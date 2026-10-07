@@ -33,9 +33,9 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     });
 
     // Попытку создаёт кнопка «Начать» (или «Продолжить», если её уже начали).
-    await page.goto(t.taskUrl, { waitUntil: 'networkidle', timeout: 60000 });
-    await page.waitForTimeout(2000);
-    const start = page.getByRole('button', { name: /^(Начать|Продолжить)$/ });
+    await page.goto(t.taskUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const start = page.getByRole('button', { name: /^(Начать|Продолжить|Попробовать ещё раз)$/ });
+    await start.first().waitFor({ timeout: 30000 }).catch(() => {});
     if (await start.count()) {
       console.log('Нажимаю:', await start.first().innerText());
       await start.first().click();
