@@ -107,7 +107,7 @@ function htmlToText(h) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;|&rsquo;/g, "'")
-    .replace(/&([a-z]+);/gi, (m, n) => ({ aacute: 'á', eacute: 'é', iacute: 'í', oacute: 'ó', uacute: 'ú', ntilde: 'ñ', iquest: '¿', iexcl: '¡', Aacute: 'Á', Eacute: 'É' }[n] || m))
+    .replace(/&([a-z]+);/gi, (m, n) => ({ rarr: '→', ndash: '–', mdash: '—', laquo: '«', raquo: '»', aacute: 'á', eacute: 'é', iacute: 'í', oacute: 'ó', uacute: 'ú', ntilde: 'ñ', iquest: '¿', iexcl: '¡', Aacute: 'Á', Eacute: 'É' }[n] || m))
     .replace(/[ \t]+/g, ' ').replace(/\n\s+/g, '\n').trim();
 }
 
