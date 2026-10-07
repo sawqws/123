@@ -5,7 +5,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "== Пакеты"
 apt-get update
-apt-get install -y curl git python3 ca-certificates
+apt-get install -y curl git python3 ca-certificates tzdata
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
