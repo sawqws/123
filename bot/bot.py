@@ -26,6 +26,17 @@ LINK = re.compile(r"https://horodigital\.ru/student/topic/[0-9a-f-]{36}/task/[0-
 TIMEOUT = 15 * 60  # секунд на одно задание
 
 lock = threading.Lock()
+mode = {}  # chat -> "show", если следующую ссылку нужно только решить без отправки
+
+BTN_DO, BTN_SHOW, BTN_LIST, BTN_HELP = "📝 Сделать задание", "👀 Только ответы", "📋 Что надо сделать", "❓ Помощь"
+MENU = json.dumps({"keyboard": [[BTN_DO, BTN_SHOW], [BTN_LIST, BTN_HELP]], "resize_keyboard": True})
+HELP = (
+    "Как пользоваться:\n"
+    f"{BTN_DO}: пришли ссылку на задание, я решу и отправлю на сайт.\n"
+    f"{BTN_SHOW}: пришли ссылку, я только покажу ответы, на сайт ничего не отправлю.\n"
+    f"{BTN_LIST}: список несделанных заданий по предметам.\n"
+    "Можно и просто прислать ссылку без кнопки: тогда я решу и отправлю."
+)
 
 
 def tg(method, **params):
@@ -34,14 +45,15 @@ def tg(method, **params):
         return json.load(r)
 
 
-def send(chat, text):
+def send(chat, text, menu=False):
     text = text.strip() or "(пустой ответ)"
     for i in range(0, len(text), 4000):  # лимит Telegram 4096 символов
-        tg("sendMessage", chat_id=chat, text=text[i:i + 4000])
+        extra = {"reply_markup": MENU} if menu else {}
+        tg("sendMessage", chat_id=chat, text=text[i:i + 4000], disable_web_page_preview="true", **extra)
 
 
-def prompt_for(url, text):
-    only_show = re.search(r"покажи|не отправляй|только ответ", text, re.I)
+def prompt_for(url, text, show):
+    only_show = show or re.search(r"покажи|не отправляй|только ответ", text, re.I)
     mode = (
         "Только реши и покажи ответы, на сайт НЕ отправляй (шаг 3 не делать)."
         if only_show
@@ -55,7 +67,22 @@ def prompt_for(url, text):
     )
 
 
-def run_task(chat, url, text):
+def run_list(chat):
+    if not lock.acquire(blocking=False):
+        send(chat, "Сейчас делаю задание, попробуй через пару минут.")
+        return
+    try:
+        send(chat, "Смотрю сайт…")
+        try:
+            res = subprocess.run(["node", "horo/status.js"], cwd=REPO, capture_output=True, text=True, timeout=300)
+            send(chat, res.stdout if res.returncode == 0 else "Ошибка:\n" + res.stderr[-1500:], menu=True)
+        except subprocess.TimeoutExpired:
+            send(chat, "Сайт не ответил за 5 минут.", menu=True)
+    finally:
+        lock.release()
+
+
+def run_task(chat, url, text, show=False):
     if not lock.acquire(blocking=False):
         send(chat, "Сейчас делаю другое задание, пришли ссылку чуть позже.")
         return
@@ -63,7 +90,7 @@ def run_task(chat, url, text):
         send(chat, "Принял, делаю…")
         t0 = time.time()
         cmd = [
-            "claude", "-p", prompt_for(url, text),
+            "claude", "-p", prompt_for(url, text, show),
             "--permission-mode", "acceptEdits",
             "--allowedTools", "Bash(node horo/*)", "Read", "Write", "Edit",
         ]
@@ -72,7 +99,7 @@ def run_task(chat, url, text):
             out = res.stdout if res.returncode == 0 else f"Ошибка (код {res.returncode}):\n{res.stderr[-1500:]}\n{res.stdout[-1500:]}"
         except subprocess.TimeoutExpired:
             out = f"Не успел за {TIMEOUT // 60} минут, остановил."
-        send(chat, f"{out}\n\n⏱ {int(time.time() - t0)} с")
+        send(chat, f"{out}\n\n⏱ {int(time.time() - t0)} с", menu=True)
     finally:
         lock.release()
 
@@ -95,13 +122,28 @@ def main():
             if msg.get("from", {}).get("id") != ALLOWED:
                 continue
             if text.startswith("/start"):
-                send(chat, "Пришли ссылку на задание. Добавь «покажи», если не нужно отправлять.")
+                send(chat, "Привет! Выбери, что сделать.", menu=True)
+                continue
+            if text == BTN_HELP:
+                send(chat, HELP, menu=True)
+                continue
+            if text == BTN_DO:
+                mode.pop(chat, None)
+                send(chat, "Пришли ссылку на задание.")
+                continue
+            if text == BTN_SHOW:
+                mode[chat] = "show"
+                send(chat, "Пришли ссылку, покажу ответы без отправки.")
+                continue
+            if text == BTN_LIST:
+                threading.Thread(target=run_list, args=(chat,), daemon=True).start()
                 continue
             m = LINK.search(text)
             if not m:
-                send(chat, "Не вижу ссылку на задание horodigital.ru")
+                send(chat, "Не вижу ссылку на задание horodigital.ru. Выбери действие в меню.", menu=True)
                 continue
-            threading.Thread(target=run_task, args=(chat, m.group(0), text), daemon=True).start()
+            show = mode.pop(chat, None) == "show"
+            threading.Thread(target=run_task, args=(chat, m.group(0), text, show), daemon=True).start()
 
 
 if __name__ == "__main__":
