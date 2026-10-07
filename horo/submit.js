@@ -6,6 +6,9 @@
 //   blanks:          "2": ["was", "were", "not"]   (пропуски по порядку в тексте: и списки, и поля для ввода)
 //   singleSelection: "3": "текст варианта"         (точно как в fetch.js)
 //   multipleSelection: "4": ["вариант A", "вариант C"]
+//   sequence:        "5": ["первый", "второй", ...]  (тексты вариантов в нужном порядке)
+//   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]
+//   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать)
 const fs = require('fs');
 const { open, close, loadTask, BASE } = require('./lib');
 
@@ -90,6 +93,45 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
         await page.screenshot({ path: `${__dirname}/tmp/q${n}.png` });
         console.log(`В${n}: выбрано ${[].concat(a).join(' | ')} (проверь по запросу [сайт] ниже)`);
+      } else if (q.type === 'sequence') {
+        // Список react-beautiful-dnd: двигаем клавиатурой (Space, стрелки, Space).
+        const sel = '[data-rbd-droppable-id] [data-rbd-draggable-id]';
+        const items = async () => (await view.locator(sel).allInnerTexts()).map(x => x.trim());
+        for (let i = 0; i < a.length; i++) {
+          const cur = (await items()).indexOf(a[i]);
+          if (cur < 0) throw new Error(`Вопрос ${n}: нет элемента «${a[i]}»`);
+          if (cur === i) continue;
+          await view.locator(sel).nth(cur).focus();
+          await page.keyboard.press('Space'); await page.waitForTimeout(250);
+          for (let k = 0; k < cur - i; k++) { await page.keyboard.press('ArrowUp'); await page.waitForTimeout(250); }
+          await page.keyboard.press('Space'); await page.waitForTimeout(600);
+        }
+        const got = await items();
+        if (got.join('\n') !== a.join('\n')) throw new Error(`Вопрос ${n}: порядок не совпал: ${got.join(' | ')}`);
+        console.log(`В${n}: ${got.join(' → ')}`);
+      } else if (q.type === 'singleMatching') {
+        // Пары: клик по левой карточке, затем по правой.
+        const card = t => view.locator('[data-testid=singleMatchingCard]').filter({ hasText: new RegExp('^\\s*' + esc(t) + '\\s*$') });
+        for (const [l, r] of a) {
+          if ((await card(l).count()) !== 1 || (await card(r).count()) !== 1) throw new Error(`Вопрос ${n}: нет карточки «${l}» или «${r}»`);
+          await card(l).click(); await page.waitForTimeout(400);
+          await card(r).click(); await page.waitForTimeout(600);
+        }
+        console.log(`В${n}: ${a.map(([l, r]) => `${l} = ${r}`).join(' | ')}`);
+      } else if (q.type === 'grouping') {
+        // Группы: клик по элементу, затем по группе.
+        const group = g => view.locator('[role=group]').filter({ has: page.locator(`p:text-is(${JSON.stringify(g)})`) }).last();
+        const inGroup = async g => (await group(g).locator('[role=listitem]').allInnerTexts()).map(x => x.trim());
+        for (const [g, list] of Object.entries(a)) for (const txt of list) {
+          if ((await inGroup(g)).includes(txt)) continue;
+          await view.locator('[role=listitem]').filter({ hasText: txt }).first().click(); await page.waitForTimeout(500);
+          await group(g).click(); await page.waitForTimeout(800);
+        }
+        for (const [g, list] of Object.entries(a)) {
+          const got = await inGroup(g);
+          if (got.length !== list.length || !list.every(x => got.includes(x))) throw new Error(`Вопрос ${n}: в группе «${g}» оказалось: ${got.join(' | ')}`);
+        }
+        console.log(`В${n}: ${Object.entries(a).map(([g, l]) => `${g}: ${l.join(' / ')}`).join(' | ')}`);
       } else {
         throw new Error(`Вопрос ${n}: тип ${q.type} скрипт пока не умеет`);
       }

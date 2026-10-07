@@ -26,4 +26,6 @@
 
 - Облачная среда: HTTPS через прокси со своим CA. `horo/lib.js` сам подключает его в Chromium по SPKI.
 - Сессия браузера сохраняется в `horo/tmp/state.json` (в .gitignore). При истечении скрипт сам войдёт заново.
-- Типы вопросов, которые умеет `submit.js`: `manualInput`, `blanks` (выпадающие списки и поля), `singleSelection` и `multipleSelection`. Последние два ещё не проверены на реальном тесте: делать с `--no-submit` и смотреть скриншот `horo/tmp/qN.png`.
+- Типы вопросов, которые умеет `submit.js`: `manualInput`, `blanks` (выпадающие списки и поля), `sequence` (порядок), `singleMatching` (пары), `grouping` (группы), `singleSelection` и `multipleSelection`. Последние два ещё не проверены на реальном тесте: делать с `--no-submit` и смотреть скриншот `horo/tmp/qN.png`.
+- Ширина пустого поля в `blanks` (`style="width: Npx"` в task.json) пропорциональна длине ответа учителя, примерно 7 px на символ. По ней можно отличить «couldn't» от «could not».
+- Английский: апостроф прямой `'` засчитывался (тесты 2.10, 2.12, 2.17).
