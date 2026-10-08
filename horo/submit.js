@@ -85,14 +85,27 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
         console.log(`В${n}: ${got.join(' | ')}`);
       } else if (q.type === 'singleSelection' || q.type === 'multipleSelection') {
-        for (const want of [].concat(a)) {
-          const el = view.locator('._answers_7mugm_161 *').filter({ hasText: new RegExp('^\\s*' + esc(want) + '\\s*$') }).last();
-          if (!(await el.count())) throw new Error(`Вопрос ${n}: нет варианта «${want}»`);
-          await el.click();
-          await page.waitForTimeout(400);
+        // Варианты ищем по uuid (id у input), отметку видно по классу _checked_ у соседнего span.
+        const optText = o => (o.text || (o.description && o.description.text) || '').trim();
+        const want = [].concat(a);
+        const ids = want.map(w => {
+          const o = q.options.find(o => optText(o) === w);
+          if (!o) throw new Error(`Вопрос ${n}: нет варианта «${w}»`);
+          return o.uuid;
+        });
+        const box = id => view.locator(`[role=button]:has(input[id="${id}"])`);
+        const isOn = async id => (await box(id).locator('span[class*="_checked_"]').count()) > 0;
+        for (const o of q.options) {
+          const need = ids.includes(o.uuid);
+          if (need !== (await isOn(o.uuid)) && (need || q.type === 'multipleSelection')) {
+            await box(o.uuid).click();
+            await page.waitForTimeout(400);
+          }
         }
-        await page.screenshot({ path: `${__dirname}/tmp/q${n}.png` });
-        console.log(`В${n}: выбрано ${[].concat(a).join(' | ')} (проверь по запросу [сайт] ниже)`);
+        for (const o of q.options) {
+          if (ids.includes(o.uuid) !== (await isOn(o.uuid))) throw new Error(`Вопрос ${n}: отметка у «${optText(o)}» не совпала`);
+        }
+        console.log(`В${n}: ${want.join(' | ')}`);
       } else if (q.type === 'sequence') {
         // Список react-beautiful-dnd: двигаем клавиатурой (Space, стрелки, Space).
         const sel = '[data-rbd-droppable-id] [data-rbd-draggable-id]';
