@@ -46,6 +46,10 @@ def skeleton(ch):
         a = np.linspace(math.pi, 3 * math.pi, 300)
         loop = np.stack([0.27 + 0.18 * np.cos(a), -0.2 + 0.2 * np.sin(a)], 1)
         _skel[ch] = (np.vstack([top, loop]) * R, 0.5 * R)
+    if ch not in _skel and ch == '0':
+        # ноль у шрифта с черточкой внутри и после искажения похож на «8»: просто овал
+        a = np.linspace(-1.9, -1.9 - 2 * math.pi - 0.25, 400)
+        _skel[ch] = (np.stack([0.25 + 0.19 * np.cos(a), -0.35 + 0.35 * np.sin(a)], 1) * R, 0.5 * R)
     if ch not in _skel and ch == 'a':
         # «а» как у Глеба: кружок и палочка справа (у шрифта она невнятная)
         a = np.linspace(-0.3, -2 * math.pi + 0.1, 300)
@@ -76,7 +80,7 @@ class Noise:
 
 
 class Hand:
-    def __init__(self, img, ink=INK, seed=1, width=2.8, mess=1.0, slant=0.19):
+    def __init__(self, img, ink=INK, seed=1, width=2.8, mess=1.15, slant=0.2):  # mess и slant выбрал Глеб
         """mess: насколько небрежно (0.4 аккуратно, 1 обычно, 2 очень криво); slant: наклон букв вправо."""
         random.seed(seed); np.random.seed(seed)
         self.m, self.sl = mess, slant
@@ -122,8 +126,9 @@ class Hand:
             prm = dict(sx=random.uniform(1 - 0.12 * m, 1 + 0.12 * m), sy=random.uniform(1 - 0.1 * m, 1 + 0.12 * m),
                        slant=self.sl + random.uniform(-0.07, 0.07) * m, rot=random.uniform(-0.06, 0.06) * m,
                        nx=Noise(2, (0.02, 0.06)), ny=Noise(2, (0.02, 0.06)),
-                       amp=random.uniform(4, 9) * m * (0.25 if c in '()-=+' else 1))  # короткие штрихи не гнём
+                       amp=random.uniform(4, 9) * m * (0.25 if c in '()-=+' else 0.5 if c in '06' else 1))  # короткие штрихи не гнём
             out.append((c, x, dy, sc, prm))
+            if c == '-': x += size * 0.07  # иначе минус прилипает к следующей цифре (6 → «б»)
             x += adv * sc * random.uniform(1.04 - 0.06 * m, 1.04 + 0.06 * m) + size * random.uniform(0.065 - 0.035 * m, 0.065 + 0.035 * m)
         return out, x
 
