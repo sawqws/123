@@ -4,25 +4,30 @@
 
 Переменные окружения:
   TELEGRAM_TOKEN  токен от @BotFather
-  TG_ALLOWED_ID   твой Telegram ID (бот отвечает только тебе)
+  TG_ALLOWED_ID   твой Telegram ID (бот отвечает только тебе); если пусто,
+                  владельцем становится тот, кто первым нажмёт /start
   HORO_LOGIN, HORO_PASSWORD  логин и пароль сайта (их читают скрипты horo/)
 
 Только стандартная библиотека Python, ничего ставить не нужно.
-Команда /update скачивает новую версию из GitHub и перезапускает бота.
+Команда /update скачивает новую версию из GitHub и перезапускает бота (pm2 поднимет его сам).
+Команда /emoji: пришли премиум-эмодзи, и бот будет ставить их вместо обычных в своих сообщениях
+(Telegram показывает их, если у владельца бота есть Premium).
 """
 import datetime
+import html
 import json
 import os
 import re
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
-ALLOWED = int(os.environ["TG_ALLOWED_ID"])
+ALLOWED = int(os.environ.get("TG_ALLOWED_ID") or 0)  # 0: владельца ещё нет
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS = os.path.join(REPO, "horo", "tmp", "bot_settings.json")
 API = f"https://api.telegram.org/bot{TOKEN}/"
@@ -33,7 +38,7 @@ DIGEST_HOUR = 15  # во сколько присылать ежедневную 
 
 lock = threading.Lock()
 offset = 0    # следующий update_id из Telegram
-mode = {}     # chat -> "show" | "confirm_all"
+mode = {}     # chat -> "show" | "confirm_all" | "emoji"
 pending = {}  # chat -> список ссылок для «Сдать все автотесты»
 
 BTN_DO = "📝 Решить и сдать"
@@ -67,6 +72,7 @@ HELP = (
     f"{BTN_DIGEST} — включить или выключить сводку каждый день в {DIGEST_HOUR}:00 по Москве.\n\n"
     "Можно просто прислать ссылку без кнопки: решу и отправлю.\n"
     "Задания, которые проверяет учитель (конспекты, фото, устные), я не отправляю, а присылаю готовый текст.\n"
+    "/emoji — поставить премиум-эмодзи вместо обычных (нужен Telegram Premium).\n"
     "/update — обновить бота до новой версии."
 )
 
@@ -79,12 +85,52 @@ def tg(method, **params):
         return json.load(r)
 
 
+def premium(text):
+    """Обычные эмодзи -> премиум (<tg-emoji>), если их прислали через /emoji. Текст экранируется для HTML."""
+    text = html.escape(text, quote=False)
+    emo = load_settings().get("emoji") or {}
+    if not emo:
+        return text
+    keys = sorted(emo, key=len, reverse=True)
+    rx = re.compile("|".join(map(re.escape, keys)))
+    return rx.sub(lambda m: f'<tg-emoji emoji-id="{emo[m.group(0)]}">{m.group(0)}</tg-emoji>', text)
+
+
 def send(chat, text, menu=False):
     text = text.strip() or "(пустой ответ)"
     parts = [text[i:i + 4000] for i in range(0, len(text), 4000)]  # лимит Telegram 4096 символов
     for k, part in enumerate(parts):
         extra = {"reply_markup": MENU} if menu and k == len(parts) - 1 else {}
-        tg("sendMessage", chat_id=chat, text=part, disable_web_page_preview="true", **extra)
+        try:
+            tg("sendMessage", chat_id=chat, text=premium(part), parse_mode="HTML", disable_web_page_preview="true", **extra)
+        except urllib.error.HTTPError:  # Telegram не принял разметку или эмодзи — шлём простым текстом
+            tg("sendMessage", chat_id=chat, text=part, disable_web_page_preview="true", **extra)
+
+
+def utf16(text, off, length):
+    """Кусок текста по смещениям Telegram (они в UTF-16)."""
+    b = text.encode("utf-16-le")
+    return b[off * 2:(off + length) * 2].decode("utf-16-le")
+
+
+def save_emoji(chat, msg):
+    """Запоминает премиум-эмодзи из сообщения: обычный эмодзи -> id премиального."""
+    text = msg.get("text") or ""
+    found = {}
+    for e in msg.get("entities") or []:
+        if e.get("type") == "custom_emoji":
+            alt = utf16(text, e["offset"], e["length"])
+            found[alt] = e["custom_emoji_id"]
+            found[alt.replace("\ufe0f", "")] = e["custom_emoji_id"]  # и без невидимого вариационного знака
+    if not found:
+        send(chat, "Премиум-эмодзи в сообщении не нашёл. Пришли именно премиум-эмодзи (из набора Telegram Premium).", menu=True)
+        return
+    s = load_settings()
+    s.setdefault("emoji", {}).update(found)
+    save_settings(s)
+    shown = sorted({a for a in found if "\ufe0f" not in a} | {a for a in found if a.replace("\ufe0f", "") not in found})
+    send(chat, "Запомнил: " + " ".join(shown) + "\nТеперь в моих сообщениях эти эмодзи будут премиальными. "
+               "Чтобы сбросить все: /emoji_reset", menu=True)
 
 
 # ---------- Настройки ----------
@@ -101,6 +147,10 @@ def save_settings(s):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
     with open(SETTINGS, "w") as f:
         json.dump(s, f)
+
+
+def owner():
+    return ALLOWED or int(load_settings().get("owner") or 0)
 
 
 # ---------- Работа ----------
@@ -220,7 +270,7 @@ def digest_loop():
             sent_day = now.date()
             ok, out = node("horo/status.js")
             try:
-                send(ALLOWED, "🔔 Сводка на сегодня\n" + out, menu=True)
+                send(owner(), "🔔 Сводка на сегодня\n" + out, menu=True)
             except Exception as e:
                 print("digest:", e)
         time.sleep(60)
@@ -238,6 +288,19 @@ def handle(msg):
         return
     if text.startswith("/update"):
         update(chat)
+        return
+    if text.startswith("/emoji_reset"):
+        s = load_settings(); s.pop("emoji", None); save_settings(s)
+        send(chat, "Премиум-эмодзи сброшены, снова обычные.", menu=True)
+        return
+    if text.startswith("/emoji"):
+        mode[chat] = "emoji"
+        send(chat, "Пришли одним сообщением премиум-эмодзи, которые хочешь видеть вместо обычных "
+                   "(например 📝 👀 📋 ❗ ⚡ 💬 📊 🔔 ❓ ✅ 🎉 👋 ⏱ 🤔). Работает, если у тебя есть Telegram Premium.")
+        return
+    if mode.get(chat) == "emoji":
+        mode.pop(chat)
+        save_emoji(chat, msg)
         return
     if mode.get(chat) == "confirm_all":
         mode.pop(chat)
@@ -300,7 +363,13 @@ def main():
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
             msg = u.get("message") or {}
-            if msg.get("from", {}).get("id") != ALLOWED or "chat" not in msg:
+            uid = msg.get("from", {}).get("id")
+            if "chat" not in msg:
+                continue
+            if not owner() and (msg.get("text") or "").startswith("/start"):
+                s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
+                print("Владелец бота:", uid)
+            if uid != owner():
                 continue
             try:
                 handle(msg)
