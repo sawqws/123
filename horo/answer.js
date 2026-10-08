@@ -1,10 +1,13 @@
 // Отправляет текстовый ответ в задание с проверкой учителем (detailedAnswer).
-// usage: node horo/answer.js <ссылка на задание> <answer.txt>
+// usage: node horo/answer.js <ссылка на задание> <answer.txt> [файл1 файл2 ...]
+// Файлы (фото, pdf) прикрепляются к ответу.
 // Каждая строка файла становится отдельным абзацем.
 const fs = require('fs');
 const { open, close, api, parseUrl, loadTask, htmlToText, EDU } = require('./lib');
 
-const [url, file] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const replace = args.includes('--replace');  // удалить свой непроверенный ответ и отправить заново
+const [url, file, ...attach] = args.filter(a => a !== '--replace');
 const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).filter((s, i, a) => s || (i > 0 && a[i - 1]));
 
 (async () => {
@@ -15,7 +18,36 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     if (t.data.type !== 'detailedAnswer') throw new Error('Это не задание с проверкой учителем, а ' + t.data.type);
     await page.goto(parseUrl(url).taskUrl, { waitUntil: 'networkidle', timeout: 60000 });
     await page.waitForTimeout(2000);
+    await page.locator('[data-testid=messageInput]').first().waitFor({ timeout: 30000 });
+    if (replace) {
+      const dels = page.locator('[data-testid=deleteAnswerButton]');
+      const before = await dels.count();
+      if (before) {
+        await dels.last().click(); await page.waitForTimeout(1000);
+        await page.screenshot({ path: __dirname + '/tmp/delete.png' });
+        const yes = page.getByRole('button', { name: /^(Удалить|Да|Подтвердить|Да, удалить)$/ });
+        if (await yes.count()) await yes.last().click();
+        await page.waitForTimeout(3000);
+        if ((await dels.count()) >= before) throw new Error('Не получилось удалить старый ответ (см. horo/tmp/delete.png)');
+        console.log('Старый ответ удалён');
+      }
+    }
+    await page.locator('[data-testid=messageInput]').first().click();
     const ed = page.locator('[contenteditable=true].mce-content-body').first();
+    await ed.waitFor({ timeout: 30000 });
+    if (attach.length) {
+      let uploads = 0;
+      page.on('response', r => { if (r.request().method() === 'POST' && /store|upload|file/i.test(r.url())) { uploads++; console.log('  [загрузка]', r.status(), r.url().split('/api/')[1] || r.url()); } });
+      const [chooser] = await Promise.all([
+        page.waitForEvent('filechooser', { timeout: 15000 }),
+        page.locator('[data-testid=attachButton]').click(),
+      ]);
+      await chooser.setFiles(attach);
+      for (let i = 0; i < 60 && uploads < attach.length; i++) await page.waitForTimeout(500);
+      await page.waitForTimeout(2000);
+      await page.screenshot({ path: __dirname + '/tmp/attach.png' });
+      if (uploads < attach.length) console.log('  предупреждение: загрузок видно', uploads, 'из', attach.length, '(см. horo/tmp/attach.png)');
+    }
     await ed.click();
     // Вставляем через API редактора TinyMCE: при наборе с клавиатуры он сам делает из «1.» списки.
     const esc = x => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -40,6 +72,7 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     const last = att[att.length - 1];
     console.log(`Статус: ${p.status.type}`);
     console.log('Отправлено:\n' + (last ? htmlToText(last.answer.text) : '(ответ не найден)'));
+    if (last) console.log('Прикреплено файлов: ' + last.answer.attachments.length + (last.answer.attachments.length ? ' (' + last.answer.attachments.map(a => a.fileName).join(', ') + ')' : ''));
   } finally {
     await close(s);
   }
