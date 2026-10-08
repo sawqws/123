@@ -85,6 +85,15 @@ GLYPHS = {  # символ: (список штрихов, ширина)
     ':': ([_arc(0.12, 0.8, 0.04, 0.04, 0, 360, 12), _arc(0.12, 0.1, 0.04, 0.04, 0, 360, 12)], 0.3),
 }
 
+# ---------- настоящие буквы Глеба (вырезаны с его скриншотов, см. horo/fonts/gleb.npz) ----------
+BANK = {}
+_bp = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'gleb.npz')
+if os.path.exists(_bp):
+    _z = np.load(_bp)
+    for _k in _z.files:
+        if not _k.endswith('w'):
+            BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_z[_k], float(_z[_k + 'w'])))
+
 # ---------- запасные буквы из шрифта (русские слова и всё, чего нет в GLYPHS) ----------
 _font = ImageFont.truetype(FONT, 200)
 _cache = {}
@@ -138,6 +147,7 @@ class Hand:
         self.mask = np.zeros((H * SS, W * SS), bool)
         self.ink = ink
         self.r = width * SS / 2
+        self.last = {}
 
     # ---------- перо ----------
     def _dots(self, pts):
@@ -159,10 +169,24 @@ class Hand:
                 x += xh * random.uniform(0.55, 0.85); continue
             sup = ch in '²³⁴⁵'
             c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-'}.get(ch, ch)
+            real = ch in BANK or c in BANK
+            if real:                                     # его настоящая буква: случайный из вариантов, не тот же подряд
+                vs = BANK[ch] if ch in BANK else BANK[c]
+                i = random.choice([j for j in range(len(vs)) if j != self.last.get(ch)] or [0])
+                self.last[ch] = i
+                pts, w = vs[i]
+                if ch in BANK and sup: sup = False       # у надстрочных своя высота в банке
+            else:
+                pts, w = glyph(c)
             k = xh * random.uniform(1 - 0.1 * m, 1 + 0.12 * m) * (0.68 if sup else 1)
-            pts, w = glyph(c)
             up = xh * random.uniform(0.75, 0.9) if sup else 0
             if sup: x -= xh * 0.08
+            if real:
+                prm = dict(real=pts, sx=random.uniform(0.94, 1.06), sy=random.uniform(0.94, 1.06), slant=0,
+                           rot=random.uniform(-0.03, 0.03) * m, amp=0)
+                out.append((c, x, up, k, prm))
+                x += w * k * prm['sx'] + xh * random.uniform(0.32 - 0.1 * m, 0.32 + 0.14 * m) * (0.5 if sup else 1)
+                continue
             prm = dict(sx=random.uniform(1 - 0.12 * m, 1 + 0.15 * m), sy=random.uniform(1 - 0.12 * m, 1 + 0.1 * m),
                        slant=self.sl + random.uniform(-0.06, 0.08) * m, rot=random.uniform(-0.07, 0.07) * m,
                        nx=Noise(2, (1.5, 3.5)), ny=Noise(2, (1.5, 3.5)), tx=Noise(2, (6, 10)), ty=Noise(2, (6, 10)),
@@ -179,13 +203,14 @@ class Hand:
         for c, x, up, k, p in lay:
             gx = x0 + x
             gy = base - up + amp * line(gx) + (gx - x0) * tilt + random.uniform(-0.08, 0.08) * m * xh
-            for st in glyph(c)[0]:
+            for st in ([p['real']] if 'real' in p else glyph(c)[0]):
                 n = len(st)
-                if c in GLYPHS and n > 40:               # штрих то не дотянут, то короче: кружки не всегда замкнуты
+                if c in GLYPHS and 'real' not in p and n > 40:               # штрих то не дотянут, то короче: кружки не всегда замкнуты
                     st = st[int(n * random.uniform(0, 0.07) * m): n - int(n * random.uniform(0, 0.07) * m)]
                 u, v = st[:, 0], st[:, 1]
-                u = u + p['amp'] * p['nx'](u + 2 * v) + 0.012 * m * p['tx'](u - v)   # плавная деформация + дрожание
-                v = v + p['amp'] * p['ny'](2 * u - v) + 0.012 * m * p['ty'](u + v)
+                if 'real' not in p:
+                  u = u + p['amp'] * p['nx'](u + 2 * v) + 0.012 * m * p['tx'](u - v)   # плавная деформация + дрожание
+                  v = v + p['amp'] * p['ny'](2 * u - v) + 0.012 * m * p['ty'](u + v)
                 u, v = u * p['sx'], v * p['sy']
                 u = u + v * p['slant']
                 cr, sr = math.cos(p['rot']), math.sin(p['rot'])
