@@ -25,11 +25,12 @@ from scipy import ndimage
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXTRA = os.path.join(HERE, 'tmp', 'fonts', 'gleb_extra.npz')
 FONT = os.path.join(HERE, 'fonts', 'Neucha.ttf')
+FONT2 = os.path.join(HERE, 'fonts', 'Caveat.ttf')  # в Neucha нет ² ³ ≠ ≤ ≥ × ÷
 
-PAGES = [
-    'абвгдеёжзийклмнопрстуфхцчшщъыьэюя',
-    'abcdefghijklmnopqrstuvwxyz0123456789',
-    '+-=()/<>.,:;!?%²³√≠≤≥·×÷|[]{}',
+PAGES = [  # (заголовок, символы) — не больше 36 на лист
+    ('русские буквы', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'),
+    ('цифры и знаки', '0123456789+-=()/<>.,:;!?%²³√≠≤≥·×÷'),
+    ('латинские буквы', 'abcdefghijklmnopqrstuvwxyz'),
 ]
 W, H = 1640, 2360          # лист как скриншот iPad
 COLS, ROWS = 6, 6
@@ -62,7 +63,7 @@ def cell(i):
 
 
 def template(page, out):
-    chars = PAGES[page]
+    head, chars = PAGES[page]
     im = Image.new('RGB', (W, H), BG)
     d = ImageDraw.Draw(im)
     for cx, cy in corners():
@@ -72,13 +73,18 @@ def template(page, out):
         if code >> k & 1:
             d.rectangle([cx - BIT / 2, cy - BIT / 2, cx + BIT / 2, cy + BIT / 2], fill=MAGENTA)
     small = ImageFont.truetype(FONT, 34)
-    big = ImageFont.truetype(FONT, 44)
-    d.text((W / 2, 140), f'Страница {page + 1} из {len(PAGES)}: напиши каждую букву в своей клетке, как обычно',
+    big, big2 = ImageFont.truetype(FONT, 44), ImageFont.truetype(FONT2, 50)
+    blank = big.getmask('\uffff').getbbox(), bytes(big.getmask('\uffff'))
+    d.text((W / 2, 140), f'Лист {page + 1} из {len(PAGES)}, {head}: напиши каждый знак в своей клетке, как обычно',
            font=small, fill=HINT, anchor='mm')
     for i, ch in enumerate(chars):
         x0, x1, y0, base = cell(i)
         d.rectangle([x0 + 6, y0 + 6, x1 - 6, y0 + CELL_H - 6], outline=LINE, width=2)
-        d.text((x0 + 18, y0 + 14), ch, font=big, fill=HINT, anchor='la')
+        if ch == '√':  # его нет ни в одном из шрифтов — рисуем линиями
+            d.line([(x0 + 18, y0 + 40), (x0 + 26, y0 + 36), (x0 + 34, y0 + 58), (x0 + 44, y0 + 18), (x0 + 72, y0 + 18)], fill=HINT, width=3)
+        else:
+            has = (big.getmask(ch).getbbox(), bytes(big.getmask(ch))) != blank
+            d.text((x0 + 18, y0 + 14), ch, font=big if has else big2, fill=HINT, anchor='la')
         d.line([x0 + 14, base, x1 - 14, base], fill=LINE, width=3)
         for x in np.arange(x0 + 14, x1 - 14, 22):  # пунктир высоты строчной
             d.line([x, base - XH, x + 10, base - XH], fill=LINE, width=2)
@@ -183,7 +189,7 @@ def ingest(paths):
             errors.append(f'{os.path.basename(path)}: {e}')
             continue
         m = ink(sheet)
-        for i, ch in enumerate(PAGES[page]):
+        for i, ch in enumerate(PAGES[page][1]):
             x0, x1, y0, base = cell(i)
             # подсказку в левом верхнем углу не берём: обрезаем верх клетки
             y_top, y_bot = int(y0 + 70), int(y0 + CELL_H - 12)

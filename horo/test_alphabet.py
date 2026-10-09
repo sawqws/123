@@ -20,7 +20,7 @@ def fill(page, skip=()):
         im = Image.open(os.path.join(d, 't.png')).convert('RGB')
     dr = ImageDraw.Draw(im)
     f = ImageFont.truetype(A.FONT, 150)
-    for i, ch in enumerate(A.PAGES[page]):
+    for i, ch in enumerate(A.PAGES[page][1]):
         if ch in skip:
             continue
         x0, x1, y0, base = A.cell(i)
@@ -52,7 +52,7 @@ class AlphabetTest(unittest.TestCase):
         path = as_telegram(fill(0, skip='ъ'), angle=1.5)
         added, errors = A.ingest([path])
         self.assertEqual(errors, [])
-        self.assertEqual(''.join(added), A.PAGES[0].replace('ъ', ''))
+        self.assertEqual(''.join(added), A.PAGES[0][1].replace('ъ', ''))
         z = np.load(A.EXTRA)
         pts, w = z[f'{ord("п")}_0'], float(z[f'{ord("п")}_0w'])
         # «п» строчная: высота около 1 XH, стоит на строке
@@ -64,12 +64,12 @@ class AlphabetTest(unittest.TestCase):
         p2 = as_telegram(fill(1))
         A.ingest([p2])
         added, _ = A.ingest([p2])
-        self.assertIn('x', added)
+        self.assertIn('7', added)
         z = np.load(A.EXTRA)
-        self.assertIn(f'{ord("x")}_1', z.files)  # второй вариант буквы, первый не затёрт
+        self.assertIn(f'{ord("7")}_1', z.files)  # второй вариант буквы, первый не затёрт
 
     def test_empty_and_garbage(self):
-        empty = as_telegram(fill(2, skip=A.PAGES[2]))
+        empty = as_telegram(fill(2, skip=A.PAGES[2][1]))
         added, errors = A.ingest([empty])
         self.assertEqual((added, errors), ([], []))
         junk = tempfile.mktemp(suffix='.png')
