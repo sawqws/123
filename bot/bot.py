@@ -228,8 +228,21 @@ def node(*args, timeout=300, prog="node"):
     except subprocess.TimeoutExpired:
         return False, "Сайт не ответил вовремя, попробуй позже."
     if res.returncode != 0:
-        return False, "Ошибка:\n" + (res.stderr or res.stdout)[-1500:]
+        print(prog, *args, "->", res.returncode, (res.stderr or res.stdout)[-3000:])  # подробности — в лог pm2
+        return False, explain(res.stderr or res.stdout)
     return True, res.stdout
+
+
+def explain(err):
+    """Ошибку скрипта — в одну понятную строку, без трассировки и кодов."""
+    low = err.lower()
+    if "timeout" in low or "timed out" in low:
+        return "⚠️ Сайт долго не отвечает, попробуй через пару минут."
+    if "login" in low or "логин" in low or "/auth" in low:
+        return "⚠️ Не получилось войти на сайт. Проверь логин и пароль HORO на сервере."
+    lines = [l.strip() for l in err.strip().splitlines() if l.strip() and not l.strip().startswith(("at ", "File ", "Traceback"))]
+    last = lines[-1] if lines else "неизвестная ошибка"
+    return "⚠️ Не получилось: " + re.sub(r"^(Error|ОШИБКА):\s*", "", last)[:200]
 
 
 def py(*args, timeout=300):
@@ -246,7 +259,13 @@ def claude(prompt, tools, timeout=TIMEOUT):
     except FileNotFoundError:
         return False, "Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
     if res.returncode != 0:
-        return False, f"Ошибка (код {res.returncode}):\n{res.stderr[-1500:]}\n{res.stdout[-1500:]}"
+        print("claude ->", res.returncode, res.stderr[-3000:], res.stdout[-3000:])  # подробности — в лог pm2
+        low = (res.stderr + res.stdout).lower()
+        if any(w in low for w in ("login", "api key", "401", "unauthorized", "authenticat")):
+            return False, "⚠️ Claude на сервере не вошёл в аккаунт. Напиши мне (Claude Code), я войду заново."
+        if any(w in low for w in ("rate limit", "usage limit", "limit reached", "429", "overloaded")):
+            return False, "⚠️ У Claude закончился лимит или он перегружен. Попробуй через час."
+        return False, "⚠️ Claude не справился с заданием. Попробуй ещё раз."
     return True, res.stdout
 
 
@@ -281,7 +300,10 @@ def prompt_for(url, text, show):
         "(каждая строка — абзац, только то, что пойдёт учителю). Если нужны картинки (решение от руки на скриншоте, "
         f"заполненный лист), сделай их по CLAUDE.md и положи в {d}/draft_files/. Скрипт рисования клади в {d}/ и запускай "
         f"`python3 {d}/draw.py` (в нём: import sys; sys.path.insert(0, 'horo'); from hand import Hand). "
-        f"Сначала прочитай {os.path.relpath(drafts.STYLE, REPO)}, если он есть: это правила Глеба по его прошлым правкам, "
+        + ("" if os.path.exists(GLEB_EXTRA) else
+           "Алфавита почерка Глеба ещё нет. Если для задания нужно решение от руки на скриншоте, ничего не рисуй "
+           "и не отправляй, а ответь ровно одним словом НУЖЕН_АЛФАВИТ.\n")
+        + f"Сначала прочитай {os.path.relpath(drafts.STYLE, REPO)}, если он есть: это правила Глеба по его прошлым правкам, "
         "они важнее общих. Бот сам покажет черновик Глебу: в ответе текст черновика не повторяй, напиши 1–2 строки, что сделал.\n"
         "Ответ пиши для Telegram, коротко, без markdown-таблиц: результат (баллы) и что написал по каждому вопросу."
     )
@@ -301,7 +323,13 @@ def run_task(chat, url, text, show=False):
         send(chat, "Принял, делаю… Обычно это 1–3 минуты.")
         task, t0 = drafts.task_id(url), time.time()
         drafts.clear(task)
-        send(chat, solve(url, text, show), menu=True)
+        out = solve(url, text, show)
+        if "НУЖЕН_АЛФАВИТ" in out:
+            drafts.clear(task)
+            send(chat, "✍️ Это задание решается от руки, а твоего алфавита у меня ещё нет.\n"
+                       f"Нажми «{BTN_HAND}», заполни 3 листа и пришли ссылку на задание снова.", menu=True)
+            return
+        send(chat, out, menu=True)
         if drafts.fresh(task, t0):
             offer_draft(chat, task, url)
     finally:
@@ -448,6 +476,7 @@ def on_callback(cq):
 # ---------- Почерк ----------
 
 ALPHA_DIR = os.path.join(REPO, "horo", "tmp", "alphabet")
+GLEB_EXTRA = os.path.join(REPO, "horo", "tmp", "fonts", "gleb_extra.npz")  # буквы из его алфавита
 
 
 def send_alphabet(chat):
@@ -503,7 +532,7 @@ def check(chat):
             lines.append("❌ Claude: " + out.strip()[-300:] + "\nВойди на сервере: cd /root/horo && claude")
         ok, out = py("-c", "import numpy, scipy, skimage, PIL")
         lines.append("✅ Почерк: библиотеки есть" if ok else "❌ Почерк: нет библиотек, перезапусти установку (install.sh)")
-        own = os.path.exists(os.path.join(REPO, "horo", "tmp", "fonts", "gleb_extra.npz"))
+        own = os.path.exists(GLEB_EXTRA)
         lines.append("✍️ Алфавит твоим почерком: " + ("загружен" if own else f"ещё нет ({BTN_HAND})"))
         send(chat, "\n".join(lines), menu=True)
     finally:
@@ -649,8 +678,8 @@ def handle(msg):
     simple = {
         BTN_LIST: ("horo/status.js", "--html"),
         BTN_LATE: ("horo/status.js", "--late", "--html"),
-        BTN_COMM: ("horo/comments.js",),
-        BTN_GRADES: ("horo/grades.js",),
+        BTN_COMM: ("horo/comments.js", "--html"),
+        BTN_GRADES: ("horo/grades.js", "--html"),
     }
     if text in simple:
         threading.Thread(target=run_script, args=(chat, *simple[text]), daemon=True).start()

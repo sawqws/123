@@ -150,6 +150,21 @@ class BotTest(unittest.TestCase):
             self.say(bot.BTN_LATE)
         self.assertEqual(self.last()[0], '❗ <b>Просрочено: 1</b>\n🔁 <a href="u">Тест &amp; Ко</a>')  # разметка не экранирована
 
+    def test_handwriting_needs_alphabet(self):
+        with mock.patch.object(bot, "GLEB_EXTRA", "/nonexistent"):
+            self.assertIn("НУЖЕН_АЛФАВИТ", bot.prompt_for(URL, "", False))
+            with mock.patch.object(bot, "claude", lambda p, t, timeout=0: (True, "НУЖЕН_АЛФАВИТ")):
+                self.say(URL)
+        self.assertIn("алфавита у меня ещё нет", self.last()[0])
+        self.assertIsNone(bot.draft())
+        with mock.patch.object(bot, "GLEB_EXTRA", __file__):
+            self.assertNotIn("НУЖЕН_АЛФАВИТ", bot.prompt_for(URL, "", False))
+
+    def test_errors_are_short(self):
+        trace = "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x\n    at open (/root/horo/horo/lib.js:40:11)"
+        self.assertEqual(bot.explain(trace), "⚠️ Не получилось: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x")
+        self.assertIn("долго не отвечает", bot.explain("TimeoutError: Timeout 30000ms exceeded"))
+
     def test_alphabet_mode(self):
         with mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "Добавил: а б")) as _, \
              mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \
