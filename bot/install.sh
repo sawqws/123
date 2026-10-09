@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Установка Telegram-бота на новый сервер Ubuntu/Debian и запуск через pm2.
 # Одной командой (от root):
-#   curl -fsSL https://raw.githubusercontent.com/sawqws/123/claude/fervent-turing-gcfdu9/bot/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/sawqws/123/main/bot/install.sh | bash
 # Можно запускать повторно: обновит код и перезапустит бота, секреты не спрашивает второй раз.
 set -euo pipefail
-BRANCH=claude/fervent-turing-gcfdu9
+BRANCH=main
 DIR=/root/horo
 ENV=/etc/horo-bot.env
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
@@ -14,7 +14,8 @@ APT="apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-co
 echo "== 1/6 Обновление системы и пакеты"
 apt-get update
 $APT upgrade
-$APT install curl git ca-certificates tzdata python3 python3-pip
+$APT install curl git ca-certificates tzdata python3 python3-pip poppler-utils \
+  python3-numpy python3-scipy python3-pil python3-skimage   # почерк (horo/hand.py, horo/alphabet.py), листы PDF
 # из обычного apt приходит слишком старый Node.js — ставим 22
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
   $APT remove nodejs npm libnode-dev >/dev/null 2>&1 || true
@@ -24,7 +25,13 @@ fi
 echo "Node.js $(node -v)"
 
 echo "== 2/6 Код бота"
-if [ -d "$DIR/.git" ]; then git -C "$DIR" pull --ff-only; else git clone -b "$BRANCH" https://github.com/sawqws/123.git "$DIR"; fi
+if [ -d "$DIR/.git" ]; then
+  # старые установки стояли на рабочей ветке — переводим на main
+  git -C "$DIR" fetch origin "$BRANCH"
+  git -C "$DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+else
+  git clone -b "$BRANCH" https://github.com/sawqws/123.git "$DIR"
+fi
 cd "$DIR"
 
 echo "== 3/6 Браузер Chromium для сайта"
@@ -61,7 +68,9 @@ cat <<'EOT'
   2) Войди в Claude (один раз), без этого бот не сможет решать задания:
        cd /root/horo && claude
      выбери вход через аккаунт, открой ссылку, вставь код, потом напиши /exit
-  3) Логи:          pm2 logs horo-bot
+  3) В Telegram нажми «🩺 Проверка» — бот скажет, всё ли работает.
+     Потом «✍️ Мой почерк» — пришлёт алфавит для твоего почерка.
+  4) Логи:          pm2 logs horo-bot
      Перезапуск:    pm2 restart horo-bot
      Статус:        pm2 status
 EOT

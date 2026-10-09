@@ -50,7 +50,7 @@ async function login(page) {
   await page.fill('input[name=password]', process.env.HORO_PASSWORD);
   await page.click('button[type=submit]');
   await page.waitForURL(u => !u.toString().includes('/login'), { timeout: 30000 });
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('networkidle').catch(() => {});  // сайт иногда долго держит запросы — вход уже прошёл
 }
 
 async function close({ browser, ctx }) {
