@@ -1,0 +1,10 @@
+type: sequential
+steps:
+  - id: step-1
+    skill: eng-doubt-driven-development
+  - id: step-2
+    skill: eng-code-simplification
+  - id: step-3
+    skill: eng-test-driven-development
+  - id: step-4
+    skill: eng-code-review-and-quality

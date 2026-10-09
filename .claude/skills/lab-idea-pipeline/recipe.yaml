@@ -1,0 +1,10 @@
+type: sequential
+steps:
+  - id: step-1
+    skill: eng-interview-me
+  - id: step-2
+    skill: eng-idea-refine
+  - id: step-3
+    skill: kp-startup-pressure-test
+  - id: step-4
+    skill: ar-productivity-andreessen
