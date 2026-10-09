@@ -72,6 +72,9 @@ class BotTest(unittest.TestCase):
             os.makedirs(d, exist_ok=True)
             pathlib.Path(d, "hand.png").write_bytes(b"png")
             return True, "Сделал черновик"
+        if "Глеб написал про него" in prompt:  # просьба поправить черновик
+            drafts.write(TASK, "Клетка делится митозом.")
+            return True, "Убрал второе предложение"
         os.makedirs(drafts.STYLE_DIR, exist_ok=True)
         pathlib.Path(drafts.STYLE).write_text("- коротко\n")
         return True, "- писать короче"
@@ -105,6 +108,15 @@ class BotTest(unittest.TestCase):
         self.assertIsNone(bot.draft())
         self.assertIn("БЫЛО:", self.prompts[-1])  # правки ушли на обобщение
         self.assertIn("Запомнил", self.last()[0])
+
+    def test_short_message_is_a_request(self):
+        self.say(URL)
+        self.say("убери второе")
+        self.assertIn("«убери второе»", self.prompts[-1])
+        self.assertEqual(drafts.read(TASK), "Клетка делится митозом.")
+        self.assertEqual(bot.draft()["pairs"][0][2], "убери второе")
+        self.say("ок")
+        self.assertIn("ЧТО ОН НАПИСАЛ: убери второе", self.prompts[-1])
 
     def test_own_photo_replaces_generated(self):
         self.say(URL)

@@ -329,11 +329,31 @@ def show_draft(chat):
 
 
 def edit_draft(chat, text):
+    """Глеб прислал готовый текст или просьбу («убери последний абзац»): просьбу применяет Claude."""
     d = draft()
     before = drafts.read(d["task"])
-    drafts.write(d["task"], text)
-    if drafts.record_edit(d["task"], d["title"], before, text):
-        d["pairs"].append([before, text])
+    if len(text) < 0.6 * len(before):
+        if not lock.acquire(blocking=False):
+            send(chat, "Сейчас занят, пришли правку чуть позже.")
+            return
+        try:
+            send(chat, "Правлю…")
+            path = os.path.relpath(drafts.text_path(d["task"]), REPO)
+            ok, out = claude(
+                f"В {path} черновик ответа учителю. Глеб написал про него: «{text}».\n"
+                f"Если это готовый новый текст ответа, запиши его в {path} как есть. Если это просьба что-то изменить, "
+                f"измени {path} по ней и больше ничего не трогай. Каждая строка файла — абзац. В ответе одна строка: что сделал.",
+                ["Read", "Write", "Edit"], timeout=300)
+        finally:
+            lock.release()
+        if not ok:
+            send(chat, "Не получилось поправить:\n" + out, markup=DRAFT_KB)
+            return
+    else:
+        drafts.write(d["task"], text)
+    after = drafts.read(d["task"])
+    if drafts.record_edit(d["task"], d["title"], before, after):
+        d["pairs"].append([before, after, text])
         set_draft(d)
     send(chat, "Принял правку.")
     show_draft(chat)
@@ -377,7 +397,8 @@ def submit_draft(chat):
 def learn_style(pairs):
     """Обобщает правки Глеба в правила (horo/tmp/style/style.md) для следующих ответов."""
     os.makedirs(drafts.STYLE_DIR, exist_ok=True)
-    shown = "\n\n".join(f"БЫЛО:\n{b}\n\nСТАЛО:\n{a}" for b, a in pairs)
+    shown = "\n\n".join(f"БЫЛО:\n{p[0]}\n\nСТАЛО:\n{p[1]}" + (f"\n\nЧТО ОН НАПИСАЛ: {p[2]}" if len(p) > 2 and p[2] != p[1] else "")
+                          for p in pairs)
     style = os.path.relpath(drafts.STYLE, REPO)
     ok, out = claude(
         "Глеб (ученик 8 класса) поправил черновик ответа учителю.\n\n" + shown + "\n\n"
