@@ -48,7 +48,7 @@ DIGEST_HOUR = 15  # во сколько присылать ежедневную 
 
 lock = threading.Lock()
 offset = 0    # следующий update_id из Telegram
-mode = {}     # chat -> "show" | "confirm_all" | "emoji" | "alphabet"
+mode = {}     # chat -> "show" | "confirm_all" | "emoji" | "alphabet" | "hand_tune"
 pending = {}  # chat -> список ссылок для «Сдать все автотесты»
 
 BTN_DO = "📝 Решить и сдать"
@@ -91,6 +91,7 @@ HELP = (  # HTML: отправляется с raw_html=True
     "можно своими фото, потом нажми «✅ Отправить». Твои правки запоминаю.\n\n"
     "<b>Почерк и настройки</b>\n"
     f"{BTN_HAND} — алфавит, чтобы писать решения твоим почерком\n"
+    "/style — настроить, как я пишу твоим почерком (небрежность, толщина, размер)\n"
     f"{BTN_CHECK} — проверю, что всё работает\n"
     "/update — обновить бота · /emoji — премиум-эмодзи"
 )
@@ -339,7 +340,7 @@ def run_task(chat, url, text, show=False):
         if "НУЖЕН_АЛФАВИТ" in out:
             drafts.clear(task)
             send(chat, "✍️ <b>Нужен твой почерк</b>\n\nЭто задание решается от руки, а твоего алфавита у меня ещё нет. "
-                       f"Нажми «{BTN_HAND}», заполни 3 листа и пришли ссылку на задание снова.", menu=True, raw_html=True)
+                       f"Нажми «{BTN_HAND}», заполни 4 листа и пришли ссылку на задание снова.", menu=True, raw_html=True)
             return
         send(chat, f"📝 <b>Результат</b>\n\n{esc(out)}", menu=True, raw_html=True)
         if drafts.fresh(task, t0):
@@ -476,6 +477,19 @@ def learn_style(pairs):
 
 def on_callback(cq):
     chat = cq["message"]["chat"]["id"]
+    if (cq.get("data") or "").startswith("hand:"):
+        try:
+            tg("answerCallbackQuery", callback_query_id=cq["id"])
+        except urllib.error.HTTPError as e:
+            print("callback:", e)
+        _, key, *sign = cq["data"].split(":")
+        if key == "ok":
+            mode.pop(chat, None)
+            send(chat, "✅ Запомнил стиль. Задания «от руки» теперь пишу так.", menu=True)
+        else:
+            adjust_hand(key, int(sign[0]))
+            threading.Thread(target=send_sample, args=(chat, "🔄 Перерисовал."), daemon=True).start()
+        return
     try:
         tg("answerCallbackQuery", callback_query_id=cq["id"])
         tg("editMessageReplyMarkup", chat_id=chat, message_id=cq["message"]["message_id"],  # убрать кнопки: не нажать дважды
@@ -500,12 +514,12 @@ GLEB_EXTRA = os.path.join(REPO, "horo", "tmp", "fonts", "gleb_extra.npz")  # б�
 def send_alphabet(chat):
     os.makedirs(ALPHA_DIR, exist_ok=True)
     send(chat, "✍️ <b>Алфавит твоим почерком</b>\n\n"
-               "1. Сохрани 3 листа ниже: русские буквы, цифры и знаки, латиница.\n"
+               "1. Сохрани 4 листа ниже: русские буквы (2 листа), латиница, цифры и знаки.\n"
                "2. На iPad открой лист в «Фото» → Править → Разметка.\n"
-               "3. Пиши синим или белым, каждый знак в своей клетке, на линии. Пустые клетки можно оставить.\n"
+               "3. Пиши синим или белым, на линии. В рамке слева — большая буква, справа — маленькая. Пустые клетки можно оставить.\n"
                "4. Не обрезай лист: розовые квадраты по углам должны быть видны.\n"
                "5. Пришли листы сюда, потом напиши «готово».", raw_html=True)
-    for page in (1, 2, 3):
+    for page in (1, 2, 3, 4):
         out = os.path.join(ALPHA_DIR, f"alphabet_{page}.png")
         ok, err = py("horo/alphabet.py", "template", str(page), out)
         if not ok:
@@ -513,6 +527,83 @@ def send_alphabet(chat):
             return
         send_file(chat, out)
     mode[chat] = "alphabet"
+
+
+# ---------- Стиль почерка: пример решения и настройка кнопками или словами ----------
+
+HAND_STYLE = os.path.join(REPO, "horo", "tmp", "hand_style.json")  # его читает horo/hand.py
+HAND_STEPS = {  # ключ: (шаг, минимум, максимум, по умолчанию)
+    "mess": (0.25, 0.25, 2.5, 1.0),
+    "width": (0.2, 0.4, 2.6, 1.0),
+    "size": (0.1, 0.6, 1.6, 1.0),
+    "slant": (0.05, -0.2, 0.3, 0.0),
+}
+HAND_WORDS = [  # (слова в просьбе, что менять, куда)
+    (("небреж", "размаш", "корявее", "быстрее"), "mess", +1),
+    (("аккурат", "ровнее", "красивее", "чище"), "mess", -1),
+    (("толщ", "жирн"), "width", +1),
+    (("тоньш",), "width", -1),
+    (("крупн", "больше"), "size", +1),
+    (("мельч", "меньше"), "size", -1),
+    (("наклон",), "slant", +1),
+    (("прям",), "slant", -1),
+]
+HAND_KB = json.dumps({"inline_keyboard": [
+    [{"text": "😬 Небрежнее", "callback_data": "hand:mess:1"}, {"text": "✨ Аккуратнее", "callback_data": "hand:mess:-1"}],
+    [{"text": "🖊 Толще", "callback_data": "hand:width:1"}, {"text": "✏️ Тоньше", "callback_data": "hand:width:-1"}],
+    [{"text": "🔍 Крупнее", "callback_data": "hand:size:1"}, {"text": "🔎 Мельче", "callback_data": "hand:size:-1"}],
+    [{"text": "✅ Нравится", "callback_data": "hand:ok"}],
+]})
+
+
+def hand_style():
+    try:
+        with open(HAND_STYLE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def adjust_hand(key, sign, half=False):
+    step, lo, hi, default = HAND_STEPS[key]
+    st = hand_style()
+    st[key] = round(min(hi, max(lo, st.get(key, default) + sign * step * (0.5 if half else 1))), 3)
+    os.makedirs(os.path.dirname(HAND_STYLE), exist_ok=True)
+    with open(HAND_STYLE, "w") as f:
+        json.dump(st, f)
+
+
+def send_sample(chat, note=""):
+    """Пример решённого задания его почерком с кнопками настройки."""
+    out = os.path.join(ALPHA_DIR, "sample.png")
+    os.makedirs(ALPHA_DIR, exist_ok=True)
+    ok, err = py("horo/alphabet.py", "sample", out)
+    if not ok:
+        send(chat, err, menu=True)
+        return
+    mode[chat] = "hand_tune"
+    send_file(chat, out)
+    send(chat, (note + "\n\n" if note else "") + "✍️ <b>Так буду писать решения от руки.</b>\n"
+         "Поправь кнопками или словами («чуть небрежнее», «тоньше», «крупнее», «с наклоном») — "
+         "перерисую. Когда нравится — «✅ Нравится».", markup=HAND_KB, raw_html=True)
+
+
+def tune_hand(chat, text):
+    """Просьба словами: «чуть небрежнее и тоньше» -> меняет стиль и присылает новый пример."""
+    low = text.lower()
+    if low.strip(".! ") in ("ок", "ok", "да", "нравится", "подтверждаю", "готово", "отлично", "норм"):
+        mode.pop(chat, None)
+        send(chat, "✅ Запомнил стиль. Задания «от руки» теперь пишу так.", menu=True)
+        return
+    half = any(w in low for w in ("чуть", "немного", "слегка"))
+    changed = [(key, sign) for words, key, sign in HAND_WORDS if any(w in low for w in words)]
+    if not changed:
+        send(chat, "🤔 Не понял, что поменять. Можно: небрежнее, аккуратнее, толще, тоньше, крупнее, мельче, "
+                   "с наклоном, прямее — или «ок».", markup=HAND_KB)
+        return
+    for key, sign in changed:
+        adjust_hand(key, sign, half)
+    send_sample(chat, "🔄 Перерисовал.")
 
 
 def take_alphabet(chat, msg):
@@ -681,11 +772,22 @@ def handle(msg):
             return
         if text.lower().strip(".! ") in ("готово", "все", "всё", "хватит"):
             mode.pop(chat)
-            send(chat, "✍️ Готово! Теперь решения «от руки» пишу твоим почерком.", menu=True)
+            if os.path.exists(GLEB_EXTRA):
+                threading.Thread(target=send_sample, args=(chat, "✍️ Алфавит записал!"), daemon=True).start()
+            else:
+                send(chat, "Пока ни одного листа не разобрал. Пришли листы алфавита, потом напиши «готово».", menu=True)
             return
         if text not in BUTTONS and not LINK.search(text):
             send(chat, "📸 Жду листы алфавита (скриншот или фото). Закончил — напиши «готово».")
             return
+        mode.pop(chat)
+    if text.startswith("/style"):
+        threading.Thread(target=send_sample, args=(chat,), daemon=True).start()
+        return
+    if mode.get(chat) == "hand_tune" and text and text not in BUTTONS and not text.startswith("/") and not LINK.search(text):
+        threading.Thread(target=tune_hand, args=(chat, text), daemon=True).start()
+        return
+    if mode.get(chat) == "hand_tune":
         mode.pop(chat)
     if mode.get(chat) == "confirm_all":
         mode.pop(chat)

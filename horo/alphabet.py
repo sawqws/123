@@ -1,18 +1,20 @@
 """Алфавит почерком Глеба: шаблон для заполнения и разбор заполненного.
 
 Шаблон — тёмный лист (как заметки на iPad) с клетками. В каждой клетке серая подсказка-буква,
-линия строки и пунктир высоты строчной буквы. По углам малиновые метки, по ним лист находится
-на любом скриншоте или фото (даже если Telegram его сжал или iPad добавил поля), а маленькие
-метки сверху — номер страницы.
+линия строки и пунктир высоты строчной буквы. Буквы идут парами в рамке: слева большая, справа маленькая.
+Одинаковые на вид латинские и русские буквы (a/а, o/о, x/х…) пишутся один раз — hand.py берёт русскую.
+По углам малиновые метки, по ним лист находится на любом скриншоте или фото (даже если Telegram
+его сжал или iPad добавил поля), а маленькие метки сверху — номер листа.
 
 Разобранные буквы дописываются в horo/tmp/fonts/gleb_extra.npz (не в репозиторий: он публичный).
 Формат как у horo/fonts/gleb.npz: ключ '<код буквы>_<номер>' — точки скелета в единицах
 высоты строчной буквы (x от левого края, y вверх от строки), ключ + 'w' — ширина.
 
 usage:
-  python3 horo/alphabet.py template <страница 1..3> out.png
+  python3 horo/alphabet.py template <лист 1..4> out.png
   python3 horo/alphabet.py ingest img1.png [img2.jpg ...]   печатает, какие буквы добавлены
   python3 horo/alphabet.py preview out.png                  пример текста его почерком
+  python3 horo/alphabet.py sample out.png                   пример решённого задания (со стилем из hand_style.json)
   python3 horo/alphabet.py reset                            удалить добавленные буквы
 """
 import os
@@ -27,13 +29,19 @@ EXTRA = os.path.join(HERE, 'tmp', 'fonts', 'gleb_extra.npz')
 FONT = os.path.join(HERE, 'fonts', 'Neucha.ttf')
 FONT2 = os.path.join(HERE, 'fonts', 'Caveat.ttf')  # в Neucha нет ² ³ ≠ ≤ ≥ × ÷
 
-PAGES = [  # (заголовок, символы) — не больше 36 на лист
-    ('русские буквы', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'),
-    ('цифры и знаки', '0123456789+-=()/<>.,:;!?%²³√≠≤≥·×÷'),
-    ('латинские буквы', 'abcdefghijklmnopqrstuvwxyz'),
+PAGES = [  # (заголовок, символы, парами: большая+маленькая) — не больше 48 клеток на лист
+    ('русские буквы А–П', 'АаБбВвГгДдЕеЁёЖжЗзИиЙйКкЛлМмНнОоПп', True),
+    ('русские буквы Р–Я', 'РрСсТтУуФфХхЦцЧчШшЩщЪъЫыЬьЭэЮюЯя', True),
+    # a c e o p x — как русские а с е о р х, их не повторяем
+    ('латинские буквы', 'BbDdFfGgHhIiJjKkLlMmNnQqRrSsTtUuVvWwYyZz', True),
+    # ² ³ рисуются уменьшенными 2 и 3, · — точкой, их тоже не повторяем
+    ('цифры и знаки', '0123456789+-=()/<>.,:;!?%√≠≤≥×÷', False),
 ]
+CODE0 = 4                  # номер листа на метках = индекс + CODE0 (1..3 были у старого алфавита)
+# старый лист 2 (цифры и знаки, сетка 6×6) тоже годится: там в каждой клетке один знак
+OLD_DIGITS = ('0123456789+-=()/<>.,:;!?%', 6)  # ² ³ √ ≠ ≤ ≥ · × ÷ со старого листа не берём: там они были не на своих местах
 W, H = 1640, 2360          # лист как скриншот iPad
-COLS, ROWS = 6, 6
+COLS, ROWS = 8, 6
 TOP, SIDE, BOTTOM = 230, 70, 110
 CELL_W = (W - 2 * SIDE) / COLS
 CELL_H = (H - TOP - BOTTOM) / ROWS
@@ -50,32 +58,34 @@ def corners():
 
 
 def bits():
-    """Центры меток номера страницы (двоичный код page+1)."""
+    """Центры меток номера листа (двоичный код page+CODE0)."""
     return [(W / 2 + (i - 1) * 90, 20 + MARK / 2) for i in range(3)]
 
 
-def cell(i):
+def cell(i, cols=COLS, rows=ROWS):
     """Клетка i: левый край, правый край, верх, линия строки (y)."""
-    r, c = divmod(i, COLS)
-    x0 = SIDE + c * CELL_W
-    y0 = TOP + r * CELL_H
-    return x0, x0 + CELL_W, y0, y0 + CELL_H * 0.68
+    r, c = divmod(i, cols)
+    cw, ch = (W - 2 * SIDE) / cols, (H - TOP - BOTTOM) / rows
+    x0 = SIDE + c * cw
+    y0 = TOP + r * ch
+    return x0, x0 + cw, y0, y0 + ch * 0.68
 
 
 def template(page, out):
-    head, chars = PAGES[page]
+    head, chars, paired = PAGES[page]
     im = Image.new('RGB', (W, H), BG)
     d = ImageDraw.Draw(im)
     for cx, cy in corners():
         d.rectangle([cx - MARK / 2, cy - MARK / 2, cx + MARK / 2, cy + MARK / 2], fill=MAGENTA)
-    code = page + 1
+    code = page + CODE0
     for k, (cx, cy) in enumerate(bits()):
         if code >> k & 1:
             d.rectangle([cx - BIT / 2, cy - BIT / 2, cx + BIT / 2, cy + BIT / 2], fill=MAGENTA)
     small = ImageFont.truetype(FONT, 34)
     big, big2 = ImageFont.truetype(FONT, 44), ImageFont.truetype(FONT2, 50)
     blank = big.getmask('\uffff').getbbox(), bytes(big.getmask('\uffff'))
-    d.text((W / 2, 140), f'Лист {page + 1} из {len(PAGES)}, {head}: напиши каждый знак в своей клетке, как обычно',
+    d.text((W / 2, 125), f'Лист {page + 1} из {len(PAGES)}: {head}', font=small, fill=HINT, anchor='mm')
+    d.text((W / 2, 175), 'в рамке слева — большая буква, справа — маленькая' if paired else 'каждый знак в своей клетке',
            font=small, fill=HINT, anchor='mm')
     for i, ch in enumerate(chars):
         x0, x1, y0, base = cell(i)
@@ -88,6 +98,9 @@ def template(page, out):
         d.line([x0 + 14, base, x1 - 14, base], fill=LINE, width=3)
         for x in np.arange(x0 + 14, x1 - 14, 22):  # пунктир высоты строчной
             d.line([x, base - XH, x + 10, base - XH], fill=LINE, width=2)
+        if paired and i % 2:  # рамка вокруг пары «большая | маленькая»
+            px0 = cell(i - 1)[0]
+            d.rectangle([px0 + 1, y0 + 1, x1 - 1, y0 + CELL_H - 1], outline=HINT, width=4)
     im.save(out)
 
 
@@ -145,9 +158,13 @@ def straighten(img):
         box = out[int(cy - BIT / 4):int(cy + BIT / 4), int(cx - BIT / 4):int(cx + BIT / 4)]
         if _magenta(box).mean() > 0.5:
             code |= 1 << k
-    if not 1 <= code <= len(PAGES):
-        raise ValueError('не понял, какая это страница алфавита')
-    return out, code - 1
+    if code == 2:
+        return out, 'old-digits'
+    if 1 <= code < CODE0:
+        raise ValueError('это лист старого алфавита — нажми «✍️ Мой почерк» и заполни новые листы')
+    if not CODE0 <= code < CODE0 + len(PAGES):
+        raise ValueError('не понял, какой это лист алфавита')
+    return out, code - CODE0
 
 
 def ink(a):
@@ -157,20 +174,40 @@ def ink(a):
     return ((chroma > 55) & ~_magenta(a)) | (a.mean(-1) > 185)
 
 
-def glyph_from(mask, base):
-    """Маска клетки -> (точки скелета в единицах XH, ширина) или None, если пусто."""
+def glyph_from(mask, base, tiny=False):
+    """Маска клетки -> (точки скелета в единицах XH, ширина) или None, если пусто.
+    tiny: знак из точек (. , : ;) — мелкие пятна не выбрасываем."""
     from skimage.morphology import skeletonize
     lab, n = ndimage.label(mask, np.ones((3, 3)))
     if not n:
         return None
     area = ndimage.sum(mask, lab, range(1, n + 1))
-    keep = np.isin(lab, 1 + np.nonzero(area >= 25)[0])   # убрать пылинки от сжатия
-    if keep.sum() < 60:
+    keep = np.isin(lab, 1 + np.nonzero(area >= (4 if tiny else 25))[0])   # убрать пылинки от сжатия
+    if keep.sum() < (6 if tiny else 60):
         return None
     ys, xs = np.nonzero(skeletonize(keep))
     x0 = xs.min()
     pts = np.stack([(xs - x0) / XH, (base - ys) / XH], 1).astype(np.float32)
     return pts, float((xs.max() - x0) / XH)
+
+
+# Пишут кто крупнее, кто мельче линеек, и не всегда ровно на строке. Поэтому каждый лист подгоняется
+# по его же знакам к размерам из horo/fonts/gleb.npz: цифры высотой ~1.25, строчные без хвостиков ~0.9,
+# низ — на высоте ~0.1 над строкой. Пропорции между знаками листа сохраняются.
+DIGITS, SHORT = '0123456789', 'авгеёжзийклмнопстхчшъыьэюяacemnorsuvwxz'
+DIGIT_H, SHORT_H, BOTTOM_Y = 1.25, 0.9, 0.1
+
+
+def normalize(glyphs):
+    """[(знак, точки, ширина)] одного листа -> те же знаки в масштабе банка букв."""
+    def med(chars, f):
+        v = [f(p) for c, p, _ in glyphs if c in chars]
+        return float(np.median(v)) if v else None
+    hd, hs = med(DIGITS, lambda p: np.ptp(p[:, 1])), med(SHORT, lambda p: np.ptp(p[:, 1]))
+    k = DIGIT_H / hd if hd else SHORT_H / hs if hs else 1.0
+    bottom = med(DIGITS + SHORT + 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯBDFGHIJKLMNQRSTUVWYZ', lambda p: p[:, 1].min())
+    dy = BOTTOM_Y - bottom * k if bottom is not None else 0.0
+    return [(c, (p * k + [0, dy]).astype(np.float32), w * k) for c, p, w in glyphs]
 
 
 def ingest(paths):
@@ -189,17 +226,25 @@ def ingest(paths):
             errors.append(f'{os.path.basename(path)}: {e}')
             continue
         m = ink(sheet)
-        for i, ch in enumerate(PAGES[page][1]):
-            x0, x1, y0, base = cell(i)
-            # подсказку в левом верхнем углу не берём: обрезаем верх клетки
-            y_top, y_bot = int(y0 + 70), int(y0 + CELL_H - 12)
-            sub = m[y_top:y_bot, int(x0 + 12):int(x1 - 12)]
-            g = glyph_from(sub, base - y_top)
-            if g is None:
-                continue
+        if page == 'old-digits':
+            chars, cols = OLD_DIGITS
+        else:
+            chars, cols = PAGES[page][1], COLS
+        rows = ROWS if cols == COLS else 6
+        cell_h = (H - TOP - BOTTOM) / rows
+        glyphs = []
+        for i, ch in enumerate(chars):
+            x0, x1, y0, base = cell(i, cols, rows)
+            # подсказку в левом верхнем углу не берём: обрезаем верх клетки; края — рамки
+            y_top, y_bot = int(y0 + 70), int(y0 + cell_h - 14)
+            sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
+            g = glyph_from(sub, base - y_top, tiny=ch in '.,:;')
+            if g is not None:
+                glyphs.append((ch, g[0], g[1]))
+        for ch, pts, w in normalize(glyphs):
             k = ord(ch)
             n = sum(1 for key in bank if key.split('_')[0] == str(k) and not key.endswith('w'))
-            bank[f'{k}_{n}'], bank[f'{k}_{n}w'] = g[0], np.float32(g[1])
+            bank[f'{k}_{n}'], bank[f'{k}_{n}w'] = pts, np.float32(w)
             added.append(ch)
     if added:
         os.makedirs(os.path.dirname(EXTRA), exist_ok=True)
@@ -217,6 +262,26 @@ def preview(out):
     h.save(out)
 
 
+def sample(out):
+    """Пример решённого задания: условие «как на сайте» и решение его почерком (стиль из hand_style.json)."""
+    sys.path.insert(0, HERE)
+    from hand import Hand
+    img = Image.new('RGB', (1200, 900), (37, 38, 40))
+    d = ImageDraw.Draw(img)
+    f = ImageFont.truetype(FONT2, 46)
+    d.text((40, 30), '1. Выполните деление дробей:', font=f, fill=(200, 200, 215))
+    d.text((40, 95), 'а) 6a/b : 3a/b        б) 5c/2d : (−15c/d)', font=f, fill=(200, 200, 215))
+    d.text((40, 470), '2. Решите уравнение: 2x + 3 = 11', font=f, fill=(200, 200, 215))
+    h = Hand(img, ink=(90, 160, 240), width=4, seed=3)
+    h.circle(62, 125, 30, 28)
+    h.expr([('6a', 'b'), ' · ', ('b', '3a'), ' = 2'], 70, 260, 50)
+    h.expr([('5c', '2d'), ' · ', ('−d', '15c'), ' = ', ('−1', '6')], 600, 260, 50)
+    h.text('2x = 11 − 3', 70, 610, 50)
+    h.text('2x = 8', 70, 700, 50)
+    h.text('Ответ: x = 4', 70, 800, 50)
+    h.save(out)
+
+
 if __name__ == '__main__':
     cmd, args = sys.argv[1], sys.argv[2:]
     if cmd == 'template':
@@ -229,6 +294,8 @@ if __name__ == '__main__':
         sys.exit(0 if added or not errors else 1)
     elif cmd == 'preview':
         preview(args[0])
+    elif cmd == 'sample':
+        sample(args[0])
     elif cmd == 'reset':
         if os.path.exists(EXTRA):
             os.remove(EXTRA)

@@ -203,12 +203,28 @@ class BotTest(unittest.TestCase):
             self.assertEqual(c.stack, [], text)
             self.assertNotIn("<текст>", text)  # пользовательский текст экранирован
 
+    def test_hand_style_tuning(self):
+        style = os.path.join(self.tmp.name, "hand_style.json")
+        with mock.patch.object(bot, "HAND_STYLE", style), mock.patch.object(bot, "GLEB_EXTRA", __file__), \
+             mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "")), mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
+            bot.mode[CHAT] = "alphabet"
+            self.say("готово")
+            self.assertEqual(bot.mode.get(CHAT), "hand_tune")
+            self.assertIn("hand:mess:1", self.last()[1])           # кнопки настройки под примером
+            bot.on_callback({"id": "1", "data": "hand:mess:1", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+            self.say("чуть тоньше и крупнее")
+            st = json.loads(pathlib.Path(style).read_text())
+            self.assertEqual(st, {"mess": 1.25, "width": 0.9, "size": 1.05})
+            self.say("ок")
+        self.assertNotIn(CHAT, bot.mode)
+        self.assertIn("Запомнил стиль", self.last()[0])
+
     def test_alphabet_mode(self):
         with mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "Добавил: а б")) as _, \
              mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \
              mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
             self.say(bot.BTN_HAND)
-            self.assertEqual(len(self.files), 3)
+            self.assertEqual(len(self.files), 4)
             self.say(photo=[{"file_id": "a"}])
             self.assertTrue(any("Добавил знаков: 2\nа б" in m for m, _ in self.msgs))
             self.say("готово")
