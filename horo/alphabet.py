@@ -173,7 +173,12 @@ def ingest(paths):
     added, errors = [], []
     for path in paths:
         try:
-            sheet, page = straighten(Image.open(path))
+            img = Image.open(path)
+        except Exception:
+            errors.append(f'{os.path.basename(path)}: не открывается как картинка — пришли как фото, а не файлом')
+            continue
+        try:
+            sheet, page = straighten(img)
         except Exception as e:
             errors.append(f'{os.path.basename(path)}: {e}')
             continue
