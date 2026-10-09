@@ -1232,6 +1232,7 @@ def main():
     threading.Thread(target=digest_loop, daemon=True).start()
     threading.Thread(target=setup_profile, daemon=True).start()
     print("Бот запущен")
+    print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
     s = load_settings()
     if s.pop("updated", None):  # поднялись после /update
         save_settings(s)

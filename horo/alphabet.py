@@ -15,8 +15,10 @@ usage:
   python3 horo/alphabet.py ingest img1.png [img2.jpg ...]   печатает, какие буквы добавлены
   python3 horo/alphabet.py preview out.png                  пример текста его почерком
   python3 horo/alphabet.py sample out.png                   пример решённого задания (со стилем из hand_style.json)
+  python3 horo/alphabet.py renorm                           один раз подогнать по буквам старый банк (бот делает при старте)
   python3 horo/alphabet.py reset                            удалить добавленные буквы
 """
+import functools
 import os
 import sys
 
@@ -191,23 +193,58 @@ def glyph_from(mask, base, tiny=False):
     return pts, float((xs.max() - x0) / XH)
 
 
-# Пишут кто крупнее, кто мельче линеек, и не всегда ровно на строке. Поэтому каждый лист подгоняется
-# по его же знакам к размерам из horo/fonts/gleb.npz: цифры высотой ~1.25, строчные без хвостиков ~0.9,
-# низ — на высоте ~0.1 над строкой. Пропорции между знаками листа сохраняются.
-DIGITS, SHORT = '0123456789', 'авгеёжзийклмнопстхчшъыьэюяacemnorsuvwxz'
+# Пишут кто крупнее, кто мельче линеек, и одну букву больше, другую меньше. Поэтому каждая буква
+# подгоняется отдельно к размерам из horo/fonts/gleb.npz: основная часть строчной — высотой 0.9,
+# заглавные и цифры — 1.25, строка (низ основной части) — на 0.1. Хвосты и надстрочные части
+# (р, у, б, й, Д…) в высоту не считаются: где они у буквы, видно по шрифту подсказок (Neucha).
+# Знаки (+ = ( …) берут средний масштаб цифр и букв листа, а не растягиваются до высоты цифры.
 DIGIT_H, SHORT_H, BOTTOM_Y = 1.25, 0.9, 0.1
 
 
+@functools.lru_cache(None)
+def extent(ch):
+    """(низ, верх) знака в Neucha в долях его основной высоты (x-height или высота заглавной),
+    0 — строка. У простых букв (0, 1); у «р» низ около -0.57, у «б» верх около 1.7."""
+    f = ImageFont.truetype(FONT, 200)
+
+    def tb(c):
+        b = f.getbbox(c, anchor='ls')
+        return -b[3], -b[1]
+    ref = tb('х' if ch.islower() else 'Н')[1]
+    bot, top = (v / ref for v in tb(ch))
+    return (0.0 if bot > -0.12 else bot), (1.0 if top < 1.12 else top)
+
+
 def normalize(glyphs):
-    """[(знак, точки, ширина)] одного листа -> те же знаки в масштабе банка букв."""
-    def med(chars, f):
-        v = [f(p) for c, p, _ in glyphs if c in chars]
-        return float(np.median(v)) if v else None
-    hd, hs = med(DIGITS, lambda p: np.ptp(p[:, 1])), med(SHORT, lambda p: np.ptp(p[:, 1]))
-    k = DIGIT_H / hd if hd else SHORT_H / hs if hs else 1.0
-    bottom = med(DIGITS + SHORT + 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯBDFGHIJKLMNQRSTUVWYZ', lambda p: p[:, 1].min())
-    dy = BOTTOM_Y - bottom * k if bottom is not None else 0.0
-    return [(c, (p * k + [0, dy]).astype(np.float32), w * k) for c, p, w in glyphs]
+    """[(знак, точки, ширина)] одного листа -> те же знаки в масштабе банка букв, каждый подогнан отдельно."""
+    flat = [float(p[:, 1].min()) for c, p, _ in glyphs if c.isalnum() and extent(c) == (0.0, 1.0)]
+    line = float(np.median(flat)) if flat else None  # где он пишет строку относительно линейки
+
+    def body(c, p):
+        """(высота основной части, где у неё строка) в координатах листа."""
+        bot, top = extent(c)
+        lo, hi = float(p[:, 1].min()), float(p[:, 1].max())
+        if bot < 0 and top == 1 and line is not None:  # хвост вниз: основная часть — от верха до строки
+            h = hi - line
+            if 0.6 < h * (top - bot) / (hi - lo) < 1.6:
+                return h, line
+        h = (hi - lo) / (top - bot)
+        return h, lo - bot * h
+
+    out, ks = [None] * len(glyphs), []
+    for i, (c, p, w) in enumerate(glyphs):
+        if c.isalnum():
+            h, base = body(c, p)
+            k = (SHORT_H if c.islower() else DIGIT_H) / h
+            out[i] = (k, base)
+            ks.append(k)
+    kmed = float(np.median(ks)) if ks else 1.0
+    res = []
+    for (c, p, w), kb in zip(glyphs, out):
+        k, base = kb or (kmed, line if line is not None else 0.0)
+        k = min(max(k, kmed / 2.5), kmed * 2.5)  # клякса или обрывок буквы не раздувается в гиганта
+        res.append((c, ((p - [0, base]) * k + [0, BOTTOM_Y]).astype(np.float32), w * k))
+    return res
 
 
 def ingest(paths):
@@ -249,7 +286,23 @@ def ingest(paths):
     if added:
         os.makedirs(os.path.dirname(EXTRA), exist_ok=True)
         np.savez_compressed(EXTRA, **bank)
+        open(EXTRA + '.v2', 'w').close()
     return added, errors
+
+
+def renorm():
+    """Буквы, разобранные до подгонки каждой буквы отдельно (весь лист одним масштабом), подогнать заново.
+    Один раз: потом рядом лежит метка EXTRA.v2. Возвращает число подогнанных знаков."""
+    if not os.path.exists(EXTRA) or os.path.exists(EXTRA + '.v2'):
+        return 0
+    bank = dict(np.load(EXTRA))
+    keys = [k for k in bank if not k.endswith('w')]
+    glyphs = normalize([(chr(int(k.split('_')[0])), bank[k], float(bank[k + 'w'])) for k in keys])
+    for k, (_, pts, w) in zip(keys, glyphs):
+        bank[k], bank[k + 'w'] = pts, np.float32(w)
+    np.savez_compressed(EXTRA, **bank)
+    open(EXTRA + '.v2', 'w').close()
+    return len(keys)
 
 
 def preview(out):
@@ -296,9 +349,12 @@ if __name__ == '__main__':
         preview(args[0])
     elif cmd == 'sample':
         sample(args[0])
+    elif cmd == 'renorm':
+        print('Подогнал знаков:', renorm())
     elif cmd == 'reset':
-        if os.path.exists(EXTRA):
-            os.remove(EXTRA)
+        for p in (EXTRA, EXTRA + '.v2'):
+            if os.path.exists(p):
+                os.remove(p)
         print('Добавленные буквы удалены')
     else:
         sys.exit(__doc__)

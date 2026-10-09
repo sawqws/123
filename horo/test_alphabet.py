@@ -13,18 +13,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import alphabet as A
 
 
-def fill(page, skip=()):
-    """Шаблон, в котором синим «написаны» все буквы страницы, кроме skip."""
+def fill(page, skip=(), sizes=None):
+    """Шаблон, в котором синим «написаны» все буквы страницы, кроме skip.
+    sizes: {буква: размер шрифта} — чтобы буквы были разного размера (по умолчанию все 150)."""
     with tempfile.TemporaryDirectory() as d:
         A.template(page, os.path.join(d, 't.png'))
         im = Image.open(os.path.join(d, 't.png')).convert('RGB')
     dr = ImageDraw.Draw(im)
-    f = ImageFont.truetype(A.FONT, 150)
     for i, ch in enumerate(A.PAGES[page][1]):
         if ch in skip:
             continue
         x0, x1, y0, base = A.cell(i)
-        dr.text((x0 + 70, base), ch, font=f, fill=(90, 160, 240), anchor='ls')
+        f = ImageFont.truetype(A.FONT, (sizes or {}).get(ch, 150))
+        dr.text((x0 + 30, base), ch, font=f, fill=(90, 160, 240), anchor='ls')
     return im
 
 
@@ -70,6 +71,60 @@ class AlphabetTest(unittest.TestCase):
         self.assertIn('7', added)
         z = np.load(A.EXTRA)
         self.assertIn(f'{ord("7")}_1', z.files)  # второй вариант буквы, первый не затёрт
+
+    def test_each_letter_same_size(self):
+        """Буквы написаны вразнобой (от 0.65 до 1.5 от обычного) — после разбора основные части
+        строчных одной высоты, заглавных тоже; хвосты у р, у, д не мешают, низ на строке."""
+        rnd = np.random.default_rng(5)
+        for page in range(3):
+            chars = A.PAGES[page][1]
+            sizes = {ch: int(150 * rnd.uniform(0.65, 1.5)) for ch in chars}
+            A.EXTRA = os.path.join(self.tmp.name, f'e{page}.npz')
+            added, errors = A.ingest([as_telegram(fill(page, sizes=sizes), angle=1)])
+            self.assertEqual((''.join(added), errors), (chars, []))
+            z = np.load(A.EXTRA)
+            low, up = {}, {}
+            for ch in chars:
+                bot, top = A.extent(ch)
+                p = z[f'{ord(ch)}_0'][:, 1]
+                h = (p.max() - A.BOTTOM_Y) if top == 1 else (p.max() - p.min()) / (top - bot)
+                (low if ch.islower() else up)[ch] = h
+                if bot == 0:
+                    self.assertAlmostEqual(p.min(), A.BOTTOM_Y, delta=0.08, msg=ch)  # стоит на строке
+            for d, want in ((low, A.SHORT_H), (up, A.DIGIT_H)):
+                v = np.array(list(d.values()))
+                self.assertLess(np.abs(v - want).max() / want, 0.12, {c: round(float(h), 2) for c, h in d.items()})
+            # хвосты на месте: «у» уходит ниже строки, «б» выше строчных
+            if page == 0:
+                self.assertGreater(z[f'{ord("б")}_0'][:, 1].max(), 1.3)
+            if page == 1:
+                self.assertLess(z[f'{ord("у")}_0'][:, 1].min(), -0.2)
+
+    def test_signs_follow_digits(self):
+        """Знаки берут масштаб цифр: «+» и «-» не раздуваются до высоты цифры."""
+        A.ingest([as_telegram(fill(3))])
+        z = np.load(A.EXTRA)
+        hd = np.ptp(z[f'{ord("7")}_0'][:, 1])
+        self.assertAlmostEqual(hd, A.DIGIT_H, delta=0.1)
+        self.assertLess(np.ptp(z[f'{ord("+")}_0'][:, 1]), 0.8 * hd)
+        self.assertLess(np.ptp(z[f'{ord("-")}_0'][:, 1]), 0.2)
+
+    def test_renorm_old_bank(self):
+        """Банк, разобранный старым способом (лист одним масштабом), подгоняется по буквам один раз."""
+        rnd = np.random.default_rng(1)
+        sizes = {ch: int(150 * rnd.uniform(0.65, 1.5)) for ch in A.PAGES[0][1]}
+        normalize = A.normalize
+        A.normalize = lambda g: [(c, p * 0.8 + [0, 0.1], w * 0.8) for c, p, w in g]  # как старый: один масштаб
+        try:
+            A.ingest([as_telegram(fill(0, sizes=sizes))])
+        finally:
+            A.normalize = normalize
+        os.remove(A.EXTRA + '.v2')
+        self.assertGreater(A.renorm(), 30)
+        self.assertEqual(A.renorm(), 0)  # второй раз ничего не делает
+        z = np.load(A.EXTRA)
+        for ch in 'аеинопгк':
+            self.assertAlmostEqual(np.ptp(z[f'{ord(ch)}_0'][:, 1]), A.SHORT_H, delta=0.1, msg=ch)
 
     def test_empty_and_garbage(self):
         empty = as_telegram(fill(2, skip=A.PAGES[2][1]))
