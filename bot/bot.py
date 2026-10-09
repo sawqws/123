@@ -74,24 +74,31 @@ MENU = json.dumps({
     ],
     "resize_keyboard": True,
 })
-HELP = (
-    "Что я умею:\n\n"
-    f"{BTN_DO} — пришли ссылку на задание, я решу его и отправлю на сайт.\n"
-    f"{BTN_SHOW} — пришли ссылку, я только покажу ответы, на сайт ничего не отправлю.\n"
-    f"{BTN_LIST} — все несделанные обязательные задания по предметам.\n"
-    f"{BTN_LATE} — только задания с прошедшим сроком.\n"
-    f"{BTN_ALL} — найду все новые тесты с автопроверкой и сдам их по очереди (сначала спрошу).\n"
-    f"{BTN_COMM} — что учитель написал по заданиям на доработке.\n"
-    f"{BTN_GRADES} — оценки и уровни по предметам.\n"
-    f"{BTN_DIGEST} — включить или выключить сводку каждый день в {DIGEST_HOUR}:00 по Москве.\n"
-    f"{BTN_HAND} — пришлю алфавит, заполнишь своим почерком, и решения «на скрине» буду писать им.\n"
-    f"{BTN_CHECK} — проверю, что всё работает: вход на сайт, Claude, почерк.\n\n"
-    "Можно просто прислать ссылку без кнопки: решу и отправлю.\n"
-    "Задания, которые проверяет учитель, сначала присылаю черновиком. Можно прислать исправленный текст "
-    "или свои фото вместо моих, потом нажать «Отправить». Твои правки запоминаю и учитываю дальше.\n"
-    "/emoji — поставить премиум-эмодзи вместо обычных (нужен Telegram Premium).\n"
-    "/update — обновить бота до новой версии."
+HELP = (  # HTML: отправляется с raw_html=True
+    "📖 <b>Что я умею</b>\n\n"
+    "<b>Задания</b>\n"
+    f"{BTN_DO} — пришли ссылку, решу и сдам\n"
+    f"{BTN_SHOW} — пришли ссылку, только покажу ответы\n"
+    f"{BTN_ALL} — найду новые тесты и сдам их (сначала спрошу)\n\n"
+    "<b>Учёба</b>\n"
+    f"{BTN_LIST} — все несделанные задания по предметам\n"
+    f"{BTN_LATE} — только просроченные\n"
+    f"{BTN_COMM} — что написали учителя\n"
+    f"{BTN_GRADES} — оценки и сколько до следующей\n"
+    f"{BTN_DIGEST} — список дел каждый день в {DIGEST_HOUR}:00 по Москве\n\n"
+    "<b>Задания для учителя</b>\n"
+    "Сначала присылаю черновик. Поправь текстом или просьбой («убери второй абзац»), "
+    "можно своими фото, потом нажми «✅ Отправить». Твои правки запоминаю.\n\n"
+    "<b>Почерк и настройки</b>\n"
+    f"{BTN_HAND} — алфавит, чтобы писать решения твоим почерком\n"
+    f"{BTN_CHECK} — проверю, что всё работает\n"
+    "/update — обновить бота · /emoji — премиум-эмодзи"
 )
+BUSY = "⏳ Я сейчас занят другим заданием, попробуй через пару минут."
+
+
+def esc(x):
+    return html.escape(str(x), quote=False)
 
 
 # ---------- Telegram ----------
@@ -276,10 +283,10 @@ def claude(prompt, tools, timeout=TIMEOUT):
 
 def run_script(chat, *args):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас занят заданием, попробуй через пару минут.")
+        send(chat, BUSY)
         return
     try:
-        send(chat, "Смотрю сайт…")
+        send(chat, "🔎 Смотрю сайт…")
         ok, out = node(*args)
         send(chat, out, menu=True, raw_html=ok and "--html" in args)
     finally:
@@ -322,19 +329,19 @@ def solve(url, text="", show=False):
 
 def run_task(chat, url, text, show=False):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас делаю другое задание, пришли ссылку чуть позже.")
+        send(chat, BUSY)
         return
     try:
-        send(chat, "Принял, делаю… Обычно это 1–3 минуты.")
+        send(chat, "⏳ Решаю задание, обычно это 1–3 минуты…")
         task, t0 = drafts.task_id(url), time.time()
         drafts.clear(task)
         out = solve(url, text, show)
         if "НУЖЕН_АЛФАВИТ" in out:
             drafts.clear(task)
-            send(chat, "✍️ Это задание решается от руки, а твоего алфавита у меня ещё нет.\n"
-                       f"Нажми «{BTN_HAND}», заполни 3 листа и пришли ссылку на задание снова.", menu=True)
+            send(chat, "✍️ <b>Нужен твой почерк</b>\n\nЭто задание решается от руки, а твоего алфавита у меня ещё нет. "
+                       f"Нажми «{BTN_HAND}», заполни 3 листа и пришли ссылку на задание снова.", menu=True, raw_html=True)
             return
-        send(chat, out, menu=True)
+        send(chat, f"📝 <b>Результат</b>\n\n{esc(out)}", menu=True, raw_html=True)
         if drafts.fresh(task, t0):
             offer_draft(chat, task, url)
     finally:
@@ -374,9 +381,12 @@ def show_draft(chat):
     d = draft()
     text = drafts.read(d["task"])
     n = len(drafts.files(d["task"]))
-    send(chat, f"📄 Черновик для учителя: {d['title']}\n\n{text or '(без текста)'}\n\n"
-               + (f"Картинок: {n}\n" if n else "")
-               + "Поправить: пришли исправленный текст целиком или свои фото вместо моих.", markup=DRAFT_KB)
+    quote = "blockquote expandable" if len(text) > 700 else "blockquote"  # длинный текст свёрнут, раскрывается по нажатию
+    send(chat, f"📄 <b>Черновик для учителя</b>\n<i>{esc(d['title'])}</i>\n\n"
+               + (f"<{quote}>{esc(text)}</{quote.split()[0]}>\n\n" if text else "")
+               + (f"🖼 Картинок: {n}\n" if n else "")
+               + "✏️ Поправить: пришли новый текст, просьбу («убери второй абзац») или свои фото.",
+         markup=DRAFT_KB, raw_html=True)
 
 
 def edit_draft(chat, text):
@@ -385,10 +395,10 @@ def edit_draft(chat, text):
     before = drafts.read(d["task"])
     if len(text) < 0.6 * len(before):
         if not lock.acquire(blocking=False):
-            send(chat, "Сейчас занят, пришли правку чуть позже.")
+            send(chat, BUSY)
             return
         try:
-            send(chat, "Правлю…")
+            send(chat, "✏️ Правлю…")
             path = os.path.relpath(drafts.text_path(d["task"]), REPO)
             ok, out = claude(
                 f"В {path} черновик ответа учителю. Глеб написал про него: «{text}».\n"
@@ -406,7 +416,7 @@ def edit_draft(chat, text):
     if drafts.record_edit(d["task"], d["title"], before, after):
         d["pairs"].append([before, after, text])
         set_draft(d)
-    send(chat, "Принял правку.")
+    send(chat, "✅ Правку внёс.")
     show_draft(chat)
 
 
@@ -417,12 +427,12 @@ def add_draft_photo(chat, msg):
     d["own_files"] = True
     set_draft(d)
     n = len(drafts.files(d["task"]))
-    send(chat, f"Фото добавил, всего картинок: {n}. Когда всё — жми «Отправить».", markup=DRAFT_KB)
+    send(chat, f"🖼 Фото добавил, всего картинок: {n}. Когда всё — жми «✅ Отправить учителю».", markup=DRAFT_KB)
 
 
 def submit_draft(chat):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас занят заданием, нажми «Отправить» чуть позже.", markup=DRAFT_KB)
+        send(chat, BUSY, markup=DRAFT_KB)
         return
     try:
         d = draft()
@@ -431,15 +441,18 @@ def submit_draft(chat):
             return
         if not os.path.exists(drafts.text_path(d["task"])):
             drafts.write(d["task"], "")
-        send(chat, "Отправляю учителю…")
+        send(chat, "📤 Отправляю учителю…")
         ok, out = node("horo/answer.js", d["url"], drafts.text_path(d["task"]), *drafts.files(d["task"]), timeout=600)
-        send(chat, out, menu=True)
+        if ok:
+            send(chat, f"✅ <b>Отправлено учителю</b>\n<blockquote expandable>{esc(out.strip())}</blockquote>", menu=True, raw_html=True)
+        else:
+            send(chat, out, menu=True)
         if not ok:
-            send(chat, "Не отправилось. Черновик остался, можно нажать ещё раз.", markup=DRAFT_KB)
+            send(chat, "⚠️ Не отправилось. Черновик остался, можно нажать ещё раз.", markup=DRAFT_KB)
             return
         set_draft(None)
         if d["pairs"]:
-            send(chat, "Запоминаю твои правки…")
+            send(chat, "🧠 Запоминаю твои правки…")
             send(chat, learn_style(d["pairs"]), menu=True)
     finally:
         lock.release()
@@ -475,7 +488,7 @@ def on_callback(cq):
         threading.Thread(target=submit_draft, args=(chat,), daemon=True).start()
     elif cq.get("data") == "drop":
         set_draft(None)
-        send(chat, "Не отправляю. Если передумаешь, пришли ссылку ещё раз.", menu=True)
+        send(chat, "👌 Не отправляю. Если передумаешь, пришли ссылку ещё раз.", menu=True)
 
 
 # ---------- Почерк ----------
@@ -486,9 +499,12 @@ GLEB_EXTRA = os.path.join(REPO, "horo", "tmp", "fonts", "gleb_extra.npz")  # б�
 
 def send_alphabet(chat):
     os.makedirs(ALPHA_DIR, exist_ok=True)
-    send(chat, "Это алфавит из 3 листов. Открой каждый на iPad, напиши в клетках буквы своим почерком "
-               "(как в заметках) и пришли обратно скриншотом или фото, можно все сразу. "
-               "Пустые клетки можно оставить. Когда закончишь, напиши «готово».")
+    send(chat, "✍️ <b>Алфавит твоим почерком</b>\n\n"
+               "1. Сохрани 3 листа ниже: русские буквы, цифры и знаки, латиница.\n"
+               "2. На iPad открой лист в «Фото» → Править → Разметка.\n"
+               "3. Пиши синим или белым, каждый знак в своей клетке, на линии. Пустые клетки можно оставить.\n"
+               "4. Не обрезай лист: розовые квадраты по углам должны быть видны.\n"
+               "5. Пришли листы сюда, потом напиши «готово».", raw_html=True)
     for page in (1, 2, 3):
         out = os.path.join(ALPHA_DIR, f"alphabet_{page}.png")
         ok, err = py("horo/alphabet.py", "template", str(page), out)
@@ -501,7 +517,7 @@ def send_alphabet(chat):
 
 def take_alphabet(chat, msg):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас занят заданием, пришли лист чуть позже.")
+        send(chat, BUSY)
         return
     try:
         data, name = download(attachment(msg))
@@ -509,8 +525,17 @@ def take_alphabet(chat, msg):
         with open(path, "wb") as f:
             f.write(data)
         ok, out = py("horo/alphabet.py", "ingest", path)
-        send(chat, out.strip())
-        if ok:
+        lines = out.strip().splitlines()
+        added = next((l.split(":", 1)[1].split() for l in lines if l.startswith("Добавил:")), [])
+        added = [] if added == ["ничего"] else added
+        errors = [l.split(":", 1)[1].strip() for l in lines if l.startswith("Ошибка:")]
+        if added:
+            send(chat, f"✅ Добавил знаков: {len(added)}\n" + " ".join(added))
+        for e in errors:
+            send(chat, f"⚠️ Лист не разобрал: {e}")
+        if not ok and not errors:
+            send(chat, out)  # непонятная ошибка — как есть
+        if added:
             prev = os.path.join(ALPHA_DIR, "preview.png")
             if py("horo/alphabet.py", "preview", prev)[0]:
                 send_file(chat, prev, "Так теперь пишу твоим почерком. Пришли ещё лист или напиши «готово».")
@@ -522,34 +547,31 @@ def take_alphabet(chat, msg):
 
 def check(chat):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас занят заданием, попробуй через пару минут.")
+        send(chat, BUSY)
         return
     try:
-        send(chat, "Проверяю, это до минуты…")
+        send(chat, "🩺 Проверяю, это до минуты…")
         git = lambda *a: subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
-        lines = [f"Версия: {git('rev-parse', '--abbrev-ref', 'HEAD')} {git('rev-parse', '--short', 'HEAD')}"]
+        lines = ["🩺 <b>Проверка</b>", ""]
         ok, out = node("horo/grades.js", timeout=180)
-        lines.append("✅ Сайт: вход работает" if ok else "❌ Сайт: " + out.strip()[-300:])
+        lines.append("✅ Сайт — вход работает" if ok else "❌ Сайт — " + esc(out.strip()[-300:]))
         ok, out = claude("Ответь одним словом: ok", [], timeout=120)
-        if ok and out.strip():
-            lines.append("✅ Claude: отвечает")
-        else:
-            lines.append("❌ Claude: " + out.strip()[-300:] + "\nВойди на сервере: cd /root/horo && claude")
+        lines.append("✅ Claude — отвечает" if ok and out.strip() else "❌ Claude — " + esc(out.strip()[-300:]))
         ok, out = py("-c", "import numpy, scipy, skimage, PIL")
-        lines.append("✅ Почерк: библиотеки есть" if ok else "❌ Почерк: нет библиотек, перезапусти установку (install.sh)")
-        own = os.path.exists(GLEB_EXTRA)
-        lines.append("✍️ Алфавит твоим почерком: " + ("загружен" if own else f"ещё нет ({BTN_HAND})"))
-        send(chat, "\n".join(lines), menu=True)
+        lines.append("✅ Почерк — библиотеки на месте" if ok else "❌ Почерк — нет библиотек, нужна переустановка (install.sh)")
+        lines.append("✅ Алфавит — заполнен" if os.path.exists(GLEB_EXTRA) else f"✍️ Алфавит — ещё не заполнен ({BTN_HAND})")
+        lines += ["", f"<i>Версия {esc(git('rev-parse', '--short', 'HEAD'))}</i>"]
+        send(chat, "\n".join(lines), menu=True, raw_html=True)
     finally:
         lock.release()
 
 
 def find_auto_tests(chat):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас занят заданием, попробуй через пару минут.")
+        send(chat, BUSY)
         return
     try:
-        send(chat, "Ищу новые тесты с автопроверкой…")
+        send(chat, "🔎 Ищу новые тесты с автопроверкой…")
         ok, out = node("horo/status.js", "--json")
         if not ok:
             send(chat, out, menu=True)
@@ -560,21 +582,21 @@ def find_auto_tests(chat):
             return
         pending[chat] = [r["url"] for r in tests]
         mode[chat] = "confirm_all"
-        lines = "\n".join(f"{i + 1}. {r['subj']}: {r['title']}" for i, r in enumerate(tests))
-        send(chat, f"Нашёл {len(tests)}:\n{lines}\n\nСдать все? Напиши «да» или «нет».")
+        lines = "\n".join(f"{i + 1}. <b>{esc(r['subj'])}</b> — {esc(r['title'])}" for i, r in enumerate(tests))
+        send(chat, f"⚡ <b>Нашёл тестов: {len(tests)}</b>\n\n{lines}\n\nСдать все? Напиши «да» или «нет».", raw_html=True)
     finally:
         lock.release()
 
 
 def run_all(chat, urls):
     if not lock.acquire(blocking=False):
-        send(chat, "Сейчас занят заданием, попробуй через пару минут.")
+        send(chat, BUSY)
         return
     try:
         for i, url in enumerate(urls, 1):
-            send(chat, f"Тест {i} из {len(urls)}…")
-            send(chat, solve(url))
-        send(chat, "Все тесты сделаны ✅", menu=True)
+            send(chat, f"⏳ Тест {i} из {len(urls)}…")
+            send(chat, f"📝 <b>Тест {i}</b>\n\n{esc(solve(url))}", raw_html=True)
+        send(chat, "✅ Все тесты сделаны!", menu=True)
     finally:
         lock.release()
 
@@ -620,9 +642,12 @@ def handle(msg):
     name = msg.get("from", {}).get("first_name") or ""
 
     if text.startswith("/start"):
-        send(chat, f"Привет{', ' + name if name else ''}! 👋\n"
-                   "Я помогаю с заданиями на horodigital: решаю тесты, подсказываю ответы и слежу за сроками.\n\n"
-                   "Выбери, что сделать 👇", menu=True)
+        send(chat, f"👋 <b>Привет{', ' + esc(name) if name else ''}!</b>\n\n"
+                   "Я помогаю с заданиями на HDP:\n"
+                   "• решаю и сдаю задания по ссылке\n"
+                   "• показываю, что надо сделать и что просрочено\n"
+                   "• собираю комментарии учителей и оценки\n\n"
+                   "Выбери действие внизу 👇", menu=True, raw_html=True)
         return
     if text.startswith("/update"):
         update(chat)
@@ -656,10 +681,10 @@ def handle(msg):
             return
         if text.lower().strip(".! ") in ("готово", "все", "всё", "хватит"):
             mode.pop(chat)
-            send(chat, "Готово ✍️ Теперь решения «на скрине» пишу твоим почерком.", menu=True)
+            send(chat, "✍️ Готово! Теперь решения «от руки» пишу твоим почерком.", menu=True)
             return
         if text not in BUTTONS and not LINK.search(text):
-            send(chat, "Жду листы алфавита (скриншот или фото). Закончил — напиши «готово».")
+            send(chat, "📸 Жду листы алфавита (скриншот или фото). Закончил — напиши «готово».")
             return
         mode.pop(chat)
     if mode.get(chat) == "confirm_all":
@@ -668,7 +693,7 @@ def handle(msg):
         if text.lower() in ("да", "yes", "ок", "давай"):
             threading.Thread(target=run_all, args=(chat, urls), daemon=True).start()
         else:
-            send(chat, "Отменил.", menu=True)
+            send(chat, "👌 Отменил.", menu=True)
         return
     if draft() and attachment(msg):
         threading.Thread(target=add_draft_photo, args=(chat, msg), daemon=True).start()
@@ -690,15 +715,15 @@ def handle(msg):
         threading.Thread(target=run_script, args=(chat, *simple[text]), daemon=True).start()
         return
     if text == BTN_HELP:
-        send(chat, HELP, menu=True)
+        send(chat, HELP, menu=True, raw_html=True)
         return
     if text == BTN_DO:
         mode.pop(chat, None)
-        send(chat, "Пришли ссылку на задание.")
+        send(chat, "🔗 Пришли ссылку на задание — решу и сдам.")
         return
     if text == BTN_SHOW:
         mode[chat] = "show"
-        send(chat, "Пришли ссылку, покажу ответы без отправки.")
+        send(chat, "🔗 Пришли ссылку — покажу ответы, на сайт ничего не отправлю.")
         return
     if text == BTN_ALL:
         threading.Thread(target=find_auto_tests, args=(chat,), daemon=True).start()
@@ -707,12 +732,14 @@ def handle(msg):
         s = load_settings()
         s["digest"] = not s.get("digest")
         save_settings(s)
-        send(chat, f"Сводка каждый день в {DIGEST_HOUR}:00 по Москве: {'включена ✅' if s['digest'] else 'выключена'}", menu=True)
+        send(chat, f"🔔 Сводка каждый день в {DIGEST_HOUR}:00 по Москве — <b>{'включена' if s['digest'] else 'выключена'}</b>\n"
+                   + ("Буду присылать список того, что надо сделать." if s["digest"] else "Включить снова — та же кнопка."),
+             menu=True, raw_html=True)
         return
 
     m = LINK.search(text)
     if not m:
-        send(chat, "Не понял 🤔 Пришли ссылку на задание или выбери действие в меню.", menu=True)
+        send(chat, "🤔 Не понял. Пришли ссылку на задание или выбери действие внизу.", menu=True)
         return
     show = mode.pop(chat, None) == "show"
     threading.Thread(target=run_task, args=(chat, m.group(0), text, show), daemon=True).start()
