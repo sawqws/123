@@ -3,7 +3,7 @@
 //   --late  только просроченные
 //   --json  вывести список в JSON (для бота)
 //   --html  разметка для Telegram: названия заданий — ссылки (так шлёт бот)
-const { open, close, api, EDU } = require('./lib');
+const { open, close, api, subjIcon, EDU } = require('./lib');
 
 const NAMES = { appointed: 'Пора начать', reworking: 'На доработке', failed: 'Не зачтено' };
 const ICONS = { appointed: '🆕', reworking: '🔁', failed: '❌' };
@@ -11,16 +11,17 @@ const DAY = 24 * 3600 * 1000;
 
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const ddmm = d => d.split('-').reverse().slice(0, 2).join('.');
-const days = n => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'}`;
+const word = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? few : many);
+const days = n => `${n} ${word(n, 'день', 'дня', 'дней')}`;
 
 function render(rows, onlyLate, html) {
   const b = s => (html ? `<b>${esc(s)}</b>` : s);
   const i = s => (html ? `<i>${esc(s)}</i>` : s);
   const link = r => (html ? `<a href="${r.url}">${esc(r.title)}</a>` : r.title);
   const late = rows.filter(r => r.late).length;
-  const out = [onlyLate
-    ? `❗ ${b(`Просрочено: ${rows.length}`)}`
-    : `📋 ${b(`Надо сделать: ${rows.length}`)}${late ? `, из них просрочено ${late}` : ''}`];
+  const out = onlyLate
+    ? [`❗ ${b('Просрочки')}`, `${rows.length} ${word(rows.length, 'задание', 'задания', 'заданий')} после дедлайна`]
+    : [`📋 ${b('Надо сделать')}`, `${rows.length} ${word(rows.length, 'задание', 'задания', 'заданий')}${late ? ` · ⏰ ${late} просрочено` : ' · всё в срок ✨'}`];
 
   const bySubj = {};
   for (const r of rows) (bySubj[r.subj] ||= []).push(r);
@@ -30,20 +31,23 @@ function render(rows, onlyLate, html) {
 
   for (const subj of subjects) {
     const list = bySubj[subj];
-    out.push('', `${b(subj)} · ${list.length}`);
+    out.push('', `${subjIcon(subj)} ${b(subj)} · ${list.length}`);
     const byTopic = {};
     for (const r of list) (byTopic[r.topicId] ||= []).push(r);
     const topics = Object.values(byTopic).sort((a, c) => a[0].deadline.localeCompare(c[0].deadline));
+    const lines = [];
     for (const t of topics) {
-      if (topics.length > 1 || t.length > 1) out.push(i(t[0].topic));
+      if (topics.length > 1 || t.length > 1) lines.push(i(t[0].topic));
       for (const r of t.sort((a, c) => a.order - c.order)) {
-        const when = r.late ? `просрочено на ${days(r.lateDays)}` : `до ${r.dl}`;
-        out.push(`${ICONS[r.rawStatus]} ${link(r)} · ${when}${r.auto ? ' ⚡' : ''}`);
-        if (!html) out.push(`   ${r.url}`);
+        const when = r.late ? `⏰ ${days(r.lateDays)}` : `до ${r.dl}`;
+        lines.push(`${ICONS[r.rawStatus]} ${link(r)} · ${when}${r.auto ? ' ⚡' : ''}`);
+        if (!html) lines.push(`   ${r.url}`);
       }
     }
+    // В Telegram задания предмета — цитатой; длинный список свёрнут и раскрывается по нажатию
+    out.push(html ? `<blockquote${list.length > 5 ? ' expandable' : ''}>${lines.join('\n')}</blockquote>` : lines.join('\n'));
   }
-  out.push('', '🔁 на доработке · ❌ не зачтено · 🆕 не начато · ⚡ тест: бот сдаст сам');
+  out.push('', i('🔁 доработка · ❌ не зачтено · 🆕 новое · ⏰ просрочено на · ⚡ сдам сам'));
   return out.join('\n');
 }
 
@@ -61,6 +65,7 @@ function render(rows, onlyLate, html) {
       const deadline = tp.studyPeriod.deadlineDate;
       rows.push({
         subj: disc[tp.disciplineId] || tp.disciplineId,
+        icon: subjIcon(disc[tp.disciplineId] || ''),
         st: NAMES[st],
         auto: t.type === 'test',
         title: t.title.trim(),
@@ -78,7 +83,7 @@ function render(rows, onlyLate, html) {
     const onlyLate = process.argv.includes('--late');
     if (onlyLate) rows.splice(0, rows.length, ...rows.filter(r => r.late));
     if (process.argv.includes('--json')) { console.log(JSON.stringify(rows)); return; }
-    if (!rows.length) { console.log(onlyLate ? 'Просрочек нет 🎉' : 'Ничего не найдено 🎉'); return; }
+    if (!rows.length) { console.log(onlyLate ? '🎉 Просрочек нет — всё сдано вовремя' : '🎉 Всё сделано, заданий нет'); return; }
     console.log(render(rows, onlyLate, process.argv.includes('--html')));
   } finally {
     await close(s);

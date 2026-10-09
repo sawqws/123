@@ -2,3 +2,5 @@ horo/tmp/
 node_modules/
 __pycache__/
 planner/data/
+tgbot/tmp/
+tgbot/.venv/

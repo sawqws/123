@@ -64,7 +64,7 @@ class BotTest(unittest.TestCase):
             self.msgs.append((p["text"], p.get("reply_markup")))
         return {"ok": True, "result": []}
 
-    def fake_claude(self, prompt, tools, timeout=0):
+    def fake_claude(self, prompt, tools, timeout=0, on_tool=None):
         self.prompts.append(prompt)
         if prompt.startswith("Задание:"):  # решение: Claude пишет черновик и картинку
             drafts.write(TASK, "Клетка делится митозом.\nЭто важно.")
@@ -137,7 +137,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(len(self.prompts), 2)  # правок не было — обобщать нечего
 
     def test_autotest_has_no_draft(self):
-        def solve_only(prompt, tools, timeout=0):
+        def solve_only(prompt, tools, timeout=0, on_tool=None):
             self.prompts.append(prompt)
             return True, "Баллы 5/5"
         with mock.patch.object(bot, "claude", solve_only):
@@ -153,7 +153,7 @@ class BotTest(unittest.TestCase):
     def test_handwriting_needs_alphabet(self):
         with mock.patch.object(bot, "GLEB_EXTRA", "/nonexistent"):
             self.assertIn("НУЖЕН_АЛФАВИТ", bot.prompt_for(URL, "", False))
-            with mock.patch.object(bot, "claude", lambda p, t, timeout=0: (True, "НУЖЕН_АЛФАВИТ")):
+            with mock.patch.object(bot, "claude", lambda p, t, timeout=0, on_tool=None: (True, "НУЖЕН_АЛФАВИТ")):
                 self.say(URL)
         self.assertIn("алфавита у меня ещё нет", self.last()[0])
         self.assertIsNone(bot.draft())
@@ -229,6 +229,97 @@ class BotTest(unittest.TestCase):
             self.assertTrue(any("Добавил знаков: 2\nа б" in m for m, _ in self.msgs))
             self.say("готово")
         self.assertNotIn(CHAT, bot.mode)
+
+    def test_score_card_and_confetti(self):
+        sent = []
+        def tg(method, **p):
+            if method == "sendMessage":
+                sent.append(p)
+            if method == "setMessageReaction":
+                sent.append({"reaction": p["reaction"]})
+            return {"ok": True, "result": {"message_id": 7}}
+        with mock.patch.object(bot, "tg", tg), \
+             mock.patch.object(bot, "claude", lambda p, t, timeout=0, on_tool=None: (True, "БАЛЛЫ: 7/7\n1. ответ А")):
+            bot.handle({"chat": {"id": CHAT}, "from": {"id": CHAT}, "text": URL, "message_id": 3})
+        card = [p for p in sent if "text" in p][-1]
+        self.assertIn("🏆 <b>7 / 7</b> · 100%", card["text"])
+        self.assertNotIn("БАЛЛЫ", card["text"])
+        self.assertEqual(card.get("message_effect_id"), bot.EFFECT_CONFETTI)
+        self.assertEqual(json.loads([p for p in sent if "reaction" in p][-1]["reaction"]), [{"type": "emoji", "emoji": "🏆"}])
+        self.assertEqual(bot.parse_score("БАЛЛЫ: 85%")[0], (85.0, None, 85))
+        self.assertEqual(bot.parse_score("Сдал\n**БАЛЛЫ: 6/7**")[0][2], 86)
+        self.assertIsNone(bot.parse_score("баллы не показали")[0])
+        self.assertEqual(bot.md("**1.** ответ `a<b`\n- пункт\n```\nx\n```"), "<b>1.</b> ответ <code>a&lt;b</code>\n• пункт\nx")
+
+    def test_effect_falls_back(self):
+        """Неизвестный эффект Telegram не принял — сообщение уходит без него, с разметкой."""
+        import io, urllib.error
+        calls = []
+        def tg(method, **p):
+            calls.append(p)
+            if "message_effect_id" in p:
+                raise urllib.error.HTTPError("u", 400, "bad effect", {}, io.BytesIO(b""))
+            return {"ok": True, "result": {"message_id": 1}}
+        with mock.patch.object(bot, "tg", tg):
+            self.assertEqual(bot.send(CHAT, "<b>ok</b>", raw_html=True, effect="1"), 1)
+        self.assertEqual(calls[-1]["text"], "<b>ok</b>")
+        self.assertEqual(calls[-1]["parse_mode"], "HTML")
+
+    def test_split_keeps_quotes_whole(self):
+        quote = "<blockquote>" + "\n".join(["строка задания"] * 100) + "</blockquote>"
+        parts = bot.split("📋 <b>Надо сделать</b>\n\n" + "\n\n".join([quote] * 4))
+        self.assertGreater(len(parts), 1)
+        for p in parts:
+            self.assertEqual(p.count("<blockquote>"), p.count("</blockquote>"))
+
+    def test_steps_from_tools(self):
+        self.assertEqual(bot.step_of("Bash", {"command": "node horo/fetch.js " + URL})[0], "📖 Читаю условие")
+        self.assertEqual(bot.step_of("Bash", {"command": "node horo/submit.js u horo/tmp/x/answers.json"})[0], "📤 Сдаю на сайт")
+        self.assertEqual(bot.step_of("Write", {"file_path": "horo/tmp/x/answers.json"})[0], "🧠 Записываю ответы")
+        self.assertEqual(bot.step_of("Read", {"file_path": "horo/tmp/x/q1.png"})[0], "🖼 Разглядываю картинки")
+        self.assertIsNone(bot.step_of("Glob", {"pattern": "*"}))
+
+    def test_claude_stream(self):
+        """Настоящий claude() на поддельном CLI: шаги из потока событий и итоговый текст."""
+        d = tempfile.mkdtemp(dir=self.tmp.name)
+        events = [
+            {"type": "system", "subtype": "init"},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "node horo/fetch.js x"}}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "думаю"}]}},
+            {"type": "result", "subtype": "success", "is_error": False, "result": "БАЛЛЫ: 3/4\nготово"},
+        ]
+        fake = pathlib.Path(d, "claude")
+        fake.write_text("#!/bin/sh\ncat <<'EOF'\n" + "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\nEOF\n")
+        fake.chmod(0o755)
+        tools = []
+        self.patches[8].stop()  # настоящий claude()
+        try:
+            with mock.patch.dict(os.environ, {"PATH": d + os.pathsep + os.environ["PATH"]}):
+                ok, out = bot.claude("x", [], timeout=20, on_tool=lambda n, i: tools.append((n, i["command"])))
+                fake.write_text('#!/bin/sh\necho \'{"type":"result","is_error":true,"result":"Usage limit reached"}\'\n')
+                bad = bot.claude("x", [], timeout=20)
+        finally:
+            self.patches[8].start()
+        self.assertEqual((ok, out), (True, "БАЛЛЫ: 3/4\nготово"))
+        self.assertEqual(tools, [("Bash", "node horo/fetch.js x")])
+        self.assertEqual(bad[0], False)
+        self.assertIn("лимит", bad[1])
+
+    def test_autotests_confirm_by_button(self):
+        rows = [{"auto": True, "rawStatus": "appointed", "url": URL, "title": "Тест <1>", "subj": "Информатика", "icon": "💻"}]
+        with mock.patch.object(bot, "node", lambda *a, timeout=0, prog="node": (True, json.dumps(rows))), \
+             mock.patch.object(bot, "claude", lambda p, t, timeout=0, on_tool=None: (True, "БАЛЛЫ: 7/7\nвсё")):
+            self.say(bot.BTN_ALL)
+            self.assertIn("all:yes", self.last()[1])
+            self.assertIn("Тест &lt;1&gt;", self.last()[0])
+            bot.on_callback({"id": "1", "data": "all:yes", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertIn("🏆 <b>7/7</b> · Тест &lt;1&gt;", self.last()[0])
+
+    def test_old_button_names_still_work(self):
+        self.say("📊 Мои оценки")
+        self.assertEqual(self.nodes[-1], ("horo/grades.js", "--html"))
+        kb = json.loads(bot.menu_kb())
+        self.assertIn(bot.BTN_GRADES, sum(kb["keyboard"], []))
 
 
 if __name__ == "__main__":
