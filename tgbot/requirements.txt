@@ -1,2 +1,2 @@
-telethon>=1.40,<2
+telethon>=1.45,<2  # 1.45: цветные кнопки (style)
 cryptg

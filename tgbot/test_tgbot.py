@@ -15,6 +15,7 @@ import actions  # noqa: E402
 import agent  # noqa: E402
 import jobs  # noqa: E402
 import tg  # noqa: E402
+import ui  # noqa: E402
 
 UTC = datetime.timezone.utc
 
@@ -316,16 +317,62 @@ class Schedule(unittest.TestCase):
         a.compose = mock.AsyncMock(return_value="сочинил")
         run(a.fire({"id": "x", "chats": [{"id": 7, "name": "Петя"}, {"id": 999, "name": "Нет"}], "ai": "что-то"}))
         self.assertEqual([t for _, t, _ in fake.sent], ["сочинил"])
-        self.assertIn("📨 Петя: сочинил", said[0])
-        self.assertIn("❌ Нет", said[0])
+        self.assertIn("✓ <b>Петя</b>\nсочинил", said[0])
+        self.assertIn("✕ <b>Нет</b>", said[0])
+
+
+class Look(unittest.TestCase):
+    def test_md(self):
+        out = ui.md("**📬 Что писали**\n\n### Петя\n- просит **ответить**\n  - срочно\n> «ну ты где» <3\n> вторая\n1. раз\n`код` и [ссылка](https://t.me)")
+        self.assertIn("<b>📬 Что писали</b>", out)
+        self.assertIn("<b>Петя</b>", out)
+        self.assertIn("• просит <b>ответить</b>", out)
+        self.assertIn("    ◦ срочно", out)
+        self.assertIn("<blockquote>«ну ты где» &lt;3\nвторая</blockquote>", out)
+        self.assertIn("<b>1.</b> раз", out)
+        self.assertIn('<code>код</code> и <a href="https://t.me">ссылка</a>', out)
+
+    def test_md_keeps_stars_in_words_and_escapes(self):
+        self.assertEqual(ui.md("2*3*4 <b>"), "2*3*4 &lt;b&gt;")
+        self.assertEqual(ui.md("```\na < b\n```"), "<pre>a &lt; b</pre>")
+
+    def test_long_quote_folds(self):
+        self.assertIn("<blockquote expandable>", ui.md("\n".join(f"> строка {i}" for i in range(10))))
+
+    def test_split_html_balances_tags(self):
+        big = "<b>Заголовок</b>\n<blockquote expandable>" + "\n".join(f"строка {i}" for i in range(900)) + "</blockquote>"
+        parts = ui.split_html(big)
+        self.assertGreater(len(parts), 1)
+        for p in parts:
+            self.assertLessEqual(len(p), 4096)
+            self.assertEqual(ui.open_stack(p), [], p[-80:])
+        self.assertTrue(parts[1].startswith("<blockquote expandable>"))
+
+    def test_steps(self):
+        tgp = "/root/horo/tgbot/tg.py"
+        self.assertEqual(ui.step("Bash", {"command": f'python3 {tgp} history "8Б класс" --limit 300'}, tgp), "📖 Читаю «8Б класс»")
+        self.assertEqual(ui.step("Bash", {"command": f"python3 {tgp} history -1001 --limit 3"}, tgp), "📖 Читаю чат")
+        self.assertEqual(ui.step("Bash", {"command": f"python3 {tgp} members -1001"}, tgp, {"-1001": "Бокс"}), "👥 Смотрю участников «Бокс»")
+        self.assertEqual(ui.step("Bash", {"command": f"python3 {tgp} --help"}, tgp), "📚 Вспоминаю команды")
+        self.assertIsNone(ui.step("Bash", {"command": "ls"}, tgp))
+        self.assertEqual(ui.step("Read", {}, tgp), "📄 Читаю длинную переписку")
+
+    def test_status(self):
+        s = ui.status(["🗂 Листаю список чатов", "📖 Читаю «8Б»"], 75)
+        self.assertIn("<code>1:15</code>", s)
+        self.assertIn("✓ 🗂 Листаю список чатов", s)
+        self.assertNotIn("✓ 📖", s)
+
+    def test_plural(self):
+        self.assertEqual([ui.plural(n, "чат", "чата", "чатов") for n in (1, 3, 5, 11, 21)],
+                         ["1 чат", "3 чата", "5 чатов", "11 чатов", "21 чат"])
+
+    def test_confirm_card(self):
+        c = agent.Agent.confirm_card("📤 Написать в «Петя»:\n\nбуду в <6>")
+        self.assertEqual(c, "<b>📤 Написать в «Петя»</b>\n<blockquote>буду в &lt;6&gt;</blockquote>")
 
 
 class Misc(unittest.TestCase):
-    def test_split(self):
-        parts = agent.split("а\n" * 5000)
-        self.assertTrue(all(len(p) <= 3800 for p in parts))
-        self.assertEqual("".join(p + "\n" for p in parts).count("а"), 5000)
-
     def test_prompt_placeholders(self):
         with open(os.path.join(agent.HERE, "prompt.md")) as f:
             p = f.read()
