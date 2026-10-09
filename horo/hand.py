@@ -96,6 +96,23 @@ for _bp in (os.path.join(_here, 'fonts', 'gleb.npz'), os.path.join(_here, 'tmp',
             if not _k.endswith('w'):
                 BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_z[_k], float(_z[_k + 'w'])))
 
+# латинские буквы, которые пишутся как русские (их нет в алфавите отдельно), и наоборот
+ALIAS = dict(zip('aceopxyACEHKMOPTXB', 'асеорхуАСЕНКМОРТХВ'))
+ALIAS.update({v: k for k, v in ALIAS.items()})
+
+# стиль, который Глеб настроил в боте: множители к небрежности, толщине и размеру, добавка к наклону
+STYLE_FILE = os.path.join(_here, 'tmp', 'hand_style.json')
+
+
+def style():
+    try:
+        import json
+        with open(STYLE_FILE) as f:
+            return {k: float(v) for k, v in json.load(f).items()}
+    except Exception:
+        return {}
+
+
 # ---------- запасные буквы из шрифта (русские слова и всё, чего нет в GLYPHS) ----------
 _font = ImageFont.truetype(FONT, 200)
 _cache = {}
@@ -141,8 +158,14 @@ class Noise:
 
 class Hand:
     def __init__(self, img, ink=INK, seed=1, width=2.8, mess=1.0, slant=0.02):
-        """mess: насколько небрежно (0.5 аккуратно, 1 как он, 1.5 на скорость); slant: наклон вправо (у него почти 0)."""
+        """mess: насколько небрежно (0.5 аккуратно, 1 как он, 1.5 на скорость); slant: наклон вправо (у него почти 0).
+        Настройки из бота (hand_style.json) умножают mess, width и размер букв."""
         random.seed(seed); np.random.seed(seed)
+        st = style()
+        mess *= st.get('mess', 1.0)
+        width *= st.get('width', 1.0)
+        slant += st.get('slant', 0.0)
+        self.k = st.get('size', 1.0)
         self.m, self.sl = mess, slant
         self.img = img.convert('RGB')
         W, H = self.img.size
@@ -170,7 +193,10 @@ class Hand:
             if ch == ' ':
                 x += xh * random.uniform(0.55, 0.85); continue
             sup = ch in '²³⁴⁵'
-            c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-'}.get(ch, ch)
+            dot = ch == '·' and '·' not in BANK and '.' in BANK  # точка умножения — его точка, поднятая к середине
+            c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '·': '.' if dot else '·'}.get(ch, ch)
+            if c not in BANK and ch not in BANK and ALIAS.get(c) in BANK:
+                c = ALIAS[c]
             real = ch in BANK or c in BANK
             if real:                                     # его настоящая буква: случайный из вариантов, не тот же подряд
                 vs = BANK[ch] if ch in BANK else BANK[c]
@@ -181,7 +207,7 @@ class Hand:
             else:
                 pts, w = glyph(c)
             k = xh * random.uniform(1 - 0.1 * m, 1 + 0.12 * m) * (0.68 if sup else 1)
-            up = xh * random.uniform(0.75, 0.9) if sup else 0
+            up = xh * random.uniform(0.75, 0.9) if sup else xh * 0.4 if dot else 0
             if sup: x -= xh * 0.08
             if real:
                 prm = dict(real=pts, sx=random.uniform(0.94, 1.06), sy=random.uniform(0.94, 1.06), slant=0,
@@ -220,12 +246,14 @@ class Hand:
                 self._dots(np.stack([gx + u * k, gy - v * k], 1))
 
     def text(self, s, x, base, size=44):
+        size *= self.k
         lay, w = self._layout(s, size)
         self._draw(lay, x, base, size)
         return x + w
 
     # ---------- дроби ----------
     def frac(self, num, den, x, base, size=40):
+        size *= self.k
         xh, m = size * XH, self.m
         ln, wn = self._layout(num, size)
         ld, wd = self._layout(den, size)

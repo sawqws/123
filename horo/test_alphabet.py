@@ -49,10 +49,13 @@ class AlphabetTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_roundtrip_page1(self):
-        path = as_telegram(fill(0, skip='ъ'), angle=1.5)
+        path = as_telegram(fill(0, skip='Жж'), angle=1.5)
         added, errors = A.ingest([path])
         self.assertEqual(errors, [])
-        self.assertEqual(''.join(added), A.PAGES[0][1].replace('ъ', ''))
+        self.assertEqual(''.join(added), A.PAGES[0][1].replace('Ж', '').replace('ж', ''))
+        z = np.load(A.EXTRA)
+        big, small = z[f'{ord("П")}_0'], z[f'{ord("п")}_0']
+        self.assertGreater(big[:, 1].max(), small[:, 1].max() + 0.3)  # большая выше маленькой — клетки не перепутаны
         z = np.load(A.EXTRA)
         pts, w = z[f'{ord("п")}_0'], float(z[f'{ord("п")}_0w'])
         # «п» строчная: высота около 1 XH, стоит на строке
@@ -61,7 +64,7 @@ class AlphabetTest(unittest.TestCase):
         self.assertGreater(w, 0.4)
 
     def test_page_detected_and_variants_append(self):
-        p2 = as_telegram(fill(1))
+        p2 = as_telegram(fill(3))
         A.ingest([p2])
         added, _ = A.ingest([p2])
         self.assertIn('7', added)
@@ -77,6 +80,42 @@ class AlphabetTest(unittest.TestCase):
         added, errors = A.ingest([junk])
         self.assertEqual(added, [])
         self.assertIn('метки', errors[0])
+
+
+class OldSheetTest(unittest.TestCase):
+    def test_old_alphabet_sheet_is_rejected(self):
+        im = fill(0)
+        d = ImageDraw.Draw(im)
+        for k, (cx, cy) in enumerate(A.bits()):  # метки как у старого листа №1
+            col = A.MAGENTA if k == 0 else A.BG
+            d.rectangle([cx - A.BIT / 2, cy - A.BIT / 2, cx + A.BIT / 2, cy + A.BIT / 2], fill=col)
+        with tempfile.TemporaryDirectory() as t:
+            A.EXTRA = os.path.join(t, 'x.npz')
+            added, errors = A.ingest([as_telegram(im)])
+        self.assertEqual(added, [])
+        self.assertIn('старого алфавита', errors[0])
+
+
+class StyleTest(unittest.TestCase):
+    def test_style_file_changes_hand(self):
+        import hand, json
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as t:
+            hand.STYLE_FILE = os.path.join(t, 's.json')
+            Path(hand.STYLE_FILE).write_text(json.dumps({'mess': 1.5, 'width': 2, 'size': 1.2}))
+            h = hand.Hand(Image.new('RGB', (10, 10)), width=4, mess=1.0)
+        self.assertEqual((h.m, h.r, h.k), (1.5, 4 * 2 * hand.SS / 2, 1.2))
+
+    def test_latin_letter_uses_russian_glyph(self):
+        import hand
+        bank = dict(hand.BANK)
+        try:
+            hand.BANK.clear()
+            hand.BANK['о'] = [(np.array([[0, 0], [1, 1]], np.float32), 1.0)]
+            lay, _ = hand.Hand(Image.new('RGB', (10, 10)))._layout('o', 44)
+            self.assertIn('real', lay[0][4])  # латинская o нарисована его русской о
+        finally:
+            hand.BANK.clear(); hand.BANK.update(bank)
 
 
 if __name__ == '__main__':
