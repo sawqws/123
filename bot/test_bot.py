@@ -145,6 +145,11 @@ class BotTest(unittest.TestCase):
         self.assertIsNone(bot.draft())
         self.assertIn("Баллы 5/5", self.last()[0])
 
+    def test_late_list_sent_as_html(self):
+        with mock.patch.object(bot, "node", lambda *a, timeout=0, prog="node": (True, '❗ <b>Просрочено: 1</b>\n🔁 <a href="u">Тест &amp; Ко</a>')):
+            self.say(bot.BTN_LATE)
+        self.assertEqual(self.last()[0], '❗ <b>Просрочено: 1</b>\n🔁 <a href="u">Тест &amp; Ко</a>')  # разметка не экранирована
+
     def test_alphabet_mode(self):
         with mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "Добавил: а б")) as _, \
              mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \

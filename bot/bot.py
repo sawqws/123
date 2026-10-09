@@ -97,9 +97,11 @@ def tg(method, **params):
         return json.load(r)
 
 
-def premium(text):
-    """Обычные эмодзи -> премиум (<tg-emoji>), если их прислали через /emoji. Текст экранируется для HTML."""
-    text = html.escape(text, quote=False)
+def premium(text, raw_html=False):
+    """Обычные эмодзи -> премиум (<tg-emoji>), если их прислали через /emoji. Текст экранируется для HTML,
+    если он ещё не HTML (raw_html — уже размечен, например список заданий со ссылками)."""
+    if not raw_html:
+        text = html.escape(text, quote=False)
     emo = load_settings().get("emoji") or {}
     if not emo:
         return text
@@ -108,16 +110,31 @@ def premium(text):
     return rx.sub(lambda m: f'<tg-emoji emoji-id="{emo[m.group(0)]}">{m.group(0)}</tg-emoji>', text)
 
 
-def send(chat, text, menu=False, markup=None):
-    text = text.strip() or "(пустой ответ)"
-    parts = [text[i:i + 4000] for i in range(0, len(text), 4000)]  # лимит Telegram 4096 символов
+def split(text, size=3500):
+    """Части не длиннее size (лимит Telegram 4096), режем по строкам, чтобы не разорвать ссылку."""
+    lines = []
+    for line in text.split("\n"):  # слишком длинную строку режем на куски
+        lines += [line[i:i + size] for i in range(0, len(line), size)] or [""]
+    parts, cur = [], ""
+    for line in lines:
+        if cur and len(cur) + len(line) + 1 > size:
+            parts.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    return [p for p in parts + [cur] if p.strip()] or ["(пустой ответ)"]
+
+
+def send(chat, text, menu=False, markup=None, raw_html=False):
+    parts = split(text.strip() or "(пустой ответ)")
     for k, part in enumerate(parts):
         last = k == len(parts) - 1
         extra = {"reply_markup": markup or MENU} if last and (menu or markup) else {}
         try:
-            tg("sendMessage", chat_id=chat, text=premium(part), parse_mode="HTML", disable_web_page_preview="true", **extra)
+            tg("sendMessage", chat_id=chat, text=premium(part, raw_html), parse_mode="HTML", disable_web_page_preview="true", **extra)
         except urllib.error.HTTPError:  # Telegram не принял разметку или эмодзи — шлём простым текстом
-            tg("sendMessage", chat_id=chat, text=part, disable_web_page_preview="true", **extra)
+            plain = html.unescape(re.sub(r"<[^>]+>", "", part)) if raw_html else part
+            tg("sendMessage", chat_id=chat, text=plain, disable_web_page_preview="true", **extra)
 
 
 def send_file(chat, path, caption=""):
@@ -239,7 +256,8 @@ def run_script(chat, *args):
         return
     try:
         send(chat, "Смотрю сайт…")
-        send(chat, node(*args)[1], menu=True)
+        ok, out = node(*args)
+        send(chat, out, menu=True, raw_html=ok and "--html" in args)
     finally:
         lock.release()
 
@@ -554,9 +572,9 @@ def digest_loop():
         s = load_settings()
         if s.get("digest") and now.hour == DIGEST_HOUR and sent_day != now.date():
             sent_day = now.date()
-            ok, out = node("horo/status.js")
+            ok, out = node("horo/status.js", "--html")
             try:
-                send(owner(), "🔔 Сводка на сегодня\n" + out, menu=True)
+                send(owner(), ("🔔 <b>Сводка на сегодня</b>\n" if ok else "🔔 Сводка на сегодня\n") + out, menu=True, raw_html=ok)
             except Exception as e:
                 print("digest:", e)
         time.sleep(60)
@@ -629,8 +647,8 @@ def handle(msg):
         return
 
     simple = {
-        BTN_LIST: ("horo/status.js",),
-        BTN_LATE: ("horo/status.js", "--late"),
+        BTN_LIST: ("horo/status.js", "--html"),
+        BTN_LATE: ("horo/status.js", "--late", "--html"),
         BTN_COMM: ("horo/comments.js",),
         BTN_GRADES: ("horo/grades.js",),
     }
