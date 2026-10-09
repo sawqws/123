@@ -31,6 +31,11 @@ from zoneinfo import ZoneInfo
 
 import drafts
 
+# pm2 передаёт свой канал связи (NODE_CHANNEL_FD) — node-скрипты бота наследуют его и падают при выходе
+# с кодом -6, хотя всё уже вывели. Скриптам бота этот канал не нужен.
+for _k in ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"):
+    os.environ.pop(_k, None)
+
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 ALLOWED = int(os.environ.get("TG_ALLOWED_ID") or 0)  # 0: владельца ещё нет
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
