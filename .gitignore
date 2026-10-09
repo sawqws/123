@@ -1,3 +1,5 @@
 horo/tmp/
 node_modules/
 __pycache__/
+tgbot/tmp/
+tgbot/.venv/
