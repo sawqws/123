@@ -115,4 +115,13 @@ function images(h) {
   return [...(h || '').matchAll(/src="([^"]+)"/g)].map(m => m[1]);
 }
 
-module.exports = { open, close, api, download, parseUrl, loadTask, htmlToText, images, BASE, TMP, EDU };
+// Значок предмета для сообщений бота (по началу названия, без учёта регистра).
+const SUBJ_ICONS = [
+  ['алгебр', '➗'], ['геометр', '📐'], ['матем', '📐'], ['русск', '🖋'], ['литер', '📚'], ['англ', '🇬🇧'], ['испан', '🇪🇸'],
+  ['немец', '🇩🇪'], ['франц', '🇫🇷'], ['китай', '🇨🇳'], ['истор', '🏛'], ['общест', '⚖️'], ['прав', '⚖️'], ['биолог', '🧬'],
+  ['хим', '⚗️'], ['физик', '⚛️'], ['физич', '🏃'], ['физкул', '🏃'], ['географ', '🌍'], ['информ', '💻'], ['эконом', '💰'],
+  ['музык', '🎵'], ['изо', '🎨'], ['искусс', '🎨'], ['техн', '🛠'], ['обж', '🛡'], ['астроном', '🔭'],
+];
+const subjIcon = name => (SUBJ_ICONS.find(([k]) => String(name).toLowerCase().startsWith(k)) || [0, '📘'])[1];
+
+module.exports = { open, close, api, download, parseUrl, loadTask, htmlToText, images, subjIcon, BASE, TMP, EDU };

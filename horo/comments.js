@@ -1,7 +1,7 @@
 // Задания на доработке и не зачтённые: последний комментарий учителя или баллы теста.
 // usage: node horo/comments.js [--html]
 //   --html  разметка для Telegram: предметы жирным, названия — ссылки, комментарий цитатой (так шлёт бот)
-const { open, close, api, EDU, htmlToText } = require('./lib');
+const { open, close, api, EDU, htmlToText, subjIcon } = require('./lib');
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -36,14 +36,14 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
       }
       rows.push(r);
     }
-    if (!rows.length) { console.log('Заданий на доработке нет 🎉'); return; }
+    if (!rows.length) { console.log('🎉 Заданий на доработке нет'); return; }
 
     const b = x => (html ? `<b>${esc(x)}</b>` : x);
-    const out = [`💬 ${b(`Комментарии учителей: ${rows.length}`)}`];
+    const out = [`💬 ${b('Комментарии учителей')}`, `${rows.length} на доработке или не зачтено`];
     const bySubj = {};
     for (const r of rows) (bySubj[r.subj] ||= []).push(r);
     for (const subj of Object.keys(bySubj).sort((a, c) => bySubj[c].length - bySubj[a].length || a.localeCompare(c))) {
-      out.push('', `${b(subj)} · ${bySubj[subj].length}`);
+      out.push('', `${subjIcon(subj)} ${b(subj)} · ${bySubj[subj].length}`);
       for (const r of bySubj[subj]) {
         const meta = [r.score != null ? `${r.score}%` : '', r.attempts].filter(Boolean).join(', ');
         const head = `${r.failed ? '❌' : '🔁'} ${html ? `<a href="${r.url}">${esc(r.title)}</a>` : r.title}${meta ? ` · ${meta}` : ''}`;
@@ -52,7 +52,7 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
         if (!html) out.push(`   ${r.url}`);
       }
     }
-    out.push('', '🔁 на доработке · ❌ не зачтено');
+    out.push('', html ? '<i>🔁 на доработке · ❌ не зачтено</i>' : '🔁 на доработке · ❌ не зачтено');
     console.log(out.join('\n'));
   } finally {
     await close(s);
