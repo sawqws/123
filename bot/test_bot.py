@@ -93,7 +93,7 @@ class BotTest(unittest.TestCase):
     def test_draft_edit_and_submit(self):
         self.say(URL)
         self.assertIn("horo/tmp/" + TASK + "/draft.txt", self.prompts[0])
-        self.assertTrue(any("Черновик для учителя: Конспект §5" in m and kb for m, kb in self.msgs))
+        self.assertTrue(any("Черновик для учителя</b>\n<i>Конспект §5</i>" in m and kb for m, kb in self.msgs))
         self.assertEqual(self.files[-1], os.path.join(drafts.files_dir(TASK), "hand.png"))
         self.assertEqual(self.nodes, [])  # без подтверждения ничего не отправлено
 
@@ -165,6 +165,44 @@ class BotTest(unittest.TestCase):
         self.assertEqual(bot.explain(trace), "⚠️ Не получилось: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x")
         self.assertIn("долго не отвечает", bot.explain("TimeoutError: Timeout 30000ms exceeded"))
 
+    def test_every_message_is_valid_telegram_html(self):
+        """Все сообщения (они уходят с parse_mode=HTML) — только разрешённые теги, все закрыты."""
+        from html.parser import HTMLParser
+        allowed = {"b", "i", "u", "s", "a", "code", "pre", "blockquote", "tg-emoji"}
+
+        class Check(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.stack = []
+            def handle_starttag(self, tag, attrs):
+                assert tag in allowed, tag
+                self.stack.append(tag)
+            def handle_endtag(self, tag):
+                assert self.stack and self.stack.pop() == tag, tag
+
+        sent = []
+        real_tg = self.fake_tg
+        def tg(method, **p):
+            if method == "sendMessage":
+                sent.append(p["text"])
+            return real_tg(method, **p)
+        with mock.patch.object(bot, "tg", tg), \
+             mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "Добавил: а <б>")), \
+             mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \
+             mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
+            for t in ("/start", bot.BTN_HELP, bot.BTN_DIGEST, bot.BTN_DIGEST, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
+                      "что-то непонятное", bot.BTN_HAND):
+                self.say(t)
+            self.say(photo=[{"file_id": "a"}])
+            self.say("готово")
+            self.say(URL)                      # черновик
+            self.say("Новый <текст> & ещё")    # правка с символами HTML
+            bot.on_callback({"id": "1", "data": "send", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertGreater(len(sent), 15)
+        for text in sent:
+            c = Check(); c.feed(text); c.close()
+            self.assertEqual(c.stack, [], text)
+            self.assertNotIn("<текст>", text)  # пользовательский текст экранирован
+
     def test_alphabet_mode(self):
         with mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "Добавил: а б")) as _, \
              mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \
@@ -172,7 +210,7 @@ class BotTest(unittest.TestCase):
             self.say(bot.BTN_HAND)
             self.assertEqual(len(self.files), 3)
             self.say(photo=[{"file_id": "a"}])
-            self.assertTrue(any("Добавил: а б" in m for m, _ in self.msgs))
+            self.assertTrue(any("Добавил знаков: 2\nа б" in m for m, _ in self.msgs))
             self.say("готово")
         self.assertNotIn(CHAT, bot.mode)
 
