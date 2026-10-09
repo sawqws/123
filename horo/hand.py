@@ -87,12 +87,14 @@ GLYPHS = {  # символ: (список штрихов, ширина)
 
 # ---------- настоящие буквы Глеба (вырезаны с его скриншотов, см. horo/fonts/gleb.npz) ----------
 BANK = {}
-_bp = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'gleb.npz')
-if os.path.exists(_bp):
-    _z = np.load(_bp)
-    for _k in _z.files:
-        if not _k.endswith('w'):
-            BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_z[_k], float(_z[_k + 'w'])))
+_here = os.path.dirname(os.path.abspath(__file__))
+# gleb_extra.npz — буквы из его алфавита (horo/alphabet.py), лежат вне репозитория
+for _bp in (os.path.join(_here, 'fonts', 'gleb.npz'), os.path.join(_here, 'tmp', 'fonts', 'gleb_extra.npz')):
+    if os.path.exists(_bp):
+        _z = np.load(_bp)
+        for _k in _z.files:
+            if not _k.endswith('w'):
+                BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_z[_k], float(_z[_k + 'w'])))
 
 # ---------- запасные буквы из шрифта (русские слова и всё, чего нет в GLYPHS) ----------
 _font = ImageFont.truetype(FONT, 200)
