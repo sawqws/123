@@ -8,11 +8,11 @@
   python3 tgbot/get_api.py          спросит номер и код, напечатает «api_id api_hash» последней строкой
 Только стандартная библиотека Python. Вопросы пишет в терминал (/dev/tty), так что работает и внутри curl | bash.
 """
-import http.cookiejar
 import json
 import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,25 +44,46 @@ def say(text, io):
     io[1].flush()
 
 
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+
+
 class Site:
+    """Куки храним сами: http.cookiejar не принял куку входа сайта (вход «true», а /apps — Unauthorized)."""
+
     def __init__(self, base=BASE):
         self.base = base
-        self.http = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        self.http.addheaders = [("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 "
-                                               "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"),
-                                ("X-Requested-With", "XMLHttpRequest")]
+        self.cookies = {}
+        self.http = urllib.request.build_opener()
+
+    def remember(self, headers):
+        for h in headers.get_all("Set-Cookie") or []:
+            name, _, value = h.split(";", 1)[0].strip().partition("=")
+            if name:
+                self.cookies[name] = value
 
     def req(self, path, data=None):
         body = urllib.parse.urlencode(data).encode() if data is not None else None
-        try:
-            with self.http.open(self.base + path, body, timeout=30) as r:
-                return r.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as e:
-            raise Fail(e.read().decode("utf-8", "replace").strip() or f"HTTP {e.code}")
-        except urllib.error.URLError as e:
-            raise Fail(f"нет связи с {self.base}: {e.reason}")
+        headers = {"User-Agent": UA, "Referer": self.base + "/auth"}
+        if body is not None:  # как jQuery на сайте
+            headers["X-Requested-With"] = "XMLHttpRequest"
+            headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+        if self.cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        for attempt in range(3):  # прокси иногда рвёт соединение
+            try:
+                with self.http.open(urllib.request.Request(self.base + path, body, headers), timeout=30) as r:
+                    self.remember(r.headers)
+                    return r.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as e:
+                self.remember(e.headers)
+                raise Fail(e.read().decode("utf-8", "replace").strip() or f"HTTP {e.code}")
+            except (urllib.error.URLError, ConnectionError) as e:
+                if attempt == 2:
+                    raise Fail(f"нет связи с {self.base}: {getattr(e, 'reason', e)}")
+                time.sleep(2)
 
     def send_code(self, phone):
+        self.req("/auth")  # как браузер: сначала страница входа
         text = self.req("/auth/send_password", {"phone": phone})
         try:
             return json.loads(text)["random_hash"]
@@ -70,9 +91,12 @@ class Site:
             raise Fail(text.strip() or "сайт не прислал код")
 
     def login(self, phone, random_hash, code):
+        before = set(self.cookies)
         text = self.req("/auth/login", {"phone": phone, "random_hash": random_hash, "password": code, "remember": "1"})
         if text.strip() != "true":
             raise Fail(text.strip() or "код не подошёл")
+        if not set(self.cookies) - before and "stel_token" not in self.cookies:
+            raise Fail(f"вход прошёл, но сайт не выдал куку (есть: {', '.join(self.cookies) or 'ничего'})")
 
     def keys(self):
         """(api_id, api_hash), если приложение уже есть, иначе (None, hash формы создания)."""

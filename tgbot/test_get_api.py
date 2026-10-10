@@ -31,6 +31,9 @@ def site(create_answer=""):
             self.wfile.write(body.encode())
 
         def do_GET(self):
+            if self.path == "/auth":
+                return self.reply(200, "<form>login</form>", "stel_ssid=s1; expires=Sat, 10 Oct 2027 15:00:00 GMT; "
+                                                             "path=/; samesite=None; secure; HttpOnly")
             if self.path == "/apps":
                 ok = "stel_token=t" in (self.headers.get("Cookie") or "")
                 return self.reply(200, (KEYS if state["app"] else FORM) if ok else "<a href='/auth'>login</a>")
