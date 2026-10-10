@@ -198,6 +198,28 @@ class BotTest(unittest.TestCase):
                              "data": carry[0]["callback_data"]})
         self.assertTrue(all(t["date"] > day for t in self.db.tasks(U)))
 
+    def test_https_url_and_notify(self):
+        conf, cands = planner.caddyfile("2.27.206.165")
+        self.assertEqual(cands, ["https://2-27-206-165.sslip.io", "https://2.27.206.165"])
+        self.assertIn("profile shortlived", conf)
+        self.assertIn(f"reverse_proxy 127.0.0.1:{planner.PORT}", conf)
+        self.db.meta("owner", U)
+        with mock.patch.object(planner, "public_url", ""):
+            self.assertTrue(planner.use_url(cands[0]))
+            self.assertEqual(planner.public_url, cands[0])
+            planner.use_url(cands[0])  # тот же адрес — второй раз не пишет
+        ready = [t for t in self.texts() if "Планер готов" in t]
+        self.assertEqual(len(ready), 1)
+        menu = [p for m, p in self.sent if m == "setChatMenuButton"]
+        self.assertEqual(menu[-1]["menu_button"]["web_app"]["url"], cands[0] + "/")
+
+    def test_welcome_without_app(self):
+        with mock.patch.object(planner, "public_url", ""):
+            self.msg("/start")
+        self.assertIn("пришлю кнопку", self.texts()[-1])
+        self.msg("/start")
+        self.assertIn("кнопка «Планер»", self.texts()[-1])
+
     def test_api_routes(self):
         r = planner.route(U, "/api/task", {"title": "Шаг", "date": "2026-10-09"})
         tid = r["task"]["id"]
