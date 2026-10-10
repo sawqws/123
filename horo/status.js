@@ -51,35 +51,45 @@ function render(rows, onlyLate, html) {
   return out.join('\n');
 }
 
-(async () => {
+// Несделанные обязательные задания (строки как в --json). disc: {id предмета: название}
+async function collect(page, disc) {
+  const q = `${EDU}/topics?tasksLevelId[0]=1&tasksLevelId[1]=2&tasksLevelId[2]=3`
+    + '&tasksProgressStatus[0]=reworking&tasksProgressStatus[1]=failed&tasksProgressStatus[2]=appointed&onlyDebts=false';
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = [];
+  for (const tp of await api(page, q)) for (const t of tp.tasks) {
+    const st = t.progress.status.type;
+    if (!NAMES[st] || t.requirementType !== 'mandatory') continue;
+    const deadline = tp.studyPeriod.deadlineDate;
+    rows.push({
+      subj: disc[tp.disciplineId] || tp.disciplineId,
+      icon: subjIcon(disc[tp.disciplineId] || ''),
+      st: NAMES[st],
+      auto: t.type === 'test',
+      type: t.type,
+      title: t.title.trim(),
+      late: deadline < today,
+      lateDays: Math.round((Date.parse(today) - Date.parse(deadline)) / DAY),
+      dl: ddmm(deadline),
+      deadline,
+      topic: (tp.title || '').trim(),
+      topicId: tp.uuid,
+      order: t.order || 0,
+      url: `https://horodigital.ru/student/topic/${tp.uuid}/task/${t.uuid}`,
+      rawStatus: st,
+    });
+  }
+  return rows;
+}
+
+const disciplines = async page => Object.fromEntries((await api(page, '/api/schools/v1/current/disciplines')).map(d => [d.disciplineId, d.name]));
+
+module.exports = { collect, disciplines };
+
+if (require.main === module) (async () => {
   const s = await open();
   try {
-    const disc = Object.fromEntries((await api(s.page, '/api/schools/v1/current/disciplines')).map(d => [d.disciplineId, d.name]));
-    const q = `${EDU}/topics?tasksLevelId[0]=1&tasksLevelId[1]=2&tasksLevelId[2]=3`
-      + '&tasksProgressStatus[0]=reworking&tasksProgressStatus[1]=failed&tasksProgressStatus[2]=appointed&onlyDebts=false';
-    const today = new Date().toISOString().slice(0, 10);
-    const rows = [];
-    for (const tp of await api(s.page, q)) for (const t of tp.tasks) {
-      const st = t.progress.status.type;
-      if (!NAMES[st] || t.requirementType !== 'mandatory') continue;
-      const deadline = tp.studyPeriod.deadlineDate;
-      rows.push({
-        subj: disc[tp.disciplineId] || tp.disciplineId,
-        icon: subjIcon(disc[tp.disciplineId] || ''),
-        st: NAMES[st],
-        auto: t.type === 'test',
-        title: t.title.trim(),
-        late: deadline < today,
-        lateDays: Math.round((Date.parse(today) - Date.parse(deadline)) / DAY),
-        dl: ddmm(deadline),
-        deadline,
-        topic: (tp.title || '').trim(),
-        topicId: tp.uuid,
-        order: t.order || 0,
-        url: `https://horodigital.ru/student/topic/${tp.uuid}/task/${t.uuid}`,
-        rawStatus: st,
-      });
-    }
+    const rows = await collect(s.page, await disciplines(s.page));
     const onlyLate = process.argv.includes('--late');
     if (onlyLate) rows.splice(0, rows.length, ...rows.filter(r => r.late));
     if (process.argv.includes('--json')) { console.log(JSON.stringify(rows)); return; }

@@ -14,6 +14,7 @@ sys.path.insert(0, HERE)
 os.environ.setdefault("TELEGRAM_TOKEN", "test")
 import bot  # noqa: E402
 import drafts  # noqa: E402
+import web  # noqa: E402
 
 URL = "https://horodigital.ru/student/topic/11111111-1111-1111-1111-111111111111/task/22222222-2222-2222-2222-222222222222"
 TASK = "22222222-2222-2222-2222-222222222222"
@@ -35,6 +36,7 @@ class BotTest(unittest.TestCase):
         t = self.tmp.name
         self.patches = [
             mock.patch.object(bot, "SETTINGS", os.path.join(t, "settings.json")),
+            mock.patch.object(bot, "OVERVIEW", os.path.join(t, "overview.json")),
             mock.patch.object(drafts, "TMP", t),
             mock.patch.object(drafts, "STYLE_DIR", os.path.join(t, "style")),
             mock.patch.object(drafts, "STYLE", os.path.join(t, "style", "style.md")),
@@ -47,7 +49,8 @@ class BotTest(unittest.TestCase):
         ]
         for p in self.patches:
             p.start()
-        self.msgs, self.files, self.prompts, self.nodes = [], [], [], []
+        self.msgs, self.files, self.prompts, self.nodes, self.reads = [], [], [], [], []
+        self.ov = {"tasks": [], "grades": [], "comments": [], "at": 1}
         os.makedirs(drafts.task_dir(TASK))
         with open(os.path.join(drafts.task_dir(TASK), "task.json"), "w") as f:
             json.dump({"data": {"type": "detailedAnswer", "title": "Конспект §5"}}, f)
@@ -57,6 +60,7 @@ class BotTest(unittest.TestCase):
             p.stop()
         self.tmp.cleanup()
         bot.mode.clear()
+        bot.LAST.clear()
 
     # ---- заглушки ----
     def fake_tg(self, method, **p):
@@ -80,6 +84,9 @@ class BotTest(unittest.TestCase):
         return True, "- писать короче"
 
     def fake_node(self, *args, timeout=0, prog="node"):
+        if args[:1] == ("horo/overview.js",):  # чтение списка для приложения — не отправка
+            self.reads.append(args)
+            return True, json.dumps(self.ov)
         self.nodes.append(args)
         return True, "Статус: checking"
 
@@ -292,14 +299,14 @@ class BotTest(unittest.TestCase):
         fake.write_text("#!/bin/sh\ncat <<'EOF'\n" + "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\nEOF\n")
         fake.chmod(0o755)
         tools = []
-        self.patches[8].stop()  # настоящий claude()
+        next(p for p in self.patches if p.attribute == "claude").stop()  # настоящий claude()
         try:
             with mock.patch.dict(os.environ, {"PATH": d + os.pathsep + os.environ["PATH"]}):
                 ok, out = bot.claude("x", [], timeout=20, on_tool=lambda n, i: tools.append((n, i["command"])))
                 fake.write_text('#!/bin/sh\necho \'{"type":"result","is_error":true,"result":"Usage limit reached"}\'\n')
                 bad = bot.claude("x", [], timeout=20)
         finally:
-            self.patches[8].start()
+            next(p for p in self.patches if p.attribute == "claude").start()
         self.assertEqual((ok, out), (True, "БАЛЛЫ: 3/4\nготово"))
         self.assertEqual(tools, [("Bash", "node horo/fetch.js x")])
         self.assertEqual(bad[0], False)
@@ -350,6 +357,104 @@ class BotTest(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertIn("не подошёл", self.last()[0])
 
+
+class AppTest(BotTest):
+    """Приложение (Mini App): подпись Telegram, доступ только владельцу, действия те же, что у кнопок."""
+
+    def init_data(self, uid=CHAT, token="test", age=0):
+        import hashlib, hmac, time, urllib.parse
+        pairs = {"auth_date": str(int(time.time()) - age), "query_id": "q", "user": json.dumps({"id": uid, "first_name": "Глеб"})}
+        secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+        pairs["hash"] = hmac.new(secret, "\n".join(f"{k}={v}" for k, v in sorted(pairs.items())).encode(), hashlib.sha256).hexdigest()
+        return urllib.parse.urlencode(pairs)
+
+    def test_init_data_signature(self):
+        self.assertEqual(web.check_init_data(self.init_data(), "test")["id"], CHAT)
+        self.assertIsNone(web.check_init_data(self.init_data(token="other"), "test"))  # подпись чужим токеном
+        self.assertIsNone(web.check_init_data(self.init_data(age=5 * 86400), "test"))  # устарело
+        forged = self.init_data().replace("%3A+42", "%3A+43")  # подменили id пользователя
+        self.assertNotEqual(forged, self.init_data())
+        self.assertIsNone(web.check_init_data(forged, "test"))
+        self.assertIsNone(web.check_init_data("", "test"))
+
+    def test_server_lets_only_owner_in(self):
+        import http.client
+        from http.server import ThreadingHTTPServer
+        bot.save_settings({"owner": CHAT})
+        web._cfg.update(token="test", owner=bot.owner, routes=bot.ROUTES, version="t")
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), web.Web)
+        bot.REAL_THREAD(target=srv.serve_forever, daemon=True).start()  # threading.Thread в тестах синхронный
+        try:
+            def get(path, data=None):
+                c = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=10)
+                c.request("GET", path, headers={"X-Init-Data": data} if data else {})
+                r = c.getresponse()
+                return r.status, r.read()
+            self.assertEqual(get("/api/state")[0], 401)
+            self.assertEqual(get("/api/state", self.init_data(uid=7))[0], 403)
+            code, body = get("/api/state", self.init_data())
+            self.assertEqual((code, json.loads(body)["busy"]), (200, False))
+            self.assertEqual(get("/")[0], 200)
+            self.assertEqual(get("/app.js")[0], 200)
+            self.assertEqual(get("/../bot.py")[0], 404)
+            self.assertEqual(get("/%2e%2e%2fbot.py")[0], 404)
+        finally:
+            srv.shutdown()
+
+    def test_solve_from_app_goes_like_link(self):
+        bot.save_settings({"owner": CHAT})
+        with self.assertRaises(ValueError):
+            bot.app_solve({"url": "https://example.com"})
+        self.assertEqual(bot.app_solve({"url": URL, "show": False}), {"ok": True})
+        self.assertIn("horo/tmp/" + TASK + "/draft.txt", self.prompts[0])  # тот же run_task, что и по ссылке в чате
+        st = bot.app_state()
+        self.assertEqual(st["draft"]["text"], "Клетка делится митозом.\nЭто важно.")
+        self.assertTrue(st["last"]["ok"] and st["last"]["draft"])
+        self.assertEqual(self.reads, [("horo/overview.js",)])  # список в приложении обновился
+        # правка текста в приложении запоминается как правка, отправка — тот же answer.js
+        bot.ROUTES["/api/draft/save"]({"text": "Клетка делится митозом."})
+        self.assertEqual(drafts.read(TASK), "Клетка делится митозом.")
+        bot.ROUTES["/api/draft/send"]({})
+        self.assertEqual(self.nodes[-1][:2], ("horo/answer.js", URL))
+        self.assertIsNone(bot.draft())
+        self.assertEqual(bot.LAST["kind"], "sent")
+
+    def test_busy_and_autotests(self):
+        bot.save_settings({"owner": CHAT})
+        bot.lock.acquire()
+        try:
+            with self.assertRaises(ValueError):
+                bot.app_solve({"url": URL})
+            self.assertTrue(bot.app_state()["busy"])
+        finally:
+            bot.lock.release()
+        with self.assertRaises(ValueError):
+            bot.app_auto({})  # списка ещё нет — сдавать нечего
+        pathlib.Path(bot.OVERVIEW).write_text(json.dumps({"at": 1, "tasks": [
+            {"auto": True, "rawStatus": "appointed", "url": URL, "title": "Тест", "subj": "Информатика"},
+            {"auto": True, "rawStatus": "failed", "url": URL + "x", "title": "Старый", "subj": "Информатика"}]}))
+        self.assertEqual(bot.app_auto({})["n"], 1)
+        self.assertIn("Автотесты сданы", self.msgs[-1][0])
+
+    def test_overview_refresh_and_menu_button(self):
+        r = bot.app_overview({})
+        self.assertTrue(r["loading"] or bot.overview())  # данных не было — пошёл за ними
+        self.assertEqual(bot.overview()["at"], 1)
+        bot.save_settings({"owner": CHAT})
+        calls = []
+        with mock.patch.object(bot, "tg", lambda m, **p: calls.append((m, p)) or {"ok": True, "result": []}):
+            bot.on_app_url("https://abc.trycloudflare.com")
+            bot.handle({"chat": {"id": CHAT}, "from": {"id": CHAT}, "text": "/app"})
+        m, p = calls[0]
+        self.assertEqual((m, p["chat_id"]), ("setChatMenuButton", CHAT))
+        self.assertEqual(json.loads(p["menu_button"])["web_app"]["url"], "https://abc.trycloudflare.com/")
+        self.assertIn("web_app", calls[-1][1]["reply_markup"])
+
+
+
+for _name in dir(BotTest):  # AppTest берёт у BotTest только заготовки, его тесты второй раз не гоняем
+    if _name.startswith("test_") and _name not in AppTest.__dict__:
+        setattr(AppTest, _name, None)
 
 if __name__ == "__main__":
     unittest.main()
