@@ -30,6 +30,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 import drafts
+import web
 
 # pm2 передаёт свой канал связи (NODE_CHANNEL_FD) — node-скрипты бота наследуют его и падают при выходе
 # с кодом -6, хотя всё уже вывели. Скриптам бота этот канал не нужен.
@@ -103,6 +104,9 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Ответы учителю</b>\n"
     "<blockquote>Сначала присылаю черновик. Поправь текстом, просьбой («убери второй абзац») "
     "или своими фото — и жми «✅ Отправить». Правки запоминаю.</blockquote>\n"
+    "<b>Приложение</b>\n"
+    "<blockquote>Кнопка «HDP» слева от поля ввода или /app — всё то же самое в красивом окне. "
+    "Кнопки здесь тоже работают, выбирай, как удобнее.</blockquote>\n"
     "<b>Почерк и настройки</b>\n"
     "<blockquote>"
     f"{BTN_HAND} — алфавит, чтобы писать решения твоим почерком\n"
@@ -113,7 +117,7 @@ HELP = (  # HTML: отправляется с raw_html=True
     "</blockquote>"
 )
 COMMANDS = [  # меню команд у поля ввода
-    ("start", "Главное меню"), ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
+    ("start", "Главное меню"), ("app", "Открыть приложение"), ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
 ]
@@ -256,6 +260,7 @@ class Live:
         self.done_steps, self.current, self.frac = [], "", 0.0
         self.t0, self.tick = time.time(), 0
         self.stop = threading.Event()
+        Live.active = self  # приложение показывает ту же работу, что и карточка в чате
         self.mid = send(chat, self.render(), raw_html=True)
         quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
@@ -312,10 +317,26 @@ class Live:
 
     def done(self):
         self.stop.set()
+        if Live.active is self:
+            Live.active = None
         delete(self.chat, self.mid)
+
+    def state(self):
+        """Для приложения: то же, что на карточке, без HTML."""
+        return {"title": plain(self.title), "sub": plain(self.sub), "step": plain(self.current),
+                "done": [plain(x) for x in self.done_steps[-3:]], "frac": self.frac if self.progress else None,
+                "secs": int(self.seconds())}
 
     def seconds(self):
         return time.time() - self.t0
+
+
+Live.active = None
+
+
+def plain(x):
+    """HTML бота -> обычный текст (для приложения)."""
+    return html.unescape(re.sub(r"<[^>]+>", "", str(x or ""))).strip()
 
 
 def send_file(chat, path, caption=""):
@@ -633,16 +654,21 @@ def run_task(chat, url, text, show=False, mid=None):
             return
         if not ok:
             react(chat, mid, "🤔")
+            remember(title or "Задание", False, plain(out), url=url, show=show, secs=time.time() - t0)
             send(chat, f"😕 <b>Не получилось</b>\n<i>{esc(title)}</i>\n\n{esc(out)}" if title else out, menu=True, raw_html=bool(title))
             return
         card, full = result_card(out, title, time.time() - t0, show)
         has_draft = drafts.fresh(task, t0)
+        score, body = parse_score(out)
+        remember(title or "Задание", True, body, score=score, url=url, show=show, secs=time.time() - t0, draft=has_draft)
         react(chat, mid, "🏆" if full else "✍" if has_draft else "👍")
         send(chat, card, menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
         if has_draft:
             offer_draft(chat, task, url)
     finally:
         lock.release()
+        if not show:
+            threading.Thread(target=refresh_overview, daemon=True).start()  # список заданий в приложении
 
 
 # ---------- Черновики для учителя ----------
@@ -750,6 +776,7 @@ def submit_draft(chat):
             ok, out = node("horo/answer.js", d["url"], drafts.text_path(d["task"]), *drafts.files(d["task"]), timeout=600)
         finally:
             live.done()
+        remember(d["title"], ok, "Отправлено учителю" if ok else plain(out), url=d["url"], kind="sent")
         if ok:
             send(chat, f"📬 <b>Отправлено учителю</b>\n<i>{esc(d['title'])}</i>\n\n"
                        f"<blockquote expandable>{esc(out.strip())}</blockquote>", menu=True, raw_html=True, effect=EFFECT_LIKE)
@@ -1049,11 +1076,13 @@ def run_all(chat, tests):
         finally:
             live.done()
         perfect = sum(r.startswith("🏆") for r in rows)
+        remember(f"Автотесты · {n}", True, "\n".join(plain(r) for r in rows), secs=time.time() - t0)
         send(chat, f"⚡ <b>Автотесты сданы</b> · {n}\n⏱ {mmss(time.time() - t0)}\n\n" + "\n".join(rows)
              + "\n\n<blockquote expandable>" + "\n\n".join(details) + "</blockquote>",
              menu=True, raw_html=True, effect=EFFECT_CONFETTI if perfect == n else None)
     finally:
         lock.release()
+        threading.Thread(target=refresh_overview, daemon=True).start()
 
 
 def update(chat):
@@ -1149,10 +1178,16 @@ def handle(msg):
                    "✍️ Пишу ответы учителю — твоим почерком\n"
                    "📋 Слежу за дедлайнами и просрочками\n"
                    f"📊 Считаю оценки · 🔔 сводка в {DIGEST_HOUR}:00</blockquote>\n"
-                   "Кинь ссылку на задание или выбери действие 👇", menu=True, raw_html=True)
+                   "Кинь ссылку на задание или выбери действие 👇\n"
+                   "<i>✨ Или открой приложение — кнопка «HDP» слева от поля ввода</i>", menu=True, raw_html=True)
+        if APP_URL:
+            on_app_url(APP_URL)  # кнопка приложения — новому владельцу
         return
     if text.startswith("/help"):
         send(chat, HELP, menu=True, raw_html=True)
+        return
+    if text.startswith("/app"):
+        send_app(chat)
         return
     if text.startswith("/update"):
         update(chat)
@@ -1269,6 +1304,181 @@ def handle(msg):
     threading.Thread(target=run_task, args=(chat, m.group(0), text, show, msg.get("message_id")), daemon=True).start()
 
 
+# ---------- Приложение внутри Telegram (Mini App, bot/webapp/) ----------
+# Те же действия, что и кнопки в чате: приложение вызывает run_task, run_all, черновик и т. д.
+# Результаты приходят и в чат, и в приложение.
+
+OVERVIEW = os.path.join(REPO, "horo", "tmp", "overview.json")  # последние данные с сайта: открываем сразу
+OV = {"loading": False, "error": ""}
+site_lock = threading.Lock()  # к сайту за списком ходит один запрос за раз
+LAST = {}                     # последний результат работы — карточка в приложении
+APP_URL = ""                  # https-адрес приложения (туннель cloudflared), пусто — ещё не готов
+STALE = 120                   # через сколько секунд данные приложения обновляются с сайта
+
+
+def remember(title, ok, text, score=None, url="", show=False, secs=0, draft=False, kind="task"):
+    LAST.clear()
+    LAST.update(title=title, ok=ok, text=(text or "").strip()[:4000], score=list(score) if score else None, url=url,
+                show=show, secs=int(secs), draft=draft, kind=kind, at=int(time.time()))
+
+
+def overview():
+    try:
+        with open(OVERVIEW) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def refresh_overview():
+    """Задания, оценки и комментарии с сайта (horo/overview.js) -> horo/tmp/overview.json."""
+    if not site_lock.acquire(blocking=False):
+        return  # уже обновляется
+    try:
+        OV["loading"] = True
+        ok, out = node("horo/overview.js", timeout=240)
+        if ok:
+            data = json.loads(out)
+            os.makedirs(os.path.dirname(OVERVIEW), exist_ok=True)
+            with open(OVERVIEW + ".part", "w") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(OVERVIEW + ".part", OVERVIEW)
+            OV["error"] = ""
+        else:
+            OV["error"] = plain(out)
+    except Exception as e:
+        OV["error"] = f"Не разобрал ответ сайта: {e}"
+    finally:
+        OV["loading"] = False
+        site_lock.release()
+
+
+def app_state(_=None):
+    """Что сейчас происходит: опрашивается приложением раз в пару секунд."""
+    d = draft()
+    ov = overview()
+    return {
+        "busy": lock.locked(),
+        "live": Live.active.state() if Live.active and lock.locked() else None,
+        "last": LAST or None,
+        "draft": {"title": d["title"], "url": d["url"], "text": drafts.read(d["task"]),
+                  "files": len(drafts.files(d["task"]))} if d else None,
+        "at": ov["at"] if ov else 0,
+        "loading": OV["loading"],
+        "error": OV["error"],
+    }
+
+
+def app_overview(b):
+    ov = overview()
+    stale = not ov or time.time() - ov["at"] / 1000 > STALE
+    if (b.get("fresh") or stale) and not OV["loading"]:
+        OV["loading"] = True  # чтобы приложение сразу показало «обновляю»
+        threading.Thread(target=refresh_overview, daemon=True).start()
+        ov = overview()
+    return {"data": ov, "loading": OV["loading"], "error": OV["error"]}
+
+
+def app_me(_):
+    git = lambda *a: subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
+    return {"digest": bool(load_settings().get("digest")), "hour": DIGEST_HOUR, "alphabet": os.path.exists(GLEB_EXTRA),
+            "version": git("rev-parse", "--short", "HEAD")}
+
+
+def busy_check():
+    if lock.locked():
+        raise ValueError("Я сейчас занят другим заданием — подожди, пока закончу")
+
+
+def app_solve(b):
+    m = LINK.search(str(b.get("url") or ""))
+    if not m:
+        raise ValueError("Это не ссылка на задание HDP")
+    busy_check()
+    threading.Thread(target=run_task, args=(owner(), m.group(0), "", bool(b.get("show"))), daemon=True).start()
+    return {"ok": True}
+
+
+def app_auto(_):
+    busy_check()
+    tests = [r for r in (overview() or {}).get("tasks", []) if r.get("auto") and r.get("rawStatus") == "appointed"]
+    if not tests:
+        raise ValueError("Новых автотестов нет")
+    threading.Thread(target=run_all, args=(owner(), tests), daemon=True).start()
+    return {"ok": True, "n": len(tests)}
+
+
+def app_draft(action):
+    def fn(b):
+        d = draft()
+        if not d:
+            raise ValueError("Черновика уже нет")
+        if action == "send":
+            busy_check()
+            threading.Thread(target=submit_draft, args=(owner(),), daemon=True).start()
+        elif action == "drop":
+            set_draft(None)
+            send(owner(), "👌 Черновик не отправляю (решил в приложении).", menu=True)
+        elif action == "save":
+            text = str(b.get("text") or "").strip()
+            before = drafts.read(d["task"])
+            if text and text != before:
+                drafts.write(d["task"], text)
+                if drafts.record_edit(d["task"], d["title"], before, text):
+                    d["pairs"].append([before, text, text])
+                    set_draft(d)
+        return app_state()
+    return fn
+
+
+def app_digest(b):
+    s = load_settings()
+    s["digest"] = bool(b.get("on"))
+    save_settings(s)
+    return app_me(b)
+
+
+def app_chat(fn):
+    """Действие, результат которого приходит в чат (проверка, алфавит)."""
+    def run(_):
+        busy_check()
+        threading.Thread(target=fn, args=(owner(),), daemon=True).start()
+        return {"ok": True}
+    return run
+
+
+ROUTES = {
+    "/api/state": app_state, "/api/overview": app_overview, "/api/me": app_me,
+    "/api/solve": app_solve, "/api/auto": app_auto,
+    "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),
+    "/api/digest": app_digest, "/api/check": app_chat(check), "/api/alphabet": app_chat(send_alphabet),
+}
+
+
+def app_kb(text="✨ Открыть приложение"):
+    return json.dumps({"inline_keyboard": [[{"text": text, "web_app": {"url": APP_URL + "/"}}]]}) if APP_URL else None
+
+
+def on_app_url(url):
+    """Адрес приложения готов или сменился (перезапуск туннеля): обновить кнопку у поля ввода."""
+    global APP_URL
+    APP_URL = url
+    button = {"type": "web_app", "text": "HDP", "web_app": {"url": url + "/"}}
+    params = {"menu_button": json.dumps(button)}
+    if owner():
+        params["chat_id"] = owner()
+    quiet("setChatMenuButton", **params)
+    print("Приложение:", url)
+
+
+def send_app(chat):
+    if APP_URL:
+        send(chat, "✨ <b>Приложение HDP</b>\nЗадания, оценки и комментарии учителей — в одном окне. "
+                   "Кнопка «HDP» тоже всегда слева от поля ввода.", markup=app_kb(), raw_html=True)
+    else:
+        send(chat, "⏳ Приложение ещё запускается (нужна минута после старта бота). Попробуй чуть позже.", menu=True)
+
+
 def setup_profile():
     """Меню команд, описание и подпись бота в Telegram (видно в пустом чате и в профиле)."""
     quiet("setMyCommands", commands=json.dumps([{"command": c, "description": d} for c, d in COMMANDS]))
@@ -1280,6 +1490,7 @@ def main():
     global offset
     threading.Thread(target=digest_loop, daemon=True).start()
     threading.Thread(target=setup_profile, daemon=True).start()
+    web.start(TOKEN, owner, ROUTES, on_app_url)
     print("Бот запущен")
     print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
     s = load_settings()

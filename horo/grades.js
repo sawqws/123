@@ -1,6 +1,7 @@
 // Оценки по предметам: уровень и оценка по шкале школы, интегральная оценка.
-// usage: node horo/grades.js [--html]   (--html: разметка для Telegram, так шлёт бот)
+// usage: node horo/grades.js [--html|--json]   (--html: разметка для Telegram, так шлёт бот; --json: для приложения)
 const { open, close, api, EDU } = require('./lib');
+const { disciplines } = require('./status');
 
 // Уровень -> оценка (так считает школа, сказал Глеб): от 3.5 — 5, от 2.5 — 4, от 2.0 — 3, ниже — 2.
 // Оценку с сайта (fivePointResult) не берём: она с этим не совпадает (уровень 3.0 сайт показывает как 5).
@@ -10,14 +11,21 @@ const MAX_LVL = 4;  // шкала уровня для полоски (выше 3
 const BAR = 8;
 const next = lvl => [...STEPS].reverse().find(([min]) => lvl < min);
 
-(async () => {
+// Предметы с уровнем: [{name, lvl, five, ia, next: [нужный уровень, оценка] | null}], от слабых к сильным
+async function collect(page, disc) {
+  return (await api(page, `${EDU}/disciplines`))
+    .filter(d => d.currentLevel != null)
+    .map(d => ({ name: disc[d.disciplineId] || d.disciplineId, lvl: d.currentLevel, five: grade(d.currentLevel), ia: d.integrativeAssessmentTotalResult, next: next(d.currentLevel) || null }))
+    .sort((a, b) => a.lvl - b.lvl || a.name.localeCompare(b.name));
+}
+
+module.exports = { collect, grade, STEPS };
+
+if (require.main === module) (async () => {
   const s = await open();
   try {
-    const disc = Object.fromEntries((await api(s.page, '/api/schools/v1/current/disciplines')).map(d => [d.disciplineId, d.name]));
-    const rows = (await api(s.page, `${EDU}/disciplines`))
-      .filter(d => d.currentLevel != null)
-      .map(d => ({ name: disc[d.disciplineId] || d.disciplineId, lvl: d.currentLevel, five: grade(d.currentLevel), ia: d.integrativeAssessmentTotalResult }))
-      .sort((a, b) => a.lvl - b.lvl || a.name.localeCompare(b.name));
+    const rows = await collect(s.page, await disciplines(s.page));
+    if (process.argv.includes('--json')) { console.log(JSON.stringify(rows)); return; }
     const html = process.argv.includes('--html');
     const b = x => (html ? `<b>${x}</b>` : x);
     const code = x => (html ? `<code>${x}</code>` : x);

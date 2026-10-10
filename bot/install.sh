@@ -40,6 +40,13 @@ npx playwright install --with-deps chromium
 
 echo "== 4/6 Claude Code и pm2"
 npm install -g @anthropic-ai/claude-code pm2
+# cloudflared — https-адрес для приложения бота (кнопка «HDP»); если не встанет, бот скачает его сам
+if ! command -v cloudflared >/dev/null; then
+  ARCH=$(dpkg --print-architecture)
+  curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" \
+    && dpkg -i /tmp/cloudflared.deb || echo "cloudflared не поставился — бот скачает его сам"
+  rm -f /tmp/cloudflared.deb
+fi
 
 echo "== 5/6 Секреты"
 if [ ! -s "$ENV" ]; then
