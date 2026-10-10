@@ -321,6 +321,35 @@ class BotTest(unittest.TestCase):
         kb = json.loads(bot.menu_kb())
         self.assertIn(bot.BTN_GRADES, sum(kb["keyboard"], []))
 
+    def test_planner_install(self):
+        tok = "8800000000:AAH" + "x" * 32
+        runs = []
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"ok":true,"result":{"username":"plan_bot"}}'
+
+        def fake_run(cmd, **kw):
+            runs.append((cmd, kw["env"]))
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+        with mock.patch.object(bot.urllib.request, "urlopen", lambda *a, **k: Resp()), \
+                mock.patch.object(bot.subprocess, "run", fake_run):
+            self.say("/planner")
+            self.assertIn("Пришли токен", self.last()[0])
+            self.say(tok, message_id=9)
+        self.assertTrue(runs[0][0][-1].endswith("planner/install.sh"))
+        self.assertEqual(runs[0][1]["PLANNER_TOKEN"], tok)
+        self.assertNotIn("TELEGRAM_TOKEN", runs[0][1])  # секреты HDP-бота установке не передаются
+        self.assertIn("Планер запущен", self.last()[0])
+        self.assertIn("t.me/plan_bot", self.last()[1])
+        def bad(*a, **k):
+            raise OSError("401")
+        with mock.patch.object(bot.urllib.request, "urlopen", bad), mock.patch.object(bot.subprocess, "run", fake_run):
+            self.say("/planner 1234567:" + "y" * 40)  # неверный токен — установка не запускается
+        self.assertEqual(len(runs), 1)
+        self.assertIn("не подошёл", self.last()[0])
+
 
 if __name__ == "__main__":
     unittest.main()

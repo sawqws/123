@@ -108,7 +108,8 @@ HELP = (  # HTML: отправляется с raw_html=True
     f"{BTN_HAND} — алфавит, чтобы писать решения твоим почерком\n"
     "/style — как пишу: небрежность, толщина, размер\n"
     f"{BTN_CHECK} — проверю, что всё работает\n"
-    "/update — обновиться · /emoji — премиум-эмодзи"
+    "/update — обновиться · /emoji — премиум-эмодзи\n"
+    "/planner токен — поставить бота-планера на этот сервер"
     "</blockquote>"
 )
 COMMANDS = [  # меню команд у поля ввода
@@ -1075,6 +1076,46 @@ def update(chat):
     os._exit(0)  # pm2 сам запустит бота заново
 
 
+BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
+
+
+def install_planner(chat, token, msg_id=None):
+    """Ставит бота-планера (planner/) на этот же сервер: токен в /etc/planner-bot.env, cloudflared, pm2.
+    Запускается только владельцем и только фиксированный planner/install.sh из репозитория."""
+    if msg_id:  # токен не должен висеть в чате
+        try:
+            tg("deleteMessage", chat_id=chat, message_id=msg_id)
+        except Exception:
+            pass
+    if token == TOKEN:
+        send(chat, "🤔 Это токен этого бота. Нужен токен нового бота-планера от @BotFather.")
+        return
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=30) as r:
+            me = json.load(r)["result"]
+    except Exception:
+        send(chat, "❌ Токен не подошёл. Скопируй его из @BotFather целиком и пришли ещё раз.")
+        return
+    name = me.get("username") or "planner"
+    send(chat, f"⏳ Ставлю планер @{name} на сервер… Это 1–2 минуты.")
+    env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": "/root",  # без секретов этого бота
+           "LANG": "C.UTF-8", "PLANNER_TOKEN": token}
+    try:
+        res = subprocess.run(["bash", os.path.join(REPO, "planner", "install.sh")], cwd=REPO, env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        send(chat, "❌ Установка шла дольше 15 минут и остановлена. Логи: pm2 logs horo-bot")
+        return
+    if res.returncode != 0:
+        tail = (res.stdout + res.stderr).strip()[-1200:]
+        send(chat, f"❌ Не получилось поставить планер:\n<pre>{esc(tail)}</pre>", raw_html=True)
+        return
+    send(chat, f"✅ <b>Планер запущен</b>\n\nОткрой @{esc(name)} и нажми /start — станешь владельцем. "
+               "Через минуту слева от поля ввода появится кнопка «Планер».",
+         markup=json.dumps({"inline_keyboard": [[{"text": f"Открыть @{name}", "url": f"https://t.me/{name}"}]]}),
+         raw_html=True)
+
+
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 
@@ -1115,6 +1156,14 @@ def handle(msg):
         return
     if text.startswith("/update"):
         update(chat)
+        return
+    if text.startswith("/planner") or BOT_TOKEN.fullmatch(text):
+        m = BOT_TOKEN.search(text)
+        if not m:
+            send(chat, "🗓 Пришли токен бота-планера от @BotFather — поставлю его на этот сервер.\n"
+                       "Например: /planner 123456789:AAH…", menu=True)
+            return
+        threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id")), daemon=True).start()
         return
     if text.startswith("/emoji_reset"):
         s = load_settings(); s.pop("emoji", None); save_settings(s)
