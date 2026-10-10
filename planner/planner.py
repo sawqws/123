@@ -23,7 +23,9 @@ import html
 import json
 import mimetypes
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -161,17 +163,17 @@ def setup_bot():
             db.meta("bot_setup", key)
         except Exception as e:
             print("setup:", e)
-    set_menu()
 
 
 def set_menu():
     if not public_url:
-        return
+        return False
     try:
         tg("setChatMenuButton", menu_button={"type": "web_app", "text": "Планер", "web_app": {"url": public_url + "/"}})
-        print("Приложение:", public_url)
+        return True
     except Exception as e:
         print("menu:", e)
+        return False
 
 
 # ---------- доступ ----------
@@ -364,7 +366,8 @@ def welcome(chat, name):
             "⏰ <b>Напоминания</b>, утренний план и итоги дня\n\n"
             "Чтобы добавить задачу, просто напиши её, например:\n"
             "<i>завтра в 18:00 тренировка</i>\n\n"
-            "А всё самое красивое — в планере 👇")
+            + ("А удобнее всего — в приложении-планере: кнопка «Планер» слева от поля ввода или здесь 👇" if public_url else
+               "Приложение-планер (день, неделя, месяц, цели) сейчас запускается — пришлю кнопку, как только будет готово."))
     send(chat, text, with_app([], "✨ Открыть планер"))
 
 
@@ -436,7 +439,9 @@ def on_message(msg):
         if public_url:
             send(chat, "🗓 Твой планер:", with_app([]))
         else:
-            send(chat, "Приложение ещё запускается, попробуй через минуту.")
+            send(chat, "Приложение ещё запускается — пришлю кнопку, как только будет готово.")
+    elif cmd == "/status":
+        send(chat, f"🩺 Приложение: {esc(public_url or 'нет адреса')}\nСостояние: {esc(https_note)}")
     elif cmd == "/export":
         export(chat, uid)
     elif cmd == "/update" and uid == (owner() or min(ALLOWED or {0})):
@@ -734,55 +739,192 @@ def serve():
     httpd.serve_forever()
 
 
-# ---------- туннель: https-адрес без домена ----------
+# ---------- https-адрес для приложения ----------
+# Telegram открывает мини-приложение только по https. Основной путь — Caddy на этом же сервере
+# (порты 80 и 443): сертификат Let's Encrypt на имя вида 1-2-3-4.sslip.io и на сам IP сервера.
+# Если за 5 минут не вышло — запасной путь, туннель cloudflared (он работает не везде).
+CADDY_DIR = os.path.join(DATA, "caddy")
+https_note = "запускается"  # что с адресом приложения — для /status
 
-def healthy():
+
+def healthy(url=None):
+    url = url or public_url
+    if not url:
+        return False
     try:
-        with urllib.request.urlopen(public_url + "/health", timeout=20) as r:
+        with urllib.request.urlopen(url + "/health", timeout=20) as r:
             return r.read() == b"ok"
     except Exception:
         return False
 
 
-def tunnel():
-    """cloudflared даёт адрес https://….trycloudflare.com. Он меняется при перезапуске —
-    тогда бот обновляет кнопку «Планер». Если адрес перестал открываться, туннель перезапускается."""
+def use_url(url):
+    """Ставит адрес приложения на кнопку «Планер»; если адрес новый — пишет владельцу, что всё готово."""
     global public_url
+    old, public_url = public_url, url
+    if not set_menu():
+        public_url = old
+        return False
+    if db.meta("app_url") != url:
+        db.meta("app_url", url)
+        if owner():
+            try:
+                send(owner(), "✨ <b>Планер готов!</b>\n\nКнопка «Планер» теперь слева от поля ввода. "
+                              "Или открой прямо отсюда 👇", with_app([], "✨ Открыть планер"))
+            except Exception as e:
+                print("notify:", e)
+    return True
+
+
+def server_ip():
+    if os.environ.get("PLANNER_IP"):
+        return os.environ["PLANNER_IP"]
+    for url in ("https://api.ipify.org", "https://ipv4.icanhazip.com", "https://ifconfig.me/ip"):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                ip = r.read().decode().strip()
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+                return ip
+        except Exception:
+            pass
+    return None
+
+
+def caddy_bin():
+    """Caddy из системы или скачанный в planner/data/caddy (один файл, официальная сборка)."""
+    found = shutil.which("caddy")
+    if found:
+        return found
+    path = os.path.join(CADDY_DIR, "caddy")
+    if not os.path.exists(path):
+        arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), "amd64")
+        os.makedirs(CADDY_DIR, exist_ok=True)
+        print("Скачиваю Caddy…")
+        urllib.request.urlretrieve(f"https://caddyserver.com/api/download?os=linux&arch={arch}", path + ".part")
+        os.chmod(path + ".part", 0o755)
+        os.replace(path + ".part", path)
+    return path
+
+
+def caddyfile(ip):
+    """Настройки Caddy и адреса, по которым приложение будет доступно (сначала имя, потом IP)."""
+    host = ip.replace(".", "-") + ".sslip.io"
+    conf = (
+        "{\n"
+        f"\tstorage file_system {CADDY_DIR}/data\n"
+        "\tadmin off\n"
+        "}\n"
+        f"https://{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{PORT}\n"
+        "}\n"
+        f"https://{ip} {{\n"
+        "\ttls {\n"
+        "\t\tissuer acme https://acme-v02.api.letsencrypt.org/directory {\n"
+        "\t\t\tprofile shortlived\n"
+        "\t\t}\n"
+        "\t}\n"
+        f"\treverse_proxy 127.0.0.1:{PORT}\n"
+        "}\n"
+    )
+    return conf, [f"https://{host}", f"https://{ip}"]
+
+
+def start_caddy(binary, conf_path):
+    proc = subprocess.Popen([binary, "run", "--config", conf_path, "--adapter", "caddyfile"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+    def log():  # в pm2 logs — только ошибки и полученные сертификаты
+        for line in proc.stderr:
+            if '"level":"error"' in line or "certificate obtained" in line:
+                print("caddy:", line.strip()[:400])
+    threading.Thread(target=log, daemon=True).start()
+    return proc
+
+
+def https():
+    global https_note
+    proc = cands = None
+    try:
+        ip = server_ip()
+        if not ip:
+            raise RuntimeError("не узнал IP сервера")
+        conf, cands = caddyfile(ip)
+        os.makedirs(CADDY_DIR, exist_ok=True)
+        conf_path = os.path.join(CADDY_DIR, "Caddyfile")
+        with open(conf_path, "w") as f:
+            f.write(conf)
+        binary = caddy_bin()
+        proc = start_caddy(binary, conf_path)
+        https_note = "Caddy получает сертификат"
+    except Exception as e:
+        https_note = f"Caddy не запустился: {e}"
+        print(https_note)
+    fallback = False
+    started = time.time()
+    while True:
+        if proc and proc.poll() is not None:  # Caddy упал (например, порт 443 занят) — пробуем снова
+            print("Caddy остановился, перезапускаю")
+            https_note = "Caddy перезапускается (занят порт 80/443?)"
+            time.sleep(10)
+            proc = start_caddy(binary, conf_path)
+        if cands and not (public_url in cands and healthy()):
+            for c in cands:
+                if healthy(c) and use_url(c):
+                    https_note = "работает через Caddy"
+                    print("Приложение:", c)
+                    break
+        if not fallback and public_url not in (cands or []) and time.time() - started > 300:
+            fallback = True  # своего https пока нет — запасной туннель
+            threading.Thread(target=tunnel, daemon=True).start()
+        time.sleep(15 if public_url not in (cands or []) else 120)
+
+
+def tunnel():
+    """Запасной путь: cloudflared даёт адрес https://….trycloudflare.com (меняется при перезапуске).
+    Адрес Caddy важнее: туннель занимает кнопку, только пока своего https нет."""
+    global https_note
     while True:
         try:
             proc = subprocess.Popen(["cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{PORT}"],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         except FileNotFoundError:
-            print("cloudflared не установлен — приложение недоступно, работает только чат. Установка: planner/install.sh")
+            print("cloudflared не установлен — запасного туннеля нет")
             return
-        found = threading.Event()
+        found = {}
+        ready = threading.Event()
 
         def read():
-            global public_url
             for line in proc.stderr:
                 m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-                if m and not found.is_set():
-                    public_url = m.group(0)
-                    found.set()
+                if m and not ready.is_set():
+                    found["url"] = m.group(0)
+                    ready.set()
 
         threading.Thread(target=read, daemon=True).start()
-        if found.wait(60):
+        if ready.wait(60):
+            url = found["url"]
             for _ in range(30):  # адрес начинает открываться не сразу
-                if healthy():
+                if healthy(url):
                     break
                 time.sleep(3)
-            set_menu()
             fails = 0
             while proc.poll() is None:
-                time.sleep(120)
-                fails = 0 if healthy() else fails + 1
+                ok = healthy(url)
+                if ok and (not public_url or "trycloudflare" in public_url) and public_url != url and use_url(url):
+                    https_note = "работает через туннель cloudflared"
+                if public_url and "trycloudflare" not in public_url:
+                    proc.kill()  # появился свой https — туннель больше не нужен
+                    return
+                fails = 0 if ok else fails + 1
                 if fails >= 3:
                     print("Туннель не отвечает — перезапускаю")
                     proc.kill()
+                time.sleep(60)
         else:
+            print("cloudflared не выдал адрес за минуту")
             proc.kill()
         proc.wait()
-        time.sleep(5)
+        time.sleep(30)
 
 
 VERSION = asset_version() if os.path.isdir(WEB) else "0"
@@ -793,9 +935,11 @@ def main():
     if not TOKEN:
         sys.exit("Нет PLANNER_TOKEN (токен от @BotFather). Впиши его в /etc/planner-bot.env")
     threading.Thread(target=serve, daemon=True).start()
-    if not public_url:
-        threading.Thread(target=tunnel, daemon=True).start()
     setup_bot()
+    if public_url:
+        set_menu()
+    else:
+        threading.Thread(target=https, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     print(f"{NAME} запущен")
     while True:

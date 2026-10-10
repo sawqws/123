@@ -32,6 +32,11 @@ if ! command -v cloudflared >/dev/null; then
 fi
 cloudflared --version
 
+# приложению нужен https: Caddy (его бот скачивает сам) берёт сертификат, для этого открыты порты 80 и 443
+if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+  ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
+fi
+
 echo "== 3/5 Код"
 if [ -d "$DIR/.git" ]; then
   git -C "$DIR" fetch origin "$BRANCH"
