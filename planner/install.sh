@@ -3,6 +3,7 @@
 # Одной командой (от root):
 #   curl -fsSL https://raw.githubusercontent.com/sawqws/123/main/planner/install.sh | bash
 # Повторный запуск обновляет код и перезапускает бота, токен второй раз не спрашивает.
+# Токен можно передать сразу: curl … | PLANNER_TOKEN=123:ABC bash
 set -euo pipefail
 BRANCH=main
 DIR=/root/horo
@@ -40,8 +41,13 @@ else
 fi
 
 echo "== 4/5 Токен"
-if [ ! -s "$ENV" ]; then
-  read -r -p "Токен НОВОГО бота от @BotFather (не HDP-бота): " TOKEN < /dev/tty
+# токен можно передать сразу: curl … | PLANNER_TOKEN='123:ABC' bash
+if [ -n "${PLANNER_TOKEN:-}" ] && [ -s "$ENV" ]; then
+  sed -i "s|^PLANNER_TOKEN=.*|PLANNER_TOKEN=${PLANNER_TOKEN}|" "$ENV"
+  echo "Токен обновлён в $ENV"
+elif [ ! -s "$ENV" ]; then
+  TOKEN="${PLANNER_TOKEN:-}"
+  [ -n "$TOKEN" ] || read -r -p "Токен НОВОГО бота от @BotFather (не HDP-бота): " TOKEN < /dev/tty
   umask 077
   printf 'PLANNER_TOKEN=%s\nPLANNER_ALLOWED=\nPLANNER_PUBLIC=\nPLANNER_URL=\n' "$TOKEN" > "$ENV"
   chmod 600 "$ENV"
