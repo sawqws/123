@@ -30,11 +30,17 @@ echo "== 3/5 Python-библиотеки (Telethon)"
 
 echo "== 4/5 Секреты"
 if [ ! -s "$ENV" ]; then
-  echo "Ключи приложения: зайди на https://my.telegram.org → API development tools,"
-  echo "создай приложение (название любое) и скопируй App api_id и App api_hash."
   read -r -p "Токен нового бота от @BotFather: " TOKEN < /dev/tty
+  echo "Ключи приложения Telegram (api_id и api_hash). Если их нет — просто нажми Enter:"
+  echo "получу их сам с my.telegram.org, понадобятся номер и код из Telegram."
   read -r -p "api_id: " APIID < /dev/tty
-  read -r -p "api_hash: " APIHASH < /dev/tty
+  if [ -z "$APIID" ]; then
+    KEYS=$(python3 "$DIR/tgbot/get_api.py" | tail -1) || { echo "Ключи получить не удалось, запусти установку ещё раз"; exit 1; }
+    APIID=${KEYS%% *}
+    APIHASH=${KEYS##* }
+  else
+    read -r -p "api_hash: " APIHASH < /dev/tty
+  fi
   # владелец — тот же, что у HDP-бота, чтобы никто другой не успел нажать /start
   OWNER=$(python3 -c "import json;print(json.load(open('$DIR/horo/tmp/bot_settings.json')).get('owner') or '')" 2>/dev/null || true)
   umask 077
