@@ -250,8 +250,9 @@ def connect_link(uid):
 
 def setup_text():
     url = redirect_url() or "(адрес приложения ещё не готов — /status)"
-    return ("🔌 <b>Подключение WHOOP</b> — один раз, 3 минуты:\n\n"
-            "1. Открой <a href=\"https://developer-dashboard.whoop.com\">developer-dashboard.whoop.com</a> "
+    return ("🔌 <b>Подключение WHOOP</b> — один раз, 3 минуты. Это не новое приложение на телефон, а ключ доступа: "
+            "только так WHOOP разрешает боту читать твои данные.\n\n"
+            "1. Открой <a href=\"https://developer-dashboard.whoop.com/apps/create\">developer-dashboard.whoop.com</a> "
             "и войди своим аккаунтом WHOOP.\n"
             "2. Создай команду (Team, любое имя), потом <b>Create App</b>.\n"
             "3. Scopes: отметь все <code>read:*</code> и <code>offline</code>.\n"

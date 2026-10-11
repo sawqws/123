@@ -380,6 +380,27 @@ class BotTest(unittest.TestCase):
         self.assertIn("КПП запущен", self.last()[0])
         self.assertIn("t.me/kpp_bot", self.last()[1])
 
+    def test_coach_install(self):
+        tok = "8730000000:AAH" + "z" * 32
+        runs = []
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"ok":true,"result":{"username":"TrainerWhoopbot"}}'
+
+        def fake_run(cmd, **kw):
+            runs.append((cmd, kw["env"]))
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+        with mock.patch.object(bot.urllib.request, "urlopen", lambda *a, **k: Resp()), \
+                mock.patch.object(bot.subprocess, "run", fake_run):
+            self.say("/coach")
+            self.assertIn("тренера", self.last()[0])
+            self.say("/coach " + tok, message_id=9)
+        self.assertTrue(runs[0][0][-1].endswith("coach/install.sh"))
+        self.assertEqual(runs[0][1]["COACH_TOKEN"], tok)
+        self.assertIn("Тренер запущен", self.last()[0])
+
 
 class AppTest(BotTest):
     """Приложение (Mini App): подпись Telegram, доступ только владельцу, действия те же, что у кнопок."""
