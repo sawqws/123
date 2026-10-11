@@ -36,6 +36,14 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+import digest  # noqa: E402
+import maker  # noqa: E402
+import media  # noqa: E402
+
+maker.ui = sys.modules[__name__]
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DATA = os.path.join(HERE, "data")
@@ -52,6 +60,7 @@ APPS = {  # имя в pm2 -> подпись
     "coach-bot": "⚡ Тренер «Форма»",
     "planner-bot": "🗓 Планер «Ритм»",
     "kpp-bot": "🚧 КПП",
+    "avito-bot": "🛍 Авито",
     "tg-agent": "🤖 Секретарь",
     SELF: "👑 Главный",
 }
@@ -59,6 +68,7 @@ INSTALL = {  # что умеем ставить по одному токену: 
     "coach": ("COACH_TOKEN", "⚡ Тренер WHOOP", "Открой @{name}, нажми /start, потом /connect — подключим WHOOP."),
     "planner": ("PLANNER_TOKEN", "🗓 Планер", "Открой @{name} и нажми /start — через минуту появится кнопка «Планер»."),
     "kpp": ("KPP_TOKEN", "🚧 КПП", "Открой @{name}, нажми /start и войди через Яндекс."),
+    "avito": ("AVITO_TOKEN", "🛍 Авито", "Открой @{name}, нажми /start и пришли фото вещи."),
 }
 TZ = datetime.timezone(datetime.timedelta(hours=3))  # Москва
 
@@ -172,13 +182,17 @@ def apps():
         mon = r.get("monit") or {}
         up = env.get("pm_uptime")
         res.append({
-            "name": r.get("name"), "label": APPS.get(r.get("name"), "🔹 " + str(r.get("name"))),
+            "name": r.get("name"), "label": label(r.get("name")),
             "status": env.get("status") or "?", "restarts": env.get("restart_time") or 0,
             "uptime": max(0, time.time() - up / 1000) if up and env.get("status") == "online" else 0,
             "mem": round((mon.get("memory") or 0) / 1048576), "cpu": mon.get("cpu") or 0,
         })
     order = list(APPS)
     return sorted(res, key=lambda a: order.index(a["name"]) if a["name"] in order else 99)
+
+
+def label(name):
+    return APPS.get(name) or maker.label(name) or "🔹 " + str(name)
 
 
 def ago(sec):
@@ -228,6 +242,7 @@ def home(chat, mid=None):
         lines.append(f"{'🟢' if ok else '🔴'} {esc(a['label'])} — "
                      + (f"{ago(a['uptime'])}, {a['mem']} МБ" if ok else f"<b>{esc(a['status'])}</b>"))
     btns = [[b(a["label"], f"app|{a['name']}")] for a in rows if a["name"] != SELF]
+    btns.append([b("📂 Все боты", "all"), b("🛠 Сделать бота", "mk"), b("✏️ Доработать", "fix")])
     btns.append([b("⬆️ Обновить всех", "upd"), b("➕ Поставить", "add")])
     btns.append([b("🖥 Сервер", "srv"), b("🤖 Claude", "cl"), b("🔄", "home")])
     return show(chat, mid, "\n".join(lines), btns)
@@ -248,7 +263,7 @@ def app_card(chat, mid, name):
 def logs(chat, name):
     code, out = sh("pm2", "logs", name, "--nostream", "--lines", "30", "--raw", timeout=30)
     out = "\n".join(line for line in out.splitlines() if line.strip())[-3500:] or "пусто"
-    send(chat, f"📜 <b>{esc(APPS.get(name, name))}</b>\n<pre>{esc(out)}</pre>",
+    send(chat, f"📜 <b>{esc(label(name))}</b>\n<pre>{esc(out)}</pre>",
          [[b("🔄 Перезапустить", f"rs|{name}"), b("‹ К ботам", "home")]])
 
 
@@ -259,7 +274,7 @@ def restart(chat, name):
     time.sleep(4)
     a = next((x for x in apps() or [] if x["name"] == name), {})
     ok = code == 0 and a.get("status") == "online"
-    send(chat, f"{'✅' if ok else '⚠️'} {esc(APPS.get(name, name))} — "
+    send(chat, f"{'✅' if ok else '⚠️'} {esc(label(name))} — "
          + ("перезапущен" if ok else f"не поднялся: {esc(out.strip()[-300:] or a.get('status'))}"),
          [[b("📜 Логи", f"lg|{name}"), b("‹ К ботам", "home")]])
 
@@ -289,21 +304,27 @@ def fmt_date(iso):
 
 # ---------- обновление и установка ----------
 
-def update_all(chat):
+def update_all(chat, reset=False):
     def git(*a):
         return sh("git", "-C", REPO, *a, timeout=120)
     _, old = git("rev-parse", "HEAD")
     code, out = git("fetch", "origin", "main")
     if code == 0:
-        code, out = git("checkout", "-B", "main", "origin/main")
+        code, out = sync_main(git, reset)
     if code != 0:
-        return send(chat, f"⚠️ Не скачал код:\n<pre>{esc(out[-800:])}</pre>")
+        return send(chat, f"⚠️ Не скачал код:\n<pre>{esc(out[-800:])}</pre>",
+                    [[b("🧹 Сбросить локальные правки и обновить", "upd|reset")]] if "rebase" in out else None)
     _, new = git("rev-parse", "HEAD")
     if old.strip() == new.strip():
         return send(chat, "✅ Уже последняя версия, перезапускать никого не нужно.", [[b("‹ К ботам", "home")]])
     _, changed = git("diff", "--name-only", old.strip(), new.strip())
     if "package.json" in changed or "package-lock.json" in changed:
         sh("npm", "install", "--no-audit", "--no-fund", "--prefix", REPO, timeout=600)
+    if not os.path.exists(os.path.join(REPO, "common", ".venv", "bin", "python")):
+        send(chat, "🎙 Ставлю распознавание голосовых для всех ботов — один раз, 2–5 минут…")
+        code, out = sh("bash", os.path.join(REPO, "common", "setup.sh"), timeout=1800)
+        if code != 0:
+            send(chat, f"⚠️ Голосовые не поставились:\n<pre>{esc(out[-600:])}</pre>")
     names = [a["name"] for a in apps() or [] if a["name"] in APPS and a["name"] != SELF]
     res = []
     for n in names:
@@ -313,6 +334,21 @@ def update_all(chat):
     send(chat, "⬆️ <b>Обновил и перезапустил</b>\n" + "\n".join(esc(x) for x in res) + "\n\nПерезапускаюсь сам…")
     tg("getUpdates", offset=offset, timeout=0)
     os._exit(0)  # pm2 поднимет заново
+
+
+def sync_main(git, reset=False):
+    """Код = свежий main. Локальные коммиты «✏️ Доработать» переносятся поверх него (rebase);
+    конфликт — откат rebase и ошибка (reset=True — выбросить локальные правки)."""
+    _, ahead = git("rev-list", "origin/main..HEAD")
+    if reset or not ahead.strip():
+        return git("checkout", "-B", "main", "origin/main")
+    git("add", "-A")
+    git("-c", "user.name=Главный", "-c", "user.email=hub@localhost", "commit", "-q", "-m", "Главный: правки на сервере")
+    code, out = git("-c", "user.name=Главный", "-c", "user.email=hub@localhost", "rebase", "origin/main")
+    if code != 0:
+        git("rebase", "--abort")
+        return code, "Правки, сделанные здесь через «✏️ Доработать», конфликтуют с обновлением (rebase).\n" + out
+    return 0, out
 
 
 def install(chat, kind, token, msg_id=None):
@@ -386,6 +422,7 @@ def watch_once(now=None):
                 out.append((f"💳 Сервер оплачен до {fmt_date(paid)} — " + (
                     f"осталось {left} дн. Продли, иначе все боты выключатся." if left > 0 else
                     "срок сегодня! Продли сейчас." if left == 0 else "срок прошёл! Продли и пришли новый /paid ДД.ММ."), None))
+        out += digest.due(st, now, rows, srv, st.get("paid"))
         save(st)
     return out
 
@@ -507,7 +544,7 @@ def remote_api(action, body):
         return {"code": code, "out": out[-100000:]}
     if action == "restart":
         code, out = sh("pm2", "restart", str(body["name"]), timeout=60)
-        tell(f"🤖 Claude перезапустил {esc(APPS.get(body['name'], body['name']))}"
+        tell(f"🤖 Claude перезапустил {esc(label(body['name']))}"
              + (f": {esc(str(body['why'])[:300])}" if body.get("why") else ""))
         return {"code": code, "out": out[-5000:]}
     if action == "exec":
@@ -650,7 +687,10 @@ HELP = ("👑 <b>Главный</b> — следит за ботами на се
         "• Сам напишет, если бот упал или перезапускается по кругу, и когда заработал снова.\n"
         "• Кнопки: перезапуск, логи, «Обновить всех», «Поставить» нового бота по токену.\n"
         "• /paid 07.11 — срок оплаты сервера, напомню за 7, 3 и 1 день.\n\n"
-        "• /claude — вход для Claude: сам смотрит логи и чинит ботов, о каждой команде пишу сюда.\n\n"
+        "• /claude — вход для Claude: сам смотрит логи и чинит ботов, о каждой команде пишу сюда.\n"
+        "• 🛠 /make — сделаю нового бота по ТЗ (код, @BotFather, запуск), ✏️ /fix — доработаю любого бота.\n"
+        "• 📂 /all — все боты со ссылками.\n"
+        + digest.HELP_LINES + "\n"
         "/bots — боты · /server — сервер · /update — обновить всех")
 
 
@@ -665,6 +705,11 @@ def on_message(msg):
         print("Владелец:", uid)
     if not allowed(uid):
         return send(chat, "🔒 Это личный бот.")
+    kind = media.kind(msg)
+    if kind == "voice":
+        return threading.Thread(target=hear, args=(msg,), daemon=True).start()
+    if kind == "photo":
+        return on_photo(msg)
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     wait = setting("wait")
     if cmd in ("/start", "/bots", "/menu"):
@@ -680,6 +725,20 @@ def on_message(msg):
         claude_card(chat, None)
     elif cmd == "/update":
         threading.Thread(target=update_all, args=(chat,), daemon=True).start()
+    elif cmd == "/all":
+        threading.Thread(target=maker.show_all, args=(chat,), daemon=True).start()
+    elif cmd == "/make":
+        maker.ask_make(chat)
+    elif cmd == "/fix":
+        maker.ask_fix(chat)
+    elif cmd in ("/remind", "/reminders", "/digest"):
+        with lock:
+            st = load()
+            res = digest.command(st, text, time.time())
+            save(st)
+        send(chat, *res) if res else send(chat, HELP)
+    elif not cmd and wait and maker.on_text(chat, wait, text, msg):
+        pass
     elif cmd == "/paid":
         iso = parse_paid(text)
         if not iso:
@@ -707,8 +766,44 @@ def on_message(msg):
         setting("token_hint", BOT_TOKEN.search(text).group(0))
         send(chat, "🔑 Вижу токен (сообщение удалил). Какого бота поставить?",
              [[b(INSTALL[k][1], f"addt|{k}")] for k in INSTALL])
+    elif text and not cmd:
+        maker.ask_what(chat, text)
     else:
         home(chat)
+
+
+def hear(msg):
+    """Голосовое → текст → дальше как обычное сообщение."""
+    chat = msg["chat"]["id"]
+    tg("sendChatAction", chat_id=chat, action="typing")
+    try:
+        text = media.voice_text(TOKEN, msg)
+    except media.MediaError as e:
+        return send(chat, f"🎙 {esc(e)}")
+    except Exception as e:
+        return send(chat, f"🎙 Не получилось: {esc(e)}")
+    send(chat, f"🎙 <i>«{esc(text)}»</i>")
+    rest = {k: v for k, v in msg.items() if k not in ("voice", "audio", "video_note", "document")}
+    on_message({**rest, "text": text})
+
+
+def on_photo(msg):
+    """Фото и скриншоты прикладываются к ТЗ (Claude их посмотрит). Подпись — сам текст ТЗ."""
+    chat = msg["chat"]["id"]
+    try:
+        path = media.photo_path(TOKEN, msg, os.path.join(DATA, "shots"))
+    except Exception as e:
+        return send(chat, f"😕 Не скачал фото: {esc(e)}")
+    with lock:
+        st = load()
+        st["shots"] = (st.get("shots") or [])[-9:] + [path]
+        save(st)
+    cap = (msg.get("caption") or "").strip()
+    if cap:
+        rest = {k: v for k, v in msg.items() if k not in ("photo", "document", "caption")}
+        return on_message({**rest, "text": cap})
+    if not msg.get("media_group_id") or len(setting("shots")) == 1:
+        send(chat, "📎 Фото приложу к задаче — теперь напиши или надиктуй, что сделать.")
 
 
 def on_callback(cq):
@@ -735,7 +830,17 @@ def on_callback(cq):
         on_claude(chat, mid, data[1] if len(data) > 1 else "")
     elif data[0] == "upd":
         note = "Обновляю…"
-        threading.Thread(target=update_all, args=(chat,), daemon=True).start()
+        threading.Thread(target=update_all, args=(chat, len(data) > 1), daemon=True).start()
+    elif data[0] == "rmd":
+        with lock:
+            st = load()
+            res = digest.callback(st, "|".join(data))
+            save(st)
+        if res:
+            note = res[0]
+            show(chat, mid, res[1], res[2])
+    elif data[0] in ("all", "mk", "mkr", "fix", "rb", "del?", "del", "mkh", "fixh"):
+        note = maker.on_callback(chat, mid, data) or ""
     elif data[0] == "add" and len(data) == 1:
         show(chat, mid, "➕ <b>Какого бота поставить?</b>\n\nСначала создай бота в @BotFather и скопируй токен.",
              [[b(INSTALL[k][1], f"add|{k}")] for k in INSTALL] + [[b("‹ Назад", "home")]])
@@ -763,6 +868,10 @@ def main():
         tg("setMyCommands", commands=[{"command": "bots", "description": "Мои боты"},
                                       {"command": "server", "description": "Сервер"},
                                       {"command": "update", "description": "Обновить всех"},
+                                      {"command": "all", "description": "Все боты"},
+                                      {"command": "make", "description": "Сделать бота"},
+                                      {"command": "fix", "description": "Доработать бота"},
+                                      {"command": "reminders", "description": "Напоминания"},
                                       {"command": "claude", "description": "Вход для Claude"},
                                       {"command": "help", "description": "Что я умею"}])
     except Exception as e:
@@ -776,6 +885,9 @@ def main():
         except Exception as e:
             print("notify:", e)
     bootstrap_remote()
+    if owner() and setting("intro") != 1:  # один раз: список всех ботов и как собрать их в папку
+        setting("intro", 1)
+        threading.Thread(target=maker.show_all, args=(owner(), None, True), daemon=True).start()
     threading.Thread(target=watch, daemon=True).start()
     threading.Thread(target=serve, daemon=True).start()
     print("Главный запущен")
