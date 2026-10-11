@@ -118,6 +118,37 @@ class HubTest(Base):
         self.assertIn("запущен", self.last()[0])
         self.assertIn("t.me/TrainerWhoopbot", self.last()[1])
 
+    def test_eye_via_botfather(self):
+        """/eye → «Создать бота сам» → Секретарь создаёт бота в @BotFather → установка с его токеном."""
+        tok = "8740000000:AAH" + "e" * 32
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"ok":true,"result":{"username":"glaz_eye_bot"}}'
+        with mock.patch.object(hub.urllib.request, "urlopen", lambda *a, **k: Resp()), \
+                mock.patch.object(hub.threading, "Thread", lambda target, args, daemon: mock.Mock(start=lambda: target(*args))), \
+                mock.patch.object(hub.maker, "secretary_ready", return_value=True), \
+                mock.patch.object(hub.maker, "botfather", return_value=(tok, None)) as bf:
+            hub.on_message(self.msg("/eye"))
+            text, btns = self.last()
+            self.assertIn("Глаз", text)
+            self.assertIn("bf|eye", btns)
+            hub.on_callback({"id": "1", "from": {"id": U}, "data": "bf|eye",
+                             "message": {"chat": {"id": U}, "message_id": 3}})
+        bf.assert_called_once_with("Глаз", "glaz_eye")
+        cmd, env = [r for r in self.runs if r[0][0] == "bash"][0]
+        self.assertTrue(cmd[1].endswith("eye/install.sh"))
+        self.assertEqual(env["EYE_TOKEN"], tok)
+        self.assertIn("t.me/glaz_eye_bot", self.last()[1])
+
+    def test_eye_without_secretary(self):
+        with mock.patch.object(hub.maker, "secretary_ready", return_value=False):
+            hub.on_message(self.msg("/eye"))
+        text, btns = self.last()
+        self.assertIn("Пришли токен", text)
+        self.assertNotIn("bf|eye", btns)
+
     def test_paid(self):
         today = datetime.date(2026, 10, 11)
         self.assertEqual(hub.parse_paid("/paid 07.11", today), "2026-11-07")

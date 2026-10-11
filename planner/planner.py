@@ -53,6 +53,7 @@ PUBLIC = os.environ.get("PLANNER_PUBLIC") == "1"
 PORT = int(os.environ.get("PLANNER_PORT") or 8787)
 COACH_PORT = 8789  # coach/coach.py
 HUB_PORT = 8790  # hub/hub.py
+EYE_PORT = 8791  # eye/eye.py
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
 REPO = os.path.dirname(HERE)
@@ -971,6 +972,10 @@ def caddyfile(ip):
         # «Главный» (hub/): вход для Claude
         f"https://hub.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{HUB_PORT}\n"
+        "}\n"
+        # «Глаз» (eye/): страница разговора через очки
+        f"https://eye.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{EYE_PORT}\n"
         "}\n"
     )
     return conf, [f"https://{host}", f"https://{ip}"]

@@ -34,6 +34,8 @@ CATALOG = {
     "kpp-bot": ("🚧 КПП", ["kpp"], "/etc/kpp-bot.env", "KPP_TOKEN", "kpp", "пропуск для такси в ЖК"),
     "avito-bot": ("🛍 Авито", ["avito"], "/etc/avito-bot.env", "AVITO_TOKEN", "avito",
                   "фото на белом фоне, описание, средняя цена"),
+    "eye-bot": ("👁 Глаз", ["eye"], "/etc/eye-bot.env", "EYE_TOKEN", "eye",
+                "Claude в очках Ray-Ban Meta: фото и разговор голосом"),
     "tg-agent": ("🤖 Секретарь", ["tgbot"], "/etc/tg-agent.env", "TG_AGENT_TOKEN", None,
                  "твой Telegram: чаты, ответы, расписания"),
     "hub-bot": ("👑 Главный", ["hub"], "/etc/hub-bot.env", "HUB_TOKEN", None, "следит за ботами, делает новых"),
@@ -347,10 +349,15 @@ def _make(chat, tz):
     deploy(chat, slug, token, st)
 
 
+def secretary_ready():
+    """Секретарь подключён к аккаунту Глеба — может сам создать бота в @BotFather."""
+    return os.path.exists(os.path.join(ui.REPO, "tgbot", "tmp", "agent.sock"))
+
+
 def botfather(name, want):
     """(токен, None) или (None, почему не вышло). Через Секретаря — аккаунт Глеба, он подтверждает кнопкой."""
     tg_py = os.path.join(ui.REPO, "tgbot", "tg.py")
-    if not os.path.exists(os.path.join(ui.REPO, "tgbot", "tmp", "agent.sock")):
+    if not secretary_ready():
         return None, "Секретарь не подключён к твоему аккаунту"
     code, out = ui.sh("python3", tg_py, "newbot", name, want, timeout=15 * 60)
     m = re.search(r"TOKEN (\S+) @(\w+)", out)
