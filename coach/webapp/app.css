@@ -15,6 +15,7 @@
   --strain: #3d9bff;
   --sleep: #9a8cff;
   --food: #ff9f43;
+  --water: #3fa9f5;
   --accent: #22e08a;
   --accent-ink: #04140c;
   --zone: var(--muted);
@@ -41,6 +42,7 @@ body.light {
   --strain: #1f7fe6;
   --sleep: #6c5ce7;
   --food: #f0801c;
+  --water: #1f8fe0;
   --accent: #0fbf6e;
   --accent-ink: #fff;
   --shadow: 0 10px 30px rgba(20, 30, 60, .1);

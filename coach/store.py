@@ -35,10 +35,14 @@ CREATE TABLE IF NOT EXISTS briefs (user INTEGER, day TEXT, kind TEXT, text TEXT,
 CREATE TABLE IF NOT EXISTS goals (
   id INTEGER PRIMARY KEY, user INTEGER NOT NULL, text TEXT NOT NULL, created TEXT
 );
+CREATE TABLE IF NOT EXISTS water (
+  id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, time TEXT DEFAULT '', ml INTEGER NOT NULL, created TEXT
+);
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS records_day ON records (user, kind, day);
 CREATE INDEX IF NOT EXISTS meals_day ON meals (user, day);
+CREATE INDEX IF NOT EXISTS water_day ON water (user, day);
 CREATE INDEX IF NOT EXISTS messages_user ON messages (user, id);
 """
 
@@ -237,6 +241,30 @@ class Store:
 
     def delete_meal(self, uid, mid):
         return self.x("DELETE FROM meals WHERE id=? AND user=?", (mid, uid)).rowcount > 0
+
+    # ---------- вода ----------
+
+    def add_water(self, uid, day, time_, ml):
+        ml = int(ml)
+        if not 10 <= ml <= 5000:
+            raise ValueError("воды от 10 мл до 5 л за раз")
+        cur = self.x("INSERT INTO water (user, day, time, ml, created) VALUES (?,?,?,?,?)",
+                     (uid, str(day), time_, ml, now_iso()))
+        return self.q("SELECT * FROM water WHERE id=?", (cur.lastrowid,))[0]
+
+    def water(self, uid, day):
+        return self.q("SELECT * FROM water WHERE user=? AND day=? ORDER BY time, id", (uid, str(day)))
+
+    def water_total(self, uid, day):
+        return int(self.q("SELECT COALESCE(SUM(ml), 0) AS s FROM water WHERE user=? AND day=?", (uid, str(day)))[0]["s"])
+
+    def water_days(self, uid, since, until):
+        rows = self.q("SELECT day, SUM(ml) AS s FROM water WHERE user=? AND day>=? AND day<=? GROUP BY day",
+                      (uid, str(since), str(until)))
+        return {r["day"]: int(r["s"]) for r in rows}
+
+    def delete_water(self, uid, wid):
+        return self.x("DELETE FROM water WHERE id=? AND user=?", (wid, uid)).rowcount > 0
 
     # ---------- тренер ----------
 

@@ -272,7 +272,8 @@
     if (n && isToday) {
       h += `<div class="card tap" data-a="tab" data-v="food"><div class="card-h"><h3>Питание</h3><span class="more">Открыть ›</span></div>
         <div class="macro"><div class="top-l"><span>Калории</span><span><b class="num">${e.kcal}</b> / ${n.kcal}</span></div><div class="bar"><span style="--c:var(--food);width:0" data-w="${Math.min(100, e.kcal / n.kcal * 100)}%"></span></div></div>
-        <div class="macro" style="margin-top:10px"><div class="top-l"><span>Белок</span><span><b class="num">${e.protein}</b> / ${n.protein} г</span></div><div class="bar"><span style="--c:var(--green);width:0" data-w="${Math.min(100, e.protein / n.protein * 100)}%"></span></div></div></div>`;
+        <div class="macro" style="margin-top:10px"><div class="top-l"><span>Белок</span><span><b class="num">${e.protein}</b> / ${n.protein} г</span></div><div class="bar"><span style="--c:var(--green);width:0" data-w="${Math.min(100, e.protein / n.protein * 100)}%"></span></div></div>
+        ${t.water ? `<div class="macro" style="margin-top:10px"><div class="top-l"><span>Вода</span><span><b class="num">${num(t.water.drank / 1000, 1)}</b> / ${num(t.water.target / 1000, 1)} л</span></div><div class="bar"><span style="--c:var(--water);width:0" data-w="${Math.min(100, t.water.drank / t.water.target * 100)}%"></span></div></div>` : ''}</div>`;
     }
     if (isToday && d.synced) h += `<div class="hint" style="text-align:center">WHOOP обновлён ${new Date(d.synced).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })} · <a data-a="sync" style="color:var(--accent)">обновить</a></div>`;
     return h;
@@ -327,6 +328,16 @@
         <div class="macros">${[['Белок', e.protein, n.protein, 'var(--green)'], ['Жиры', e.fat, n.fat, 'var(--yellow)'], ['Углеводы', e.carbs, n.carbs, 'var(--strain)']].map(([k, v, g, c]) =>
           `<div class="macro"><div class="top-l"><span>${k}</span><span><b class="num">${v}</b> / ${g} г</span></div><div class="bar"><span style="--c:${c};width:0" data-w="${Math.min(100, v / g * 100)}%"></span></div></div>`).join('')}</div></div>
         <div class="hint">Норма ${n.kcal} ккал — ${esc(n.how)}. Вода: ${num(n.water / 1000, 1)} л.${n.teen ? ' В твоём возрасте не урезаем калории: рост важнее.' : ''}</div></div>`;
+    }
+    const w = t.water;
+    if (w) {
+      h += `<div class="card"><div class="card-h"><h3>💧 Вода</h3><span class="more num">${num(w.drank / 1000, 1)} / ${num(w.target / 1000, 1)} л</span></div>
+        <div class="bar"><span style="--c:var(--water);width:0" data-w="${Math.min(100, w.drank / w.target * 100)}%"></span></div>
+        ${w.note ? `<div class="prose" style="margin-top:10px">${esc(w.mark || '')} ${esc(w.note)}</div>` : ''}
+        <div class="row-btns">${[[250, 'стакан'], [500, 'бутылка'], [1000, 'литр']].map(([ml, k]) => `<button class="btn" data-a="water" data-v="${ml}">+${ml} · ${k}</button>`).join('')}</div>
+        ${w.log.length ? w.log.map(x => `<div class="meal"><div class="time num">${esc(x.time)}</div><div class="grow"><div class="t num">${x.ml} мл</div></div>
+          <button class="del" data-a="water-del" data-v="${x.id}">${icon('trash')}</button></div>`).join('') : ''}
+        <div class="hint">Норма: ${esc(w.why)}. Можно писать боту: «выпил 500 мл», «2 стакана воды».</div></div>`;
     }
     h += `<div class="card"><div class="card-h"><h3>Что съел?</h3><button class="more" data-a="meal-new">+ вручную</button></div>
       <div class="ask"><textarea id="eat" rows="1" placeholder="Гречка с курицей, салат…">${esc(S.eatDraft || '')}</textarea>
@@ -480,6 +491,12 @@
     else if (a === 'clear') { try { S.history = (await api('/api/history/clear', {})).history; render(); } catch (e) { fail(e); } }
     else if (a === 'goal-add') { const g = $('#goal-new'); if (g && g.value.trim()) goalApi('/api/goal', { text: g.value.trim() }); }
     else if (a === 'goal-del') goalApi('/api/goal/delete', { id: Number(v) });
+    else if (a === 'water') {
+      haptic('medium');
+      try { S.data.today = (await api('/api/water', { ml: Number(v) })).day; render(); } catch (e) { fail(e); }
+    } else if (a === 'water-del') {
+      try { S.data.today = (await api('/api/water/delete', { id: Number(v) })).day; render(); } catch (e) { fail(e); }
+    }
     else if (a === 'meal-new') mealSheet();
     else if (a === 'meal-edit') mealSheet(S.data.today.meals.find(m => String(m.id) === v));
     else if (a === 'meal-del') {
