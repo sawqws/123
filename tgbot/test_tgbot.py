@@ -356,6 +356,8 @@ class Look(unittest.TestCase):
         self.assertEqual(ui.step("Bash", {"command": f"python3 {tgp} --help"}, tgp), "📚 Вспоминаю команды")
         self.assertIsNone(ui.step("Bash", {"command": "ls"}, tgp))
         self.assertEqual(ui.step("Read", {}, tgp), "📄 Читаю длинную переписку")
+        self.assertEqual(ui.step("WebSearch", {"query": "Декатлон часы работы"}, tgp), "🌐 Ищу в интернете «Декатлон часы работы»")
+        self.assertEqual(ui.step("Edit", {"file_path": "/x/memory.md"}, tgp), "📝 Записываю в память")
 
     def test_status(self):
         s = ui.status(["🗂 Листаю список чатов", "📖 Читаю «8Б»"], 75)
@@ -372,12 +374,44 @@ class Look(unittest.TestCase):
         self.assertEqual(c, "<b>📤 Написать в «Петя»</b>\n<blockquote>буду в &lt;6&gt;</blockquote>")
 
 
+class Voice(unittest.TestCase):
+    def test_voice_detection(self):
+        ns = pytypes.SimpleNamespace
+        self.assertTrue(agent.Agent.is_voice(ns(voice=object(), audio=None, video_note=None)))
+        self.assertTrue(agent.Agent.is_voice(ns(voice=None, audio=None, video_note=object())))
+        self.assertFalse(agent.Agent.is_voice(ns(voice=None, audio=None, video_note=None)))
+
+    def test_on_voice_routes_transcript(self):
+        a = agent.Agent.__new__(agent.Agent)
+        status = mock.AsyncMock()
+        a.say = mock.AsyncMock(return_value=status)
+        routed = []
+        a.route = mock.AsyncMock(side_effect=lambda ev, t: routed.append(t))
+        tmp = tempfile.mkdtemp()
+        src = os.path.join(tmp, "v.ogg")
+
+        async def download(file):
+            open(src, "w").close()
+            return src
+
+        script = os.path.join(tmp, "fake_voice.py")
+        with open(script, "w") as f:
+            f.write("print('ответьте Пете что буду в шесть')\n")
+        ev = pytypes.SimpleNamespace(message=pytypes.SimpleNamespace(download_media=download))
+        with mock.patch.object(agent, "VOICE", script), mock.patch.object(agent, "TMP", tmp):
+            run(a.on_voice(ev))
+        self.assertEqual(routed, ["ответьте Пете что буду в шесть"])
+        self.assertFalse(os.path.exists(src))  # файл голосового удалён
+        self.assertIn("Расшифровка", status.edit.call_args[0][0])
+
+
 class Misc(unittest.TestCase):
     def test_prompt_placeholders(self):
         with open(os.path.join(agent.HERE, "prompt.md")) as f:
             p = f.read()
         self.assertIn("{TG}", p)
         self.assertIn("{NOW}", p)
+        self.assertIn("{MEMORY}", p)
 
 
 if __name__ == "__main__":
