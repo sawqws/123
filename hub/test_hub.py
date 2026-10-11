@@ -186,6 +186,22 @@ class RemoteTest(Base):
         hub.on_callback({"id": "3", "from": {"id": U}, "data": "cl|off", "message": {"chat": {"id": U}, "message_id": 3}})
         self.assertEqual(self.post("status", key=hub.setting("key"))[0], 403)
 
+    def test_bootstrap_token_key(self):
+        with mock.patch.dict(os.environ, {"HUB_REMOTE": "1"}):
+            hub.bootstrap_remote()
+        self.assertEqual(hub.setting("key"), hub.token_key("111:HUB"))
+        r = self.remote("status", key="-")  # без HUB_KEY, ключ — из HUB_TOKEN
+        self.assertNotEqual(r.returncode, 0)
+        env = {**os.environ, "HUB_URL": self.url, "HUB_TOKEN": "111:HUB", "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+        env.pop("HUB_KEY", None)
+        r = subprocess.run([sys.executable, os.path.join(HERE, "remote.py"), "status"], env=env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|new", "message": {"chat": {"id": U}, "message_id": 3}})
+        r = subprocess.run([sys.executable, os.path.join(HERE, "remote.py"), "status"], env=env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(r.returncode, 0)  # после «Новый ключ» ключ из токена больше не подходит
+
     def test_lockout(self):
         hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})
         for _ in range(20):

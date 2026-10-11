@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Команды «Главному» из облачной сессии Claude. Адрес и ключ — в переменных среды HUB_URL и HUB_KEY
-(Глеб получает их в Главном: /claude → «Включить»).
+"""Команды «Главному» из облачной сессии Claude. Адрес — HUB_URL, ключ — HUB_KEY
+(Глеб получает их в Главном: /claude → «Включить») или HUB_TOKEN (токен Главного, если его ставили с HUB_REMOTE=1).
 
 usage:
   python3 hub/remote.py status                  боты и сервер
@@ -11,6 +11,8 @@ usage:
   python3 hub/remote.py update                  обновить всех ботов из main
 Причину для Глеба можно передать через WHY="…" в окружении — она придёт вместе с командой.
 """
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -21,6 +23,8 @@ import urllib.request
 
 def call(action, body=None):
     url, key = os.environ.get("HUB_URL", "").rstrip("/"), os.environ.get("HUB_KEY", "")
+    if not key and os.environ.get("HUB_TOKEN"):  # ключ, выведенный из токена Главного (HUB_REMOTE=1)
+        key = hmac.new(os.environ["HUB_TOKEN"].encode(), b"claude-remote-v1", hashlib.sha256).hexdigest()
     if not (url and key):
         sys.exit("Нет HUB_URL / HUB_KEY. Глеб включает вход в Главном (/claude) и добавляет их в переменные облачной среды.")
     req = urllib.request.Request(f"{url}/api/{action}", data=json.dumps(body or {}).encode(), method="POST",

@@ -1116,6 +1116,11 @@ SIDE_BOTS = {  # соседние боты, которых HDP-бот умеет
     "coach": {"env": "COACH_TOKEN", "what": "бота-тренера", "short": "тренера", "timeout": 900,
               "done": "✅ <b>Тренер запущен</b>\n\nОткрой @{name} и нажми /start — станешь владельцем. "
                       "Потом /connect — подключим WHOOP."},
+    # «Главный» сразу с входом для Claude (ключ выводится из токена — Claude его знает); владелец — этот чат
+    "hub": {"env": "HUB_TOKEN", "what": "бота «Главный»", "short": "Главного", "timeout": 600,
+            "extra": {"HUB_REMOTE": "1"},
+            "done": "✅ <b>Главный запущен</b>\n\nОткрой @{name} и нажми /start — туда будут приходить "
+                    "сообщения о ботах и о каждой команде Claude. Дальше Claude ставит и чинит ботов сам."},
     "kpp": {"env": "KPP_TOKEN", "what": "бота «КПП»", "short": "КПП", "timeout": 600,
             "done": "✅ <b>КПП запущен</b>\n\nОткрой @{name}, нажми /start и войди через Яндекс — "
                     "дальше просто присылай номер такси."},
@@ -1123,7 +1128,7 @@ SIDE_BOTS = {  # соседние боты, которых HDP-бот умеет
 
 
 def install_planner(chat, token, msg_id=None, kind="planner"):
-    """Ставит соседнего бота (planner/, kpp/ или coach/) на этот же сервер: токен в /etc/…-bot.env, pm2.
+    """Ставит соседнего бота (planner/, kpp/, coach/ или hub/) на этот же сервер: токен в /etc/…-bot.env, pm2.
     Запускается только владельцем и только фиксированный <kind>/install.sh из репозитория."""
     side = SIDE_BOTS[kind]
     if msg_id:  # токен не должен висеть в чате
@@ -1143,7 +1148,9 @@ def install_planner(chat, token, msg_id=None, kind="planner"):
     name = me.get("username") or kind
     send(chat, f"⏳ Ставлю {side['short']} @{name} на сервер… Это 1–2 минуты.")
     env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": "/root",  # без секретов этого бота
-           "LANG": "C.UTF-8", side["env"]: token}
+           "LANG": "C.UTF-8", side["env"]: token, **side.get("extra", {})}
+    if kind == "hub":
+        env["HUB_OWNER"] = str(chat)
     try:
         res = subprocess.run(["bash", os.path.join(REPO, kind, "install.sh")], cwd=REPO, env=env,
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=side["timeout"])
@@ -1292,6 +1299,15 @@ def handle(msg):
                        "Например: /kpp 123456789:AAH…", menu=True)
             return
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "kpp"),
+                         daemon=True).start()
+        return
+    if text.startswith("/hub"):
+        m = BOT_TOKEN.search(text)
+        if not m:
+            send(chat, "👑 Пришли токен бота «Главный» от @BotFather — поставлю его на этот сервер.\n"
+                       "Например: /hub 123456789:AAH…", menu=True)
+            return
+        threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "hub"),
                          daemon=True).start()
         return
     if text.startswith("/coach"):
