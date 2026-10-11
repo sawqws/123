@@ -2,7 +2,7 @@
 
 Записи WHOOP (cycle, recovery, sleep, workout) храним как есть, в JSON, с днём и временем начала —
 поля считает insights.py. Так новые поля WHOOP не ломают базу.
-Остальное: профиль, токены WHOOP, приёмы пищи, переписка с тренером, разборы дня, служебное.
+Остальное: профиль, цели (свободным текстом), токены WHOOP, приёмы пищи, переписка с тренером, разборы дня, служебное.
 """
 import datetime
 import json
@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE TABLE IF NOT EXISTS briefs (user INTEGER, day TEXT, kind TEXT, text TEXT, created TEXT,
   PRIMARY KEY (user, day, kind));
+CREATE TABLE IF NOT EXISTS goals (
+  id INTEGER PRIMARY KEY, user INTEGER NOT NULL, text TEXT NOT NULL, created TEXT
+);
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS records_day ON records (user, kind, day);
@@ -45,11 +48,28 @@ PROFILE_FIELDS = {
     "schedule": str, "notes": str, "morning": str, "diet": str,
 }
 GOALS = ("form", "mass", "dry", "weight")  # форма, набор мышц, рельеф, держать вес к соревнованиям
+MORNING_DEFAULT = "07:00"  # утренний разбор: не раньше этого времени; "off" — не присылать
+MAX_GOALS = 10
 MEAL_FIELDS = ("title", "kcal", "protein", "fat", "carbs", "note", "time", "day")
 
 
 def now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def morning_value(v):
+    """Время утреннего разбора: "7:30" -> "07:30", "выкл"/"off" -> "off". Иначе ValueError."""
+    v = str(v).strip().lower().replace(".", ":").replace("-", ":")
+    if v in ("off", "выкл", "нет", "0", "выключить"):
+        return "off"
+    if v in ("on", "вкл", "да", "включить"):
+        return MORNING_DEFAULT
+    parts = v.split(":")
+    if len(parts) == 2 and all(p.isdigit() for p in parts):
+        h, m = int(parts[0]), int(parts[1])
+        if 3 <= h <= 13 and 0 <= m <= 59:
+            return f"{h:02d}:{m:02d}"
+    raise ValueError("время утра в виде 07:30 (с 03:00 до 13:59) или «выкл»")
 
 
 class Store:
@@ -88,6 +108,13 @@ class Store:
             cur = self.db.execute("INSERT OR IGNORE INTO sent VALUES (?,?)", (key, now_iso()))
             self.db.commit()
             return cur.rowcount == 1
+
+    def was_sent(self, key):
+        return bool(self.q("SELECT 1 FROM sent WHERE key=?", (key,)))
+
+    def unsend(self, key):
+        """Снять отметку once — отправка не удалась, можно повторить."""
+        self.x("DELETE FROM sent WHERE key=?", (key,))
 
     # ---------- пользователь и профиль ----------
 
@@ -128,8 +155,8 @@ class Store:
                 raise ValueError("рост от 100 до 230 см")
             if k == "goal" and v not in GOALS:
                 raise ValueError("нет такой цели")
-            if k == "morning" and not (len(v) == 5 and v[2] == ":" and v.replace(":", "").isdigit()):
-                raise ValueError("время утра в виде 07:30")
+            if k == "morning":
+                v = morning_value(v)
             prof[k] = v
         self.x("UPDATE users SET profile=? WHERE id=?", (json.dumps(prof, ensure_ascii=False), uid))
         if "tz" in data and data["tz"]:
@@ -232,3 +259,20 @@ class Store:
             return r[0] if r else None
         self.x("INSERT OR REPLACE INTO briefs VALUES (?,?,?,?,?)", (uid, str(day), kind, text, now_iso()))
         return {"text": text}
+
+    # ---------- цели ----------
+
+    def goals(self, uid):
+        return self.q("SELECT id, text, created FROM goals WHERE user=? ORDER BY id", (uid,))
+
+    def add_goal(self, uid, text):
+        text = " ".join(str(text or "").split())[:300]
+        if len(text) < 3:
+            raise ValueError("напиши цель словами, например «ложиться до 23:00»")
+        if len(self.goals(uid)) >= MAX_GOALS:
+            raise ValueError(f"целей уже {MAX_GOALS} — удали лишние")
+        cur = self.x("INSERT INTO goals (user, text, created) VALUES (?,?,?)", (uid, text, now_iso()))
+        return {"id": cur.lastrowid, "text": text}
+
+    def delete_goal(self, uid, gid):
+        return self.x("DELETE FROM goals WHERE id=? AND user=?", (int(gid), uid)).rowcount > 0

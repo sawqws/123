@@ -222,7 +222,7 @@
     h += `<div class="card coach"><div class="card-h"><span class="coach-badge">${icon('spark')}</span><h3>Тренер</h3>
       ${isToday ? `<button class="more" data-a="brief">${S.briefing ? 'думаю…' : brief ? 'Обновить' : ''}</button>` : ''}</div>
       ${S.briefing ? '<div class="skeleton" style="width:92%"></div><div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:86%"></div><div class="skeleton" style="width:55%"></div>'
-        : brief ? `<div class="prose">${tgHtml(brief)}</div>` : (isToday ? `<div class="prose dim">Разбор придёт утром, как только WHOOP посчитает восстановление.</div>
+        : brief ? `<div class="prose">${tgHtml(brief)}</div>` : (isToday ? `<div class="prose dim">${d.morning === 'off' ? 'Утренний разбор выключен (время — в профиле).' : `Разбор придёт утром, с ${esc(d.morning || '07:00')}, как только WHOOP посчитает сон.`}</div>
         <div class="row-btns"><button class="btn" data-a="brief">${icon('spark')}Разобрать сейчас</button></div>` : '<div class="prose dim">Разбора за этот день нет.</div>')}
       ${isToday ? `<div class="row-btns"><button class="btn ghost" data-a="tab" data-v="coach">${icon('coach')}Спросить тренера</button></div>` : ''}</div>`;
 
@@ -362,6 +362,19 @@
   }
   function closeSheet() { $('#sheet-root').innerHTML = ''; if (tgw) tgw.BackButton.hide(); }
 
+  function goalsBlock() {
+    const gs = S.data.goals || [];
+    return `${gs.map(g => `<div class="meal"><div class="grow"><div class="t" style="white-space:normal">${esc(g.text)}</div></div>
+        <button class="del" data-a="goal-del" data-v="${g.id}" aria-label="Удалить">${icon('trash')}</button></div>`).join('')
+      || '<div class="dim small" style="margin-bottom:8px">Например: «ложиться до 23:00», «соревнования по боксу весной». Тренер привязывает к ним все советы.</div>'}
+      ${gs.length < 10 ? `<div class="ask" style="margin-top:8px"><textarea id="goal-new" rows="1" placeholder="Новая цель…"></textarea>
+        <button class="btn" data-a="goal-add" aria-label="Добавить">${icon('plus')}</button></div>` : ''}`;
+  }
+  async function goalApi(path, body) {
+    try { S.data.goals = (await api(path, body)).goals; haptic('medium'); const el = $('#goals'); if (el) el.innerHTML = goalsBlock(); }
+    catch (e) { fail(e); }
+  }
+
   const GOALS = [['form', 'Форма и результат'], ['mass', 'Набор мышц'], ['dry', 'Рельеф'], ['weight', 'Держать вес']];
   function profileSheet() {
     const d = S.data, p = d.profile, w = d.body || {};
@@ -370,6 +383,7 @@
       : `<div class="status-line" style="--c:var(--red)"><i></i><div class="grow"><b>WHOOP не подключён</b></div>${d.keys ? `<button class="btn" data-a="connect" style="height:36px;padding:0 14px">Подключить</button>` : ''}</div>`;
     const f = (k, label, ph, type = 'text', extra = '') => `<div class="field"><label>${label}</label><input name="${k}" type="${type}" inputmode="${type === 'number' ? 'decimal' : 'text'}" placeholder="${esc(ph)}" value="${esc(p[k] != null ? p[k] : '')}" ${extra}></div>`;
     sheet(`<h2>Профиль</h2>${conn}
+      <div class="field"><label>Мои цели</label><div id="goals">${goalsBlock()}</div></div>
       <form id="pf">
       <div class="row3">${f('age', 'Возраст', '14', 'number')}${f('height', 'Рост, см', w.height_meter ? Math.round(w.height_meter * 100) : '170', 'number')}${f('weight', 'Вес, кг', w.weight_kilogram ? num(w.weight_kilogram, 1) : '60', 'number')}</div>
       <div class="field"><label>Пол</label><div class="opts" data-group="sex">${[['m', 'Парень'], ['f', 'Девушка']].map(([k, t]) => `<button type="button" class="chip ${p.sex === k ? 'on' : ''}" data-a="opt" data-v="${k}">${t}</button>`).join('')}</div></div>
@@ -377,6 +391,7 @@
       ${f('sport', 'Спорт', 'бокс, 8 месяцев')}
       ${f('schedule', 'Расписание тренировок', 'пн, ср, пт, сб — 2 часа вечером')}
       <div class="field"><label>Питание: что ешь и чего не ешь</label><textarea name="diet" placeholder="школьная столовая, не ем рыбу…">${esc(p.diet || '')}</textarea></div>
+      <div class="field"><label>Утренний разбор: время или «выкл»</label><input name="morning" type="text" placeholder="07:00" value="${esc(d.morning === 'off' ? 'выкл' : d.morning || '07:00')}"></div>
       <div class="field"><label>Важно знать тренеру</label><textarea name="notes" placeholder="травмы, соревнования, самочувствие…">${esc(p.notes || '')}</textarea></div>
       <button class="btn wide" type="submit">Сохранить</button></form>`, root => {
       $('#pf', root).addEventListener('submit', async ev => {
@@ -449,6 +464,8 @@
     else if (a === 'ask') { const q = $('#q'); ask(q && q.value); }
     else if (a === 'suggest') ask(v);
     else if (a === 'clear') { try { S.history = (await api('/api/history/clear', {})).history; render(); } catch (e) { fail(e); } }
+    else if (a === 'goal-add') { const g = $('#goal-new'); if (g && g.value.trim()) goalApi('/api/goal', { text: g.value.trim() }); }
+    else if (a === 'goal-del') goalApi('/api/goal/delete', { id: Number(v) });
     else if (a === 'meal-new') mealSheet();
     else if (a === 'meal-edit') mealSheet(S.data.today.meals.find(m => String(m.id) === v));
     else if (a === 'meal-del') {
@@ -475,7 +492,9 @@
   document.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey && ev.target.tagName === 'TEXTAREA' && ev.target.closest('.ask')) {
       ev.preventDefault();
-      if (ev.target.id === 'q') ask(ev.target.value); else eat();
+      if (ev.target.id === 'q') ask(ev.target.value);
+      else if (ev.target.id === 'goal-new') { if (ev.target.value.trim()) goalApi('/api/goal', { text: ev.target.value.trim() }); }
+      else eat();
     }
   });
 

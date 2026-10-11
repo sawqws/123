@@ -46,6 +46,9 @@ import insights  # noqa: E402
 import store  # noqa: E402
 import whoop  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
+import media  # noqa: E402  голосовые -> текст (общий помощник)
+
 TOKEN = os.environ.get("COACH_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
 ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("COACH_ALLOWED", ""))}
@@ -55,6 +58,7 @@ WEB = os.path.join(HERE, "webapp")
 REPO = os.path.dirname(HERE)
 NAME = "Форма"
 SYNC_EVERY = 15 * 60
+SYNC_MORNING = 5 * 60  # утром, пока ждём сон для разбора
 
 db = store.Store(os.environ.get("COACH_DB") or os.path.join(DATA, "coach.db"))
 public_url = os.environ.get("COACH_URL", "").rstrip("/")
@@ -119,6 +123,8 @@ def setup_bot():
         {"command": "today", "description": "Разбор дня"},
         {"command": "app", "description": "Открыть приложение"},
         {"command": "food", "description": "Питание за сегодня"},
+        {"command": "goals", "description": "Мои цели"},
+        {"command": "morning", "description": "Время утреннего разбора"},
         {"command": "connect", "description": "Подключить WHOOP"},
         {"command": "sync", "description": "Обновить данные WHOOP"},
         {"command": "new", "description": "Начать разговор с тренером заново"},
@@ -337,14 +343,11 @@ def sync_user(uid, days=3, quiet=False):
 
 
 def react(uid, fresh):
-    """Новые оценённые записи: восстановление за сегодня -> утренний разбор, тренировка -> разбор тренировки."""
+    """Новые оценённые записи: тренировка -> разбор тренировки. Утренний разбор шлёт расписание (maybe_morning)."""
     u = db.user(uid)
     now = user_now(u)
     day = now.date().isoformat()
     for kind, r in fresh:
-        if kind == "recovery" and r.get("_day") == day and 4 <= now.hour < 15:
-            if db.once(f"morning:{uid}:{day}"):
-                threading.Thread(target=morning_brief, args=(uid,), daemon=True).start()
         if kind == "workout" and r.get("_day") == day and 6 <= now.hour < 23:
             w = insights.workout_of(r)
             if (w["minutes"] or 0) >= 15 and db.once(f"workout:{r.get('id')}"):
@@ -356,18 +359,39 @@ def react(uid, fresh):
 ZONE_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴", None: "⚪️"}
 
 
+def num(x, n=1):
+    return str(round(x, n)).replace(".", ",") if n else str(round(x))
+
+
 def headline(t):
-    r, s = t.get("recovery"), t.get("sleep")
-    parts = []
+    """Цифры утра: восстановление, ВСР и пульс покоя против нормы, сон, нагрузка вчера."""
+    r, s, b, y = t.get("recovery"), t.get("sleep"), t.get("base") or {}, t.get("yesterday") or {}
+    lines = []
     if r:
-        parts.append(f"{ZONE_ICON[r['zone']]} <b>{r['score']}%</b>")
+        parts = [f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>"]
         if r.get("hrv"):
-            parts.append(f"ВСР {round(r['hrv'])}")
+            parts.append(f"ВСР {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else ""))
         if r.get("rhr"):
-            parts.append(f"пульс {r['rhr']}")
+            parts.append(f"пульс покоя {r['rhr']}" + (f" ({round(b['rhr'])})" if b.get("rhr") else ""))
+        lines.append(" · ".join(parts))
     if s:
-        parts.append(f"сон {insights.fmt_h(s['hours'])}")
-    return " · ".join(parts)
+        parts = [f"😴 Сон <b>{insights.fmt_h(s['hours'])}</b>" + (f" из {insights.fmt_h(s['need'])}" if s.get("need") else "")]
+        if s.get("performance") is not None:
+            parts.append(f"выполнение {s['performance']}%")
+        if s.get("efficiency") is not None:
+            parts.append(f"эффективность {s['efficiency']}%")
+        lines.append(" · ".join(parts))
+    if y.get("strain") is not None:
+        ws = ", ".join(f"{w['sport'].lower()} {w['minutes']} мин" for w in y.get("workouts") or [] if w.get("minutes"))
+        lines.append(f"🔥 Нагрузка вчера <b>{num(y['strain'])}</b>" + (f" · {esc(ws)}" if ws else ""))
+    return "\n".join(lines)
+
+
+def bed_line(t):
+    bt = t.get("bedtime")
+    if not bt:
+        return ""
+    return f"Отбой сегодня — до <b>{bt['bed']}</b>, чтобы поспать {insights.fmt_h(bt['need'])} до подъёма в {bt['wake']}."
 
 
 def rule_brief(t):
@@ -378,20 +402,39 @@ def rule_brief(t):
     n = t["nutrition"]
     if n:
         lines.append(f"• Питание: <b>{n['kcal']} ккал</b>, белок {n['protein']} г, вода {n['water'] / 1000:.1f} л.".replace(".", ",", 1))
+    if bed_line(t):
+        lines.append("• " + bed_line(t))
     return "\n".join(lines) or "Данных за сегодня пока нет."
 
 
+def rule_early(t):
+    """План без сегодняшнего сна (WHOOP ещё не посчитал) — по вчерашнему дню."""
+    y = t.get("yesterday") or {}
+    hard = (y.get("strain") or 0) >= 14
+    lines = ["• Тренировка — по самочувствию: разминка 15 мин; тяжело и вялый — техника вместо спарринга."
+             + (" Вчера была большая нагрузка — не форсируй." if hard else "")]
+    n = t["nutrition"]
+    if n:
+        lines.append(f"• Вода {n['water'] / 1000:.1f} л, белок {n['protein']} г, завтрак не пропускай.".replace(".", ",", 1))
+    else:
+        lines.append("• Вода 2–2,5 л, белок в каждый приём пищи, завтрак не пропускай.")
+    if bed_line(t):
+        lines.append("• " + bed_line(t))
+    return "\n".join(lines)
+
+
 def morning_brief(uid, chat=None, force=False):
+    """Разбор дня. True — отправлено (или сказано, что данных нет), False — занят другим ответом."""
     chat = chat or uid
     if uid in busy and not force:
-        return
+        return False
     busy.add(uid)
     try:
         typing(chat)
         text, t = context(uid)
         if not t["has_data"]:
             send(chat, "Данных WHOOP пока нет. Подключи браслет: /connect")
-            return
+            return True
         try:
             body = ai.to_html(ai.morning(text))
         except ai.AIError as e:
@@ -399,8 +442,124 @@ def morning_brief(uid, chat=None, force=False):
         db.brief(uid, t["day"], "morning", body)
         send(chat, f"☀️ <b>Доброе утро</b>\n{headline(t)}\n\n{body}",
              with_app([[{"text": "💬 Спросить тренера", "callback_data": "q|"}]], "⚡ Открыть день"))
+        if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
+            db.once(f"morning:{uid}:{t['day']}")
+        return True
     finally:
         busy.discard(uid)
+
+
+def morning_early(uid):
+    """Утро, а сна за ночь нет (WHOOP не посчитал или браслет не надет): план по вчерашнему дню."""
+    if uid in busy:
+        return False
+    busy.add(uid)
+    try:
+        text, t = context(uid)
+        try:
+            body = ai.to_html(ai.morning_early(text))
+        except ai.AIError:
+            body = rule_early(t)
+        db.brief(uid, t["day"], "morning", body)
+        y = headline({"yesterday": t.get("yesterday")})
+        send(uid, "☀️ <b>Доброе утро</b>\nWHOOP ещё не посчитал сон — разбор пришлю, как только он появится "
+                  "(если браслет был на руке).\n" + (y + "\n" if y else "") + f"\n{body}",
+             with_app([[{"text": "🔄 Обновить WHOOP", "callback_data": "s|"}]], "⚡ Открыть день"))
+        return True
+    finally:
+        busy.discard(uid)
+
+
+# ---------- утренний разбор по расписанию ----------
+# Каждый день не раньше времени из /morning (по умолчанию 07:00, часовой пояс пользователя): как только WHOOP
+# посчитал восстановление — полный разбор. Не посчитал за MORNING_WAIT часов — короткий план без сна, а полный
+# разбор — когда данные появятся (до MORNING_LATE часов после времени). Каждое — не больше раза в день.
+MORNING_WAIT = datetime.timedelta(hours=3)
+MORNING_LATE = datetime.timedelta(hours=8)
+
+
+def morning_at(u):
+    """Время утреннего разбора (datetime.time) или None — выключен."""
+    v = u["profile"].get("morning") or store.MORNING_DEFAULT
+    if v == "off":
+        return None
+    try:
+        h, m = (int(x) for x in v.split(":"))
+        return datetime.time(h, m)
+    except ValueError:
+        return datetime.time(7, 0)
+
+
+def morning_text(u):
+    at = morning_at(u)
+    if not at:
+        return "☀️ Утренний разбор <b>выключен</b>. Включить: /morning 07:00"
+    late = (datetime.datetime.combine(datetime.date.today(), at) + MORNING_WAIT).strftime("%H:%M")
+    return (f"☀️ Утренний разбор — каждый день с <b>{at.strftime('%H:%M')}</b>: как только WHOOP посчитает сон "
+            f"(если проснёшься позже — сразу после этого). Не посчитал к {late} — пришлю короткий план без сна.\n\n"
+            "Другое время: <code>/morning 08:30</code> · выключить: <code>/morning off</code>")
+
+
+def morning_buttons(u):
+    cur = u["profile"].get("morning") or store.MORNING_DEFAULT
+    times = ["06:30", "07:00", "07:30", "08:00", "09:00"]
+    row = [{"text": ("✓ " if cur == x else "") + x, "callback_data": f"mt|{x}"} for x in times]
+    return [row[:3], row[3:] + [{"text": ("✓ " if cur == "off" else "") + "Выкл", "callback_data": "mt|off"}]]
+
+
+def night_ready(uid, day):
+    """'full' — восстановление за сегодня посчитано, 'part' — только сон, None — ничего."""
+    d = insights.by_day(db, uid, day, day).get(day) or {}
+    return "full" if d.get("recovery") else "part" if d.get("sleep") else None
+
+
+def morning_due(at, now, ready, sent_brief, sent_early):
+    """Что прислать сейчас: 'brief' (полный разбор), 'early' (план без сна) или None."""
+    if at is None or sent_brief:
+        return None
+    start = datetime.datetime.combine(now.date(), at, now.tzinfo)
+    if not start <= now < start + MORNING_LATE:
+        return None
+    if ready == "full":
+        return "brief"
+    if now >= start + MORNING_WAIT:
+        if ready == "part":
+            return "brief"
+        if not sent_early:
+            return "early"
+    return None
+
+
+def morning_waiting(u, now):
+    """Ждём сон к утреннему разбору — синхронизировать WHOOP чаще (с 10 минут до времени разбора)."""
+    at = morning_at(u)
+    if not at or db.was_sent(f"morning:{u['id']}:{now.date()}"):
+        return False
+    start = datetime.datetime.combine(now.date(), at, now.tzinfo)
+    return start - datetime.timedelta(minutes=10) <= now < start + MORNING_LATE
+
+
+def maybe_morning(u, now):
+    uid = u["id"]
+    if not db.token(uid) or uid in busy:
+        return None
+    day = now.date().isoformat()
+    keys = {"brief": f"morning:{uid}:{day}", "early": f"morning-early:{uid}:{day}"}
+    kind = morning_due(morning_at(u), now, night_ready(uid, day), db.was_sent(keys["brief"]), db.was_sent(keys["early"]))
+    if kind and db.once(keys[kind]):
+        threading.Thread(target=morning_job, args=(uid, kind, keys[kind]), daemon=True).start()
+    return kind
+
+
+def morning_job(uid, kind, key):
+    ok = False
+    try:
+        ok = morning_brief(uid) if kind == "brief" else morning_early(uid)
+    except Exception as e:
+        print("morning:", uid, kind, e)
+        traceback.print_exc()
+    if not ok:  # не отправилось — расписание повторит через минуту
+        db.unsend(key)
 
 
 def workout_note(uid, w):
@@ -438,11 +597,14 @@ def evening(uid, now):
 # ---------- чат ----------
 
 HELP = ("⚡ <b>Форма</b> — твой тренер по данным WHOOP.\n\n"
-        "• Утром, когда WHOOP посчитает восстановление, пришлю разбор: можно ли тренироваться в полную, что есть, когда спать.\n"
+        "• Каждое утро (с 07:00, время — /morning) пришлю разбор: восстановление, сон, можно ли в полную, что есть, когда лечь.\n"
+        "• <b>Цели</b> (/goals): «ложиться до 23:00», «соревнования весной» — все советы привязываю к ним.\n"
         "• После тренировки — что съесть и как восстановиться.\n"
         "• <b>Спрашивай что угодно</b> текстом: «почему низкое восстановление?», «что съесть перед боксом?».\n"
-        "• <b>Еда</b>: пришли фото тарелки или напиши «съел гречку с курицей» — посчитаю ккал и БЖУ.\n\n"
-        "/today — разбор дня · /food — питание · /sync — обновить · /connect — WHOOP · /new — новый разговор")
+        "• <b>Еда</b>: пришли фото тарелки или напиши «съел гречку с курицей» — посчитаю ккал и БЖУ.\n"
+        "• <b>Голосовые</b> понимаю как текст. <b>Скрин</b> WHOOP или плана тренировок — пришли с вопросом в подписи.\n\n"
+        "/today — разбор дня · /goals — цели · /morning — время разбора · /food — питание · /sync — обновить · "
+        "/connect — WHOOP · /new — новый разговор")
 
 FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпил[аи]?|завтрак|обед|ужин|перекус|еда)\b[:\s,-]*", re.I)
 
@@ -479,6 +641,11 @@ def food_text(uid):
     return "\n".join(lines)
 
 
+PHOTO_ASK = "Что на фото? Разбери с учётом моих данных и целей."
+QUESTION = re.compile(r"^(почему|зачем|что|как|какой|какая|какие|сколько|когда|можно|стоит|нормально|разбери|объясни|"
+                      r"оцени|посмотри|глянь|проверь|помоги)\b", re.I)
+
+
 def log_meal(chat, uid, text="", photo=None):
     if uid in busy:
         send(chat, "Секунду, ещё думаю над прошлым сообщением…")
@@ -493,7 +660,11 @@ def log_meal(chat, uid, text="", photo=None):
             send(chat, f"⚠️ Не смог оценить еду: {esc(e)}. Можно добавить вручную в приложении.", with_app([], "🍽 Питание", "/food"))
             return
         if est.get("food") is False:
-            send(chat, esc(est.get("comment") or "Не вижу на фото еды. Если это вопрос — напиши его текстом."))
+            if photo:  # скрин WHOOP, план тренировок и т. п. — это вопрос тренеру с картинкой
+                busy.discard(uid)
+                answer(chat, uid, text or PHOTO_ASK, photo)
+            else:
+                send(chat, esc(est.get("comment") or "Не похоже на еду. Если это вопрос — напиши его текстом."))
             return
         now = user_now(db.user(uid))
         m = db.save_meal(uid, {**est, "day": now.date().isoformat(), "time": now.strftime("%H:%M")})
@@ -527,6 +698,54 @@ def answer(chat, uid, question, photo=None):
         busy.discard(uid)
 
 
+def goals_view(uid):
+    gs = db.goals(uid)
+    if gs:
+        lines = ["🎯 <b>Мои цели</b>"] + [f"{i}. {esc(g['text'])}" for i, g in enumerate(gs, 1)]
+        lines.append("\nУчитываю их в каждом совете, утром пишу, как день двигает к цели.")
+    else:
+        lines = ["🎯 <b>Цели</b> пока не записаны.",
+                 "Напиши, к чему идёшь: «ложиться до 23:00», «бокс — соревнования весной», «вес 60 кг к декабрю». "
+                 "Все советы буду привязывать к ним."]
+    rows = [[{"text": f"🗑 {i}. {g['text'][:28]}", "callback_data": f"g|del|{g['id']}"}] for i, g in enumerate(gs, 1)]
+    if len(gs) < store.MAX_GOALS:
+        rows.append([{"text": "➕ Добавить цель", "callback_data": "g|add"}])
+    return "\n".join(lines), rows
+
+
+def add_goal(chat, uid, text):
+    try:
+        db.add_goal(uid, text)
+    except ValueError as e:
+        send(chat, f"⚠️ {esc(e)}")
+        return
+    body, rows = goals_view(uid)
+    send(chat, "✅ Цель записана.\n\n" + body, rows)
+
+
+def awaiting(uid, what=None):
+    """Ждём от пользователя текст (например, цель после кнопки «Добавить цель»). what=None — проверить и сбросить."""
+    if what:
+        db.meta(f"await:{uid}", f"{what}:{int(time.time())}")
+        return what
+    v = db.meta(f"await:{uid}")
+    if not v:
+        return None
+    db.meta(f"await:{uid}", "")
+    kind, _, at = v.partition(":")
+    return kind if time.time() - int(at or 0) < 15 * 60 else None
+
+
+def set_morning(chat, uid, value):
+    try:
+        db.save_profile(uid, {"morning": value})
+    except ValueError as e:
+        send(chat, f"⚠️ {esc(e)}")
+        return
+    u = db.user(uid)
+    send(chat, morning_text(u), morning_buttons(u))
+
+
 def on_message(msg):
     chat = msg["chat"]["id"]
     frm = msg.get("from") or {}
@@ -541,6 +760,8 @@ def on_message(msg):
         return
     db.user(uid, frm.get("first_name"))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+    arg = text.split(None, 1)[1].strip() if cmd and len(text.split(None, 1)) > 1 else ""
+    wait = awaiting(uid)
     if cmd == "/start":
         arg = text.split()[1] if len(text.split()) > 1 else ""
         welcome(chat, uid, frm.get("first_name"))
@@ -561,6 +782,17 @@ def on_message(msg):
         threading.Thread(target=morning_brief, args=(uid, chat), daemon=True).start()
     elif cmd == "/food":
         send(chat, food_text(uid), with_app([], "🍽 Открыть питание", "/food"))
+    elif cmd in ("/goals", "/goal"):
+        if arg:
+            add_goal(chat, uid, arg)
+        else:
+            send(chat, *goals_view(uid))
+    elif cmd == "/morning":
+        if arg:
+            set_morning(chat, uid, arg)
+        else:
+            u = db.user(uid)
+            send(chat, morning_text(u), morning_buttons(u))
     elif cmd == "/sync":
         if not db.token(uid):
             connect(chat, uid)
@@ -580,16 +812,46 @@ def on_message(msg):
     elif msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
         fid = msg["photo"][-1]["file_id"] if msg.get("photo") else msg["document"]["file_id"]
         path = download(fid, os.path.join(DATA, "photos", str(uid)))
-        is_question = text.endswith("?") or len(text) > 80
+        # подпись-вопрос — сразу тренеру с картинкой; иначе Claude решает: еда -> ккал, не еда -> разбор (log_meal)
+        is_question = text.endswith("?") or len(text) > 80 or bool(QUESTION.match(text))
         target = answer if is_question else log_meal
-        threading.Thread(target=target, args=(chat, uid, text or ("Что на фото?" if is_question else ""), path),
-                         daemon=True).start()
+        threading.Thread(target=target, args=(chat, uid, text, path), daemon=True).start()
+    elif media.kind(msg) == "voice":
+        threading.Thread(target=on_voice, args=(chat, uid, msg, wait), daemon=True).start()
     elif text:
-        m = FOOD_WORDS.match(text)
-        if m and len(text) > len(m.group(0)) + 1:
-            threading.Thread(target=log_meal, args=(chat, uid, text), daemon=True).start()
-        else:
-            threading.Thread(target=answer, args=(chat, uid, text), daemon=True).start()
+        on_text(chat, uid, text, wait)
+
+
+def on_text(chat, uid, text, wait=None):
+    """Обычный текст (или распознанное голосовое): цель после кнопки, еда или вопрос тренеру."""
+    if wait == "goal":
+        add_goal(chat, uid, text)
+        return
+    m = FOOD_WORDS.match(text)
+    if m and len(text) > len(m.group(0)) + 1:
+        threading.Thread(target=log_meal, args=(chat, uid, text), daemon=True).start()
+    else:
+        threading.Thread(target=answer, args=(chat, uid, text), daemon=True).start()
+
+
+def on_voice(chat, uid, msg, wait=None):
+    """Голосовое, аудио или кружок: распознать (не в главном цикле), показать текст и разобрать как написанное."""
+    typing(chat)
+    try:
+        text = media.voice_text(TOKEN, msg).strip()
+    except media.MediaError as e:
+        send(chat, f"⚠️ Голосовое: {esc(e)}. Можно написать текстом.")
+        if wait:
+            awaiting(uid, wait)  # цель всё ещё ждём
+        return
+    except Exception as e:
+        print("voice:", e)
+        send(chat, "⚠️ Не получилось скачать голосовое — попробуй ещё раз или напиши текстом.")
+        if wait:
+            awaiting(uid, wait)
+        return
+    send(chat, f"🎙 «{esc(text)}»")
+    on_text(chat, uid, text, wait)
 
 
 def save_creds(chat, uid, msg, text):
@@ -625,6 +887,27 @@ def on_callback(cq):
         note = "Готовлю разбор…"
     elif data[0] == "q":
         send(chat, "Напиши вопрос — отвечу с учётом твоих данных. Например: «что съесть перед тренировкой?»")
+    elif data[0] == "g" and data[1] == "add":
+        awaiting(uid, "goal")
+        send(chat, "✍️ Напиши цель одним сообщением. Например: «ложиться до 23:00» или «соревнования по боксу в марте».")
+    elif data[0] == "g" and data[1] == "del":
+        if db.delete_goal(uid, int(data[2])):
+            note = "Удалено"
+        edit(chat, mid, *goals_view(uid))
+    elif data[0] == "mt":
+        try:
+            db.save_profile(uid, {"morning": data[1]})
+            u = db.user(uid)
+            edit(chat, mid, morning_text(u), morning_buttons(u))
+            note = "Выключено" if data[1] == "off" else f"Разбор с {data[1]}"
+        except ValueError as e:
+            note = str(e)
+    elif data[0] == "s":
+        if db.token(uid):
+            note = "Обновляю WHOOP…"
+            threading.Thread(target=sync_user, args=(uid, 3), daemon=True).start()
+        else:
+            connect(chat, uid)
     elif data[0] == "m" and data[1] == "del":
         if db.delete_meal(uid, int(data[2])):
             edit(chat, mid, "🗑 <s>Удалено</s>")
@@ -673,11 +956,17 @@ def tick():
         if tok:
             last = tok.get("synced")
             age = time.time() - datetime.datetime.fromisoformat(last).timestamp() if last else 1e9
-            if age >= SYNC_EVERY:
+            every = SYNC_MORNING if morning_waiting(u, now) and night_ready(uid, now.date().isoformat()) != "full" \
+                else SYNC_EVERY
+            if age >= every:
                 try:
                     sync_user(uid, days=3 if db.record_count(uid) else 60, quiet=not db.record_count(uid))
                 except Exception as e:
                     print("sync:", uid, e)
+            try:
+                maybe_morning(db.user(uid), now)
+            except Exception as e:
+                print("morning:", uid, e)
         if now.hour == 20 and now.minute >= 30 and db.once(f"evening:{uid}:{now.date()}"):
             try:
                 evening(uid, now)
@@ -806,6 +1095,7 @@ def route(uid, path, b):
             "connected": bool(tok), "synced": (tok or {}).get("synced"), "keys": bool(cid and sec),
             "today": day_payload(uid, today), "series": insights.series(db, uid, today, 30),
             "redirect": redirect_url(), "thinking": uid in busy,
+            "goals": db.goals(uid), "morning": u["profile"].get("morning") or store.MORNING_DEFAULT,
         }
     if path == "/api/day":
         day = datetime.date.fromisoformat(b.get("d") or today.isoformat())
@@ -815,6 +1105,12 @@ def route(uid, path, b):
         return {"series": insights.series(db, uid, today, n)}
     if path == "/api/profile":
         return {"profile": db.save_profile(uid, b)["profile"]}
+    if path == "/api/goal":
+        db.add_goal(uid, b.get("text"))
+        return {"goals": db.goals(uid)}
+    if path == "/api/goal/delete":
+        db.delete_goal(uid, int(b["id"]))
+        return {"goals": db.goals(uid)}
     if path == "/api/meal":
         b = dict(b)
         b.setdefault("day", today.isoformat())

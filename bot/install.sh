@@ -48,6 +48,11 @@ if ! command -v cloudflared >/dev/null; then
   rm -f /tmp/cloudflared.deb
 fi
 
+# голосовые: ffmpeg + faster-whisper (общие для всех ботов, common/setup.sh)
+if [ -f common/setup.sh ]; then
+  bash common/setup.sh || echo "Распознавание голоса не поставилось — бот работает и без него"
+fi
+
 echo "== 5/6 Секреты"
 if [ ! -s "$ENV" ]; then
   read -r -p "Токен бота от @BotFather: " TOKEN < /dev/tty
