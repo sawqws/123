@@ -3,11 +3,13 @@
 анализирует чаты, пишет, управляет группами, раскладывает папки, шлёт по расписанию.
 Думает Claude Code (`claude -p`), а с аккаунтом работает через команды
 tgbot/tg.py -> этот агент -> Telethon. Всё, что меняет Telegram, Глеб подтверждает кнопкой.
+Сам бот — обычный Bot API (tgbot/botapi.py, нужен только токен), Telethon — только для аккаунта.
 Оформление сообщений — tgbot/ui.py, картинки — tgbot/art/.
 
 Переменные окружения (/etc/tg-agent.env):
-  TG_AGENT_TOKEN       токен бота от @BotFather
-  TG_API_ID, TG_API_HASH  ключи приложения с my.telegram.org
+  TG_AGENT_TOKEN       токен бота от @BotFather — единственное обязательное
+  TG_API_ID, TG_API_HASH  ключи приложения с my.telegram.org; если их нет, бот сам получит их при входе
+                       в аккаунт (tgbot/get_api.py) и сохранит в tgbot/tmp/settings.json
   TG_ALLOWED_ID        Telegram ID Глеба; если пусто — владелец тот, кто первым нажмёт /start
 Вход в аккаунт — в самом боте (/login), сессия лежит в tgbot/tmp/ и в репозиторий не попадает.
 """
@@ -21,11 +23,13 @@ import sys
 import time
 import uuid
 
-from telethon import Button, TelegramClient, errors, events, functions, types
+from telethon import TelegramClient, errors, functions
 
 import actions
+import get_api
 import jobs
 import ui
+from botapi import Bot, BotError, Button
 from ui import card, esc
 
 for _k in ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"):  # pm2, см. bot/bot.py
@@ -126,16 +130,16 @@ def dots(code, n):
 
 
 class Agent:
-    def __init__(self, api_id, api_hash, token, allowed=0):
+    def __init__(self, token, api_id=0, api_hash="", allowed=0):
         os.makedirs(TMP, exist_ok=True)
         os.makedirs(WORK, exist_ok=True)
         os.chmod(TMP, 0o700)
         self.token = token
         self.allowed = allowed
-        self.bot = TelegramClient(os.path.join(TMP, "bot"), api_id, api_hash)
-        self.bot.parse_mode = "html"
-        self.client = TelegramClient(os.path.join(TMP, "account"), api_id, api_hash, receive_updates=False,
-                                     device_model="HDP Agent", system_version="server", app_version="1.0")
+        self.bot = Bot(token)
+        s = load_settings()
+        api_id, api_hash = api_id or s.get("api_id"), api_hash or s.get("api_hash")
+        self.client = self.make_client(api_id, api_hash) if api_id and api_hash else None
         self.proc = None       # запущенный Claude
         self.busy = False
         self.stopped = False
@@ -160,7 +164,14 @@ class Agent:
                                               buttons=buttons if i == len(parts) - 1 else None, **kw)
         return msg
 
+    @staticmethod
+    def make_client(api_id, api_hash):
+        return TelegramClient(os.path.join(TMP, "account"), int(api_id), api_hash, receive_updates=False,
+                              device_model="HDP Agent", system_version="server", app_version="1.0")
+
     async def authorized(self):
+        if self.client is None:  # ключей ещё нет — аккаунт не подключён
+            return False
         if not self.client.is_connected():
             await self.client.connect()
         return await self.client.is_user_authorized()
@@ -180,7 +191,7 @@ class Agent:
         self.waiting[cid] = fut
         buttons = [[Button.inline("Да", f"ok:{cid}", style="success"), Button.inline("Нет", f"no:{cid}", style="danger")],
                    [Button.inline("⚡ Да на всё в этом запросе", f"all:{cid}")]]
-        msg = await self.bot.send_message(self.owner(), self.confirm_card(text), buttons=buttons, parse_mode="html")
+        msg = await self.bot.send_message(self.owner(), self.confirm_card(text), buttons=buttons)
         try:
             ans = await asyncio.wait_for(fut, CONFIRM_TIMEOUT)
         except asyncio.TimeoutError:
@@ -220,7 +231,9 @@ class Agent:
             elif kind == "login":
                 await ev.answer()
                 await self.start_login()
-        except errors.MessageNotModifiedError:
+        except BotError as e:
+            if not e.not_modified:
+                raise
             await ev.answer()
 
     async def on_answer(self, ev, ans, cid):
@@ -368,7 +381,7 @@ class Agent:
                     try:
                         await status.edit(text_, buttons=stop_btn, parse_mode="html")
                         shown = text_
-                    except errors.RPCError:
+                    except BotError:
                         pass
 
         def on_step(s):
@@ -385,7 +398,7 @@ class Agent:
             self.cancel_waiting()
             try:
                 await status.delete()
-            except errors.RPCError:
+            except BotError:
                 pass
         secs = int(time.monotonic() - started)
         if ok:
@@ -534,7 +547,7 @@ class Agent:
             await self.say(card("✓ Уже вошёл", esc(actions.who(me))))
             return
         self.login = {"step": "phone"}
-        await self.say(card("🔑 Вход в аккаунт · 1 из 3",
+        await self.say(card("🔑 Вход в аккаунт",
                             "Нажмите кнопку ниже — Telegram сам передаст номер.\nИли напишите его: +79991234567",
                             "/cancel — отмена"),
                        buttons=[[Button.request_phone("📱 Отправить мой номер", resize=True, single_use=True)]])
@@ -543,7 +556,7 @@ class Agent:
         st = self.login
         body = (f"Код пришёл в чат «Telegram». Наберите его кнопками — так Telegram не отменит его.\n\n"
                 f"<code>{dots(st['code'], st['len'])}</code>" + (f"\n\n{note}" if note else ""))
-        text = card("🔢 Код · 2 из 3", body, "/cancel — отмена")
+        text = card("🔢 Код", body, "/cancel — отмена")
         if edit:
             await edit.edit(text, buttons=keypad(), parse_mode="html")
         else:
@@ -570,8 +583,8 @@ class Agent:
             await self.client.sign_in(st["phone"], st["code"], phone_code_hash=st["hash"])
         except errors.SessionPasswordNeededError:
             self.login = {"step": "password"}
-            await ev.edit(card("🔢 Код · 2 из 3", "✓ код принят"), buttons=None, parse_mode="html")
-            await self.say(card("🔐 Облачный пароль · 3 из 3", "Включена двухэтапная проверка. Напишите пароль — сообщение сразу удалю.",
+            await ev.edit(card("🔢 Код", "✓ код принят"), buttons=None, parse_mode="html")
+            await self.say(card("🔐 Облачный пароль", "Включена двухэтапная проверка. Напишите пароль — сообщение сразу удалю.",
                                 "/cancel — отмена"))
             return
         except errors.PhoneCodeInvalidError:
@@ -582,7 +595,7 @@ class Agent:
             self.login = None
             await ev.edit(oops(self.login_error(e)), buttons=None, parse_mode="html")
             return
-        await ev.edit(card("🔢 Код · 2 из 3", "✓ код принят"), buttons=None, parse_mode="html")
+        await ev.edit(card("🔢 Код", "✓ код принят"), buttons=None, parse_mode="html")
         await self.logged_in()
 
     @staticmethod
@@ -601,11 +614,14 @@ class Agent:
         try:
             if st["step"] == "phone":
                 contact = ev.message.contact
-                phone = "+" + contact.phone_number.lstrip("+") if contact else re.sub(r"[^\d+]", "", text)
-                sent = await self.client.send_code_request(phone)
-                self.login = {"step": "code", "phone": phone, "hash": sent.phone_code_hash, "code": "",
-                              "len": getattr(sent.type, "length", 0) or 0}
-                await self.send_code_card()
+                phone = get_api.normalize(contact.phone_number if contact else text)
+                if self.client is None:  # ключей приложения ещё нет — сначала они
+                    await self.keys_start(phone)
+                else:
+                    await self.send_tg_code(phone)
+            elif st["step"] == "site":
+                await ev.delete()
+                await self.keys_finish(re.sub(r"\s+", "", text))
             elif st["step"] == "code":  # набрал код текстом
                 await ev.delete()
                 st["code"] = re.sub(r"\D", "", text)
@@ -619,6 +635,62 @@ class Agent:
         except errors.RPCError as e:
             self.login = None
             await self.say(oops(self.login_error(e)))
+
+    async def send_tg_code(self, phone):
+        if not self.client.is_connected():
+            await self.client.connect()
+        sent = await self.client.send_code_request(phone)
+        self.login = {"step": "code", "phone": phone, "hash": sent.phone_code_hash, "code": "",
+                      "len": getattr(sent.type, "length", 0) or 0}
+        await self.send_code_card()
+
+    async def keys_start(self, phone):
+        """Ключи api_id/api_hash с my.telegram.org — сервер получает их сам (с телефона через VPN сайт отвечает ERROR)."""
+        site = get_api.Site()
+        try:
+            rh = await asyncio.to_thread(site.send_code, phone)
+        except get_api.Fail as e:
+            self.login = None
+            wait = "too many" in str(e).lower()
+            await self.say(oops(("my.telegram.org временно ограничил коды для этого номера. Попробуйте через несколько часов: /login"
+                                 if wait else f"my.telegram.org: {e}")))
+            return
+        self.login = {"step": "site", "phone": phone, "site": site, "hash": rh}
+        await self.say(card("🔑 Ключи Telegram",
+                            "Один раз нужны ключи приложения — получу их сам. В чат «Telegram» пришёл код "
+                            "для сайта my.telegram.org (буквы и цифры).\n\nПришлите его сюда <b>с пробелами между символами</b>, "
+                            "например <code>e W - S G 3</code>, — сообщение сразу удалю.", "/cancel — отмена"))
+
+    async def keys_finish(self, code):
+        st = self.login
+        site = st["site"]
+        try:
+            await asyncio.to_thread(site.login, st["phone"], st["hash"], code)
+        except get_api.Fail as e:
+            await self.say(card("✕ Код не подошёл", esc(str(e)) + "\nПришлите ещё раз, с пробелами.", "/cancel — отмена"))
+            return
+        status = await self.say(card("🔑 Ключи Telegram", "◐ Вошёл на my.telegram.org, создаю приложение…"))
+
+        def keys():
+            api_id, rest = site.keys()
+            if api_id is None:
+                site.create(rest)
+                api_id, rest = site.keys()
+            if api_id is None:
+                raise get_api.Fail("приложение не создалось")
+            return api_id, rest
+        try:
+            api_id, api_hash = await asyncio.to_thread(keys)
+        except get_api.Fail as e:
+            self.login = None
+            await status.edit(oops(f"Ключи не получены: {e}"))
+            return
+        s = load_settings()
+        s["api_id"], s["api_hash"] = api_id, api_hash
+        save_settings(s)
+        await status.edit(card("🔑 Ключи Telegram", "✓ получены и сохранены"))
+        self.client = self.make_client(api_id, api_hash)
+        await self.send_tg_code(st["phone"])
 
     async def submit_code_text(self):
         class Fake:  # тот же путь, что у клавиатуры: правим карточку с кодом
@@ -668,10 +740,10 @@ class Agent:
     async def set_profile(self):
         """Описание, «о боте» и команды — при каждом запуске (идемпотентно)."""
         try:
-            await self.bot(functions.bots.SetBotInfoRequest(lang_code="", about=ABOUT, description=DESCRIPTION))
-            await self.bot(functions.bots.SetBotCommandsRequest(
-                types.BotCommandScopeDefault(), "", [types.BotCommand(c, d) for c, d in COMMANDS]))
-        except errors.RPCError as e:
+            await self.bot.call("setMyShortDescription", short_description=ABOUT)
+            await self.bot.call("setMyDescription", description=DESCRIPTION)
+            await self.bot.call("setMyCommands", commands=[{"command": c, "description": d} for c, d in COMMANDS])
+        except BotError as e:
             print("profile:", repr(e), flush=True)
 
     async def set_avatar(self):
@@ -830,10 +902,9 @@ class Agent:
             asyncio.create_task(self.ask(text))  # не блокируем: пока Claude думает, нужны кнопки «Да/Нет»
 
     async def main(self):
-        await self.bot.start(bot_token=self.token)
-        await self.client.connect()
-        self.bot.add_event_handler(self.on_message, events.NewMessage(incoming=True))
-        self.bot.add_event_handler(self.on_callback, events.CallbackQuery())
+        await self.bot.get_me()  # неверный токен — падаем сразу, pm2 покажет ошибку
+        if self.client is not None:
+            await self.client.connect()
         await self.serve()
         asyncio.create_task(self.scheduler())
         await self.set_profile()
@@ -845,10 +916,10 @@ class Agent:
             save_settings(s)
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
             await self.say(card("✦ Обновился", esc(head)), buttons=MENU)
-        await self.bot.run_until_disconnected()
+        await self.bot.run(self.on_message, self.on_callback)
 
 
 if __name__ == "__main__":
-    agent = Agent(int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"], os.environ["TG_AGENT_TOKEN"],
+    agent = Agent(os.environ["TG_AGENT_TOKEN"], int(os.environ.get("TG_API_ID") or 0), os.environ.get("TG_API_HASH", ""),
                   int(os.environ.get("TG_ALLOWED_ID") or 0))
     asyncio.run(agent.main())
