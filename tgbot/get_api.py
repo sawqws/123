@@ -53,6 +53,7 @@ class Site:
     def __init__(self, base=BASE):
         self.base = base
         self.cookies = {}
+        self.tries = 20  # повторы, если сайт «забыл» вход (см. keys)
         self.http = urllib.request.build_opener()
 
     def remember(self, headers):
@@ -100,7 +101,11 @@ class Site:
 
     def keys(self):
         """(api_id, api_hash), если приложение уже есть, иначе (None, hash формы создания)."""
-        page = self.last_page = self.req("/apps")
+        for attempt in range(self.tries):
+            page = self.last_page = self.req("/apps")
+            if "my_login_form" not in page:
+                break
+            time.sleep(1)  # выкинуло на вход: выход в интернет через несколько IP, а вход привязан к одному
         found = parse_keys(page)
         if found:
             return found
@@ -110,10 +115,14 @@ class Site:
         return None, form_hash
 
     def create(self, form_hash):
-        try:
-            text = self._create(form_hash)
-        except Fail as e:
-            text = str(e)
+        for attempt in range(min(self.tries, 10)):
+            try:
+                text = self._create(form_hash)
+            except Fail as e:
+                text = str(e)
+            if not any(w in text for w in ("Unauthorized", "my_login_form", "ERROR")):
+                break
+            time.sleep(2)  # «ERROR» бывает, когда запрос ушёл не с того IP, что вход
         if text.strip().upper().startswith("ERROR"):
             raise Fail("сайт ответил ERROR при создании приложения (с сервера тоже) — попробуй через час")
 
