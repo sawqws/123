@@ -62,6 +62,7 @@ APPS = {  # имя в pm2 -> подпись
     "kpp-bot": "🚧 КПП",
     "avito-bot": "🛍 Авито",
     "tg-agent": "🤖 Секретарь",
+    "eye-bot": "👁 Глаз",
     SELF: "👑 Главный",
 }
 INSTALL = {  # что умеем ставить по одному токену: папка, переменная с токеном, подпись, что дальше
@@ -69,8 +70,17 @@ INSTALL = {  # что умеем ставить по одному токену: 
     "planner": ("PLANNER_TOKEN", "🗓 Планер", "Открой @{name} и нажми /start — через минуту появится кнопка «Планер»."),
     "kpp": ("KPP_TOKEN", "🚧 КПП", "Открой @{name}, нажми /start и войди через Яндекс."),
     "avito": ("AVITO_TOKEN", "🛍 Авито", "Открой @{name}, нажми /start и пришли фото вещи."),
+    "eye": ("EYE_TOKEN", "👁 Глаз (очки)", "Открой @{name} и нажми /start — через минуту появится кнопка «Глаз»: "
+            "там «🎙 Говорить» и «📷 Фото»."),
     "tgbot": ("TG_AGENT_TOKEN", "🤖 Секретарь", "Открой @{name}, нажми /start и «Войти в аккаунт» — после этого "
                                                 "я сам создаю новых ботов в @BotFather."),
+}
+BOTFATHER = {  # имя и желаемый username, если бота создаёт Секретарь (без «bot» на конце)
+    "coach": ("Форма", "forma_coach"),
+    "planner": ("Ритм", "ritm_planner"),
+    "kpp": ("КПП пропуск", "kpp_pass"),
+    "avito": ("Авито помощник", "avito_helper"),
+    "eye": ("Глаз", "glaz_eye"),
 }
 TZ = datetime.timezone(datetime.timedelta(hours=3))  # Москва
 
@@ -351,6 +361,27 @@ def sync_main(git, reset=False):
         git("rebase", "--abort")
         return code, "Правки, сделанные здесь через «✏️ Доработать», конфликтуют с обновлением (rebase).\n" + out
     return 0, out
+
+
+def ask_token(chat, mid, kind):
+    """Просим токен; если Секретарь подключён к аккаунту — можно не ходить в @BotFather самому."""
+    setting("wait", kind)
+    rows = [[b("🤖 Создать бота сам", f"bf|{kind}")]] if kind in BOTFATHER and maker.secretary_ready() else []
+    text = f"Пришли токен бота от @BotFather — поставлю {esc(INSTALL[kind][1])}."
+    if rows:
+        text += "\n\nИли нажми «🤖 Создать бота сам» — создам его в @BotFather через Секретаря."
+    show(chat, mid, text, rows + [[b("Отмена", "home")]])
+
+
+def botfather_install(chat, kind):
+    name, want = BOTFATHER.get(kind, (INSTALL[kind][1], kind))
+    send(chat, f"🤖 Создаю бота «{esc(name)}» в @BotFather через Секретаря…")
+    token, why = maker.botfather(name, want)
+    if not token:
+        setting("wait", kind)
+        return send(chat, f"😕 Не создал: {esc(why)}\n\nСоздай сам в @BotFather (/newbot) и пришли сюда токен.",
+                    [[{"text": "Открыть @BotFather", "url": "https://t.me/BotFather"}], [b("Отмена", "home")]])
+    install(chat, kind, token)
 
 
 def install(chat, kind, token, msg_id=None):
@@ -755,9 +786,7 @@ def on_message(msg):
         kind = cmd[1:] if cmd else wait
         m = BOT_TOKEN.search(text)
         if not m:
-            setting("wait", kind)
-            return send(chat, f"Пришли токен бота от @BotFather — поставлю {esc(INSTALL[kind][1])}.",
-                        [[b("Отмена", "home")]])
+            return ask_token(chat, None, kind)
         setting("wait", None)
         threading.Thread(target=install, args=(chat, kind, m.group(0), msg.get("message_id")), daemon=True).start()
     elif BOT_TOKEN.search(text):
@@ -847,8 +876,11 @@ def on_callback(cq):
         show(chat, mid, "➕ <b>Какого бота поставить?</b>\n\nСначала создай бота в @BotFather и скопируй токен.",
              [[b(INSTALL[k][1], f"add|{k}")] for k in INSTALL] + [[b("‹ Назад", "home")]])
     elif data[0] == "add":
-        setting("wait", data[1])
-        show(chat, mid, f"Пришли токен бота от @BotFather — поставлю {esc(INSTALL[data[1]][1])}.", [[b("Отмена", "home")]])
+        ask_token(chat, mid, data[1])
+    elif data[0] == "bf" and data[1] in INSTALL:
+        setting("wait", None)
+        note = "Создаю…"
+        threading.Thread(target=botfather_install, args=(chat, data[1]), daemon=True).start()
     elif data[0] == "addt":
         token = setting("token_hint")
         setting("token_hint", None)

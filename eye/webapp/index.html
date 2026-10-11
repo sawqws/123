@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0c10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Глаз">
+  <title>Глаз</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <link rel="stylesheet" href="app.css?v={{v}}">
+</head>
+<body>
+  <main id="app">
+    <header class="top">
+      <div class="brand"><span class="logo">👁</span> Глаз</div>
+      <div id="place" class="place">📍 определяю место…</div>
+    </header>
+
+    <section class="stage">
+      <button id="talk" class="orb" aria-label="Говорить">
+        <span class="ring" id="ring"></span>
+        <span class="orb-icon" id="orb-icon">🎙</span>
+      </button>
+      <div id="state" class="state">Нажми, чтобы говорить</div>
+      <div id="heard" class="heard"></div>
+      <div id="say" class="say"></div>
+    </section>
+
+    <div class="actions">
+      <label class="btn" for="pick">📷 Фото<input id="pick" type="file" accept="image/*" multiple hidden></label>
+      <button id="stop" class="btn">⏹ Тише</button>
+      <button id="new" class="btn">⟲ Заново</button>
+    </div>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <h2 class="feed-title">Что видел</h2>
+    <div id="feed" class="feed"><div class="empty">Пришли фото с очков в чат или нажми «📷 Фото».</div></div>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="app.js?v={{v}}"></script>
+</body>
+</html>
