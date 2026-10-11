@@ -117,6 +117,7 @@ def with_app(rows, text="⚡ Открыть Форму", path=""):
 def setup_bot():
     commands = [
         {"command": "today", "description": "Разбор дня"},
+        {"command": "progress", "description": "Разбор прогресса за 2 месяца"},
         {"command": "app", "description": "Открыть приложение"},
         {"command": "food", "description": "Питание за сегодня"},
         {"command": "connect", "description": "Подключить WHOOP"},
@@ -381,6 +382,49 @@ def rule_brief(t):
     return "\n".join(lines) or "Данных за сегодня пока нет."
 
 
+def send_long(chat, text, buttons=None):
+    """Telegram пускает до 4096 символов — длинный разбор режем по абзацам."""
+    parts, cur = [], ""
+    for para in text.split("\n\n"):
+        if cur and len(cur) + len(para) + 2 > 3800:
+            parts.append(cur)
+            cur = para
+        else:
+            cur = f"{cur}\n\n{para}" if cur else para
+    parts.append(cur)
+    for i, p in enumerate(parts):
+        send(chat, p, buttons if i == len(parts) - 1 else None)
+
+
+def progress_report(uid, chat=None, week=False):
+    """Разбор прогресса за 60 дней (или итог недели — week=True)."""
+    chat = chat or uid
+    if uid in busy:
+        send(chat, "Секунду, ещё думаю над прошлым сообщением…")
+        return
+    busy.add(uid)
+    try:
+        typing(chat)
+        day = today_of(uid)
+        ctx, p = insights.progress_context(db, uid, day, profile(uid), whoop.body(db, uid), 28 if week else 60)
+        if not any(w["days"] for w in p["weeks"]):
+            send(chat, "Данных WHOOP пока нет. Подключи браслет: /connect")
+            return
+        if not week:
+            send(chat, "🧠 Разбираю все твои данные за 2 месяца — это минута-две…")
+        try:
+            body = ai.to_html(ai.progress(ctx, week=week))
+        except ai.AIError as e:
+            send(chat, f"⚠️ Разбор не получился: {esc(e)}. Попробуй ещё раз: /progress")
+            return
+        db.brief(uid, day.isoformat(), "week" if week else "progress", body)
+        title = "📅 <b>Итог недели</b>" if week else "📈 <b>Разбор прогресса за 2 месяца</b>"
+        send_long(chat, f"{title}\n\n{body}", with_app([[{"text": "💬 Спросить тренера", "callback_data": "q|"}]],
+                                                       "📊 Тренды", "/trends"))
+    finally:
+        busy.discard(uid)
+
+
 def morning_brief(uid, chat=None, force=False):
     chat = chat or uid
     if uid in busy and not force:
@@ -442,6 +486,7 @@ HELP = ("⚡ <b>Форма</b> — твой тренер по данным WHOOP
         "• После тренировки — что съесть и как восстановиться.\n"
         "• <b>Спрашивай что угодно</b> текстом: «почему низкое восстановление?», «что съесть перед боксом?».\n"
         "• <b>Еда</b>: пришли фото тарелки или напиши «съел гречку с курицей» — посчитаю ккал и БЖУ.\n\n"
+        "• <b>/progress</b> — большой разбор прогресса за 2 месяца и план; по воскресеньям в 19:00 — итог недели.\n\n"
         "/today — разбор дня · /food — питание · /sync — обновить · /connect — WHOOP · /new — новый разговор")
 
 FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпил[аи]?|завтрак|обед|ужин|перекус|еда)\b[:\s,-]*", re.I)
@@ -559,6 +604,8 @@ def on_message(msg):
         save_creds(chat, uid, msg, text)
     elif cmd == "/today":
         threading.Thread(target=morning_brief, args=(uid, chat), daemon=True).start()
+    elif cmd == "/progress":
+        threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
     elif cmd == "/food":
         send(chat, food_text(uid), with_app([], "🍽 Открыть питание", "/food"))
     elif cmd == "/sync":
@@ -623,6 +670,9 @@ def on_callback(cq):
     elif data[0] == "b":
         threading.Thread(target=morning_brief, args=(uid, chat), daemon=True).start()
         note = "Готовлю разбор…"
+    elif data[0] == "p":
+        threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
+        note = "Разбираю прогресс…"
     elif data[0] == "q":
         send(chat, "Напиши вопрос — отвечу с учётом твоих данных. Например: «что съесть перед тренировкой?»")
     elif data[0] == "m" and data[1] == "del":
@@ -683,6 +733,9 @@ def tick():
                 evening(uid, now)
             except Exception as e:
                 print("evening:", e)
+        # итог недели — воскресенье, 19:00
+        if tok and now.weekday() == 6 and now.hour == 19 and db.once(f"week:{uid}:{now.date()}"):
+            threading.Thread(target=progress_report, args=(uid, uid, True), daemon=True).start()
 
 
 def scheduler():
@@ -847,6 +900,12 @@ def route(uid, path, b):
     if path == "/api/history/clear":
         db.clear_history(uid)
         return {"history": []}
+    if path == "/api/progress":
+        if b.get("make"):
+            ctx, _ = insights.progress_context(db, uid, today, profile(uid), whoop.body(db, uid), 60)
+            db.brief(uid, today.isoformat(), "progress", ai.to_html(ai.progress(ctx)))
+        last = db.q("SELECT day, text FROM briefs WHERE user=? AND kind='progress' ORDER BY day DESC LIMIT 1", (uid,))
+        return {"progress": last[0] if last else None}
     if path == "/api/brief":
         ctx, t = context(uid)
         if not t["has_data"]:

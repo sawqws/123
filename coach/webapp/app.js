@@ -144,6 +144,7 @@
     if (S.tab === tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     S.tab = tab; haptic(); renderTabs(); render(); window.scrollTo(0, 0);
     if (tab === 'trends' && !S.series[S.range]) loadSeries(S.range);
+    if (tab === 'trends' && S.progress === undefined) loadProgress();
     if (tab === 'coach' && !S.history) loadHistory();
   }
   function render() {
@@ -287,6 +288,13 @@
     const zc = r => r.zone === 'green' ? 'var(--green)' : r.zone === 'yellow' ? 'var(--yellow)' : 'var(--red)';
     const card = (title, value, unit, sub, chart) => `<div class="card"><div class="card-h"><h3>${title}</h3></div>
       <div class="chart-top"><span class="v num">${value}</span><span class="s">${unit}</span><span class="s" style="margin-left:auto">${sub}</span></div>${chart}</div>`;
+    const pr = S.progress;
+    h += `<div class="card coach"><div class="card-h"><span class="coach-badge">${icon('spark')}</span><h3>Разбор прогресса</h3>
+      ${pr && !S.progressing ? `<button class="more" data-a="progress">Обновить</button>` : ''}</div>
+      ${S.progressing ? '<div class="skeleton" style="width:92%"></div><div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div><div class="hint">Разбираю 2 месяца данных — около минуты…</div>'
+        : pr ? `<div class="hint" style="margin:0 0 8px">от ${dateLine(pr.day).toLowerCase()}</div><div class="prose">${tgHtml(pr.text)}</div>`
+        : `<div class="prose dim">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</div>
+           <div class="row-btns"><button class="btn" data-a="progress">${icon('spark')}Разобрать прогресс</button></div>`}</div>`;
     const greens = rows.filter(r => r.zone === 'green').length, reds = rows.filter(r => r.zone === 'red').length;
     h += card('Восстановление', num(avg(rows, 'recovery')), '% в среднем', `🟢 ${greens} · 🔴 ${reds}`, bars(rows, 'recovery', { max: 100, color: zc }));
     h += card('ВСР · HRV', num(avg(rows, 'hrv')), 'мс', 'чем выше, тем лучше', line(rows, 'hrv', 'var(--green)', avg(rows, 'hrv')));
@@ -298,6 +306,11 @@
   }
   async function loadSeries(n) {
     try { S.series[n] = (await api('/api/series', { n })).series; if (S.tab === 'trends') render(); } catch (e) { fail(e); }
+  }
+  async function loadProgress(make) {
+    if (make) { if (S.progressing) return; S.progressing = true; render(); }
+    try { S.progress = (await api('/api/progress', make ? { make: 1 } : {})).progress; if (make) haptic('medium'); } catch (e) { fail(e); }
+    S.progressing = false; if (S.tab === 'trends') render();
   }
 
   // ---------- Питание ----------
@@ -443,6 +456,7 @@
     else if (a === 'tab') go(v);
     else if (a === 'connect') connect();
     else if (a === 'brief') brief();
+    else if (a === 'progress') loadProgress(true);
     else if (a === 'day') shiftDay(Number(v));
     else if (a === 'range') { S.range = Number(v); haptic(); render(); if (!S.series[S.range]) loadSeries(S.range); }
     else if (a === 'eat') eat();
@@ -502,6 +516,7 @@
     catch (e) { view.innerHTML = `<div class="onb"><div class="logo">${icon('today')}</div><h1>Форма</h1><p>${esc(e.message)}</p></div>`; return; }
     render();
     if (S.tab === 'trends' && !S.series[S.range]) loadSeries(S.range);
+    if (S.tab === 'trends') loadProgress();
     if (S.tab === 'coach') loadHistory();
     if (t === 'profile') profileSheet();
     // данные обновляются сами, пока приложение открыто
