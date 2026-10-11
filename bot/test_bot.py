@@ -527,6 +527,16 @@ class AgentTest(BotTest):
         self.assertIn("Секретарь запущен", self.msgs[-1][0])
         self.assertNotIn(CHAT, bot.mode)
 
+    def test_token_and_phone_in_one_message(self):
+        self.start_agent()
+        self.say("/agent 123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX 79138434865", mid=20)
+        self.assertEqual(self.phones, ["+79991234567"])  # normalize в заглушке
+        self.assertEqual(bot.mode.get(CHAT), "agent_code")
+        self.assertEqual(self.deleted, [20])
+        self.say("A b C 1", mid=21)
+        self.assertEqual(self.codes, ["AbC1"])
+        self.assertIn("Секретарь запущен", self.msgs[-1][0])
+
     def test_wrong_code_then_cancel(self):
         self.start_agent(fail_login=5)
         self.say("/agent 123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX")
