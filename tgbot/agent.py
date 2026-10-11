@@ -91,6 +91,13 @@ COMMANDS = [("start", "главная"), ("menu", "меню и статус"), (
             ("stop", "остановить"), ("check", "проверка"), ("login", "войти в аккаунт"), ("help", "что я умею")]
 
 
+def manual_keys(text):
+    """(api_id, api_hash) из сообщения со страницы my.telegram.org или None."""
+    h = re.search(r"\b([0-9a-f]{32})\b", text or "", re.I)
+    i = re.search(r"(?<![0-9a-f])(\d{5,10})(?![0-9a-f])", (text or "").replace(h.group(1), " ") if h else "", re.I)
+    return (i.group(1), h.group(1).lower()) if h and i else None
+
+
 def load_settings():
     try:
         with open(SETTINGS) as f:
@@ -619,6 +626,13 @@ class Agent:
                     await self.keys_start(phone)
                 else:
                     await self.send_tg_code(phone)
+            elif st["step"] in ("site", "manual") and manual_keys(text):
+                await ev.delete()
+                await self.keys_save(*manual_keys(text), st["phone"])
+            elif st["step"] == "manual":
+                await ev.delete()
+                await self.say(card("✕ Не вижу ключей", "Нужны две строки со страницы my.telegram.org → API development tools: "
+                                    "<b>App api_id</b> (число) и <b>App api_hash</b> (32 символа).", "/cancel — отмена"))
             elif st["step"] == "site":
                 await ev.delete()
                 await self.keys_finish(re.sub(r"\s+", "", text))
@@ -650,10 +664,10 @@ class Agent:
         try:
             rh = await asyncio.to_thread(site.send_code, phone)
         except get_api.Fail as e:
-            self.login = None
             wait = "too many" in str(e).lower()
-            await self.say(oops(("my.telegram.org временно ограничил коды для этого номера. Попробуйте через несколько часов: /login"
+            await self.say(oops(("my.telegram.org временно ограничил коды для этого номера — через несколько часов: /login"
                                  if wait else f"my.telegram.org: {e}")))
+            await self.ask_manual(phone)
             return
         self.login = {"step": "site", "phone": phone, "site": site, "hash": rh}
         await self.say(card("🔑 Ключи Telegram",
@@ -682,15 +696,30 @@ class Agent:
         try:
             api_id, api_hash = await asyncio.to_thread(keys)
         except get_api.Fail as e:
-            self.login = None
             await status.edit(oops(f"Ключи не получены: {e}"))
+            await self.ask_manual(st["phone"])
             return
+        await status.edit(card("🔑 Ключи Telegram", "✓ получены"))
+        await self.keys_save(api_id, api_hash, st["phone"])
+
+    async def ask_manual(self, phone):
+        """Запасной путь: Глеб создаёт приложение на my.telegram.org сам (со своего интернета) и присылает ключи."""
+        self.login = {"step": "manual", "phone": phone}
+        await self.say(card("🔑 Ключи вручную — 2 минуты",
+                            "1. Выключите VPN, откройте <b>my.telegram.org</b>, войдите по номеру (код придёт в Telegram).\n"
+                            "2. <b>API development tools</b> → App title: <code>Gleb Agent</code>, Short name: "
+                            "<code>glebagent</code>, Platform: Desktop → <b>Create application</b>.\n"
+                            "3. Скопируйте сюда <b>App api_id</b> и <b>App api_hash</b> одним сообщением — сразу удалю его "
+                            "и продолжу вход.\n\nЕсли сайт пишет «too many tries» — попробуйте завтра.",
+                            "/cancel — отмена"))
+
+    async def keys_save(self, api_id, api_hash, phone):
         s = load_settings()
-        s["api_id"], s["api_hash"] = api_id, api_hash
+        s["api_id"], s["api_hash"] = str(api_id), api_hash
         save_settings(s)
-        await status.edit(card("🔑 Ключи Telegram", "✓ получены и сохранены"))
-        self.client = self.make_client(api_id, api_hash)
-        await self.send_tg_code(st["phone"])
+        await self.say(card("🔑 Ключи Telegram", "✓ сохранены — теперь код для входа в аккаунт"))
+        self.client = self.make_client(int(api_id), api_hash)
+        await self.send_tg_code(phone)
 
     async def submit_code_text(self):
         class Fake:  # тот же путь, что у клавиатуры: правим карточку с кодом

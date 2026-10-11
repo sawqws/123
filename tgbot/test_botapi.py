@@ -208,10 +208,58 @@ class AgentOverBotApi(unittest.TestCase):
             await self.until(lambda: tg.sent("sendMessage"))
             tg.push_text("+79138434865")
             await self.until(lambda: any("временно ограничил" in p["text"] for p in tg.sent("sendMessage")))
-            self.assertIsNone(a.login)
+            await self.until(lambda: any("Ключи вручную" in p["text"] for p in tg.sent("sendMessage")))
+            self.assertEqual(a.login["step"], "manual")
 
         with mock.patch.object(get_api, "Site", return_value=site):
             self.run_agent(tg, scenario)
+
+
+    def test_site_error_then_manual_keys(self):
+        tg = FakeTelegram()
+        site = mock.Mock()
+        site.send_code.return_value = "rh"
+        site.keys.return_value = (None, "form")
+        site.create.side_effect = get_api.Fail("сайт ответил ERROR при создании приложения")
+        client = mock.Mock()
+        client.is_connected.return_value = True
+        client.connect = mock.AsyncMock()
+        client.is_user_authorized = mock.AsyncMock(return_value=False)
+        client.send_code_request = mock.AsyncMock(return_value=pytypes.SimpleNamespace(
+            phone_code_hash="h", type=pytypes.SimpleNamespace(length=5)))
+        made = []
+
+        async def scenario(a):
+            tg.push_text("/login")
+            await self.until(lambda: tg.sent("sendMessage"))
+            tg.push_text("", contact="79138434865")
+            await self.until(lambda: any("Ключи Telegram" in p["text"] for p in tg.sent("sendMessage")))
+            tg.push_text("e W - S G 3")
+            await self.until(lambda: any("Ключи вручную" in p["text"] for p in tg.sent("sendMessage")))
+            tg.push_text("просто текст")
+            await self.until(lambda: any("Не вижу ключей" in p["text"] for p in tg.sent("sendMessage")))
+            tg.push_text("App api_id: 2345678\nApp api_hash: ABCDEF0123456789abcdef0123456789")
+            await self.until(lambda: client.send_code_request.await_count)
+            client.send_code_request.assert_awaited_with("+79138434865")
+            with open(agent.SETTINGS) as f:
+                s = json.load(f)
+            self.assertEqual((s["api_id"], s["api_hash"]), ("2345678", "abcdef0123456789abcdef0123456789"))
+            self.assertEqual(made, [(2345678, "abcdef0123456789abcdef0123456789")])
+
+        def make(i, h):
+            made.append((int(i), h))
+            return client
+        with mock.patch.object(get_api, "Site", return_value=site), \
+                mock.patch.object(agent.Agent, "make_client", staticmethod(make)):
+            self.run_agent(tg, scenario)
+
+    def test_manual_keys_parse(self):
+        self.assertEqual(agent.manual_keys("api_id 1234567 api_hash 0123456789abcdef0123456789abcdef"),
+                         ("1234567", "0123456789abcdef0123456789abcdef"))
+        self.assertEqual(agent.manual_keys("0123456789abcdef0123456789abcdef\n1234567"),
+                         ("1234567", "0123456789abcdef0123456789abcdef"))
+        self.assertIsNone(agent.manual_keys("1234567"))
+        self.assertIsNone(agent.manual_keys("e W - S G 3"))
 
 
 class MarkupTest(unittest.TestCase):
