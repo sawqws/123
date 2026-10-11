@@ -45,6 +45,11 @@ else
   echo "Уже есть $ENV — не трогаю (поменять: nano $ENV, потом pm2 restart hub-bot --update-env)"
 fi
 
+# вход для Claude идёт через Caddy планера (порт 443 один) — перезапускаем планер с новым кодом
+if pm2 describe planner-bot >/dev/null 2>&1; then
+  pm2 restart planner-bot >/dev/null && echo "Планер перезапущен — его Caddy теперь обслуживает и Главного"
+fi
+
 echo "== 4/4 Запуск"
 pm2 delete hub-bot >/dev/null 2>&1 || true
 pm2 start "$DIR/hub/ecosystem.config.js"
@@ -60,5 +65,6 @@ cat <<'EOT'
 
 Готово, «Главный» запущен.
   Открой его в Telegram и нажми /start — станешь владельцем.
+  /claude — вход для Claude (ключ добавить в переменные облачной среды).
   Логи: pm2 logs hub-bot
 EOT

@@ -48,6 +48,7 @@ ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("PLANNER_ALLOWED", 
 PUBLIC = os.environ.get("PLANNER_PUBLIC") == "1"
 PORT = int(os.environ.get("PLANNER_PORT") or 8787)
 COACH_PORT = 8789  # coach/coach.py
+HUB_PORT = 8790  # hub/hub.py
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
 REPO = os.path.dirname(HERE)
@@ -829,6 +830,10 @@ def caddyfile(ip):
         # бот-тренер «Форма» (coach/) на этом же сервере: порт 443 один, поэтому его адрес держит этот Caddy
         f"https://coach.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{COACH_PORT}\n"
+        "}\n"
+        # «Главный» (hub/): вход для Claude
+        f"https://hub.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{HUB_PORT}\n"
         "}\n"
     )
     return conf, [f"https://{host}", f"https://{ip}"]

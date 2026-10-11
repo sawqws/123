@@ -5,19 +5,26 @@
 - сам пишет, если бот упал или постоянно перезапускается, и когда он снова заработал;
 - «Обновить всех»: свежий код из main и перезапуск;
 - «Поставить бота»: тренер, планер, КПП — по токену от @BotFather;
-- сервер: память, диск, нагрузка; предупреждает, если кончается место или подходит срок оплаты (/paid ДД.ММ).
+- сервер: память, диск, нагрузка; предупреждает, если кончается место или подходит срок оплаты (/paid ДД.ММ);
+- вход для Claude (/claude): Claude из облачной сессии по https с ключом смотрит состояние, логи,
+  перезапускает и выполняет команды на сервере (hub/remote.py). Включает и выключает владелец,
+  о каждой команде Главный пишет ему в чат.
 
 Переменные окружения (на сервере — /etc/hub-bot.env):
   HUB_TOKEN    токен от @BotFather
   HUB_ALLOWED  Telegram ID владельца; если пусто — владелец тот, кто первым нажал /start
+  HUB_PORT     порт входа для Claude на 127.0.0.1 (по умолчанию 8790; снаружи — Caddy планера)
 
 Только стандартная библиотека Python.
 """
 import datetime
+import hashlib
+import hmac
 import html
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -26,6 +33,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -36,6 +44,7 @@ API = f"https://api.telegram.org/bot{TOKEN}/"
 ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("HUB_ALLOWED", ""))}
 SELF = "hub-bot"
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
+PORT = int(os.environ.get("HUB_PORT") or 8790)
 
 APPS = {  # имя в pm2 -> подпись
     "horo-bot": "📚 HDP",
@@ -219,7 +228,7 @@ def home(chat, mid=None):
                      + (f"{ago(a['uptime'])}, {a['mem']} МБ" if ok else f"<b>{esc(a['status'])}</b>"))
     btns = [[b(a["label"], f"app|{a['name']}")] for a in rows if a["name"] != SELF]
     btns.append([b("⬆️ Обновить всех", "upd"), b("➕ Поставить", "add")])
-    btns.append([b("🖥 Сервер", "srv"), b("🔄", "home")])
+    btns.append([b("🖥 Сервер", "srv"), b("🤖 Claude", "cl"), b("🔄", "home")])
     return show(chat, mid, "\n".join(lines), btns)
 
 
@@ -393,6 +402,216 @@ def watch():
         time.sleep(60)
 
 
+# ---------- вход для Claude ----------
+# Claude в облачной сессии не может написать боту в Telegram (боты не видят сообщений ботов), поэтому
+# у Главного есть https-вход: POST /api/<действие> с заголовком «Authorization: Bearer <ключ>».
+# Ключ создаёт владелец кнопкой, выключить можно в любой момент; о каждой команде Главный пишет владельцу.
+jobs = {}
+fails = []
+public_ip = None
+
+
+def server_ip():
+    global public_ip
+    if public_ip:
+        return public_ip
+    for url in ("https://api.ipify.org", "https://ipv4.icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                ip = r.read().decode().strip()
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+                public_ip = ip
+                return ip
+        except Exception:
+            pass
+    return None
+
+
+def hub_url():
+    ip = os.environ.get("HUB_IP") or server_ip()
+    return f"https://hub.{ip.replace('.', '-')}.sslip.io" if ip else ""
+
+
+def remote_on():
+    return bool(setting("remote") and setting("key"))
+
+
+def check_key(header):
+    key = setting("key") or ""
+    got = header[7:].strip() if header.startswith("Bearer ") else ""
+    return bool(key and got) and hmac.compare_digest(hashlib.sha256(got.encode()).digest(),
+                                                     hashlib.sha256(key.encode()).digest())
+
+
+def tell(text):
+    """Сообщение владельцу о том, что делает Claude."""
+    try:
+        if owner():
+            send(owner(), text)
+    except Exception as e:
+        print("tell:", e)
+
+
+def run_job(cmd, timeout, why=""):
+    """Команда в bash в папке репозитория; вывод копится в задаче, Claude забирает его по id."""
+    jid = secrets.token_hex(4)
+    job = jobs[jid] = {"id": jid, "cmd": cmd, "done": False, "code": None, "out": "", "started": time.time()}
+    for k in sorted(jobs, key=lambda k: jobs[k]["started"])[:-50]:
+        jobs.pop(k, None)
+    tell("🤖 <b>Claude выполняет</b>" + (f" — {esc(why[:200])}" if why else "") + f"\n<pre>{esc(cmd[:600])}</pre>")
+
+    def work():
+        try:
+            p = subprocess.Popen(["bash", "-lc", cmd], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, text=True, env={**os.environ, "HOME": "/root"})
+            timer = threading.Timer(timeout, p.kill)
+            timer.start()
+            for line in p.stdout:
+                job["out"] = (job["out"] + line)[-200000:]
+            p.wait()
+            p.stdout.close()
+            timer.cancel()
+            job["code"] = p.returncode
+        except Exception as e:
+            job["out"] += f"\n{e}"
+            job["code"] = -1
+        job["done"] = True
+        if job["code"] != 0:
+            tell(f"🤖 Команда Claude завершилась с кодом {job['code']}")
+    threading.Thread(target=work, daemon=True).start()
+    return job
+
+
+def remote_api(action, body):
+    if action == "status":
+        return {"apps": apps(), "server": server(), "paid": setting("paid")}
+    if action == "logs":
+        lines = max(10, min(int(body.get("lines") or 60), 1000))
+        code, out = sh("pm2", "logs", str(body["name"]), "--nostream", "--lines", str(lines), "--raw", timeout=30)
+        return {"code": code, "out": out[-100000:]}
+    if action == "restart":
+        code, out = sh("pm2", "restart", str(body["name"]), timeout=60)
+        tell(f"🤖 Claude перезапустил {esc(APPS.get(body['name'], body['name']))}"
+             + (f": {esc(str(body['why'])[:300])}" if body.get("why") else ""))
+        return {"code": code, "out": out[-5000:]}
+    if action == "exec":
+        cmd = str(body.get("cmd") or "").strip()
+        if not cmd:
+            raise ValueError("пустая команда")
+        job = run_job(cmd, max(5, min(int(body.get("timeout") or 600), 3600)), str(body.get("why") or ""))
+        return {"id": job["id"]}
+    if action == "job":
+        job = jobs.get(str(body.get("id")))
+        if not job:
+            raise KeyError("нет такой задачи (Главный перезапускался?)")
+        start = max(0, int(body.get("from") or 0))
+        return {"done": job["done"], "code": job["code"], "out": job["out"][start:], "len": len(job["out"])}
+    if action == "say":
+        text = str(body.get("text") or "").strip()[:3500]
+        if not text:
+            raise ValueError("пустое сообщение")
+        tell("🤖 <b>Claude:</b> " + esc(text))
+        return {"ok": True}
+    if action == "update":
+        tell("🤖 Claude обновляет всех ботов")
+        threading.Thread(target=lambda: (time.sleep(1), update_all(owner())), daemon=True).start()
+        return {"ok": True, "note": "Главный перезапустится в конце"}
+    raise KeyError("нет такого действия")
+
+
+class Web(BaseHTTPRequestHandler):
+    server_version = "Hub/1"
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def reply(self, code, body):
+        data = json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path == "/health":
+            return self.reply(200, "ok")
+        self.reply(404, {"error": "not found"})
+
+    def do_POST(self):
+        now = time.time()
+        fails[:] = [t for t in fails if now - t < 3600]
+        if len(fails) >= 20:
+            return self.reply(429, {"error": "слишком много неверных ключей, вход закрыт на час"})
+        if not remote_on():
+            return self.reply(403, {"error": "вход для Claude выключен — включи в Главном: /claude"})
+        if not check_key(self.headers.get("Authorization") or ""):
+            fails.append(now)
+            if len(fails) == 20:
+                tell("⚠️ 20 попыток с неверным ключом за час — вход для Claude закрыт на час. "
+                     "Если это не ты, нажми «♻️ Новый ключ» в /claude.")
+            return self.reply(401, {"error": "неверный ключ"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
+        except ValueError:
+            return self.reply(400, {"error": "bad json"})
+        action = self.path.rstrip("/").rsplit("/", 1)[-1]
+        try:
+            self.reply(200, remote_api(action, body if isinstance(body, dict) else {}))
+        except (KeyError, ValueError) as e:
+            self.reply(400, {"error": str(e).strip("'")})
+        except Exception as e:
+            traceback.print_exc()
+            self.reply(500, {"error": str(e)})
+
+
+def serve():
+    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Web)
+    httpd.daemon_threads = True
+    httpd.serve_forever()
+
+
+def claude_card(chat, mid):
+    on = remote_on()
+    url = hub_url()
+    lines = ["🤖 <b>Вход для Claude</b>\n",
+             "Claude из облачной сессии сам смотрит ботов и логи, перезапускает, обновляет и выполняет "
+             "команды на сервере. О каждой команде я пишу сюда.\n",
+             "🟢 Включён" if on else "⚪️ Выключен"]
+    if url:
+        lines.append(f"Адрес: <code>{esc(url)}</code>")
+    btns = [[b("⛔ Выключить", "cl|off")] if on else [b("🔑 Включить", "cl|on")]]
+    if on:
+        btns.append([b("🔑 Показать ключ", "cl|show"), b("♻️ Новый ключ", "cl|new")])
+    btns.append([b("‹ Назад", "home")])
+    return show(chat, mid, "\n".join(lines), btns)
+
+
+def show_key(chat):
+    send(chat, "🔑 <b>Ключ для Claude</b>\n\nДобавь две переменные в настройки облачной среды Claude "
+               "(меню среды в заголовке сессии → Edit → переменные окружения) и начни новую сессию:\n\n"
+               f"<code>HUB_URL={esc(hub_url())}</code>\n<code>HUB_KEY={esc(setting('key'))}</code>\n\n"
+               "Потом удали это сообщение. Выключить вход — «⛔ Выключить» в /claude.")
+
+
+def on_claude(chat, mid, arg):
+    if arg in ("on", "new"):
+        if arg == "new" or not setting("key"):
+            setting("key", secrets.token_urlsafe(32))
+        setting("remote", True)
+        claude_card(chat, mid)
+        show_key(chat)
+    elif arg == "off":
+        setting("remote", False)
+        claude_card(chat, mid)
+    elif arg == "show":
+        show_key(chat)
+    else:
+        claude_card(chat, mid)
+
+
 # ---------- сообщения ----------
 
 def parse_paid(text, today=None):
@@ -415,6 +634,7 @@ HELP = ("👑 <b>Главный</b> — следит за ботами на се
         "• Сам напишет, если бот упал или перезапускается по кругу, и когда заработал снова.\n"
         "• Кнопки: перезапуск, логи, «Обновить всех», «Поставить» нового бота по токену.\n"
         "• /paid 07.11 — срок оплаты сервера, напомню за 7, 3 и 1 день.\n\n"
+        "• /claude — вход для Claude: сам смотрит логи и чинит ботов, о каждой команде пишу сюда.\n\n"
         "/bots — боты · /server — сервер · /update — обновить всех")
 
 
@@ -440,6 +660,8 @@ def on_message(msg):
         send(chat, HELP)
     elif cmd == "/server":
         server_card(chat, None)
+    elif cmd == "/claude":
+        claude_card(chat, None)
     elif cmd == "/update":
         threading.Thread(target=update_all, args=(chat,), daemon=True).start()
     elif cmd == "/paid":
@@ -493,6 +715,8 @@ def on_callback(cq):
         threading.Thread(target=logs, args=(chat, data[1]), daemon=True).start()
     elif data[0] == "srv":
         server_card(chat, mid)
+    elif data[0] == "cl":
+        on_claude(chat, mid, data[1] if len(data) > 1 else "")
     elif data[0] == "upd":
         note = "Обновляю…"
         threading.Thread(target=update_all, args=(chat,), daemon=True).start()
@@ -523,6 +747,7 @@ def main():
         tg("setMyCommands", commands=[{"command": "bots", "description": "Мои боты"},
                                       {"command": "server", "description": "Сервер"},
                                       {"command": "update", "description": "Обновить всех"},
+                                      {"command": "claude", "description": "Вход для Claude"},
                                       {"command": "help", "description": "Что я умею"}])
     except Exception as e:
         print("setup:", e)
@@ -535,6 +760,7 @@ def main():
         except Exception as e:
             print("notify:", e)
     threading.Thread(target=watch, daemon=True).start()
+    threading.Thread(target=serve, daemon=True).start()
     print("Главный запущен")
     while True:
         try:
