@@ -174,6 +174,77 @@ class BotTest(unittest.TestCase):
         self.assertIn("Неделя", joined)
         self.assertIn("🥊 Спарринг", joined)
 
+    def media_msg(self, **extra):
+        planner.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, **extra})
+
+    def test_voice_like_text(self):
+        voice = {"voice": {"file_id": "v1", "duration": 3}}
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(planner.media, "voice_text", return_value="завтра в 18:00 бокс <b>") as vt:
+            self.media_msg(**voice)
+        vt.assert_called_once()
+        t = self.db.tasks(U)[0]
+        self.assertEqual((t["title"], t["time"]), ("Бокс <b>", "18:00"))
+        texts = self.texts()
+        self.assertIn("Слушаю", texts[0])
+        self.assertIn("🎙 «завтра в 18:00 бокс &lt;b&gt;»", texts)
+        self.assertIn("Бокс &lt;b&gt;", texts[-1])
+        self.assertIn("sendChatAction", [m for m, p in self.sent])
+
+    def test_voice_error(self):
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(planner.media, "voice_text", side_effect=planner.media.MediaError("в голосовом не слышно слов")):
+            self.media_msg(voice={"file_id": "v1"})
+        self.assertIn("не слышно слов", self.texts()[-1])
+        self.assertEqual(self.db.tasks(U), [])
+
+    def test_voice_runs_in_thread(self):
+        started = []
+        with mock.patch.object(planner.threading, "Thread", side_effect=lambda **k: started.append(k) or mock.Mock()):
+            self.media_msg(voice={"file_id": "v1"})
+        self.assertEqual(len(started), 1)
+        self.assertEqual(self.sent, [])  # главный цикл не ждёт распознавания
+
+    def test_photo_to_tasks(self):
+        today = planner.today_of(U)
+        seen = {}
+
+        def fake_claude(prompt, cwd):
+            seen["prompt"], seen["cwd"] = prompt, cwd
+            return "1. 12.10 18:00 Бокс\n- Купить молоко!\n• по пн и ср 19:00 Английский\n"
+
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(planner.media, "photo_path", side_effect=lambda tok, m, folder: os.path.join(folder, "p.jpg")), \
+                mock.patch.object(planner, "claude", fake_claude):
+            self.media_msg(photo=[{"file_id": "a"}, {"file_id": "b"}], caption="расписание на неделю")
+        self.assertIn("p.jpg", seen["prompt"])
+        self.assertIn("расписание на неделю", seen["prompt"])
+        self.assertIn(f"{today:%d.%m.%Y}", seen["prompt"])
+        self.assertFalse(os.path.exists(seen["cwd"]))  # временная папка удалена
+        tasks = {t["title"]: t for t in self.db.tasks(U)}
+        self.assertEqual(set(tasks), {"Бокс", "Купить молоко", "Английский"})
+        self.assertEqual(tasks["Бокс"]["time"], "18:00")
+        self.assertEqual(tasks["Бокс"]["date"][5:], "10-12")
+        self.assertTrue(tasks["Купить молоко"]["important"])
+        self.assertEqual(tasks["Английский"]["repeat"], "13")
+        self.assertIn("Добавил 3 задачи", self.texts()[-1])
+
+    def test_photo_nothing_or_error(self):
+        photo = {"photo": [{"file_id": "a"}]}
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(planner.media, "photo_path", return_value="/tmp/x.jpg"):
+            with mock.patch.object(planner, "claude", return_value="НЕТ"):
+                self.media_msg(**photo)
+            self.assertIn("Не нашёл", self.texts()[-1])
+            with mock.patch.object(planner, "claude", side_effect=planner.AIError("Claude не ответил")):
+                self.media_msg(**photo)
+            self.assertIn("Claude не ответил", self.texts()[-1])
+        self.assertEqual(self.db.tasks(U), [])
+
+    def test_task_lines(self):
+        self.assertEqual(planner.task_lines("```\n1) Алгебра\n2. 12.10 Контрольная\nНЕТ\n\n«Бокс»"),
+                         ["Алгебра", "12.10 Контрольная", "Бокс"])
+
     def test_reminder_morning_evening(self):
         self.db.user(U)
         now = planner.user_now(self.db.user(U)).replace(hour=17, minute=31, second=0, microsecond=0)

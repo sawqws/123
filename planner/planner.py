@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -41,6 +42,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import parse  # noqa: E402
 import store  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
+import media  # noqa: E402  голосовые и фото (common/media.py)
 
 TOKEN = os.environ.get("PLANNER_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
@@ -352,6 +356,8 @@ HELP = (
     "• <i>12.10 контрольная!</i>  (! — важное)\n"
     "• <i>по пн, ср и пт английский в 7 вечера</i>\n"
     "• <i>каждый день зарядка в 7:30</i>\n\n"
+    "🎙 <b>Голосом</b> — скажи задачу так же, как написал бы.\n"
+    "📷 <b>Фото</b> — скриншот расписания или список дел от руки: я выпишу задачи сам.\n\n"
     "<b>Команды</b>\n"
     "/today — план на сегодня с галочками\n"
     "/tomorrow — на завтра\n"
@@ -373,15 +379,22 @@ def welcome(chat, name):
     send(chat, text, with_app([], "✨ Открыть планер"))
 
 
-def quick_add(chat, uid, text):
-    today = today_of(uid)
+def add_task(uid, text, today):
+    """Текст -> сохранённая задача (или None, если в тексте нет названия)."""
     p = parse.parse(text, today)
     if not p["title"]:
+        return None
+    return db.save_task(uid, {"title": p["title"], "date": p["date"].isoformat(), "time": p["time"],
+                              "repeat": p["repeat"], "important": p["important"],
+                              "remind": db.user(uid)["remind"] if p["time"] else -1})
+
+
+def quick_add(chat, uid, text):
+    today = today_of(uid)
+    t = add_task(uid, text, today)
+    if not t:
         send(chat, "🤔 Не понял, что добавить. Напиши, например: <i>завтра в 18:00 тренировка</i>")
         return
-    t = db.save_task(uid, {"title": p["title"], "date": p["date"].isoformat(), "time": p["time"],
-                           "repeat": p["repeat"], "important": p["important"],
-                           "remind": db.user(uid)["remind"] if p["time"] else -1})
     send(chat, added_text(t, today), added_buttons(t, today))
 
 
@@ -406,6 +419,126 @@ def added_buttons(t, today):
                     + [{"text": "Без даты", "callback_data": f"m|{t['id']}|-"}] * bool(t["date"]))
     rows.append([{"text": "↩️ Отменить", "callback_data": f"u|{t['id']}"}])
     return with_app([r for r in rows if r], "Открыть в планере", f"/day/{t['date']}" if t["date"] else "/week")
+
+
+# ---------- голосовые и фото ----------
+
+class AIError(Exception):
+    """Понятная причина для пользователя."""
+
+
+NO_TOOLS = ["--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"]
+
+
+def spawn(fn, *args):
+    """Медленное (распознавание речи, Claude) — в отдельном потоке, чтобы бот не замирал."""
+    def run():
+        try:
+            fn(*args)
+        except Exception as e:
+            print("media:", e)
+            traceback.print_exc()
+    threading.Thread(target=run, daemon=True).start()
+
+
+def status(chat, text):
+    """Короткий статус («Слушаю…»), который потом заменится результатом; -> message_id или None."""
+    try:
+        tg("sendChatAction", chat_id=chat, action="typing")
+        res = send(chat, text).get("result")
+        return res.get("message_id") if isinstance(res, dict) else None
+    except Exception:
+        return None
+
+
+def replace(chat, mid, text, buttons=None):
+    return edit(chat, mid, text, buttons) if mid else send(chat, text, buttons)
+
+
+def on_voice(chat, uid, msg):
+    mid = status(chat, "🎙 Слушаю…")
+    try:
+        text = media.voice_text(TOKEN, msg)
+    except media.MediaError as e:
+        replace(chat, mid, f"🎙 Не получилось: {esc(e)}")
+        return
+    replace(chat, mid, f"🎙 «{esc(text)}»")
+    quick_add(chat, uid, text)  # дальше — как будто это написали
+
+
+def claude(prompt, cwd, timeout=240):
+    """`claude -p` в отдельной папке (без чужих CLAUDE.md); картинки читает инструментом Read."""
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--allowedTools", "Read", "--max-turns", "4", *NO_TOOLS]
+    try:
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        raise AIError("на сервере нет Claude Code — напиши задачи текстом") from None
+    except subprocess.TimeoutExpired:
+        raise AIError("Claude долго думает — попробуй ещё раз") from None
+    try:
+        res = json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else {}
+    except ValueError:
+        res = {}
+    if p.returncode != 0 or res.get("is_error") or not res.get("result"):
+        log = (p.stderr + p.stdout)[-1000:]
+        print("claude ->", p.returncode, log)
+        low = log.lower()
+        if any(w in low for w in ("login", "api key", "401", "unauthorized", "authenticat")):
+            raise AIError("Claude на сервере не вошёл в аккаунт")
+        if any(w in low for w in ("rate limit", "usage limit", "limit reached", "429", "overloaded")):
+            raise AIError("у Claude закончился лимит, попробуй позже")
+        raise AIError("Claude не ответил")
+    return res["result"].strip()
+
+
+def photo_prompt(path, caption, today):
+    return (f"Сегодня {today:%d.%m.%Y}, {WEEKDAYS[today.weekday()].lower()}. На картинке {path} — расписание, "
+            "список дел или заметка (скриншот или от руки). Открой её инструментом Read и выпиши задачи "
+            "по одной на строку в формате планера:\n"
+            "• «ДД.ММ ЧЧ:ММ название» — дату и время пиши, только если они есть на картинке или в подписи;\n"
+            "• просто день недели (пн, вт…) — переведи в ближайшую такую дату ДД.ММ, начиная с сегодня;\n"
+            "• повторяющиеся — только если так и написано (каждый, по понедельникам, расписание уроков на неделю): "
+            "«по пн и ср ЧЧ:ММ название», «каждый день ЧЧ:ММ название»;\n"
+            "• без даты — просто «название»; важное — «!» в конце.\n"
+            "Название — коротко, по-русски, как написано. Без нумерации, заголовков и пояснений. "
+            "Если задач нет — ответь одним словом НЕТ."
+            + (f"\n\nПодпись к фото: «{caption}»" if caption else ""))
+
+
+def task_lines(answer):
+    """Ответ Claude -> строки задач (без маркеров списка и «НЕТ»)."""
+    out = []
+    for line in (answer or "").splitlines():
+        line = re.sub(r"^\s*(?:[-•*·]|\d{1,2}[.)])\s+", "", line).strip(" «»\"'`")
+        if line and not line.startswith("```") and line.upper().rstrip(".!") != "НЕТ":
+            out.append(line[:200])
+    return out[:20]
+
+
+def on_photo(chat, uid, msg):
+    mid = status(chat, "📷 Читаю фото…")
+    today = today_of(uid)
+    work = tempfile.mkdtemp(prefix="planner-ai-")
+    try:
+        path = media.photo_path(TOKEN, msg, work)
+        answer = claude(photo_prompt(path, (msg.get("caption") or "").strip(), today), work)
+    except (media.MediaError, AIError) as e:
+        replace(chat, mid, f"📷 Не получилось: {esc(e)}")
+        return
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    tasks = [t for t in (add_task(uid, line, today) for line in task_lines(answer)) if t]
+    if not tasks:
+        replace(chat, mid, "📷 Не нашёл на фото задач. Напиши их текстом или скажи голосом.")
+        return
+    lines = [f"📷 <b>Добавил {len(tasks)} {plural(len(tasks), 'задачу', 'задачи', 'задач')}</b>", ""]
+    for t in tasks:
+        when = (repeat_text(t["repeat"]) if t["repeat"]
+                else human_date(datetime.date.fromisoformat(t["date"]), today) if t["date"] else "без даты")
+        lines.append(f"• {esc(t['title'])} — {when}" + (f" · {t['time']}" if t["time"] else "")
+                     + (" ❗" if t["important"] else ""))
+    first = tasks[0]["date"]
+    replace(chat, mid, "\n".join(lines), with_app([], "Открыть в планере", f"/day/{first}" if first else "/week"))
 
 
 # ---------- обработка ----------
@@ -450,6 +583,10 @@ def on_message(msg):
         update(chat)
     elif cmd:
         send(chat, "Такой команды нет. /help — что я умею.")
+    elif media.kind(msg) == "voice":
+        spawn(on_voice, chat, uid, msg)
+    elif media.kind(msg) == "photo":
+        spawn(on_photo, chat, uid, msg)
     elif text:
         quick_add(chat, uid, text)
 

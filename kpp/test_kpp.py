@@ -142,6 +142,55 @@ class Bot(unittest.TestCase):
         self.assertEqual(kpp.st["jwt"], "new")
         self.assertIn("Пропуск заказан", self.texts()[-1])
 
+    def voice(self, transcript=None, error=None, spoken=""):
+        vt = mock.patch.object(kpp.media, "voice_text", side_effect=error, return_value=transcript)
+        with mock.patch.object(kpp, "spawn", lambda fn, *a: fn(*a)), vt as v, \
+                mock.patch.object(kpp, "spoken_plate", return_value=spoken) as sp, \
+                mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 3}]}) as cr:
+            kpp.on_message({"chat": {"id": 1, "type": "private"}, "from": {"id": 1}, "voice": {"file_id": "v"}})
+        v.assert_called_once()
+        return sp, cr
+
+    def test_voice_plate_in_text(self):
+        sp, cr = self.voice("Номер А, 123, ВС, 777 <b>")
+        sp.assert_not_called()
+        self.assertEqual(cr.call_args[0][0], "А123ВС777")
+        texts = self.texts()
+        self.assertIn("Слушаю", texts[0])
+        self.assertIn("🎙 «Номер А, 123, ВС, 777 &lt;b&gt;»", texts)
+        self.assertIn("Пропуск заказан", texts[-1])
+
+    def test_voice_spoken_words(self):
+        sp, cr = self.voice("а сто двадцать три вэ эс семьсот семьдесят семь", spoken="А123ВС777\n")
+        sp.assert_called_once_with("а сто двадцать три вэ эс семьсот семьдесят семь")
+        self.assertEqual(cr.call_args[0][0], "А123ВС777")
+        self.assertIn("Пропуск заказан", self.texts()[-1])
+
+    def test_voice_no_plate(self):
+        sp, cr = self.voice("привет", spoken="НЕТ")
+        cr.assert_not_called()
+        self.assertIn("Не расслышал", self.texts()[-1])
+
+    def test_voice_error(self):
+        sp, cr = self.voice(error=kpp.media.MediaError("в голосовом не слышно слов"))
+        cr.assert_not_called()
+        self.assertIn("не слышно слов", self.texts()[-1])
+
+    def test_voice_in_thread(self):
+        started = []
+        with mock.patch.object(kpp.threading, "Thread", side_effect=lambda **k: started.append(k) or mock.Mock()):
+            kpp.on_message({"chat": {"id": 1, "type": "private"}, "from": {"id": 1}, "voice": {"file_id": "v"}})
+        self.assertEqual(len(started), 1)
+        self.assertEqual(self.sent, [])
+
+    def test_photo_screenshot(self):
+        with mock.patch.object(kpp, "read_photo", return_value="М456ОР50") as rp, \
+                mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 4}]}):
+            kpp.on_message({"chat": {"id": 1, "type": "private"}, "from": {"id": 1},
+                            "document": {"file_id": "d", "mime_type": "image/png"}})
+        rp.assert_called_once()
+        self.assertIn("Пропуск заказан", self.texts()[-1])
+
     def test_needs_login(self):
         kpp.st = {"owner": 1}
         self.msg("А123ВС777")

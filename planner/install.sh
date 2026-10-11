@@ -60,6 +60,9 @@ else
   echo "Уже есть $ENV — не трогаю (поменять: nano $ENV, потом pm2 restart planner-bot --update-env)"
 fi
 
+# голосовые (faster-whisper в common/.venv); без них бот работает, просто не слушает голосовые
+bash "$DIR/common/setup.sh" || echo "Голосовые не установились — бот работает без них"
+
 echo "== 5/5 Запуск"
 pm2 delete planner-bot >/dev/null 2>&1 || true
 pm2 start "$DIR/planner/ecosystem.config.js"

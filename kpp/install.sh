@@ -45,6 +45,9 @@ else
   echo "Уже есть $ENV — не трогаю (поменять: nano $ENV, потом pm2 restart kpp-bot --update-env)"
 fi
 
+# голосовые (faster-whisper в common/.venv); без них бот работает, просто не слушает голосовые
+bash "$DIR/common/setup.sh" || echo "Голосовые не установились — бот работает без них"
+
 echo "== 4/4 Запуск"
 pm2 delete kpp-bot >/dev/null 2>&1 || true
 pm2 start "$DIR/kpp/ecosystem.config.js"
