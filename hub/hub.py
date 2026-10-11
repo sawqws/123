@@ -69,6 +69,8 @@ INSTALL = {  # что умеем ставить по одному токену: 
     "planner": ("PLANNER_TOKEN", "🗓 Планер", "Открой @{name} и нажми /start — через минуту появится кнопка «Планер»."),
     "kpp": ("KPP_TOKEN", "🚧 КПП", "Открой @{name}, нажми /start и войди через Яндекс."),
     "avito": ("AVITO_TOKEN", "🛍 Авито", "Открой @{name}, нажми /start и пришли фото вещи."),
+    "tgbot": ("TG_AGENT_TOKEN", "🤖 Секретарь", "Открой @{name}, нажми /start и «Войти в аккаунт» — после этого "
+                                                "я сам создаю новых ботов в @BotFather."),
 }
 TZ = datetime.timezone(datetime.timedelta(hours=3))  # Москва
 

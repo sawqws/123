@@ -692,7 +692,8 @@ async def newbot(ctx, a):
     title = a["name"].strip()[:64]
     base = re.sub(r"[^A-Za-z0-9_]", "", a["username"].lstrip("@"))
     base = re.sub(r"_?bot$", "", base, flags=re.I)[:24] or "my"
-    await ctx.confirm(f"🤖 Создать бота «{title}» @{base}_bot в @BotFather")
+    if not a.get("auto"):  # Главный создаёт ботов по ТЗ сам (так просил Глеб): новый бот ничего не меняет в чатах
+        await ctx.confirm(f"🤖 Создать бота «{title}» @{base}_bot в @BotFather")
     tries = [f"{base}_bot", f"{base}bot"] + [f"{base}{n}_bot" for n in (1, 2, 7, 24, 77, 2026)]
     async with ctx.client.conversation("BotFather", timeout=60, exclusive=False) as conv:
         await conv.send_message("/newbot")

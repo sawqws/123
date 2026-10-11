@@ -29,7 +29,10 @@ echo "== 3/5 Python-библиотеки (Telethon)"
 .venv/bin/pip install -q -r requirements.txt
 
 echo "== 4/5 Секреты"
-if [ ! -s "$ENV" ]; then
+if [ -n "${TG_AGENT_TOKEN:-}" ] && [ -s "$ENV" ]; then
+  sed -i "s|^TG_AGENT_TOKEN=.*|TG_AGENT_TOKEN=${TG_AGENT_TOKEN}|" "$ENV"
+  echo "Токен обновлён в $ENV"
+elif [ ! -s "$ENV" ]; then
   TOKEN=${TG_AGENT_TOKEN:-}
   [ -n "$TOKEN" ] || read -r -p "Токен бота от @BotFather: " TOKEN < /dev/tty
   # api_id/api_hash не нужны: бот работает на Bot API, а ключи для аккаунта получит сам при «Войти в аккаунт»

@@ -414,5 +414,48 @@ class Misc(unittest.TestCase):
         self.assertIn("{MEMORY}", p)
 
 
+class FakeConv:
+    """Разговор с @BotFather: на каждое наше сообщение — следующий заготовленный ответ."""
+
+    def __init__(self, replies):
+        self.replies, self.sent = list(replies), []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def send_message(self, text):
+        self.sent.append(text)
+
+    async def get_response(self):
+        return pytypes.SimpleNamespace(raw_text=self.replies.pop(0))
+
+
+class NewBot(unittest.TestCase):
+    def ctx(self, replies, answer=True):
+        c = Ctx(answer)
+        c.conv = FakeConv(replies)
+        c.client.conversation = lambda *a, **k: c.conv
+        return c
+
+    def test_taken_then_token_auto(self):
+        c = self.ctx(["Alright, a new bot. How are we going to call it? Please choose a name for your bot.",
+                      "Good. Now let's choose a username for your bot.",
+                      "Sorry, this username is already taken.",
+                      "Done! Use this token to access the HTTP API:\n123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nKeep it"])
+        out = run(actions.run(c, "newbot", {"name": "Вода", "username": "water_bot", "auto": True}))
+        self.assertEqual(out, "TOKEN 123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA @waterbot")
+        self.assertEqual(c.conv.sent, ["/newbot", "Вода", "water_bot", "waterbot"])
+        self.assertEqual(c.asked, [])  # Главный создаёт без вопроса
+
+    def test_confirm_without_auto(self):
+        c = self.ctx([], answer=False)
+        out = run(actions.run(c, "newbot", {"name": "Вода", "username": "water"}))
+        self.assertIn("не подтвердил", out)
+        self.assertEqual(len(c.asked), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
