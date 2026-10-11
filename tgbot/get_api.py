@@ -100,14 +100,14 @@ class Site:
 
     def keys(self):
         """(api_id, api_hash), если приложение уже есть, иначе (None, hash формы создания)."""
-        page = self.req("/apps")
+        page = self.last_page = self.req("/apps")
         found = parse_keys(page)
         if found:
             return found
-        m = re.search(r'name="hash"\s+value="([0-9a-f]+)"', page)
-        if not m:
+        form_hash = parse_form_hash(page)
+        if not form_hash:
             raise Fail("не нашёл ни ключей, ни формы создания на /apps — похоже, вход не прошёл")
-        return None, m.group(1)
+        return None, form_hash
 
     def create(self, form_hash):
         try:
@@ -123,9 +123,19 @@ class Site:
             "app_url": "", "app_platform": "desktop", "app_desc": "personal assistant"})
 
 
+def parse_form_hash(page):
+    """value скрытого поля name="hash" формы создания (атрибуты в любом порядке, кавычки любые)."""
+    for tag in re.findall(r"<input\b[^>]*>", page, re.I):
+        if re.search(r"""name\s*=\s*["']?hash["'\s/>]""", tag, re.I):
+            m = re.search(r"""value\s*=\s*["']([^"']+)["']""", tag, re.I)
+            if m:
+                return m.group(1)
+    return None
+
+
 def parse_keys(page):
-    api_id = re.search(r"api_id.{0,400}?<strong>\s*(\d+)\s*</strong>", page, re.S | re.I)
-    api_hash = re.search(r"api_hash.{0,400}?>\s*([0-9a-f]{32})\s*<", page, re.S | re.I)
+    api_id = re.search(r"api_id.{0,600}?>\s*(\d{3,12})\s*<", page, re.S | re.I)
+    api_hash = re.search(r"api_hash.{0,600}?\b([0-9a-f]{32})\b", page, re.S | re.I)
     if api_id and api_hash:
         return api_id.group(1), api_hash.group(1)
     return None
