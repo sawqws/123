@@ -1113,6 +1113,9 @@ SIDE_BOTS = {  # соседние боты, которых HDP-бот умеет
     "planner": {"env": "PLANNER_TOKEN", "what": "бота-планера", "short": "планер", "timeout": 900,
                 "done": "✅ <b>Планер запущен</b>\n\nОткрой @{name} и нажми /start — станешь владельцем. "
                         "Через минуту слева от поля ввода появится кнопка «Планер»."},
+    "coach": {"env": "COACH_TOKEN", "what": "бота-тренера", "short": "тренера", "timeout": 900,
+              "done": "✅ <b>Тренер запущен</b>\n\nОткрой @{name} и нажми /start — станешь владельцем. "
+                      "Потом /connect — подключим WHOOP."},
     "kpp": {"env": "KPP_TOKEN", "what": "бота «КПП»", "short": "КПП", "timeout": 600,
             "done": "✅ <b>КПП запущен</b>\n\nОткрой @{name}, нажми /start и войди через Яндекс — "
                     "дальше просто присылай номер такси."},
@@ -1120,7 +1123,7 @@ SIDE_BOTS = {  # соседние боты, которых HDP-бот умеет
 
 
 def install_planner(chat, token, msg_id=None, kind="planner"):
-    """Ставит соседнего бота (planner/ или kpp/) на этот же сервер: токен в /etc/…-bot.env, pm2.
+    """Ставит соседнего бота (planner/, kpp/ или coach/) на этот же сервер: токен в /etc/…-bot.env, pm2.
     Запускается только владельцем и только фиксированный <kind>/install.sh из репозитория."""
     side = SIDE_BOTS[kind]
     if msg_id:  # токен не должен висеть в чате
@@ -1289,6 +1292,15 @@ def handle(msg):
                        "Например: /kpp 123456789:AAH…", menu=True)
             return
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "kpp"),
+                         daemon=True).start()
+        return
+    if text.startswith("/coach"):
+        m = BOT_TOKEN.search(text)
+        if not m:
+            send(chat, "⚡ Пришли токен бота-тренера (WHOOP) от @BotFather — поставлю его на этот сервер.\n"
+                       "Например: /coach 123456789:AAH…", menu=True)
+            return
+        threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "coach"),
                          daemon=True).start()
         return
     if text.startswith("/planner") or BOT_TOKEN.fullmatch(text):
