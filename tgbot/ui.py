@@ -159,7 +159,7 @@ def reopen_tags(text):
 # ---------- Живой статус: что делает Claude ----------
 
 STEPS = {
-    "me": "👤 Смотрю твой аккаунт",
+    "me": "👤 Смотрю ваш аккаунт",
     "chats": "🗂 Листаю список чатов",
     "history": "📖 Читаю {chat}",
     "search": "🔎 Ищу «{q}»",
@@ -200,6 +200,13 @@ def step(tool, inp, tg_path, names=None):
     """Шаг Claude (имя инструмента и его вход) -> строка для статуса или None. names: id чата -> название."""
     if tool == "Read":
         return "📄 Читаю длинную переписку"
+    if tool == "WebSearch":
+        q = (inp or {}).get("query", "")
+        return f"🌐 Ищу в интернете «{q[:40]}»" if q else "🌐 Ищу в интернете"
+    if tool == "WebFetch":
+        return "🌐 Читаю страницу"
+    if tool in ("Edit", "Write"):
+        return "📝 Записываю в память"
     if tool != "Bash":
         return None
     cmd = (inp or {}).get("command", "")

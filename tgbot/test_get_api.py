@@ -94,6 +94,19 @@ class GetApi(unittest.TestCase):
             self.run_site(create_answer="ERROR")
         self.assertIn("ERROR", str(e.exception))
 
+    def test_form_hash_variants(self):
+        for page in ('<input type="hidden" name="hash" value="ab12cd34"/>',
+                     "<input value='Xy-9_Za' type=hidden name=hash>",
+                     '<input name="hash" type="hidden" value="QwErTy123" />'):
+            self.assertTrue(get_api.parse_form_hash(page), page)
+        self.assertIsNone(get_api.parse_form_hash('<input name="phone" value="+7">'))
+        self.assertIsNone(get_api.parse_form_hash('<input name="app_hash" value="x">'))
+
+    def test_keys_without_strong(self):
+        page = ('<label>App api_id:</label><span class="x">7654321</span>'
+                '<label>App api_hash:</label><span class="x">fedcba9876543210fedcba9876543210</span>')
+        self.assertEqual(get_api.parse_keys(page), ("7654321", "fedcba9876543210fedcba9876543210"))
+
     def test_normalize(self):
         for p in ("8 999 123-45-67", "+7 (999) 123-45-67", "79991234567"):
             self.assertEqual(get_api.normalize(p), "+79991234567")

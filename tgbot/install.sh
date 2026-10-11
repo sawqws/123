@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 
 echo "== 1/5 Пакеты"
 apt-get update -q
-apt-get -y -q install git python3 python3-venv python3-pip ca-certificates
+apt-get -y -q install git python3 python3-venv python3-pip ca-certificates ffmpeg
 
 echo "== 2/5 Код"
 if [ -d "$DIR/.git" ]; then
