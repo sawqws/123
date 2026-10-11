@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)
 import ai  # noqa: E402
 import insights  # noqa: E402
 import store  # noqa: E402
+import water  # noqa: E402
 import whoop  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
@@ -124,6 +125,7 @@ def setup_bot():
         {"command": "progress", "description": "Разбор прогресса за 2 месяца"},
         {"command": "app", "description": "Открыть приложение"},
         {"command": "food", "description": "Питание за сегодня"},
+        {"command": "water", "description": "Вода за сегодня"},
         {"command": "goals", "description": "Мои цели"},
         {"command": "morning", "description": "Время утреннего разбора"},
         {"command": "connect", "description": "Подключить WHOOP"},
@@ -403,6 +405,10 @@ def rule_brief(t):
     n = t["nutrition"]
     if n:
         lines.append(f"• Питание: <b>{n['kcal']} ккал</b>, белок {n['protein']} г, вода {n['water'] / 1000:.1f} л.".replace(".", ",", 1))
+    wt = t.get("water") or {}
+    if wt.get("yesterday"):
+        lines.append(f"• Вода вчера: {water.day_line(wt['yesterday'], wt['y_target'])}"
+                     + (" — норма ✅" if wt["yesterday"] >= wt["y_target"] else " — сегодня держи стакан под рукой."))
     if bed_line(t):
         lines.append("• " + bed_line(t))
     return "\n".join(lines) or "Данных за сегодня пока нет."
@@ -646,9 +652,10 @@ HELP = ("⚡ <b>Форма</b> — твой тренер по данным WHOOP
         "• После тренировки — что съесть и как восстановиться.\n"
         "• <b>Спрашивай что угодно</b> текстом: «почему низкое восстановление?», «что съесть перед боксом?».\n"
         "• <b>Еда</b>: пришли фото тарелки или напиши «съел гречку с курицей» — посчитаю ккал и БЖУ.\n"
+        "• <b>Вода</b>: «выпил 500 мл», «2 стакана воды», «+300» — скажу, сколько из нормы и успеваешь ли. /water\n"
         "• <b>Голосовые</b> понимаю как текст. <b>Скрин</b> WHOOP или плана тренировок — пришли с вопросом в подписи.\n"
         "• <b>/progress</b> — большой разбор прогресса за 2 месяца и план; по воскресеньям в 19:00 — итог недели.\n\n"
-        "/today — разбор дня · /goals — цели · /morning — время разбора · /progress — прогресс · /food — питание · "
+        "/today — разбор дня · /goals — цели · /morning — время разбора · /progress — прогресс · /food — питание · /water — вода · "
         "/sync — обновить · /connect — WHOOP · /new — новый разговор")
 
 FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпил[аи]?|завтрак|обед|ужин|перекус|еда)\b[:\s,-]*", re.I)
@@ -676,14 +683,43 @@ def food_text(uid):
     lines = ["🍽 <b>Питание сегодня</b>"]
     if n:
         lines.append(f"{e['kcal']} / {n['kcal']} ккал · Б {e['protein']}/{n['protein']} · Ж {e['fat']}/{n['fat']} · У {e['carbs']}/{n['carbs']}")
-        lines.append(f"Вода: {n['water'] / 1000:.1f} л".replace(".", ","))
     else:
         lines.append("Добавь вес в профиле — посчитаю норму.")
+    wt = t["water"]
+    lines.append(f"💧 Вода: {water.day_line(wt['drank'], wt['target'])} — /water")
     for m in t["meals"]:
         lines.append(f"• {esc(m['time'])} {esc(m['title'])} — {round(m['kcal'])} ккал")
     if not t["meals"]:
         lines.append("\nПока ничего не записано. Пришли фото еды или напиши «съел …».")
     return "\n".join(lines)
+
+
+def water_buttons(last_id=None):
+    rows = [[{"text": "+250 · стакан", "callback_data": "wa|add|250"},
+             {"text": "+500 · бутылка", "callback_data": "wa|add|500"}]]
+    if last_id:
+        rows.append([{"text": "↩️ Отменить", "callback_data": f"wa|del|{last_id}"}])
+    return with_app(rows, "🍽 Питание", "/food")
+
+
+def water_text(uid, added=0):
+    u = db.user(uid)
+    now = user_now(u)
+    _, t = context(uid)
+    wt = t["water"]
+    text = water.card(added, wt["drank"], wt["target"], wt["why"], now.hour + now.minute / 60, wt["trained"])
+    if not added and wt["log"]:
+        text += "\n\n" + " · ".join(f"{esc(w['time'])} {water.liters(w['ml'])}" for w in wt["log"][-8:])
+    if not added and not wt["log"]:
+        text += "\n\nПиши, сколько выпил: «500 мл», «стакан воды», «+300» — или жми кнопки."
+    return text, (wt["log"][-1]["id"] if wt["log"] else None)
+
+
+def log_water(chat, uid, ml):
+    now = user_now(db.user(uid))
+    row = db.add_water(uid, now.date().isoformat(), now.strftime("%H:%M"), ml)
+    text, _ = water_text(uid, ml)
+    send(chat, text, water_buttons(row["id"]))
 
 
 PHOTO_ASK = "Что на фото? Разбери с учётом моих данных и целей."
@@ -829,6 +865,13 @@ def on_message(msg):
         threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
     elif cmd == "/food":
         send(chat, food_text(uid), with_app([], "🍽 Открыть питание", "/food"))
+    elif cmd == "/water":
+        ml = water.parse(arg) or water.parse("вода " + arg) if arg else None
+        if ml:
+            log_water(chat, uid, ml)
+        else:
+            text, last = water_text(uid)
+            send(chat, text, water_buttons(last))
     elif cmd in ("/goals", "/goal"):
         if arg:
             add_goal(chat, uid, arg)
@@ -873,6 +916,10 @@ def on_text(chat, uid, text, wait=None):
     """Обычный текст (или распознанное голосовое): цель после кнопки, еда или вопрос тренеру."""
     if wait == "goal":
         add_goal(chat, uid, text)
+        return
+    ml = water.parse(text)
+    if ml:
+        log_water(chat, uid, ml)
         return
     m = FOOD_WORDS.match(text)
     if m and len(text) > len(m.group(0)) + 1:
@@ -958,6 +1005,14 @@ def on_callback(cq):
             threading.Thread(target=sync_user, args=(uid, 3), daemon=True).start()
         else:
             connect(chat, uid)
+    elif data[0] == "wa" and data[1] == "add":
+        log_water(chat, uid, int(data[2]))
+        note = f"+{data[2]} мл"
+    elif data[0] == "wa" and data[1] == "del":
+        if db.delete_water(uid, int(data[2])):
+            text, last = water_text(uid)
+            edit(chat, mid, "↩️ Отменил.\n\n" + text, water_buttons(last))
+            note = "Отменил"
     elif data[0] == "m" and data[1] == "del":
         if db.delete_meal(uid, int(data[2])):
             edit(chat, mid, "🗑 <s>Удалено</s>")
@@ -1134,6 +1189,10 @@ def day_payload(uid, day):
     t = insights.today(db, uid, day, profile(uid), whoop.body(db, uid))
     b = db.brief(uid, day.isoformat(), "morning")
     t["brief"] = b["text"] if b else None
+    now = user_now(db.user(uid))
+    if day == now.date():
+        wt = t["water"]
+        wt["mark"], wt["note"] = water.assess(wt["drank"], wt["target"], now.hour + now.minute / 60, wt["trained"])
     return t
 
 
@@ -1169,6 +1228,13 @@ def route(uid, path, b):
         b.setdefault("day", today.isoformat())
         b.setdefault("time", user_now(u).strftime("%H:%M"))
         return {"meal": db.save_meal(uid, b), "day": day_payload(uid, datetime.date.fromisoformat(b["day"]))}
+    if path == "/api/water":
+        now = user_now(u)
+        db.add_water(uid, today.isoformat(), now.strftime("%H:%M"), int(b.get("ml") or 0))
+        return {"day": day_payload(uid, today)}
+    if path == "/api/water/delete":
+        db.delete_water(uid, int(b["id"]))
+        return {"day": day_payload(uid, today)}
     if path == "/api/meal/delete":
         db.delete_meal(uid, int(b["id"]))
         return {"ok": True, "day": day_payload(uid, today)}

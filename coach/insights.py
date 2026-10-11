@@ -8,6 +8,7 @@
 import datetime
 import statistics
 
+import water
 import whoop
 
 ZONES = ((67, "green"), (34, "yellow"), (0, "red"))
@@ -331,11 +332,18 @@ def today(db, uid, day, profile, body):
     food = db.meals(uid, day.isoformat())
     nut = nutrition(profile, body, base, (d["cycle"] or {}).get("kcal"), train_min)
     y = days.get((day - datetime.timedelta(days=1)).isoformat()) or {}
+    target, why = water.norm(nut, train_min)
+    yday = (day - datetime.timedelta(days=1)).isoformat()
+    y_train = sum(w["minutes"] or 0 for w in y.get("workouts") or [])
+    y_target, _ = water.norm(nutrition(profile, body, base, None, y_train), y_train)
+    drinks = db.water(uid, day.isoformat())
     return {
         "day": day.isoformat(), **d, "base": base, "ratio": ratio, "band": strain_band(d["recovery"]),
         "tips": tips(d, base, ratio, profile, recent), "nutrition": nut, "eaten": eaten(food), "meals": food,
         "yesterday": {"strain": (y.get("cycle") or {}).get("strain"), "workouts": y.get("workouts") or []},
         "bedtime": bedtime(days, day, profile), "has_data": bool(days),
+        "water": {"drank": sum(w["ml"] for w in drinks), "target": target, "why": why, "log": drinks,
+                  "trained": bool(train_min), "yesterday": db.water_total(uid, yday), "y_target": y_target},
     }
 
 
@@ -389,6 +397,9 @@ def text_context(db, uid, day, profile, body, n=14):
         n_ = t["nutrition"]
         lines.append(f"ПИТАНИЕ НА ДЕНЬ (наш расчёт, {n_['how']}): {n_['kcal']} ккал, Б {n_['protein']} г, "
                      f"Ж {n_['fat']} г, У {n_['carbs']} г, вода {n_['water']} мл")
+    wt = t["water"]
+    lines.append(f"ВОДА СЕГОДНЯ (записывает сам): выпито {water.day_line(wt['drank'], wt['target'])}"
+                 + (f"; вчера {water.day_line(wt['yesterday'], wt['y_target'])}" if wt["yesterday"] else "; вчера не записывал"))
     e = t["eaten"]
     if e["count"]:
         lines.append(f"СЪЕДЕНО СЕГОДНЯ: {e['kcal']} ккал, Б {e['protein']}, Ж {e['fat']}, У {e['carbs']} — "

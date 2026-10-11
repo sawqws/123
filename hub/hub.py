@@ -72,6 +72,8 @@ INSTALL = {  # что умеем ставить по одному токену: 
     "avito": ("AVITO_TOKEN", "🛍 Авито", "Открой @{name}, нажми /start и пришли фото вещи."),
     "eye": ("EYE_TOKEN", "👁 Глаз (очки)", "Открой @{name} и нажми /start — через минуту появится кнопка «Глаз»: "
             "там «🎙 Говорить» и «📷 Фото»."),
+    "tgbot": ("TG_AGENT_TOKEN", "🤖 Секретарь", "Открой @{name}, нажми /start и «Войти в аккаунт» — после этого "
+                                                "я сам создаю новых ботов в @BotFather."),
 }
 BOTFATHER = {  # имя и желаемый username, если бота создаёт Секретарь (без «bot» на конце)
     "coach": ("Форма", "forma_coach"),
@@ -364,16 +366,16 @@ def sync_main(git, reset=False):
 def ask_token(chat, mid, kind):
     """Просим токен; если Секретарь подключён к аккаунту — можно не ходить в @BotFather самому."""
     setting("wait", kind)
-    rows = [[b("🤖 Создать бота сам", f"bf|{kind}")]] if maker.secretary_ready() else []
+    rows = [[b("🤖 Создать бота сам", f"bf|{kind}")]] if kind in BOTFATHER and maker.secretary_ready() else []
     text = f"Пришли токен бота от @BotFather — поставлю {esc(INSTALL[kind][1])}."
     if rows:
-        text += "\n\nИли нажми «🤖 Создать бота сам» — создам его в @BotFather через Секретаря (подтвердишь кнопкой)."
+        text += "\n\nИли нажми «🤖 Создать бота сам» — создам его в @BotFather через Секретаря."
     show(chat, mid, text, rows + [[b("Отмена", "home")]])
 
 
 def botfather_install(chat, kind):
     name, want = BOTFATHER.get(kind, (INSTALL[kind][1], kind))
-    send(chat, f"🤖 Создаю бота «{esc(name)}» в @BotFather — подтверди в Секретаре.")
+    send(chat, f"🤖 Создаю бота «{esc(name)}» в @BotFather через Секретаря…")
     token, why = maker.botfather(name, want)
     if not token:
         setting("wait", kind)
