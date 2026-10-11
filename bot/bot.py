@@ -14,6 +14,7 @@
 (Telegram показывает их, если у владельца бота есть Premium).
 Задания с проверкой учителем: бот присылает черновик, Глеб правит или жмёт «Отправить»;
 правки запоминаются (bot/drafts.py). /alphabet — алфавит его почерком (horo/alphabet.py).
+Голосовые (и аудио, кружки) распознаются (common/media.py) и дальше идут как набранный текст.
 """
 import datetime
 import html
@@ -21,6 +22,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -31,6 +33,9 @@ from zoneinfo import ZoneInfo
 
 import drafts
 import web
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+import media  # noqa: E402  голосовые -> текст, фото (common/media.py)
 
 # pm2 передаёт свой канал связи (NODE_CHANNEL_FD) — node-скрипты бота наследуют его и падают при выходе
 # с кодом -6, хотя всё уже вывели. Скриптам бота этот канал не нужен.
@@ -104,6 +109,10 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Ответы учителю</b>\n"
     "<blockquote>Сначала присылаю черновик. Поправь текстом, просьбой («убери второй абзац») "
     "или своими фото — и жми «✅ Отправить». Правки запоминаю.</blockquote>\n"
+    "<b>Голос и фото</b>\n"
+    "<blockquote>🎙 Голосовое — как обычное сообщение: распознаю и сделаю то же, что по тексту "
+    "(правка черновика, «ок», «оценки», «готово»…)\n"
+    "📸 Фото — в черновик для учителя или листом алфавита</blockquote>\n"
     "<b>Приложение</b>\n"
     "<blockquote>Кнопка «HDP» слева от поля ввода или /app — всё то же самое в красивом окне. "
     "Кнопки здесь тоже работают, выбирай, как удобнее.</blockquote>\n"
@@ -1013,6 +1022,8 @@ def check(chat):
         finally:
             live.done()
         rows.append("✅ <b>Алфавит</b> · заполнен" if os.path.exists(GLEB_EXTRA) else f"✍️ <b>Алфавит</b> · ещё не заполнен ({BTN_HAND})")
+        rows.append("✅ <b>Голосовые</b> · распознавание на месте" if media.whisper_python()
+                    else "🎙 <b>Голосовые</b> · распознавание не установлено (common/setup.sh)")
         head = "🩺 <b>Проверка</b> · " + ("всё работает ✨" if not bad else f"проблем: {bad}")
         when = git("log", "-1", "--format=%cd", "--date=format:%d.%m %H:%M")
         send(chat, "\n".join([head, "", *rows, "", f"<i>Версия {esc(git('rev-parse', '--short', 'HEAD'))} от {esc(when)}</i>"]),
@@ -1262,8 +1273,53 @@ def digest_loop():
         time.sleep(60)
 
 
+def spoken_button(text):
+    """«Оценки.» голосом -> «📊 Оценки»: кнопку не произнести с эмодзи, поэтому сравниваем только слова."""
+    words = lambda s: " ".join(re.findall(r"[a-zа-яё]+", s.lower().replace("ё", "е")))
+    said = words(text)
+    return next((b for b in sorted(BUTTONS) if said and words(b) == said), text)
+
+
+def hear_voice(msg):
+    """Голосовое, аудио или кружок -> текст (faster-whisper, несколько секунд) -> дальше как набранный текст."""
+    chat = msg["chat"]["id"]
+    mid = send(chat, "🎙 Слушаю…")
+    stop = threading.Event()
+
+    def typing():  # «печатает…» держится 5 секунд — повторяем, пока распознаётся
+        while not stop.is_set():
+            quiet("sendChatAction", chat_id=chat, action="typing")
+            stop.wait(4)
+
+    REAL_THREAD(target=typing, daemon=True).start()
+    try:
+        heard = media.voice_text(TOKEN, msg)
+    except media.MediaError as e:
+        delete(chat, mid)
+        why = str(e)
+        send(chat, f"🎙 {why[:1].upper()}{why[1:]}.", menu=True)
+        return
+    except Exception as e:
+        print("voice:", e)
+        delete(chat, mid)
+        send(chat, "🎙 Не получилось скачать голосовое, пришли ещё раз.", menu=True)
+        return
+    finally:
+        stop.set()
+    echo = f"🎙 «{esc(heard)}»"
+    if mid:
+        edit(chat, mid, echo)
+    else:
+        send(chat, echo, raw_html=True)
+    voice_keys = ("voice", "audio", "video_note", "document", "caption")
+    handle({**{k: v for k, v in msg.items() if k not in voice_keys}, "text": spoken_button(heard)})
+
+
 def handle(msg):
     chat = msg["chat"]["id"]
+    if media.kind(msg) == "voice":  # распознаём не в цикле опроса Telegram
+        threading.Thread(target=hear_voice, args=(msg,), daemon=True).start()
+        return
     text = (msg.get("text") or "").strip()
     text = ALIASES.get(text, text)
     name = msg.get("from", {}).get("first_name") or ""
@@ -1389,6 +1445,12 @@ def handle(msg):
             threading.Thread(target=submit_draft, args=(chat,), daemon=True).start()
         else:
             edit_draft(chat, text)
+        return
+    if media.kind(msg) == "photo":  # фото сейчас некуда приложить
+        send(chat, "📸 <b>Фото пригодится, когда:</b>\n"
+                   "<blockquote>📄 жду черновик для учителя — фото заменит мои картинки\n"
+                   f"✍️ заполняешь алфавит почерка ({BTN_HAND})</blockquote>\n"
+                   "Чтобы решить задание, пришли ссылку на него.", menu=True, raw_html=True)
         return
 
     simple = {

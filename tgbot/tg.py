@@ -107,6 +107,10 @@ def parser():
     c = cmd("leave", "⚠ выйти из группы")
     c.add_argument("chat")
 
+    c = cmd("newbot", "⚠ создать бота в @BotFather (вернёт токен)")
+    c.add_argument("name", help="имя бота, как его видно в чате")
+    c.add_argument("username", help="желаемый username, без «bot» на конце — допишу сам")
+
     cmd("folders", "папки Telegram и чаты в них")
     c = cmd("folder", "⚠ создать папку или добавить/убрать в ней чаты")
     c.add_argument("name", help="название папки")

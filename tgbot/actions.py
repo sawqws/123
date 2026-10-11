@@ -678,3 +678,39 @@ async def unjob(ctx, a):
     await ctx.confirm(f"⏰ Удалить расписание: {jobs.describe(j)}")
     ctx.jobs.remove(a["id"])
     return "✅ Удалено"
+
+
+# ---------- @BotFather ----------
+
+BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
+
+
+@command("newbot", write=True)
+async def newbot(ctx, a):
+    """Новый бот в @BotFather: имя и username (на «bot»). Если username занят — пробует с цифрами.
+    Возвращает строку «TOKEN <токен> @<username>» — её разбирает Главный (hub/maker.py)."""
+    title = a["name"].strip()[:64]
+    base = re.sub(r"[^A-Za-z0-9_]", "", a["username"].lstrip("@"))
+    base = re.sub(r"_?bot$", "", base, flags=re.I)[:24] or "my"
+    await ctx.confirm(f"🤖 Создать бота «{title}» @{base}_bot в @BotFather")
+    tries = [f"{base}_bot", f"{base}bot"] + [f"{base}{n}_bot" for n in (1, 2, 7, 24, 77, 2026)]
+    async with ctx.client.conversation("BotFather", timeout=60, exclusive=False) as conv:
+        await conv.send_message("/newbot")
+        r = await conv.get_response()
+        if "name" not in (r.raw_text or "").lower():
+            raise Fail("BotFather ответил не так: " + cut(r.raw_text, 300))
+        await conv.send_message(title)
+        await conv.get_response()
+        for u in tries:
+            await conv.send_message(u)
+            r = await conv.get_response()
+            m = BOT_TOKEN.search(r.raw_text or "")
+            if m:
+                return f"TOKEN {m.group(0)} @{u}"
+            low = (r.raw_text or "").lower()
+            if "too many attempts" in low or "try again in" in low:
+                raise Fail("BotFather: слишком много попыток — " + cut(r.raw_text, 200))
+            if "20 bots" in low or "can't add more" in low:
+                raise Fail("в BotFather уже 20 ботов — лимит Telegram")
+        await conv.send_message("/cancel")
+    raise Fail("все варианты username заняты: " + ", ".join(tries))

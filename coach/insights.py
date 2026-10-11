@@ -281,6 +281,43 @@ def strain_band(rec):
     return STRAIN_BAND.get(z) if z else None
 
 
+# ---------- отбой ----------
+
+def _mins(hhmm):
+    try:
+        h, m = (int(x) for x in hhmm.split(":"))
+        return h * 60 + m
+    except (AttributeError, ValueError):
+        return None
+
+
+def _hhmm(mins):
+    mins %= 24 * 60
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+def bedtime(days, day, profile):
+    """Во сколько лечь сегодня: обычный подъём (медиана за 14 дней; будни и выходные отдельно) минус нужный сон
+    и 20 минут на засыпание. Нужный сон — из WHOOP за прошлую ночь, но не меньше 8,5 ч до 18 лет и 7,5 ч взрослым."""
+    tomorrow = day + datetime.timedelta(days=1)
+    lo = (day - datetime.timedelta(days=13)).isoformat()
+    ends = [(d, _mins(v["sleep"]["end"])) for d, v in days.items()
+            if lo <= d <= day.isoformat() and v.get("sleep") and _mins(v["sleep"].get("end")) is not None]
+    ends = [(d, m) for d, m in ends if 3 * 60 <= m <= 13 * 60]  # подъём утром, а не дневной сон
+    same = [m for d, m in ends if (datetime.date.fromisoformat(d).weekday() >= 5) == (tomorrow.weekday() >= 5)]
+    pick = same if len(same) >= 2 else [m for _, m in ends]
+    if not pick:
+        return None
+    wake = round(statistics.median(pick))
+    age = profile.get("age")
+    floor = 8.5 if age and age < 18 else 7.5
+    last = (days.get(day.isoformat()) or {}).get("sleep") or {}
+    need = max(last.get("need") or 0, floor)
+    bed = wake - round(need * 60) - 20
+    bed -= bed % 10  # округляем вниз до 10 минут
+    return {"bed": _hhmm(bed), "wake": _hhmm(wake), "need": round(need, 2), "weekend": tomorrow.weekday() >= 5}
+
+
 # ---------- всё про день ----------
 
 def today(db, uid, day, profile, body):
@@ -293,10 +330,12 @@ def today(db, uid, day, profile, body):
     train_min = sum(w["minutes"] or 0 for w in d["workouts"])
     food = db.meals(uid, day.isoformat())
     nut = nutrition(profile, body, base, (d["cycle"] or {}).get("kcal"), train_min)
+    y = days.get((day - datetime.timedelta(days=1)).isoformat()) or {}
     return {
         "day": day.isoformat(), **d, "base": base, "ratio": ratio, "band": strain_band(d["recovery"]),
         "tips": tips(d, base, ratio, profile, recent), "nutrition": nut, "eaten": eaten(food), "meals": food,
-        "has_data": bool(days),
+        "yesterday": {"strain": (y.get("cycle") or {}).get("strain"), "workouts": y.get("workouts") or []},
+        "bedtime": bedtime(days, day, profile), "has_data": bool(days),
     }
 
 
@@ -319,6 +358,10 @@ def text_context(db, uid, day, profile, body, n=14):
     """Сжатый текст для Claude: профиль, сегодня, обычный уровень, последние n дней, тренировки, питание."""
     t = today(db, uid, day, profile, body)
     lines = ["ПРОФИЛЬ: " + profile_line(profile, body)]
+    goals = db.goals(uid)
+    if goals:
+        lines.append("ЦЕЛИ (написал сам; советы привязывай к ним, но безопасность важнее): "
+                     + "; ".join(f"{i}) {g['text']} (с {g['created'][:10]})" for i, g in enumerate(goals, 1)))
     lines.append(f"СЕГОДНЯ {day.isoformat()} ({['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'][day.weekday()]}):")
     r, s, c = t["recovery"], t["sleep"], t["cycle"]
     lines.append("  восстановление: " + (f"{r['score']}% ({r['zone']}), ВСР {r['hrv']} мс, пульс покоя {r['rhr']}, "
@@ -338,6 +381,10 @@ def text_context(db, uid, day, profile, body, n=14):
                  f"траты {b['kcal']} ккал; нагрузка 7/28 = {t['ratio'] or '—'}")
     if t["band"]:
         lines.append(f"ОРИЕНТИР НАГРУЗКИ НА СЕГОДНЯ (наш): {t['band'][0]}–{t['band'][1]}")
+    if t["bedtime"]:
+        bt = t["bedtime"]
+        lines.append(f"ОТБОЙ СЕГОДНЯ (наш расчёт): лечь до {bt['bed']} — подъём обычно {bt['wake']}"
+                     f"{' (выходной)' if bt['weekend'] else ''}, нужно сна {fmt_h(bt['need'])}")
     if t["nutrition"]:
         n_ = t["nutrition"]
         lines.append(f"ПИТАНИЕ НА ДЕНЬ (наш расчёт, {n_['how']}): {n_['kcal']} ккал, Б {n_['protein']} г, "

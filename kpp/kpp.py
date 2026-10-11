@@ -12,7 +12,8 @@
   KPP_ALLOWED  Telegram ID через запятую; если пусто — владельцем станет первый /start
   KPP_DATA     папка с данными (по умолчанию kpp/data, вне git)
 
-Только стандартная библиотека Python. Скриншоты читает `claude -p`, если он есть на сервере.
+Только стандартная библиотека Python. Скриншоты читает `claude -p`, если он есть на сервере;
+голосовые распознаёт common/media.py (faster-whisper), продиктованный словами номер переводит `claude -p`.
 """
 import datetime
 import hashlib
@@ -24,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import urllib.error
@@ -34,9 +36,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import domyland as dl  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
+import media  # noqa: E402  голосовые и фото (common/media.py)
+
 TOKEN = os.environ.get("KPP_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
-FILES = f"https://api.telegram.org/file/bot{TOKEN}/"
 ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("KPP_ALLOWED", ""))}
 DATA = os.environ.get("KPP_DATA") or os.path.join(HERE, "data")
 STATE = os.path.join(DATA, "state.json")
@@ -45,6 +49,7 @@ TZ = ZoneInfo("Europe/Moscow")
 REPEAT_WINDOW = 20 * 60  # тот же номер в течение 20 минут — не дублируем пропуск
 
 offset = 0
+LOCK = threading.Lock()  # заказ пропусков и состояние — по одному: голосовые разбираются в своём потоке
 MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
               "октября", "ноября", "декабря"]
 
@@ -199,7 +204,7 @@ HELP = (
     "🚧 <b>КПП</b> — пропуск для такси за одно сообщение\n\n"
     "Пришли номер машины — <code>А123ВС777</code>. Подойдёт и текст целиком: "
     "«белый Kia Rio, А 123 ВС 777» — номер я найду сам. "
-    "Можно переслать сообщение или прислать скриншот из Яндекс Go.\n\n"
+    "Можно переслать сообщение, прислать скриншот из Яндекс Go или продиктовать номер голосовым.\n\n"
     "/passes — мои пропуска, отменить\n"
     "/auto — автопропуск в Домиленде\n"
     "/place — адрес, на который заказывать\n"
@@ -351,25 +356,77 @@ def toggle_autopass(pid):
     call(lambda c: c.set_autopass(places))
 
 
-# ---------- скриншоты ----------
+# ---------- скриншоты и голосовые ----------
 
-def read_photo(photo):
-    """Номер со скриншота: Telegram отдаёт файл, `claude -p` читает с картинки."""
+def ask_claude(prompt, cwd, read=False):
+    """Ответ `claude -p` (пустая строка, если его нет или он не ответил)."""
     claude = shutil.which("claude")
     if not claude:
+        return ""
+    tools = ["--allowedTools", "Read"] if read else []
+    try:
+        res = subprocess.run([claude, "-p", prompt, *tools], cwd=cwd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return ""
+    return res.stdout
+
+
+def read_photo(msg):
+    """Номер со скриншота (фото или картинка-документ): `claude -p` читает с картинки."""
+    if not shutil.which("claude"):
         return None
-    info = tg("getFile", file_id=photo["file_id"])["result"]
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "shot.jpg")
-        urllib.request.urlretrieve(FILES + info["file_path"], path)
+        try:
+            path = media.photo_path(TOKEN, msg, tmp)
+        except media.MediaError:
+            return None
         prompt = (f"На скриншоте {path} — заказ такси. Прочитай госномер машины. "
                   "Ответь только номером, без пробелов, например А123ВС777. Если номера нет — ответь НЕТ.")
+        return ask_claude(prompt, tmp, read=True)
+
+
+def spoken_plate(text):
+    """Номер, продиктованный словами («а сто двадцать три вэ эс семьсот семьдесят семь») -> А123ВС777."""
+    prompt = (f"Человек продиктовал голосом госномер машины такси (Россия). Распознанный текст: «{text}».\n"
+              "Запиши номер в виде А123ВС777: буквы кириллицей только из АВЕКМНОРСТУХ "
+              "(«а»→А, «бэ/вэ»→В, «е»→Е, «ка»→К, «эм»→М, «эн»→Н, «о»→О, «пэ/эр»→Р, «эс»→С, «тэ»→Т, «у»→У, «ха»→Х), "
+              "числа словами — цифрами («сто двадцать три»→123, «семьсот семьдесят семь»→777). "
+              "Ответь только номером, без пробелов. Если номера нет — ответь НЕТ.")
+    with tempfile.TemporaryDirectory() as tmp:
+        return ask_claude(prompt, tmp)
+
+
+def spawn(fn, *args):
+    """Медленное (распознавание речи) — в отдельном потоке, чтобы бот не замирал."""
+    def run():
         try:
-            res = subprocess.run([claude, "-p", prompt, "--allowedTools", "Read"], cwd=tmp,
-                                 capture_output=True, text=True, timeout=120)
-        except subprocess.TimeoutExpired:
-            return None
-        return res.stdout
+            fn(*args)
+        except Exception as e:
+            print("voice:", e)
+            traceback.print_exc()
+    threading.Thread(target=run, daemon=True).start()
+
+
+def on_voice(chat, msg):
+    tg("sendChatAction", chat_id=chat, action="typing")
+    mid = ((send(chat, "🎙 Слушаю…") or {}).get("result") or {}).get("message_id")
+    say = (lambda t: edit(chat, mid, t)) if mid else (lambda t: send(chat, t))
+    try:
+        text = media.voice_text(TOKEN, msg)
+    except media.MediaError as e:
+        say(f"🎙 Не получилось: {esc(e)}")
+        return
+    say(f"🎙 «{esc(text)}»")
+    found = dl.plates(text.replace(",", " "))  # «А, 123, ВС, 777»
+    if not found:
+        tg("sendChatAction", chat_id=chat, action="typing")
+        found = dl.plates(spoken_plate(text) or "")
+    with LOCK:
+        if not found:
+            send(chat, "Не расслышал номер 🤔\nПовтори по буквам или напиши: <code>А123ВС777</code>")
+            return
+        for plate in found[:3]:
+            order(chat, plate)
 
 
 # ---------- обработчики ----------
@@ -413,15 +470,17 @@ def on_message(msg):
         update(chat)
     elif cmd:
         send(chat, "Такой команды нет. /help — что я умею.")
+    elif media.kind(msg) == "voice":
+        spawn(on_voice, chat, msg)
     elif dl.extract_token(text):
         do_login(chat, dl.extract_token(text))
         if st.get("pending") and st.get("place_id"):
             order(chat, st.pop("pending"))
     else:
         found = dl.plates(text)
-        if not found and msg.get("photo"):
+        if not found and media.kind(msg) == "photo":
             tg("sendChatAction", chat_id=chat, action="typing")
-            found = dl.plates(read_photo(msg["photo"][-1]) or "")
+            found = dl.plates(read_photo(msg) or "")
             if not found:
                 send(chat, "🔍 Не разглядел номер на скриншоте. Напиши его текстом: <code>А123ВС777</code>")
                 return
@@ -500,10 +559,11 @@ def main():
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
             try:
-                if u.get("callback_query"):
-                    on_callback(u["callback_query"])
-                elif u.get("message"):
-                    on_message(u["message"])
+                with LOCK:
+                    if u.get("callback_query"):
+                        on_callback(u["callback_query"])
+                    elif u.get("message"):
+                        on_message(u["message"])
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()

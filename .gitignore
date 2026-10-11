@@ -7,3 +7,6 @@ tgbot/.venv/
 kpp/data/
 coach/data/
 hub/data/
+avito/data/
+avito/.venv/
+common/.venv/

@@ -1,5 +1,5 @@
 """Проверка тренера без Telegram и WHOOP: синхронизация (поддельный WHOOP), расчёты, подпись Mini App, API,
-вход в WHOOP, утренний разбор и разбор тренировки (Claude подменён).
+вход в WHOOP, утренний разбор по расписанию, цели и разбор тренировки (Claude подменён).
 usage: python3 coach/test_coach.py
 """
 import datetime
@@ -218,6 +218,22 @@ class InsightsTest(unittest.TestCase):
         self.assertIn("восстановление: 82%", text)
         self.assertIn("Бокс", text)
 
+    def test_bedtime(self):
+        t = insights.today(self.db, U, TODAY, {"age": 14}, {})
+        bt = t["bedtime"]
+        self.assertEqual(bt["need"], 9.1)  # нужный сон WHOOP 8,5 + 0,4 + 0,2 больше подросткового минимума
+        wake = int(bt["wake"][:2]) * 60 + int(bt["wake"][3:])
+        bed = int(bt["bed"][:2]) * 60 + int(bt["bed"][3:])
+        self.assertTrue(0 <= (wake - 546 - 20) - bed + (1440 if bed > wake else 0) < 10)
+        self.assertEqual(bt["weekend"], False)  # 12.10.2026 — понедельник
+        self.assertIsNotNone(t["yesterday"]["strain"])
+        text, _ = insights.text_context(self.db, U, TODAY, {"age": 14}, {})
+        self.assertIn(f"лечь до {bt['bed']}", text)
+        self.assertNotIn("ЦЕЛИ", text)
+        days = {"2026-10-11": {"sleep": {"end": "07:00", "need": 7.0}}, "2026-10-10": {"sleep": {"end": "07:20"}}}
+        self.assertEqual(insights.bedtime(days, TODAY, {"age": 30})["bed"], "23:20")  # 07:10 − 7,5 ч − 20 мин
+        self.assertIsNone(insights.bedtime({}, TODAY, {}))
+
     def test_progress(self):
         p = insights.progress(self.db, U, TODAY, 40)
         self.assertGreaterEqual(len(p["weeks"]), 6)
@@ -249,6 +265,64 @@ class AITest(unittest.TestCase):
         with mock.patch.object(ai, "claude", return_value="не знаю"):
             with self.assertRaises(ai.AIError):
                 ai.meal("", "что-то")
+
+
+class SyncThread:
+    """threading.Thread, который выполняет задачу сразу (для проверки расписания)."""
+
+    def __init__(self, target, args=(), kwargs=None, daemon=None):
+        self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+    def start(self):
+        self.target(*self.args, **self.kwargs)
+
+
+class GoalsStoreTest(unittest.TestCase):
+    def test_crud(self):
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "g.db"))
+        g = db.add_goal(U, "  сгонка   до 60 кг к декабрю ")
+        self.assertEqual(g["text"], "сгонка до 60 кг к декабрю")
+        db.add_goal(U, "ложиться до 23:00")
+        db.add_goal(8, "чужая цель")
+        self.assertEqual([x["text"] for x in db.goals(U)], ["сгонка до 60 кг к декабрю", "ложиться до 23:00"])
+        self.assertFalse(db.delete_goal(8, g["id"]))  # чужую не удалить
+        self.assertTrue(db.delete_goal(U, g["id"]))
+        self.assertEqual(len(db.goals(U)), 1)
+        with self.assertRaises(ValueError):
+            db.add_goal(U, " ")
+        for i in range(store.MAX_GOALS - 1):
+            db.add_goal(U, f"цель {i}")
+        with self.assertRaises(ValueError):
+            db.add_goal(U, "ещё одна")
+        self.assertEqual(len(db.add_goal(9, "я" * 500)["text"]), 300)
+
+    def test_morning_value(self):
+        self.assertEqual(store.morning_value("7:30"), "07:30")
+        self.assertEqual(store.morning_value("08.15"), "08:15")
+        self.assertEqual(store.morning_value("Выкл"), "off")
+        self.assertEqual(store.morning_value("вкл"), "07:00")
+        for bad in ("25:00", "1:00", "утром", "7"):
+            with self.assertRaises(ValueError):
+                store.morning_value(bad)
+
+
+class MorningDueTest(unittest.TestCase):
+    def test_rules(self):
+        due, at = coach.morning_due, datetime.time(7, 0)
+        t = lambda h, m=0: datetime.datetime(2026, 10, 11, h, m)  # noqa: E731
+        self.assertIsNone(due(at, t(6, 59), "full", False, False))
+        self.assertEqual(due(at, t(7), "full", False, False), "brief")
+        self.assertIsNone(due(at, t(7), "full", True, False))  # уже было
+        self.assertIsNone(due(at, t(8), "part", False, False))  # только сон — ждём восстановление
+        self.assertIsNone(due(at, t(9, 59), None, False, False))
+        self.assertEqual(due(at, t(10), "part", False, False), "brief")
+        self.assertEqual(due(at, t(10), None, False, False), "early")
+        self.assertIsNone(due(at, t(10, 5), None, False, True))
+        self.assertEqual(due(at, t(11), "full", False, True), "brief")  # сон досчитан после плана
+        self.assertIsNone(due(at, t(15), "full", False, True))
+        self.assertIsNone(due(None, t(8), "full", False, False))  # выключено
+        tz = coach.ZoneInfo("Europe/Moscow")
+        self.assertEqual(due(at, datetime.datetime(2026, 10, 11, 7, 30, tzinfo=tz), "full", False, False), "brief")
 
 
 class Resp:
@@ -291,6 +365,7 @@ class BotTest(unittest.TestCase):
     def tearDown(self):
         for p in self.p:
             p.stop()
+        self.db.db.close()
 
     def fake_tg(self, method, **kw):
         self.sent.append((method, kw))
@@ -357,7 +432,7 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(ai, "claude", side_effect=ai.AIError("нет")):
             coach.morning_brief(U)
         self.assertIn("Ориентир нагрузки", self.texts()[-1])
-        # react: восстановление за сегодня -> разбор один раз; тренировка -> разбор один раз
+        # react: тренировка -> разбор один раз; утренний разбор шлёт расписание, а не react
         with mock.patch.object(coach.threading, "Thread") as th:
             rec = {"_day": "2026-10-11", "cycle_id": 1}
             wk = {"_day": "2026-10-11", "id": "w9", "start": "2026-10-11T12:00:00Z", "end": "2026-10-11T13:00:00Z",
@@ -365,7 +440,7 @@ class BotTest(unittest.TestCase):
             coach.react(U, [("recovery", rec), ("workout", wk)])
             coach.react(U, [("recovery", rec), ("workout", wk)])
         targets = [c.kwargs["target"].__name__ for c in th.call_args_list]
-        self.assertEqual(targets, ["morning_brief", "workout_note"])
+        self.assertEqual(targets, ["workout_note"])
 
     def test_chat_routing(self):
         with mock.patch.object(coach.threading, "Thread") as th:
@@ -383,6 +458,215 @@ class BotTest(unittest.TestCase):
         self.assertIn("Гречка с курицей", t)
         self.assertIn("520 ккал", t)
         self.assertEqual(self.db.meals(U, "2026-10-11")[0]["kcal"], 520)
+
+    # ---------- утренний разбор по расписанию ----------
+
+    def at(self, hh, mm, day=11):
+        return datetime.datetime(2026, 10, day, hh, mm)
+
+    def mornings(self):
+        return [t for t in self.texts() if "Доброе утро" in t]
+
+    def run_morning(self, now, reply="**Зелёный день.**"):
+        with mock.patch.object(coach.threading, "Thread", SyncThread), \
+                mock.patch.object(ai, "claude", return_value=reply) as c:
+            kind = coach.maybe_morning(self.db.user(U), now)
+        return kind, c
+
+    def test_morning_once_after_sleep(self):
+        self.assertIsNone(self.run_morning(self.at(6, 59))[0])  # раньше времени — ничего
+        kind, c = self.run_morning(self.at(7, 0))
+        self.assertEqual(kind, "brief")
+        m = self.mornings()
+        self.assertEqual(len(m), 1)
+        for w in ("Восстановление <b>82%</b>", "ВСР", "пульс покоя", "Сон <b>", "выполнение", "эффективность",
+                  "Нагрузка вчера"):
+            self.assertIn(w, m[0])
+        self.assertIn("ОТБОЙ СЕГОДНЯ", c.call_args[0][0])
+        for hm in ((7, 1), (9, 30), (12, 0)):
+            self.assertIsNone(self.run_morning(self.at(*hm))[0])
+        self.assertEqual(len(self.mornings()), 1)
+        # назавтра — снова (данных за 12-е нет: к 10:00 короткий план)
+        self.assertIsNone(self.run_morning(self.at(7, 0, 12))[0])
+        self.assertEqual(self.run_morning(self.at(10, 0, 12))[0], "early")
+
+    def test_morning_manual_counts(self):
+        with mock.patch.object(ai, "claude", return_value="ок"):
+            coach.morning_brief(U)  # /today после пробуждения
+        self.assertIsNone(self.run_morning(self.at(7, 30))[0])
+        self.assertEqual(len(self.mornings()), 1)
+
+    def test_morning_fallback_then_brief(self):
+        today = TODAY.isoformat()
+        saved = self.db.q("SELECT * FROM records WHERE user=? AND day=? AND kind IN ('recovery','sleep')", (U, today))
+        self.db.x("DELETE FROM records WHERE user=? AND day=? AND kind IN ('recovery','sleep')", (U, today))
+        for hm in ((7, 0), (8, 30), (9, 59)):
+            self.assertIsNone(self.run_morning(self.at(*hm))[0])
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("нет")):
+            with mock.patch.object(coach.threading, "Thread", SyncThread):
+                self.assertEqual(coach.maybe_morning(self.db.user(U), self.at(10, 0)), "early")
+        m = self.mornings()
+        self.assertEqual(len(m), 1)
+        self.assertIn("ещё не посчитал сон", m[0])
+        self.assertIn("Отбой сегодня", m[0])  # план по правилам, Claude недоступен
+        self.assertIn("Нагрузка вчера", m[0])
+        self.assertIsNone(self.run_morning(self.at(10, 1))[0])
+        for r in saved:  # WHOOP досчитал сон
+            self.db.x("INSERT INTO records VALUES (?,?,?,?,?,?)", tuple(r.values()))
+        self.assertEqual(self.run_morning(self.at(10, 30))[0], "brief")
+        self.assertIsNone(self.run_morning(self.at(10, 45))[0])
+        self.assertEqual(len(self.mornings()), 2)
+
+    def test_morning_too_late_and_off(self):
+        self.assertIsNone(self.run_morning(self.at(15, 0))[0])  # 07:00 + 8 ч — день прошёл
+        self.db.save_profile(U, {"morning": "выкл"})
+        self.assertIsNone(self.run_morning(self.at(7, 30))[0])
+        self.db.save_profile(U, {"morning": "8:30"})
+        self.assertIsNone(self.run_morning(self.at(8, 0))[0])
+        self.assertEqual(self.run_morning(self.at(8, 30))[0], "brief")
+
+    def test_morning_busy_and_retry(self):
+        coach.busy.add(U)
+        try:
+            self.assertIsNone(self.run_morning(self.at(7, 0))[0])
+        finally:
+            coach.busy.discard(U)
+        self.assertFalse(self.db.was_sent(f"morning:{U}:2026-10-11"))
+        with mock.patch.object(coach, "send", side_effect=RuntimeError("telegram down")), \
+                mock.patch.object(coach.threading, "Thread", SyncThread), mock.patch.object(ai, "claude", return_value="ок"):
+            self.assertEqual(coach.maybe_morning(self.db.user(U), self.at(7, 0)), "brief")
+        self.assertFalse(self.db.was_sent(f"morning:{U}:2026-10-11"))  # не ушло — повторим
+        self.assertEqual(self.run_morning(self.at(7, 1))[0], "brief")
+        self.assertEqual(len(self.mornings()), 1)
+
+    def test_morning_no_whoop(self):
+        self.db.drop_token(U)
+        self.assertIsNone(self.run_morning(self.at(10, 0))[0])
+
+    def test_tick_sends_morning(self):
+        self.db.mark_synced(U)
+        with mock.patch.object(coach, "user_now", return_value=self.at(7, 5)), \
+                mock.patch.object(coach, "sync_user") as su, \
+                mock.patch.object(coach.threading, "Thread", SyncThread), mock.patch.object(ai, "claude", return_value="ок"):
+            coach.tick()
+            coach.tick()
+        su.assert_not_called()  # синхронизировали только что
+        self.assertEqual(len(self.mornings()), 1)
+
+    def test_morning_command(self):
+        msg = lambda t: {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": t}  # noqa: E731
+        coach.on_message(msg("/morning"))
+        self.assertIn("с <b>07:00</b>", self.texts()[-1])
+        self.assertIn("10:00", self.texts()[-1])
+        coach.on_message(msg("/morning 8.30"))
+        self.assertEqual(self.db.user(U)["profile"]["morning"], "08:30")
+        self.assertIn("11:30", self.texts()[-1])
+        coach.on_message(msg("/morning off"))
+        self.assertEqual(self.db.user(U)["profile"]["morning"], "off")
+        self.assertIn("выключен", self.texts()[-1])
+        coach.on_message(msg("/morning 25:00"))
+        self.assertIn("⚠️", self.texts()[-1])
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "mt|07:30",
+                           "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertEqual(self.db.user(U)["profile"]["morning"], "07:30")
+
+    # ---------- цели ----------
+
+    def test_goals_chat(self):
+        msg = lambda t: {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": t}  # noqa: E731
+        coach.on_message(msg("/goals"))
+        self.assertIn("пока не записаны", self.texts()[-1])
+        coach.on_message(msg("/goal ложиться до 23:00"))
+        self.assertIn("1. ложиться до 23:00", self.texts()[-1])
+        # кнопка «Добавить» -> следующий текст становится целью, а не вопросом тренеру
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "g|add", "message": {"chat": {"id": U}, "message_id": 3}})
+        with mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_message(msg("бокс — соревнования весной"))
+            coach.on_message(msg("а это уже вопрос?"))
+        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["answer"])
+        self.assertEqual([g["text"] for g in self.db.goals(U)], ["ложиться до 23:00", "бокс — соревнования весной"])
+        gid = self.db.goals(U)[0]["id"]
+        coach.on_callback({"id": "2", "from": {"id": U}, "data": f"g|del|{gid}", "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertEqual([g["text"] for g in self.db.goals(U)], ["бокс — соревнования весной"])
+        self.assertIn("1. бокс", [kw for m, kw in self.sent if m == "editMessageText"][-1]["text"])
+
+    def test_goals_in_every_prompt(self):
+        self.db.add_goal(U, "вес 60 кг к декабрю")
+        with mock.patch.object(ai, "claude", return_value="ок") as c:
+            coach.morning_brief(U)
+            call("/api/ask", {"text": "Можно спарринг?"})
+            coach.workout_note(U, insights.workout_of({"id": "w1", "sport_name": "boxing"}))
+        with mock.patch.object(ai, "claude", return_value='{"food": true, "title": "Банан", "kcal": 100}') as c2:
+            coach.log_meal(U, U, "съел банан")
+        prompts = [a[0][0] for a in c.call_args_list] + [c2.call_args[0][0]]
+        self.assertEqual(len(prompts), 4)
+        for p in prompts:
+            self.assertIn("ЦЕЛИ", p)
+            self.assertIn("вес 60 кг к декабрю", p)
+        self.assertIn("ЦЕЛИ — одна строка", prompts[0])  # утром — про прогресс к цели
+
+    def test_goals_api(self):
+        r = call("/api/all")
+        self.assertEqual((r.json["goals"], r.json["morning"]), ([], "07:00"))
+        r = call("/api/goal", {"text": "ложиться до 23:00"})
+        self.assertEqual([g["text"] for g in r.json["goals"]], ["ложиться до 23:00"])
+        self.assertEqual(call("/api/goal", {"text": "x"}).code, 400)
+        gid = r.json["goals"][0]["id"]
+        self.assertEqual(call("/api/goal/delete", {"id": gid}).json["goals"], [])
+        self.assertEqual(call("/api/profile", {"morning": "выкл"}).json["profile"]["morning"], "off")
+        self.assertEqual(call("/api/all").json["morning"], "off")
+
+    # ---------- голосовые и фото ----------
+
+    def test_voice(self):
+        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1", "duration": 3}}
+        with mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_message(msg)
+        self.assertEqual(th.call_args.kwargs["target"].__name__, "on_voice")  # не в главном цикле
+        with mock.patch.object(coach.media, "voice_text", return_value="Съел гречку с курицей.") as vt, \
+                mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_voice(U, U, msg)
+            vt.return_value = "почему <низкое> восстановление"
+            coach.on_voice(U, U, msg)
+        self.assertEqual(vt.call_args[0], (coach.TOKEN, msg))
+        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["log_meal", "answer"])
+        self.assertEqual(th.call_args_list[1].kwargs["args"][2], "почему <низкое> восстановление")
+        self.assertIn("🎙 «Съел гречку с курицей.»", self.texts())
+        self.assertIn("🎙 «почему &lt;низкое&gt; восстановление»", self.texts())
+        self.assertIn(("sendChatAction", {"chat_id": U, "action": "typing"}), self.sent)
+
+    def test_voice_goal_and_errors(self):
+        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "video_note": {"file_id": "n1"}}
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "g|add", "message": {"chat": {"id": U}, "message_id": 3}})
+        with mock.patch.object(coach.media, "voice_text", side_effect=coach.media.MediaError("в голосовом не слышно слов")), \
+                mock.patch.object(coach.threading, "Thread", SyncThread):
+            coach.on_message(msg)
+        self.assertIn("не слышно слов", self.texts()[-1])
+        self.assertEqual(self.db.goals(U), [])
+        with mock.patch.object(coach.media, "voice_text", return_value="Ложиться до 23:00"), \
+                mock.patch.object(coach.threading, "Thread", SyncThread):
+            coach.on_message(msg)  # цель всё ещё ждём — голосовое стало целью
+        self.assertEqual([g["text"] for g in self.db.goals(U)], ["Ложиться до 23:00"])
+
+    def test_photo_routing(self):
+        base = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "photo": [{"file_id": "p1"}]}
+        with mock.patch.object(coach, "download", return_value="/tmp/p.jpg"), \
+                mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_message(base)
+            coach.on_message({**base, "caption": "обед"})
+            coach.on_message({**base, "caption": "Разбери мой план на неделю"})
+            coach.on_message({**base, "caption": "это нормально?"})
+        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["log_meal", "log_meal", "answer", "answer"])
+
+    def test_photo_not_food_goes_to_coach(self):
+        with mock.patch.object(ai, "claude", side_effect=['{"food": false, "comment": "это скрин WHOOP"}',
+                                                          "**Восстановление 82%** — можно бокс в полную."]) as c:
+            coach.log_meal(U, U, "", "/tmp/whoop.jpg")
+        self.assertEqual(c.call_args_list[1].kwargs["image"], "/tmp/whoop.jpg")
+        self.assertIn(coach.PHOTO_ASK, c.call_args_list[1][0][0])
+        self.assertIn("<b>Восстановление 82%</b>", self.texts()[-1])
+        self.assertEqual(self.db.meals(U, "2026-10-11"), [])
+        self.assertNotIn(U, coach.busy)
 
     def test_progress_report(self):
         long = "\n\n".join(f"**Блок {i}**\n- " + "пункт " * 120 for i in range(12))

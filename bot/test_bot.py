@@ -152,6 +152,56 @@ class BotTest(unittest.TestCase):
         self.assertIsNone(bot.draft())
         self.assertIn("Баллы 5/5", self.last()[0])
 
+    def voice(self, heard=None, error=None, **extra):
+        """Голосовое: распознавание подменено (без сети и whisper)."""
+        def fake(token, msg):
+            self.assertEqual(msg["voice"]["file_id"], "v1")
+            if error:
+                raise bot.media.MediaError(error)
+            return heard
+        with mock.patch.object(bot.media, "voice_text", fake):
+            bot.handle({"chat": {"id": CHAT}, "from": {"id": CHAT}, "message_id": 3,
+                        "voice": {"file_id": "v1", "duration": 2}, **extra})
+
+    def test_voice_link_routed_like_text(self):
+        """Ссылка голосом — тот же run_task, что и набранная; сначала эхо того, что услышал."""
+        calls = []
+        with mock.patch.object(bot, "run_task", lambda *a: calls.append(a)):
+            self.voice(f"Реши {URL} <срочно>")
+        self.assertEqual(calls, [(CHAT, URL, f"Реши {URL} <срочно>", False, 3)])
+        texts = [m for m, _ in self.msgs]
+        self.assertEqual(texts[0], "🎙 Слушаю…")
+        self.assertIn(f"🎙 «Реши {URL} &lt;срочно&gt;»", texts)  # эхо экранировано
+
+    def test_voice_edits_draft_and_presses_buttons(self):
+        self.say(URL)
+        self.voice("Убери второе.")
+        self.assertIn("«Убери второе.»", self.prompts[-1])  # как набранная просьба
+        self.assertEqual(drafts.read(TASK), "Клетка делится митозом.")
+        self.voice("Ок.")
+        self.assertEqual(self.nodes[-1][0], "horo/answer.js")  # «ок» голосом отправил черновик
+        self.voice("Оценки.")
+        self.assertEqual(self.nodes[-1], ("horo/grades.js", "--html"))  # кнопка голосом
+        self.assertEqual(bot.spoken_button("решить и сдать"), bot.BTN_DO)
+        self.assertEqual(bot.spoken_button("оценки за неделю"), "оценки за неделю")
+
+    def test_voice_error_reported(self):
+        with mock.patch.object(bot, "run_task", lambda *a: self.fail("не должно запускаться")):
+            self.voice(error="в голосовом не слышно слов")
+        self.assertEqual(self.last()[0], "🎙 В голосовом не слышно слов.")
+        self.assertNotIn("«", self.last()[0])
+
+    def test_voice_kinds(self):
+        self.assertEqual(bot.media.kind({"video_note": {"file_id": "x"}}), "voice")
+        self.assertEqual(bot.media.kind({"audio": {"file_id": "x"}}), "voice")
+        self.assertEqual(bot.media.kind({"photo": [{"file_id": "x"}]}), "photo")
+
+    def test_photo_without_context(self):
+        """Фото, когда черновика и алфавита нет, — подсказка, что с фото можно сделать (а не «не понял»)."""
+        self.say(photo=[{"file_id": "a"}])
+        self.assertIn("Фото пригодится", self.last()[0])
+        self.assertEqual(self.prompts, [])
+
     def test_late_list_sent_as_html(self):
         with mock.patch.object(bot, "node", lambda *a, timeout=0, prog="node": (True, '❗ <b>Просрочено: 1</b>\n🔁 <a href="u">Тест &amp; Ко</a>')):
             self.say(bot.BTN_LATE)
@@ -196,6 +246,8 @@ class BotTest(unittest.TestCase):
              mock.patch.object(bot, "py", lambda *a, timeout=0: (True, "Добавил: а <б>")), \
              mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \
              mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
+            self.say(photo=[{"file_id": "p"}])  # фото без черновика — подсказка
+            self.voice("Что <это> & то")        # эхо голосового
             for t in ("/start", bot.BTN_HELP, bot.BTN_DIGEST, bot.BTN_DIGEST, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
                       "что-то непонятное", bot.BTN_HAND):
                 self.say(t)
