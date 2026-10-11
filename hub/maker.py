@@ -34,7 +34,7 @@ CATALOG = {
     "kpp-bot": ("🚧 КПП", ["kpp"], "/etc/kpp-bot.env", "KPP_TOKEN", "kpp", "пропуск для такси в ЖК"),
     "avito-bot": ("🛍 Авито", ["avito"], "/etc/avito-bot.env", "AVITO_TOKEN", "avito",
                   "фото на белом фоне, описание, средняя цена"),
-    "tg-agent": ("🤖 Секретарь", ["tgbot"], "/etc/tg-agent.env", "TG_AGENT_TOKEN", None,
+    "tg-agent": ("🤖 Секретарь", ["tgbot"], "/etc/tg-agent.env", "TG_AGENT_TOKEN", "tgbot",
                  "твой Telegram: чаты, ответы, расписания"),
     "hub-bot": ("👑 Главный", ["hub"], "/etc/hub-bot.env", "HUB_TOKEN", None, "следит за ботами, делает новых"),
 }
@@ -351,8 +351,8 @@ def botfather(name, want):
     """(токен, None) или (None, почему не вышло). Через Секретаря — аккаунт Глеба, он подтверждает кнопкой."""
     tg_py = os.path.join(ui.REPO, "tgbot", "tg.py")
     if not os.path.exists(os.path.join(ui.REPO, "tgbot", "tmp", "agent.sock")):
-        return None, "Секретарь не подключён к твоему аккаунту"
-    code, out = ui.sh("python3", tg_py, "newbot", name, want, timeout=15 * 60)
+        return None, "Секретарь не запущен — поставь его: «📂 Все боты» → «➕ Поставить Секретарь»"
+    code, out = ui.sh("python3", tg_py, "newbot", name, want, "--auto", timeout=5 * 60)
     m = re.search(r"TOKEN (\S+) @(\w+)", out)
     if code == 0 and m:
         return m.group(1), None
