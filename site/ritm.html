@@ -853,6 +853,8 @@ function viewStats() {
     const shown = got.filter(x => x.ok).concat(got.filter(x => !x.ok).sort((a, b) => a.m - b.m).filter((x, i, arr) => arr.findIndex(y => y.h === x.h) === i)).slice(0, 18);
     html += sec('Достижения', `${got.filter(x => x.ok).length} из ${got.length}`) + `<div class="badges">${shown.map(x => `<div class="panel badge${x.ok ? ' got' : ''}" style="--c:${col(x.h)}"><span class="md num">${x.m}</span><b>${esc(x.h.emoji)} ${x.m} ${plural(x.m, 'день', 'дня', 'дней')}</b><small>${esc(x.h.name)}${x.ok ? '' : ` · ещё ${x.m - streak(x.h)}`}</small></div>`).join('')}</div>`;
   }
+  html += sec('Данные') + `<div class="panel" style="padding:16px;display:grid;gap:12px"><p style="margin:0;color:var(--muted)">${store.mode === 'db' ? 'Хранятся в твоём аккаунте claude.ai.' : 'Хранятся на этом устройстве. Раз в неделю сохраняй копию файлом — тогда ничего не пропадёт, и её можно загрузить на другом устройстве.'}</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${window.claude ? '' : '<button class="btn ghost" data-a="export">Сохранить копию</button>'}<label class="btn ghost" style="cursor:pointer">Загрузить копию<input type="file" id="importFile" accept="application/json,.json" hidden></label></div></div>`;
   return html;
 }
 
@@ -864,7 +866,7 @@ function render() {
   const v = $('#view');
   const focus = document.activeElement && document.activeElement.matches('[data-add]') ? document.activeElement.dataset.date + '|' + document.activeElement.dataset.goal : null;
   if (store.mode === 'loading') { v.innerHTML = '<div class="panel empty" style="margin-top:40px"><span class="logo" style="height:34px"><i></i><i></i><i></i><i></i></span><p>Загружаю твой ритм…</p></div>'; renderNav(); return; }
-  v.innerHTML = (store.mode === 'local' && (S.habits.length || S.tasks.length) ? '<div class="banner">Сейчас данные сохраняются только в этом браузере. Открой страницу, войдя в claude.ai, — тогда они будут в аккаунте и на всех устройствах.</div>' : '') + fn();
+  v.innerHTML = (window.claude && store.mode === 'local' && (S.habits.length || S.tasks.length) ? '<div class="banner">Сейчас данные сохраняются только в этом браузере. Открой страницу, войдя в claude.ai, — тогда они будут в аккаунте и на всех устройствах.</div>' : '') + fn();
   ui.pop = null;
   renderNav();
   if (lastView !== ui.view + ui.goalId) { window.scrollTo(0, 0); lastView = ui.view + ui.goalId; }
@@ -1059,6 +1061,12 @@ const A = {
   hview: el => { ui.gridView = !!el.dataset.g; render(); },
   fold: el => { const k = el.dataset.k; ui.closed.has(k) ? ui.closed.delete(k) : ui.closed.add(k); try { localStorage.setItem('ritm.closed', JSON.stringify([...ui.closed])); } catch (e) { /* */ } render(); },
   'import-grit': () => importGrit(),
+  export: () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
+    a.download = `ritm-${today()}.json`; document.body.appendChild(a); a.click(); a.remove();
+    toast('Копия сохранена в «Загрузки»');
+  },
   'quick-add': () => ui.view === 'habits' ? habitSheet(null) : ui.view === 'goals' ? goalSheet(null) : taskSheet(null, ui.view === 'today' ? ui.sel : today()),
   task: (el, e) => { if (e.target.closest('[data-a="tick"],[data-a="to-today"]')) return; taskSheet(S.tasks.find(x => x.id === el.dataset.id)); },
   tick: (el, e) => { e.stopPropagation(); const t = S.tasks.find(x => x.id === el.dataset.id); t.done = !t.done; save(); render(); if (t.done && t.date && dayProgress(t.date).pct === 100) { confetti(); toast('День закрыт полностью 🎉'); } },
@@ -1082,6 +1090,15 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-a]');
   if (!el || !A[el.dataset.a] || el.closest('.sheet')) return;
   A[el.dataset.a](el, e);
+});
+document.addEventListener('change', e => {
+  if (e.target.id !== 'importFile' || !e.target.files[0]) return;
+  e.target.files[0].text().then(txt => {
+    const data = JSON.parse(txt);
+    if (!data || !Array.isArray(data.habits) || !Array.isArray(data.tasks)) throw new Error('bad');
+    const prev = S; S = Object.assign(EMPTY(), data); save(); render();
+    toast('Копия загружена', 'Отменить', () => { S = prev; save(); render(); });
+  }).catch(() => toast('Это не копия Ритма — выбери файл ritm-….json'));
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('[data-add]')) {
