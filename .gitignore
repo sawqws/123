@@ -4,4 +4,5 @@ __pycache__/
 planner/data/
 tgbot/tmp/
 tgbot/.venv/
+kpp/data/
 coach/data/
