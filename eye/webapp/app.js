@@ -246,9 +246,16 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- кнопки ----------
 let safari = '';
+// карманный режим: пока идёт разговор, касание в кармане его не выключит — только удержание ~1 с
+let downAt = 0;
+$('talk').addEventListener('pointerdown', () => { downAt = Date.now(); });
 $('talk').addEventListener('click', async () => {
   audioCtx();
   unlockSpeech();
+  if (talking && Date.now() - downAt < 800) {
+    toast('Чтобы остановить разговор — удерживай кнопку');
+    return;
+  }
   if (talking) {
     talking = false;
     stopSpeaking();
