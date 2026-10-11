@@ -114,7 +114,8 @@ HELP = (  # HTML: отправляется с raw_html=True
     "/style — как пишу: небрежность, толщина, размер\n"
     f"{BTN_CHECK} — проверю, что всё работает\n"
     "/update — обновиться · /emoji — премиум-эмодзи\n"
-    "/planner токен — поставить бота-планера на этот сервер"
+    "/planner токен — поставить бота-планера на этот сервер\n"
+    "/kpp токен — поставить бота «КПП» (пропуск для такси)"
     "</blockquote>"
 )
 COMMANDS = [  # меню команд у поля ввода
@@ -1109,16 +1110,27 @@ def update(chat):
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 
 
-def install_planner(chat, token, msg_id=None):
-    """Ставит бота-планера (planner/) на этот же сервер: токен в /etc/planner-bot.env, cloudflared, pm2.
-    Запускается только владельцем и только фиксированный planner/install.sh из репозитория."""
+SIDE_BOTS = {  # соседние боты, которых HDP-бот умеет ставить на этот же сервер по токену
+    "planner": {"env": "PLANNER_TOKEN", "what": "бота-планера", "short": "планер", "timeout": 900,
+                "done": "✅ <b>Планер запущен</b>\n\nОткрой @{name} и нажми /start — станешь владельцем. "
+                        "Через минуту слева от поля ввода появится кнопка «Планер»."},
+    "kpp": {"env": "KPP_TOKEN", "what": "бота «КПП»", "short": "КПП", "timeout": 600,
+            "done": "✅ <b>КПП запущен</b>\n\nОткрой @{name}, нажми /start и войди через Яндекс — "
+                    "дальше просто присылай номер такси."},
+}
+
+
+def install_planner(chat, token, msg_id=None, kind="planner"):
+    """Ставит соседнего бота (planner/ или kpp/) на этот же сервер: токен в /etc/…-bot.env, pm2.
+    Запускается только владельцем и только фиксированный <kind>/install.sh из репозитория."""
+    side = SIDE_BOTS[kind]
     if msg_id:  # токен не должен висеть в чате
         try:
             tg("deleteMessage", chat_id=chat, message_id=msg_id)
         except Exception:
             pass
     if token == TOKEN:
-        send(chat, "🤔 Это токен этого бота. Нужен токен нового бота-планера от @BotFather.")
+        send(chat, f"🤔 Это токен этого бота. Нужен токен нового {side['what']} от @BotFather.")
         return
     try:
         with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=30) as r:
@@ -1126,22 +1138,21 @@ def install_planner(chat, token, msg_id=None):
     except Exception:
         send(chat, "❌ Токен не подошёл. Скопируй его из @BotFather целиком и пришли ещё раз.")
         return
-    name = me.get("username") or "planner"
-    send(chat, f"⏳ Ставлю планер @{name} на сервер… Это 1–2 минуты.")
+    name = me.get("username") or kind
+    send(chat, f"⏳ Ставлю {side['short']} @{name} на сервер… Это 1–2 минуты.")
     env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": "/root",  # без секретов этого бота
-           "LANG": "C.UTF-8", "PLANNER_TOKEN": token}
+           "LANG": "C.UTF-8", side["env"]: token}
     try:
-        res = subprocess.run(["bash", os.path.join(REPO, "planner", "install.sh")], cwd=REPO, env=env,
-                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
+        res = subprocess.run(["bash", os.path.join(REPO, kind, "install.sh")], cwd=REPO, env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=side["timeout"])
     except subprocess.TimeoutExpired:
-        send(chat, "❌ Установка шла дольше 15 минут и остановлена. Логи: pm2 logs horo-bot")
+        send(chat, f"❌ Установка шла дольше {side['timeout'] // 60} минут и остановлена. Логи: pm2 logs horo-bot")
         return
     if res.returncode != 0:
         tail = (res.stdout + res.stderr).strip()[-1200:]
-        send(chat, f"❌ Не получилось поставить планер:\n<pre>{esc(tail)}</pre>", raw_html=True)
+        send(chat, f"❌ Не получилось поставить {side['short']}:\n<pre>{esc(tail)}</pre>", raw_html=True)
         return
-    send(chat, f"✅ <b>Планер запущен</b>\n\nОткрой @{esc(name)} и нажми /start — станешь владельцем. "
-               "Через минуту слева от поля ввода появится кнопка «Планер».",
+    send(chat, side["done"].format(name=esc(name)),
          markup=json.dumps({"inline_keyboard": [[{"text": f"Открыть @{name}", "url": f"https://t.me/{name}"}]]}),
          raw_html=True)
 
@@ -1328,6 +1339,15 @@ def handle(msg):
         return
     if text.startswith("/agent") or (mode.get(chat) or "").startswith("agent_"):
         threading.Thread(target=agent_step, args=(chat, text, msg.get("message_id")), daemon=True).start()
+        return
+    if text.startswith("/kpp"):
+        m = BOT_TOKEN.search(text)
+        if not m:
+            send(chat, "🚧 Пришли токен бота «КПП» от @BotFather — поставлю его на этот сервер.\n"
+                       "Например: /kpp 123456789:AAH…", menu=True)
+            return
+        threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "kpp"),
+                         daemon=True).start()
         return
     if text.startswith("/planner") or BOT_TOKEN.fullmatch(text):
         m = BOT_TOKEN.search(text)

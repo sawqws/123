@@ -357,6 +357,29 @@ class BotTest(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertIn("не подошёл", self.last()[0])
 
+    def test_kpp_install(self):
+        tok = "8600000000:AAG" + "x" * 32
+        runs = []
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"ok":true,"result":{"username":"kpp_bot"}}'
+
+        def fake_run(cmd, **kw):
+            runs.append((cmd, kw["env"]))
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+        with mock.patch.object(bot.urllib.request, "urlopen", lambda *a, **k: Resp()), \
+                mock.patch.object(bot.subprocess, "run", fake_run):
+            self.say("/kpp")
+            self.assertIn("КПП", self.last()[0])
+            self.say("/kpp " + tok, message_id=9)
+        self.assertTrue(runs[0][0][-1].endswith("kpp/install.sh"))
+        self.assertEqual(runs[0][1]["KPP_TOKEN"], tok)
+        self.assertNotIn("PLANNER_TOKEN", runs[0][1])
+        self.assertIn("КПП запущен", self.last()[0])
+        self.assertIn("t.me/kpp_bot", self.last()[1])
+
 
 class AppTest(BotTest):
     """Приложение (Mini App): подпись Telegram, доступ только владельцу, действия те же, что у кнопок."""
