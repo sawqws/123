@@ -1200,6 +1200,8 @@ def agent_step(chat, text, msg_id=None):
             st["keys"] = (env["TG_API_ID"], env["TG_API_HASH"])
             return agent_install(chat)
         mode[chat] = "agent_phone"
+        if st.get("phone_hint"):  # «/agent ТОКЕН НОМЕР» одним сообщением
+            return agent_step(chat, st.pop("phone_hint"))
         send(chat, "📱 Номер телефона твоего Telegram — получу ключи приложения с my.telegram.org прямо с сервера.")
         return
     if step == "agent_phone":
@@ -1242,6 +1244,9 @@ def agent_step(chat, text, msg_id=None):
         return agent_install(chat)
     mode[chat] = "agent_token"  # /agent — начало
     m = BOT_TOKEN.search(text)
+    phone = re.search(r"\+?\d[\d\s()-]{9,}\d", BOT_TOKEN.sub(" ", text))
+    if phone:
+        st["phone_hint"] = phone.group(0)
     if m:
         return agent_step(chat, m.group(0), msg_id)
     send(chat, "🤵 Ставлю секретаря на сервер. Пришли токен его бота от @BotFather. /cancel — отмена")
