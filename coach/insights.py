@@ -359,6 +359,100 @@ def text_context(db, uid, day, profile, body, n=14):
     return "\n".join(lines), t
 
 
+def _bed_hour(s):
+    """Время отхода ко сну в часах от полудня (23:30 -> 11.5, 01:00 -> 13), чтобы считать средние через полночь."""
+    if not s or not s.get("start"):
+        return None
+    h, m = (int(x) for x in s["start"].split(":"))
+    return (h - 12) % 24 + m / 60
+
+
+def _clock(x):
+    if x is None:
+        return "—"
+    m = round(x * 60) % (24 * 60)
+    return f"{(m // 60 + 12) % 24:02d}:{m % 60:02d}"
+
+
+def progress(db, uid, day, days=60):
+    """Сводка прогресса за days дней: по неделям, первая половина против второй, сон, спорт, связи."""
+    since = day - datetime.timedelta(days=days - 1)
+    data = by_day(db, uid, since.isoformat(), day.isoformat())
+    weeks = {}
+    for d in sorted(data):
+        dt = datetime.date.fromisoformat(d)
+        weeks.setdefault((dt - datetime.timedelta(days=dt.weekday())).isoformat(), []).append(data[d])
+    rows = []
+    for w, vs in sorted(weeks.items()):
+        rec = [v["recovery"] for v in vs if v["recovery"]]
+        slp = [v["sleep"] for v in vs if v["sleep"]]
+        wk = [x for v in vs for x in v["workouts"]]
+        rows.append({
+            "week": w, "days": len(rec), "recovery": _mean(r["score"] for r in rec),
+            "green": sum(r["zone"] == "green" for r in rec), "red": sum(r["zone"] == "red" for r in rec),
+            "hrv": _mean(r["hrv"] for r in rec), "rhr": _mean(r["rhr"] for r in rec),
+            "sleep": _mean(s["hours"] for s in slp), "perf": _mean(s["performance"] for s in slp),
+            "bed": _mean(_bed_hour(s) for s in slp), "strain": _mean(v["cycle"]["strain"] for v in vs if v["cycle"]),
+            "workouts": len(wk), "minutes": sum(x["minutes"] or 0 for x in wk),
+        })
+    keys = sorted(data)
+    half = len(keys) // 2
+
+    def part(ks):
+        vs = [data[k] for k in ks]
+        rec = [v["recovery"] for v in vs if v["recovery"]]
+        slp = [v["sleep"] for v in vs if v["sleep"]]
+        return {"recovery": _mean(r["score"] for r in rec), "hrv": _mean(r["hrv"] for r in rec),
+                "rhr": _mean(r["rhr"] for r in rec), "sleep": _mean(s["hours"] for s in slp),
+                "strain": _mean(v["cycle"]["strain"] for v in vs if v["cycle"])}
+    sports = {}
+    for v in data.values():
+        for x in v["workouts"]:
+            s = sports.setdefault(x["sport"], {"count": 0, "minutes": 0, "strain": []})
+            s["count"] += 1
+            s["minutes"] += x["minutes"] or 0
+            s["strain"].append(x["strain"])
+    sports = {k: {"count": s["count"], "minutes": s["minutes"], "strain": _mean(s["strain"])}
+              for k, s in sorted(sports.items(), key=lambda kv: -kv[1]["minutes"])}
+    # связи: восстановление после длинного и короткого сна, после тяжёлого и лёгкого дня
+    pairs = []
+    for k in keys:
+        prev = (datetime.date.fromisoformat(k) - datetime.timedelta(days=1)).isoformat()
+        if data[k]["recovery"] and prev in data:
+            pairs.append((data[k], data[prev]))
+    after = {
+        "sleep_8plus": _mean(v["recovery"]["score"] for v, _ in pairs if v["sleep"] and v["sleep"]["hours"] >= 8),
+        "sleep_under7": _mean(v["recovery"]["score"] for v, _ in pairs if v["sleep"] and v["sleep"]["hours"] < 7),
+        "strain_14plus": _mean(v["recovery"]["score"] for v, p in pairs if p["cycle"] and (p["cycle"]["strain"] or 0) >= 14),
+        "strain_under10": _mean(v["recovery"]["score"] for v, p in pairs if p["cycle"] and (p["cycle"]["strain"] or 0) < 10),
+    }
+    beds = [b for b in (_bed_hour(v["sleep"]) for v in data.values()) if b is not None]
+    gaps = sum(1 for i in range(days) if not (data.get((since + datetime.timedelta(days=i)).isoformat()) or {}).get("recovery"))
+    return {"weeks": rows, "first": part(keys[:half]), "second": part(keys[half:]), "sports": sports, "after": after,
+            "bed_mean": _mean(beds), "bed_spread": round(statistics.pstdev(beds), 2) if len(beds) > 2 else None,
+            "gaps": gaps, "days": days, "since": since.isoformat()}
+
+
+def progress_context(db, uid, day, profile, body, days=60):
+    p = progress(db, uid, day, days)
+    lines = ["ПРОФИЛЬ: " + profile_line(profile, body),
+             f"ПЕРИОД: {p['since']} — {day.isoformat()} ({days} дн), дней без данных восстановления: {p['gaps']}",
+             "ПО НЕДЕЛЯМ (неделя с: дней / восст% / зел-красн / ВСР / пульс покоя / сон ч / сон % / отбой / нагрузка / тренировок, мин):"]
+    for w in p["weeks"]:
+        lines.append(f"  {w['week']}: {w['days']} / {w['recovery']} / {w['green']}-{w['red']} / {w['hrv']} / {w['rhr']} / "
+                     f"{w['sleep']} / {w['perf']} / {_clock(w['bed'])} / {w['strain']} / {w['workouts']}, {w['minutes']}")
+    f, s = p["first"], p["second"]
+    lines.append(f"ПЕРВАЯ ПОЛОВИНА → ВТОРАЯ: восст {f['recovery']} → {s['recovery']}, ВСР {f['hrv']} → {s['hrv']}, "
+                 f"пульс покоя {f['rhr']} → {s['rhr']}, сон {f['sleep']} → {s['sleep']} ч, нагрузка {f['strain']} → {s['strain']}")
+    lines.append(f"ОТБОЙ: в среднем {_clock(p['bed_mean'])}, разброс ±{p['bed_spread']} ч")
+    a = p["after"]
+    lines.append(f"ВОССТАНОВЛЕНИЕ ПОСЛЕ: сна ≥8 ч — {a['sleep_8plus']}%, сна <7 ч — {a['sleep_under7']}%; "
+                 f"после дня с нагрузкой ≥14 — {a['strain_14plus']}%, <10 — {a['strain_under10']}%")
+    lines.append("СПОРТ ЗА ПЕРИОД: " + "; ".join(f"{k}: {v['count']} раз, {v['minutes']} мин, ср. нагрузка {v['strain']}"
+                                                for k, v in p["sports"].items()))
+    return "\n".join(lines), p
+
+
 def profile_line(p, body):
     parts = []
     if p.get("age"):
