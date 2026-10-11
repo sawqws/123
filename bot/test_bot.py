@@ -401,6 +401,27 @@ class BotTest(unittest.TestCase):
         self.assertEqual(runs[0][1]["COACH_TOKEN"], tok)
         self.assertIn("Тренер запущен", self.last()[0])
 
+    def test_hub_install(self):
+        tok = "8960000000:AAF" + "h" * 32
+        runs = []
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"ok":true,"result":{"username":"Setingss111bot"}}'
+
+        def fake_run(cmd, **kw):
+            runs.append((cmd, kw["env"]))
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+        with mock.patch.object(bot.urllib.request, "urlopen", lambda *a, **k: Resp()), \
+                mock.patch.object(bot.subprocess, "run", fake_run):
+            self.say("/hub " + tok, message_id=9)
+        cmd, env = runs[0]
+        self.assertTrue(cmd[-1].endswith("hub/install.sh"))
+        self.assertEqual((env["HUB_TOKEN"], env["HUB_REMOTE"]), (tok, "1"))
+        self.assertTrue(env["HUB_OWNER"].isdigit())
+        self.assertIn("Главный запущен", self.last()[0])
+
 
 class AppTest(BotTest):
     """Приложение (Mini App): подпись Telegram, доступ только владельцу, действия те же, что у кнопок."""

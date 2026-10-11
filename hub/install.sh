@@ -39,10 +39,17 @@ elif [ ! -s "$ENV" ]; then
   TOKEN="${HUB_TOKEN:-}"
   [ -n "$TOKEN" ] || read -r -p "Токен бота «Главный» от @BotFather: " TOKEN < /dev/tty
   umask 077
-  printf 'HUB_TOKEN=%s\nHUB_ALLOWED=\n' "$TOKEN" > "$ENV"
+  # HUB_OWNER — Telegram ID владельца (передаёт HDP-бот), HUB_REMOTE=1 — сразу включить вход для Claude
+  printf 'HUB_TOKEN=%s\nHUB_ALLOWED=%s\nHUB_REMOTE=%s\n' "$TOKEN" "${HUB_OWNER:-}" "${HUB_REMOTE:-0}" > "$ENV"
   chmod 600 "$ENV"
 else
   echo "Уже есть $ENV — не трогаю (поменять: nano $ENV, потом pm2 restart hub-bot --update-env)"
+fi
+if [ "${HUB_REMOTE:-}" = 1 ] && ! grep -q '^HUB_REMOTE=1' "$ENV"; then
+  sed -i '/^HUB_REMOTE=/d' "$ENV"; echo 'HUB_REMOTE=1' >> "$ENV"
+fi
+if [ -n "${HUB_OWNER:-}" ] && grep -q '^HUB_ALLOWED=$' "$ENV"; then
+  sed -i "s|^HUB_ALLOWED=$|HUB_ALLOWED=${HUB_OWNER}|" "$ENV"
 fi
 
 # вход для Claude идёт через Caddy планера (порт 443 один) — перезапускаем планер с новым кодом

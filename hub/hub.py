@@ -14,6 +14,7 @@
   HUB_TOKEN    токен от @BotFather
   HUB_ALLOWED  Telegram ID владельца; если пусто — владелец тот, кто первым нажал /start
   HUB_PORT     порт входа для Claude на 127.0.0.1 (по умолчанию 8790; снаружи — Caddy планера)
+  HUB_REMOTE   1 — вход для Claude включён сразу, ключ = HMAC(токен) (см. token_key)
 
 Только стандартная библиотека Python.
 """
@@ -436,6 +437,21 @@ def remote_on():
     return bool(setting("remote") and setting("key"))
 
 
+def token_key(token=None):
+    """Ключ входа, выведенный из токена Главного: его знает тот, кому владелец дал токен (Claude)."""
+    return hmac.new((token or TOKEN).encode(), b"claude-remote-v1", hashlib.sha256).hexdigest()
+
+
+def bootstrap_remote():
+    """HUB_REMOTE=1 (ставит HDP-бот по просьбе владельца): вход для Claude включён с первого запуска.
+    «♻️ Новый ключ» в /claude заменяет его случайным, «⛔ Выключить» — закрывает."""
+    if os.environ.get("HUB_REMOTE") == "1" and not setting("key"):
+        setting("key", token_key())
+        setting("remote", True)
+        tell("🤖 Вход для Claude включён — он сам поставит и проверит ботов. О каждой команде напишу сюда. "
+             "Выключить: /claude → «⛔ Выключить».")
+
+
 def check_key(header):
     key = setting("key") or ""
     got = header[7:].strip() if header.startswith("Bearer ") else ""
@@ -759,6 +775,7 @@ def main():
             home(chat)
         except Exception as e:
             print("notify:", e)
+    bootstrap_remote()
     threading.Thread(target=watch, daemon=True).start()
     threading.Thread(target=serve, daemon=True).start()
     print("Главный запущен")
