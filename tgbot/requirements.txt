@@ -1,2 +1,4 @@
 telethon>=1.45,<2  # 1.45: цветные кнопки (style)
 cryptg
+faster-whisper>=1.1  # голосовые (tgbot/voice.py)
+numpy
