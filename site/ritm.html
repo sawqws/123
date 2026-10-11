@@ -14,9 +14,9 @@
   --fg: #14161b;
   --fg-2: #3c414c;
   --muted: #6a7080;
-  --accent: #f29a00;
-  --accent-ink: #a85f00;
-  --on-accent: #1b1200;
+  --accent: #5b5ff0;
+  --accent-ink: #4448d6;
+  --on-accent: #ffffff;
   --good: #16a35f;
   --bad: #e5484d;
   --shadow: 0 1px 2px rgba(20, 24, 33, .06), 0 8px 24px rgba(20, 24, 33, .06);
@@ -29,20 +29,20 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0c0e12; --surface: #15181e; --surface-2: #1d2128; --surface-3: #272c35;
+    --bg: #000000; --surface: #131315; --surface-2: #1c1c20; --surface-3: #2a2a30;
     --line: rgba(255, 255, 255, .07); --line-2: rgba(255, 255, 255, .13);
-    --fg: #f1f2f5; --fg-2: #c3c7d0; --muted: #8a90a0;
-    --accent: #ffb21f; --accent-ink: #ffc54d; --on-accent: #1b1200;
+    --fg: #f4f4f6; --fg-2: #c9c9d1; --muted: #8b8b97;
+    --accent: #7b7fff; --accent-ink: #a5a8ff; --on-accent: #ffffff;
     --good: #3dd68c; --bad: #ff6369;
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px rgba(0, 0, 0, .25);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0c0e12; --surface: #15181e; --surface-2: #1d2128; --surface-3: #272c35;
+  --bg: #000000; --surface: #131315; --surface-2: #1c1c20; --surface-3: #2a2a30;
   --line: rgba(255, 255, 255, .07); --line-2: rgba(255, 255, 255, .13);
-  --fg: #f1f2f5; --fg-2: #c3c7d0; --muted: #8a90a0;
-  --accent: #ffb21f; --accent-ink: #ffc54d; --on-accent: #1b1200;
+  --fg: #f4f4f6; --fg-2: #c9c9d1; --muted: #8b8b97;
+  --accent: #7b7fff; --accent-ink: #a5a8ff; --on-accent: #ffffff;
   --good: #3dd68c; --bad: #ff6369;
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px rgba(0, 0, 0, .25);
   color-scheme: dark;
@@ -337,15 +337,85 @@ textarea.field { resize: vertical; min-height: 80px; }
   .toast { bottom: calc(90px + env(safe-area-inset-bottom, 0px)); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+
+/* ---------- верхняя панель (как в Grit) ---------- */
+.app { display: block; }
+.topbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 12px 24px; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.topbar .brand { padding: 0; }
+.toptabs { display: flex; gap: 2px; padding: 4px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.toptabs button { height: 38px; padding: 0 16px; border-radius: 999px; font-weight: 600; color: var(--fg-2); display: inline-flex; align-items: center; gap: 8px; }
+.toptabs button svg { display: none; }
+.toptabs button.on { background: var(--surface-3); color: var(--accent-ink); }
+.top-r { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+.round { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--line); }
+.round:hover { background: var(--surface-3); }
+.top-r .sync span { display: none; }
+main { padding-top: 8px; }
+
+/* ---------- лента дней ---------- */
+.strip { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin: 0 -8px 18px; padding: 4px 8px; }
+.strip::-webkit-scrollbar { display: none; }
+.strip button { flex: 0 0 auto; width: 56px; padding: 8px 0 10px; border-radius: 28px; display: grid; justify-items: center; gap: 6px; color: var(--muted); }
+.strip small { font-size: 12.5px; font-weight: 500; }
+.strip .dn { position: relative; width: 38px; height: 38px; display: grid; place-items: center; font-size: 14px; color: var(--fg-2); }
+.strip .dn svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.strip .dn .bg { fill: var(--surface-2); stroke: none; }
+.strip .dn .arc { stroke: var(--accent); stroke-width: 3; fill: none; }
+.strip .dn b { position: relative; font-weight: 600; }
+.strip .fut .dn .bg { fill: transparent; }
+.strip .on { background: var(--accent); color: var(--on-accent); }
+.strip .on small { color: var(--on-accent); }
+.strip .on .dn .bg { fill: color-mix(in srgb, #ffffff 22%, transparent); }
+.strip .on .dn .arc { stroke: #ffffff; }
+.strip .on .dn { color: #ffffff; }
+.daytitle { text-align: center; font-weight: 650; font-size: 17px; margin: 4px 0 10px; }
+.daytitle small { display: block; color: var(--muted); font-weight: 500; font-size: 13px; margin-top: 2px; }
+
+/* ---------- группы и карточки привычек ---------- */
+.groups { display: grid; gap: 14px; margin-bottom: 24px; }
+.grp { border: 1.5px solid color-mix(in srgb, var(--g) 55%, transparent); border-radius: 26px; padding: 6px 10px 12px; background: color-mix(in srgb, var(--g) 5%, transparent); }
+.grp > header { display: flex; align-items: center; gap: 10px; padding: 8px 6px 10px; }
+.grp > header b { flex: 1; font-size: 17px; font-weight: 650; }
+.grp > header .n { color: var(--muted); font-size: 13px; font-weight: 600; }
+.grp .fold { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; border: 2px solid color-mix(in srgb, var(--g) 55%, transparent); transition: transform .25s var(--ease); }
+.grp.closed .fold { transform: rotate(180deg); }
+.grp.closed { padding-bottom: 6px; }
+.grp.closed .hgrid { display: none; }
+.hgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)); gap: 12px; }
+.hcard {
+  position: relative; display: grid; gap: 10px; padding: 16px 14px 16px 16px; border-radius: 22px; min-width: 0;
+  background: color-mix(in srgb, var(--c) 22%, var(--surface)); border: 1px solid color-mix(in srgb, var(--c) 30%, transparent);
+}
+.hcard .row { display: flex; align-items: center; gap: 12px; }
+.hcard .hic { font-size: 26px; width: 34px; text-align: center; flex: none; }
+.hcard .nm { flex: 1; min-width: 0; text-align: left; }
+.hcard .nm b { display: block; font-size: 16.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hcard .nm small { color: color-mix(in srgb, var(--fg) 75%, transparent); font-size: 13.5px; }
+.hcard .miss, .hcard .streak { position: absolute; top: 8px; left: 12px; font: 700 12px var(--font-body); }
+.hcard .miss { color: var(--bad); }
+.hcard .streak { color: var(--good); }
+.hcard.done-card { background: color-mix(in srgb, var(--c) 34%, var(--surface)); }
+.hcard .check { width: 56px; height: 56px; border: 4px solid color-mix(in srgb, var(--c) 60%, var(--surface)); color: var(--fg); background: color-mix(in srgb, var(--c) 12%, var(--surface)); }
+.hcard .check svg { width: 26px; height: 26px; }
+.hcard .check.done { background: var(--c); border-color: var(--c); color: #ffffff; }
+.hcard .check.fail { background: var(--bad); border-color: var(--bad); color: #ffffff; }
+.hcard .grid { margin-top: 2px; }
+.notday { font-size: 12.5px; color: var(--muted); }
+.import { padding: 16px; border-radius: 18px; border: 1.5px dashed color-mix(in srgb, var(--accent) 50%, transparent); display: grid; gap: 10px; justify-items: center; text-align: center; max-width: 520px; }
+
+@media (max-width: 860px) {
+  .topbar { grid-template-columns: 1fr auto; padding: 10px 16px; }
+  .toptabs { display: none; }
+  .hcard .check { width: 50px; height: 50px; }
+}
 </style>
 
 <div class="app">
-  <aside class="side">
+  <header class="topbar">
     <div class="brand"><span class="logo"><i></i><i></i><i></i><i></i></span><b>Ритм</b></div>
-    <nav class="nav" id="nav"></nav>
-    <div class="side-day" id="sideDay"></div>
-    <div class="sync" id="sync"><i></i><span>Загружаю…</span></div>
-  </aside>
+    <nav class="toptabs" id="nav"></nav>
+    <div class="top-r"><span class="sync" id="sync"><i></i><span>Загружаю…</span></span><button class="round" data-a="quick-add" aria-label="Добавить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
+  </header>
   <main><div class="wrap" id="view"></div></main>
   <nav class="tabbar" id="tabbar"></nav>
 </div>
@@ -398,15 +468,16 @@ const I = {
   send: '<svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
   back: '<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>',
 };
-const COLORS = { amber: '#f29a00', coral: '#ff6b4a', rose: '#e9467a', violet: '#8b5cf6', blue: '#3b82f6', cyan: '#06b6d4', green: '#16a35f', lime: '#84cc16' };
+const COLORS = { green: '#22a35a', teal: '#0f9a9a', cyan: '#06b6d4', blue: '#3b82f6', violet: '#8b5cf6', rose: '#e9467a', coral: '#ff6b4a', amber: '#f29a00', brown: '#b8732e', lime: '#84cc16' };
 const EMOJI = ['💧', '📚', '🏃', '🥊', '🧘', '💪', '😴', '🍎', '🦷', '📝', '🎯', '🧠', '💻', '🎸', '🇬🇧', '🚭', '📵', '🍬', '☕', '🌅', '🚿', '🧹', '💰', '🙏', '🚶', '🏋️', '🥗', '🎨', '📖', '🌱', '🔥', '⭐'];
 const MILES = [3, 7, 14, 30, 66, 100, 365];
+const GROUPS = [['morning', 'Утро', '🌅', '#f59e0b'], ['day', 'День', '☀️', '#22c55e'], ['evening', 'Вечер', '🌙', '#3b82f6'], ['any', 'В любое время', '', '']];
 const col = x => COLORS[x && x.color] || COLORS.amber;
 
 /* ===== состояние ===== */
 const EMPTY = () => ({ v: 1, habits: [], log: {}, tasks: [], goals: [], notes: [] });
 let S = EMPTY();
-const ui = { view: 'today', sel: today(), week: monday(today()), month: firstOfMonth(today()), msel: today(), goalId: null, habitFilter: 'all', goalTab: 'active', planMode: 'week', pop: null, picks: new Set(['water', 'read', 'sport']) };
+const ui = { view: 'today', sel: today(), week: monday(today()), month: firstOfMonth(today()), msel: today(), goalId: null, habitFilter: 'all', goalTab: 'active', planMode: 'week', pop: null, gridView: false, closed: new Set((() => { try { return JSON.parse(localStorage.getItem('ritm.closed') || '[]'); } catch (e) { return []; } })()), picks: new Set() };
 
 /* ===== хранилище: db (аккаунт) → иначе этот браузер ===== */
 const store = { mode: 'loading', ref: null, saving: false, again: false, last: '', timer: null };
@@ -551,19 +622,47 @@ function checkBtn(h, d) {
   }
   const r = 21, c = 2 * Math.PI * r;
   const arc = t > 1 && !done && v > 0 ? `<svg class="arc" viewBox="0 0 50 50"><circle cx="25" cy="25" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - v / t)}"/></svg>` : '';
-  return `<button class="check${done ? ' done' : ''}${ui.pop === h.id ? ' pop' : ''}" data-a="tap" data-id="${h.id}" aria-label="Отметить">${done ? I.check : t > 1 ? `<span class="num" style="font-weight:700;font-size:14px">${v}</span>` : ''}${arc}${t > 1 ? `<span class="cnt num">${v}/${t}</span>` : ''}</button>`;
+  return `<button class="check${done ? ' done' : ''}${ui.pop === h.id ? ' pop' : ''}" data-a="tap" data-id="${h.id}" aria-label="Отметить">${done ? I.check : t > 1 && v ? `<span class="num" style="font-weight:700;font-size:15px">${v}</span>` : I.plus}${arc}${t > 1 ? `<span class="cnt num">${v}/${t}</span>` : ''}</button>`;
 }
-function habitCard(h, d, full = true) {
-  const s = streak(h);
-  const meta = [`<span class="fire">🔥 ${s} ${plural(s, 'день', 'дня', 'дней')}</span>`];
-  if (full) meta.push(`<span>${rate(h)}% за 30 дн.</span>`);
-  if (h.kind === 'bad') meta.push('<span>отказ</span>');
-  else if ((h.target || 1) > 1) meta.push(`<span>${h.target} ${esc(h.unit || 'раз')} в день</span>`);
-  return `<div class="panel habit" style="--c:${col(h)}">
-    <div class="row"><div class="hicon">${esc(h.emoji)}</div>
-      <button class="nm" data-a="habit" data-id="${h.id}"><b>${esc(h.name)}</b><div class="meta">${meta.join('')}</div></button>
-      ${scheduled(h, d) ? checkBtn(h, d) : '<span class="meta" style="font-size:12.5px">не сегодня</span>'}</div>
+function schedText(h) {
+  const d = h.days || '', cap = c => WD[+c - 1][0].toUpperCase() + WD[+c - 1][1];
+  const base = d === '1234567' ? 'Каждый день' : d === '12345' ? 'По будням' : d === '67' ? 'По выходным' : [...d].map(cap).join(', ');
+  return base + ((h.target || 1) > 1 ? `, ${Math.max(0, val(h, ui.view === 'today' ? ui.sel : today()))}/${h.target}` : '') + (h.kind === 'bad' ? ' · бросаю' : '');
+}
+function missed(h) {
+  // сколько запланированных дней подряд пропущено до сегодня (как «−4» в Grit)
+  let d = addDays(today(), -1), n = 0, g = 0;
+  while (d >= h.created && g++ < 400) { if (scheduled(h, d)) { if (isDone(h, d)) break; n++; } d = addDays(d, -1); }
+  return n;
+}
+function habitCard(h, d, full = false) {
+  const s = streak(h), m = h.kind === 'bad' ? 0 : missed(h);
+  const badge = m ? `<span class="miss num">−${m}</span>` : s ? `<span class="streak num">🔥${s}</span>` : '';
+  return `<div class="hcard${isDone(h, d) && h.kind !== 'bad' ? ' done-card' : ''}" style="--c:${col(h)}">${badge}
+    <div class="row"><span class="hic">${esc(h.emoji)}</span>
+      <button class="nm" data-a="habit" data-id="${h.id}"><b>${esc(h.name)}</b><small>${schedText(h)}${full ? ` · ${rate(h)}% за 30 дн.` : ''}</small></button>
+      ${scheduled(h, d) ? checkBtn(h, d) : '<span class="notday">не в этот день</span>'}</div>
     ${full ? grid(h) : ''}</div>`;
+}
+function groupsHtml(list, d, full) {
+  let html = '<div class="groups">';
+  for (const [k, name, icon, color] of GROUPS) {
+    const part = list.filter(h => (h.group || 'any') === k);
+    if (!part.length) continue;
+    const cards = `<div class="hgrid">${part.map(h => habitCard(h, d, full)).join('')}</div>`;
+    if (k === 'any') { html += cards; continue; }
+    const closed = ui.closed.has(k), done = part.filter(h => isDone(h, d)).length;
+    html += `<section class="grp${closed ? ' closed' : ''}" style="--g:${color}"><header><span>${icon}</span><b>${name}</b><span class="n num">${done}/${part.length}</span><button class="fold" data-a="fold" data-k="${k}" aria-label="Свернуть или развернуть"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button></header>${cards}</section>`;
+  }
+  return html + '</div>';
+}
+function strip(d) {
+  const t = today(); let out = '';
+  for (let i = -20; i <= 3; i++) {
+    const x = addDays(t, i), q = dayProgress(x), r = 17, c = 2 * Math.PI * r;
+    out += `<button class="${x === d ? 'on' : ''}${x > t ? ' fut' : ''}" data-a="day" data-d="${x}"><small>${WD[wd(x)][0].toUpperCase() + WD[wd(x)][1]}</small><span class="dn"><svg viewBox="0 0 38 38"><circle class="bg" cx="19" cy="19" r="19"/>${x <= t && q.all ? `<circle class="arc" cx="19" cy="19" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - q.pct / 100)}" stroke-linecap="round"/>` : ''}</svg><b class="num">${+x.slice(8)}</b></span></button>`;
+  }
+  return `<div class="strip" id="strip">${out}</div>`;
 }
 function taskRow(t, opts = {}) {
   const g = t.goal && S.goals.find(x => x.id === t.goal);
@@ -596,10 +695,21 @@ const PRESETS = [
   { k: 'sugar', name: 'Без сладкого', emoji: '🍬', color: 'rose', kind: 'bad' },
   { k: 'phone', name: 'Без телефона в кровати', emoji: '📵', color: 'amber', kind: 'bad' },
 ];
+const GRIT = [
+  ['Почистить зубы', '🪥', 'teal', 'evening'], ['Гигиена лица', '🧴', 'green', 'evening'], ['Теплый душ', '🚿', 'green', 'evening'], ['Лег до 10:30', '🛏️', 'green', 'evening'],
+  ['Массаж лица', '💆', 'green', 'morning'], ['Принять холодный душ', '❄️', 'blue', 'morning'], ['Принять витамины', '💊', 'teal', 'morning'], ['Проснуться до 9:00', '🌞', 'brown', 'morning'], ['Почистить зубы', '🪥', 'teal', 'morning'],
+  ['Распределение категорий', '✅', 'green', 'any', '7'], ['Послушать аудиокнигу', '🎧', 'teal', 'any'], ['Озознанный', '🧘', 'green', 'any', '1234567', 5],
+  ['Не оставил ответов', '✅', 'green', 'any'], ['Не опаздал', '⏰', 'green', 'any'], ['Носил резинки', '🦷', 'green', 'any'],
+];
+function importGrit() {
+  GRIT.forEach(([name, emoji, color, group, days, target]) => S.habits.push({ id: uid(), name, emoji, color, group, kind: 'good', days: days || '1234567', target: target || 1, unit: '', goal: '', created: today(), archived: false }));
+  save(); render(); toast(`Перенёс ${GRIT.length} привычек из Grit`);
+}
 function onboarding() {
   return `<div class="panel empty">
     <span class="logo" style="height:34px"><i></i><i></i><i></i><i></i></span>
-    <b>Собери свой ритм</b>
+    <div class="import"><b>Перенести привычки из Grit</b><p style="margin:0">${GRIT.length} привычек со скриншота: утро, вечер и остальные — с теми же названиями и цветами. Историю отметок Grit не отдаёт, она начнётся с сегодня.</p><button class="btn" data-a="import-grit">Перенести</button></div>
+    <b>Или собери свой ритм</b>
     <p>Выбери привычки, которые хочешь держать каждый день. Ритм будет считать серии дней подряд и рисовать сетку прогресса. Задачи и цели добавишь потом.</p>
     <div class="presets">${PRESETS.map(p => `<button class="preset${ui.picks.has(p.k) ? ' on' : ''}" data-a="pick" data-k="${p.k}">${p.emoji} ${p.name}</button>`).join('')}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center"><button class="btn" data-a="start">Начать с выбранными</button><button class="btn ghost" data-a="new-habit">Своя привычка</button></div></div>`;
@@ -609,39 +719,32 @@ function viewToday() {
   const d = ui.sel, t = today(), p = dayProgress(d), mon = monday(d);
   const hs = habitsActive();
   const todays = hs.filter(h => scheduled(h, d)), rest = hs.filter(h => !scheduled(h, d));
-  let html = `<div class="head"><div class="grow"><div class="eyebrow">${WDL[wd(d)]}${rel(d) ? ' · ' + rel(d).toLowerCase() : ''}</div><h1 class="title">${dm(d)}</h1></div>
-    ${d !== t ? '<button class="btn ghost" data-a="go-today">Сегодня</button>' : ''}<button class="btn" data-a="new-task">${I.plus}Задача</button></div>`;
-  html += `<div class="week" style="margin-bottom:18px">${[0, 1, 2, 3, 4, 5, 6].map(i => {
-    const x = addDays(mon, i), q = dayProgress(x);
-    return `<button class="${x === d ? 'on' : ''}${x === t ? ' today' : ''}" data-a="day" data-d="${x}"><small>${WD[i]}</small><b class="num">${+x.slice(8)}</b><span class="pip"><i style="width:${x <= t ? q.pct : 0}%"></i></span></button>`;
-  }).join('')}</div>`;
+  let html = `<div class="daytitle">${rel(d) || WDL[wd(d)]}<small>${rel(d) ? WDL[wd(d)].toLowerCase() + ', ' : ''}${dm(d)}${p.all ? ` · сделано ${p.ok} из ${p.all}` : ''}</small></div>${strip(d)}`;
   if (!S.habits.length && !S.tasks.length) return html + onboarding();
-  const left = p.all - p.ok;
-  html += `<div class="cols"><div class="stack">
-    <div class="panel hero">${ring(p.pct, 76, 8)}<div class="t"><b class="num">${p.ok} из ${p.all}</b><span>${!p.all ? 'На этот день ничего нет' : left === 0 ? 'Всё сделано. Так держать' : d > t ? 'Запланировано' : `Осталось ${left} — шаг за шагом`}</span></div></div>`;
-  html += sec('Привычки', todays.length, '<button class="link" data-a="new-habit">+ Новая</button>');
-  html += todays.length ? todays.map(h => habitCard(h, d, false)).join('') : `<div class="panel empty"><p>На этот день привычек нет.</p></div>`;
-  if (rest.length) html += `<div class="sec"><h3 style="font-size:12px">Не в этот день</h3><span class="n">${rest.map(h => esc(h.emoji)).join(' ')}</span></div>`;
-  html += `</div><div class="stack">`;
+  html += todays.length ? groupsHtml(todays, d, false) : `<div class="panel empty" style="margin-bottom:20px"><p>На этот день привычек нет.</p><button class="btn ghost" data-a="new-habit">Новая привычка</button></div>`;
+  if (rest.length) html += `<div class="sec" style="margin:-10px 0 18px"><h3 style="font-size:12px">Не в этот день</h3><span class="n">${rest.map(h => esc(h.emoji)).join(' ')}</span></div>`;
+  html += `<div class="cols"><div class="stack">`;
   if (d === t) {
     const late = overdue();
     if (late.length) html += sec('Просрочено', late.length, '<button class="link" data-a="all-today">Все на сегодня</button>') + `<div class="panel">${late.map(x => taskRow(x, { date: true, after: `<button class="link" data-a="to-today" data-id="${x.id}">→ сегодня</button>` })).join('')}</div>`;
   }
   const ts = dayTasks(d);
-  html += sec('Задачи', ts.length) + `<div class="panel">${ts.map(x => taskRow(x)).join('')}${addRow(d)}</div>`;
+  html += sec('Задачи', ts.length, '<button class="link" data-a="new-task">+ Задача</button>') + `<div class="panel">${ts.map(x => taskRow(x)).join('')}${addRow(d)}</div>`;
+  html += `</div><div class="stack">`;
   const focus = S.goals.filter(g => g.status === 'active' && ((g.horizon === 'week' && g.start === monday(d)) || (g.horizon === 'month' && g.start === firstOfMonth(d))));
-  if (focus.length) html += sec('Цели в фокусе', '', '<button class="link" data-a="nav" data-v="goals">Все цели</button>') + `<div class="gcards">${focus.map(goalCard).join('')}</div>`;
+  html += sec('Цели в фокусе', '', '<button class="link" data-a="nav" data-v="goals">Все цели</button>') + (focus.length ? `<div class="gcards">${focus.map(goalCard).join('')}</div>` : `<div class="panel empty"><p>Цели на эту неделю и месяц появятся здесь.</p><button class="btn ghost" data-a="new-goal">Поставить цель</button></div>`);
   return html + `</div></div>`;
 }
 
 function viewHabits() {
   const f = ui.habitFilter, all = habitsActive();
   const list = all.filter(h => f === 'all' || (f === 'bad' ? h.kind === 'bad' : h.kind !== 'bad'));
-  let html = `<div class="head"><div class="grow"><div class="eyebrow">${all.length} ${plural(all.length, 'привычка', 'привычки', 'привычек')} · последние 20 недель</div><h1 class="title">Привычки</h1></div>
+  let html = `<div class="head"><div class="grow"><div class="eyebrow">${all.length} ${plural(all.length, 'привычка', 'привычки', 'привычек')}${ui.gridView ? ' · последние 20 недель' : ''}</div><h1 class="title">Привычки</h1></div>
     <div class="seg">${[['all', 'Все'], ['good', 'Делать'], ['bad', 'Бросить']].map(([k, l]) => `<button class="${f === k ? 'on' : ''}" data-a="hfilter" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="seg"><button class="${ui.gridView ? '' : 'on'}" data-a="hview" data-g="">Карточки</button><button class="${ui.gridView ? 'on' : ''}" data-a="hview" data-g="1">Сетки</button></div>
     <button class="btn" data-a="new-habit">${I.plus}Привычка</button></div>`;
   if (!all.length) return html + onboarding();
-  html += `<div class="gcards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${list.map(h => habitCard(h, today())).join('')}</div>`;
+  html += groupsHtml(list, today(), ui.gridView);
   const arch = S.habits.filter(h => h.archived);
   if (arch.length) html += sec('Архив', arch.length) + `<div class="panel">${arch.map(h => `<button class="rank" style="width:100%;text-align:left" data-a="habit" data-id="${h.id}"><span class="hicon" style="--c:${col(h)}">${esc(h.emoji)}</span><span class="nm"><b>${esc(h.name)}</b><small style="color:var(--muted)">рекорд ${best(h)} дн.</small></span></button>`).join('')}</div>`;
   return html;
@@ -765,6 +868,8 @@ function render() {
   ui.pop = null;
   renderNav();
   if (lastView !== ui.view + ui.goalId) { window.scrollTo(0, 0); lastView = ui.view + ui.goalId; }
+  const st = $('#strip');
+  if (st) { const on = $('.on', st) || st.lastElementChild; st.scrollLeft = on.offsetLeft - st.clientWidth / 2 + on.offsetWidth / 2; }
   if (focus) { const el = $$('[data-add]').find(e => e.dataset.date + '|' + e.dataset.goal === focus); if (el) el.focus(); }
   const ta = $('#noteIn');
   if (ta) ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; });
@@ -775,8 +880,6 @@ function render() {
 function renderNav() {
   const nav = TABS.map(([k, l, ic]) => `<button class="${k === ui.view ? 'on' : ''}" data-a="nav" data-v="${k}">${ic}<span>${l}</span></button>`).join('');
   $('#nav').innerHTML = nav; $('#tabbar').innerHTML = nav;
-  const p = dayProgress(today());
-  $('#sideDay').innerHTML = `${ring(p.pct, 46, 5)}<div><small>Сегодня</small><b class="num">${p.ok} из ${p.all}</b></div>`;
 }
 
 /* ===== шторки (редакторы) ===== */
@@ -818,7 +921,7 @@ function bindConfirm(sh, btnId, fn) {
 
 function habitSheet(h) {
   const isNew = !h;
-  const f = h ? { ...h } : { name: '', emoji: '🎯', color: 'amber', kind: 'good', days: '1234567', target: 1, unit: '', goal: '' };
+  const f = h ? { ...h } : { name: '', emoji: '🎯', color: 'green', group: 'any', kind: 'good', days: '1234567', target: 1, unit: '', goal: '' };
   let stats = '';
   if (h) {
     const m = ui.hmonth || firstOfMonth(today()), start = monday(m), n = Math.ceil((diff(m, start) + dim(m)) / 7) * 7;
@@ -837,6 +940,7 @@ function habitSheet(h) {
   const goals = S.goals.filter(g => g.status === 'active');
   openSheet(isNew ? 'Новая привычка' : h.name, `${stats}
     <div class="lbl">Название</div><input class="field big" id="hName" value="${esc(f.name)}" placeholder="Например, читать 20 минут" maxlength="80">
+    <div class="lbl">Когда</div>${chips('group', GROUPS.map(([k, n, ic]) => [k, (ic ? ic + ' ' : '') + n]), f.group || 'any')}
     <div class="lbl">Тип</div>${chips('kind', [['good', '✅ Делать'], ['bad', '🛡 Бросить']], f.kind)}
     <div class="lbl">Дни</div>${chips('days', WD.map((w, i) => [String(i + 1), w]), f.days, true)}
     <div id="tgt" ${f.kind === 'bad' ? 'hidden' : ''}><div class="lbl">Сколько раз в день</div><div style="display:flex;gap:10px"><input class="field num" type="number" id="hTarget" min="1" max="50" value="${f.target || 1}" style="width:100px"><input class="field" id="hUnit" value="${esc(f.unit || '')}" placeholder="единица: стаканов, страниц…" maxlength="20"></div></div>
@@ -845,7 +949,7 @@ function habitSheet(h) {
     ${goals.length ? `<div class="lbl">Ведёт к цели</div><select class="field" id="hGoal"><option value="">Без цели</option>${goals.map(g => `<option value="${g.id}"${g.id === f.goal ? ' selected' : ''}>${esc(g.emoji + ' ' + g.title)}</option>`).join('')}</select>` : ''}
     <div class="actions"><button class="btn wide" id="hSave">${isNew ? 'Добавить привычку' : 'Сохранить'}</button>
     ${isNew ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button class="btn ghost" id="hArch" style="justify-content:center">${h.archived ? 'Вернуть из архива' : 'В архив'}</button><button class="btn danger" id="hDel" style="justify-content:center">Удалить</button></div>${confirmBox('Удалить привычку вместе со всей историей отметок?', 'Удалить')}`}</div>`, sh => {
-    chipGroup(sh, 'kind', f, 'kind'); chipGroup(sh, 'days', f, 'days', true);
+    chipGroup(sh, 'kind', f, 'kind'); chipGroup(sh, 'days', f, 'days', true); chipGroup(sh, 'group', f, 'group');
     $('[data-g="kind"]', sh).addEventListener('click', () => { $('#tgt', sh).hidden = f.kind === 'bad'; });
     $('#hEmoji', sh).onclick = e => { const b = e.target.closest('[data-e]'); if (!b) return; f.emoji = b.dataset.e; $$('#hEmoji button', sh).forEach(x => x.classList.toggle('on', x === b)); };
     $('#hColor', sh).onclick = e => { const b = e.target.closest('[data-c]'); if (!b) return; f.color = b.dataset.c; $$('#hColor button', sh).forEach(x => x.classList.toggle('on', x === b)); };
@@ -860,7 +964,7 @@ function habitSheet(h) {
       const name = $('#hName', sh).value.trim();
       if (!name) { $('#hName', sh).focus(); return; }
       if (!f.days) { toast('Выбери хотя бы один день'); return; }
-      const data = { name, emoji: f.emoji, color: f.color, kind: f.kind, days: f.days, target: Math.max(1, Math.min(50, +$('#hTarget', sh).value || 1)), unit: $('#hUnit', sh).value.trim(), goal: $('#hGoal', sh) ? $('#hGoal', sh).value : '' };
+      const data = { name, emoji: f.emoji, color: f.color, group: f.group || 'any', kind: f.kind, days: f.days, target: Math.max(1, Math.min(50, +$('#hTarget', sh).value || 1)), unit: $('#hUnit', sh).value.trim(), goal: $('#hGoal', sh) ? $('#hGoal', sh).value : '' };
       if (h) Object.assign(h, data); else S.habits.push({ id: uid(), created: today(), archived: false, ...data });
       save(); closeSheet(); render(); toast(isNew ? 'Привычка добавлена' : 'Сохранено');
     };
@@ -952,6 +1056,10 @@ const A = {
     save(); render(); toast('Готово. Отмечай привычки каждый день');
   },
   hfilter: el => { ui.habitFilter = el.dataset.f; render(); },
+  hview: el => { ui.gridView = !!el.dataset.g; render(); },
+  fold: el => { const k = el.dataset.k; ui.closed.has(k) ? ui.closed.delete(k) : ui.closed.add(k); try { localStorage.setItem('ritm.closed', JSON.stringify([...ui.closed])); } catch (e) { /* */ } render(); },
+  'import-grit': () => importGrit(),
+  'quick-add': () => ui.view === 'habits' ? habitSheet(null) : ui.view === 'goals' ? goalSheet(null) : taskSheet(null, ui.view === 'today' ? ui.sel : today()),
   task: (el, e) => { if (e.target.closest('[data-a="tick"],[data-a="to-today"]')) return; taskSheet(S.tasks.find(x => x.id === el.dataset.id)); },
   tick: (el, e) => { e.stopPropagation(); const t = S.tasks.find(x => x.id === el.dataset.id); t.done = !t.done; save(); render(); if (t.done && t.date && dayProgress(t.date).pct === 100) { confetti(); toast('День закрыт полностью 🎉'); } },
   'new-task': () => taskSheet(null, ui.view === 'today' ? ui.sel : today()),
