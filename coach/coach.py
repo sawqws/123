@@ -254,10 +254,11 @@ def setup_text():
             "только так WHOOP разрешает боту читать твои данные.\n\n"
             "1. Открой <a href=\"https://developer-dashboard.whoop.com/apps/create\">developer-dashboard.whoop.com</a> "
             "и войди своим аккаунтом WHOOP.\n"
-            "2. Создай команду (Team, любое имя), потом <b>Create App</b>.\n"
-            "3. Scopes: отметь все <code>read:*</code> и <code>offline</code>.\n"
-            f"4. Redirect URL:\n<code>{esc(url)}</code>\n"
-            "5. Нажми Create и пришли мне сюда одной строкой:\n"
+            "2. Создай команду (Team, любое имя), потом <b>Create App</b>: имя <code>Forma</code>, почта в Contacts.\n"
+            "3. Privacy Policy:\n<code>https://sawqws.github.io/123/privacy.html</code>\n"
+            f"4. Redirect URL (и нажми ADD):\n<code>{esc(url)}</code>\n"
+            "5. Scopes: отметь все 6 <code>read:*</code> (offline бот запросит сам).\n"
+            "6. Нажми Create App и пришли мне сюда одной строкой:\n"
             "<code>/whoop CLIENT_ID CLIENT_SECRET</code>\n\n"
             "Секрет храню только на сервере, сообщение с ним сразу удалю.")
 

@@ -170,7 +170,7 @@
     const d = S.data;
     const steps = d.keys ? '' : `<div class="card" style="text-align:left"><div class="card-h"><h3>Один раз, 3 минуты</h3></div><div class="steps">
       <div class="step"><b class="n">1</b><div>Открой <b>developer-dashboard.whoop.com</b> и войди аккаунтом WHOOP.</div></div>
-      <div class="step"><b class="n">2</b><div>Создай Team, затем <b>Create App</b>. Отметь все scopes <b>read:*</b> и <b>offline</b>.</div></div>
+      <div class="step"><b class="n">2</b><div>Создай Team, затем <b>Create App</b>. Privacy Policy: <b>sawqws.github.io/123/privacy.html</b>. Отметь все 6 scopes <b>read:*</b>.</div></div>
       <div class="step"><b class="n">3</b><div>Redirect URL:<span class="code" data-a="copy" data-v="${esc(d.redirect)}">${esc(d.redirect || 'адрес ещё готовится…')}</span></div></div>
       <div class="step"><b class="n">4</b><div>Пришли боту: <span class="code">/whoop CLIENT_ID CLIENT_SECRET</span></div></div></div></div>`;
     return `<div class="onb"><div class="logo">${icon('today')}</div><h1>Форма</h1>
