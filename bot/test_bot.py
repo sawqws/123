@@ -480,43 +480,19 @@ for _name in dir(BotTest):  # AppTest берёт у BotTest только заг�
         setattr(AppTest, _name, None)
 
 class AgentTest(BotTest):
-    """/agent: токен -> номер -> код -> ключи с my.telegram.org -> /etc/tg-agent.env -> tgbot/install.sh."""
+    """/agent ТОКЕН -> /etc/tg-agent.env (только токен, старые ключи сохраняются) -> tgbot/install.sh."""
 
-    def fake_get_api(self, fail_login=0):
-        test = self
+    TOK = "123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX"
 
-        class Fail(Exception):
-            pass
-
-        class Site:
-            logins = 0
-
-            def send_code(self, phone):
-                test.phones.append(phone)
-                return "rh"
-
-            def login(self, phone, rh, code):
-                Site.logins += 1
-                if Site.logins <= fail_login:
-                    raise Fail("Invalid confirmation code!")
-                test.codes.append(code)
-
-            def keys(self):
-                return (None, "form") if not test.created else ("1234567", "0123456789abcdef0123456789abcdef")
-
-            def create(self, form):
-                test.created = True
-
-        import types as pytypes
-        return pytypes.SimpleNamespace(Site=Site, Fail=Fail, normalize=lambda p: "+79991234567")
-
-    def start_agent(self, fail_login=0):
-        self.phones, self.codes, self.created, self.runs, self.deleted = [], [], False, [], []
-        env = os.path.join(self.tmp.name, "tg-agent.env")
+    def start_agent(self, old_env=""):
+        self.runs, self.deleted = [], []
+        self.env = os.path.join(self.tmp.name, "tg-agent.env")
+        if old_env:
+            with open(self.env, "w") as f:
+                f.write(old_env)
         getme = json.dumps({"ok": True, "result": {"username": "secretary_bot"}}).encode()
         patches = [
-            mock.patch.dict(sys.modules, {"get_api": self.fake_get_api(fail_login)}),
-            mock.patch.object(bot, "AGENT_ENV", env),
+            mock.patch.object(bot, "AGENT_ENV", self.env),
             mock.patch.object(bot.urllib.request, "urlopen", lambda *a, **k: __import__("io").BytesIO(getme)),
             mock.patch.object(bot, "forget", lambda chat, mid: self.deleted.append(mid)),
             mock.patch.object(bot.subprocess, "run", lambda cmd, **k: self.runs.append(cmd) or mock.Mock(
@@ -525,59 +501,44 @@ class AgentTest(BotTest):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        return env
 
     def say(self, text, mid=1):
         bot.handle({"chat": {"id": CHAT}, "from": {"id": CHAT}, "text": text, "message_id": mid})
 
-    def test_full_flow(self):
-        env = self.start_agent()
-        self.say("/agent")
-        self.say("123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX", mid=10)
-        self.assertEqual(bot.mode.get(CHAT), "agent_phone")
-        self.say("8 999 123-45-67")
-        self.assertEqual(self.phones, ["+79991234567"])
-        self.say("e W - S G 3 z Z Q e f", mid=12)
-        self.assertEqual(self.codes, ["eW-SG3zZQef"])  # пробелы убраны
-        self.assertEqual(self.deleted, [10, 12])  # токен и код удалены из чата
-        with open(env) as f:
-            text = f.read()
-        self.assertIn("TG_API_ID=1234567\n", text)
-        self.assertIn("TG_API_HASH=0123456789abcdef0123456789abcdef\n", text)
-        self.assertIn("TG_AGENT_TOKEN=123456789:", text)
-        self.assertEqual(oct(os.stat(env).st_mode & 0o777), "0o600")
-        self.assertTrue(self.runs and self.runs[-1][-1].endswith("tgbot/install.sh"))
+    def env_text(self):
+        with open(self.env) as f:
+            return f.read()
+
+    def test_one_message_installs(self):
+        self.start_agent()
+        self.say(f"/agent {self.TOK} 79138434865", mid=20)
+        self.assertEqual(self.deleted, [20])  # токен убран из чата
+        text = self.env_text()
+        self.assertIn(f"TG_AGENT_TOKEN={self.TOK}\n", text)
+        self.assertIn("TG_API_ID=\n", text)  # ключи не нужны для запуска
+        self.assertEqual(oct(os.stat(self.env).st_mode & 0o777), "0o600")
+        self.assertTrue(self.runs[-1][-1].endswith("tgbot/install.sh"))
         self.assertIn("Секретарь запущен", self.msgs[-1][0])
         self.assertNotIn(CHAT, bot.mode)
 
-    def test_token_and_phone_in_one_message(self):
-        self.start_agent()
-        self.say("/agent 123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX 79138434865", mid=20)
-        self.assertEqual(self.phones, ["+79991234567"])  # normalize в заглушке
-        self.assertEqual(bot.mode.get(CHAT), "agent_code")
-        self.assertEqual(self.deleted, [20])
-        self.say("A b C 1", mid=21)
-        self.assertEqual(self.codes, ["AbC1"])
-        self.assertIn("Секретарь запущен", self.msgs[-1][0])
+    def test_token_in_next_message_and_old_keys_kept(self):
+        self.start_agent("TG_AGENT_TOKEN=old\nTG_API_ID=555\nTG_API_HASH=abc\nTG_ALLOWED_ID=42\n")
+        self.say("/agent")
+        self.assertEqual(bot.mode.get(CHAT), "agent_token")
+        self.say(self.TOK, mid=7)
+        text = self.env_text()
+        self.assertIn("TG_API_ID=555\nTG_API_HASH=abc\n", text)
+        self.assertIn(f"TG_AGENT_TOKEN={self.TOK}", text)
 
-    def test_wrong_code_then_cancel(self):
-        self.start_agent(fail_login=5)
-        self.say("/agent 123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX")
-        self.say("+79991234567")
-        self.say("1 2 3")
-        self.assertIn("Invalid confirmation code", self.msgs[-1][0])
-        self.assertEqual(bot.mode.get(CHAT), "agent_code")
+    def test_cancel_and_this_bot_token(self):
+        self.start_agent()
+        self.say("/agent")
+        with mock.patch.object(bot, "TOKEN", self.TOK):
+            self.say(self.TOK)
+        self.assertIn("не этого бота", self.msgs[-1][0])
         self.say("/cancel")
         self.assertNotIn(CHAT, bot.mode)
         self.assertEqual(self.runs, [])
-
-    def test_token_of_this_bot_rejected(self):
-        self.start_agent()
-        self.say("/agent")
-        with mock.patch.object(bot, "TOKEN", "123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX"):
-            self.say("123456789:AAEn29QpYOZSANEg5Asv-eh9KlE3ASPVYtgXXXX")
-        self.assertIn("не этого бота", self.msgs[-1][0])
-        self.assertEqual(bot.mode.get(CHAT), "agent_token")
 
 
 for _name in list(vars(BotTest)):
