@@ -26,6 +26,7 @@ import ai  # noqa: E402
 import coach  # noqa: E402
 import insights  # noqa: E402
 import store  # noqa: E402
+import water  # noqa: E402
 import whoop  # noqa: E402
 
 U = 7
@@ -349,6 +350,46 @@ def call(path, body=None, user=None, init=None, method=None):
     except ValueError:
         out.json = None
     return out
+
+
+class WaterTest(unittest.TestCase):
+    def test_parse(self):
+        cases = {"выпил 500 мл": 500, "вода 1,5 л": 1500, "1.5 литра воды": 1500, "стакан воды": 250,
+                 "2 стакана воды": 500, "два стакана воды": 500, "выпил бутылку воды": 500, "бутылку воды 1,5 л": 1500,
+                 "+300": 300, "+0,5 л": 500, "500 мл": 500, "литр воды": 1000, "пол литра воды": 500,
+                 "полтора литра воды": 1500, "попил воды": 250, "вода 2": 2000, "вода 300": 300, "💧 400": 400}
+        for text, ml in cases.items():
+            self.assertEqual(water.parse(text), ml, text)
+        for text in ("выпил стакан сока", "выпил чай", "протеин 300 мл", "съел гречку", "привет", "500", "вода 9000",
+                     "почему мало пью воды?", "сколько воды пить на сушке", "вода"):
+            self.assertIsNone(water.parse(text), text)
+
+    def test_assess(self):
+        self.assertEqual(water.assess(2600, 2500, 15)[0], "✅")
+        self.assertEqual(water.assess(4000, 2500, 15)[0], "🟡")
+        self.assertEqual(water.assess(1300, 2500, 14)[0], "👍")   # к 14:00 нужно ~46 %
+        mark, text = water.assess(300, 2500, 16)
+        self.assertEqual(mark, "⚠️")
+        self.assertIn("Отстаёшь", text)
+        self.assertEqual(water.assess(1000, 2500, 22)[0], "🌙")
+        self.assertEqual(water.assess(0, 2500, 7)[0], "👍")       # утром ещё рано
+        self.assertEqual(water.norm(None, 60), (2600, "ориентир без веса — добавь вес в профиле"))
+        self.assertEqual(water.norm({"water": 2450}, 0)[0], 2450)
+        self.assertEqual(water.liters(1500), "1,5 л")
+        self.assertEqual(water.liters(2000), "2 л")
+        self.assertIn("▰", water.card(250, 1000, 2500, "35 мл на кг веса", 12))
+
+    def test_store(self):
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "c.db"))
+        a = db.add_water(U, "2026-10-11", "09:00", 300)
+        db.add_water(U, "2026-10-11", "10:00", 200)
+        db.add_water(U, "2026-10-10", "10:00", 1000)
+        self.assertEqual(db.water_total(U, "2026-10-11"), 500)
+        self.assertEqual(db.water_days(U, "2026-10-10", "2026-10-11"), {"2026-10-10": 1000, "2026-10-11": 500})
+        self.assertFalse(db.delete_water(99, a["id"]))
+        self.assertTrue(db.delete_water(U, a["id"]))
+        with self.assertRaises(ValueError):
+            db.add_water(U, "2026-10-11", "10:00", 9000)
 
 
 class BotTest(unittest.TestCase):
@@ -679,6 +720,41 @@ class BotTest(unittest.TestCase):
         self.assertGreater(len(texts), 2)  # длинный разбор разрезан на части
         r = call("/api/progress", {})
         self.assertIn("Блок 0", r.json["progress"]["text"])
+
+    def test_water_chat(self):
+        coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "выпил 2 стакана воды"})
+        t = self.texts()[-1]
+        self.assertIn("+500 мл", t)
+        self.assertIn("за день <b>500 мл</b>", t)
+        self.assertEqual(self.db.water_total(U, "2026-10-11"), 500)
+        rows = self.db.water(U, "2026-10-11")
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "wa|add|250", "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertEqual(self.db.water_total(U, "2026-10-11"), 750)
+        coach.on_callback({"id": "2", "from": {"id": U}, "data": f"wa|del|{rows[0]['id']}",
+                           "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertEqual(self.db.water_total(U, "2026-10-11"), 250)
+        self.assertIn("Отменил", [kw.get("text", "") for m, kw in self.sent if m in ("sendMessage", "editMessageText")][-1])
+        coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "/water"})
+        self.assertIn("08:00 250 мл", self.texts()[-1])
+        coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "/water 1.5"})
+        self.assertEqual(self.db.water_total(U, "2026-10-11"), 1750)
+        # чай и сок — это еда, не вода
+        with mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "выпил стакан сока"})
+        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["log_meal"])
+        ctx, t = coach.context(U)
+        self.assertIn("ВОДА СЕГОДНЯ", ctx)
+        self.assertIn("1,8 л из", ctx)
+        self.assertIn("Вода:", coach.food_text(U))
+
+    def test_water_api(self):
+        r = call("/api/water", {"ml": 500})
+        w = r.json["day"]["water"]
+        self.assertEqual(w["drank"], 500)
+        self.assertIn(w["mark"], ("👍", "⚠️", "✅", "🟡", "🌙"))
+        self.assertTrue(w["note"])
+        r = call("/api/water/delete", {"id": w["log"][0]["id"]})
+        self.assertEqual(r.json["day"]["water"]["drank"], 0)
 
     def test_static(self):
         r = call("/", method="GET", init="")
