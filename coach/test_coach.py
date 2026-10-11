@@ -234,6 +234,19 @@ class InsightsTest(unittest.TestCase):
         self.assertEqual(insights.bedtime(days, TODAY, {"age": 30})["bed"], "23:20")  # 07:10 − 7,5 ч − 20 мин
         self.assertIsNone(insights.bedtime({}, TODAY, {}))
 
+    def test_progress(self):
+        p = insights.progress(self.db, U, TODAY, 40)
+        self.assertGreaterEqual(len(p["weeks"]), 6)
+        self.assertEqual(sum(w["days"] for w in p["weeks"]), 40)
+        self.assertIn("Бокс", p["sports"])
+        self.assertIsNotNone(p["after"]["sleep_8plus"])
+        self.assertTrue(10 <= p["bed_mean"] <= 13)  # отбой около полуночи в часах от полудня
+        text, _ = insights.progress_context(self.db, U, TODAY, {"sport": "бокс"}, {}, 40)
+        for w in ("ПО НЕДЕЛЯМ", "ПЕРВАЯ ПОЛОВИНА", "ОТБОЙ", "Бокс:"):
+            self.assertIn(w, text)
+        self.assertEqual(insights._clock(insights._bed_hour({"start": "23:30"})), "23:30")
+        self.assertEqual(insights._clock(insights._bed_hour({"start": "01:05"})), "01:05")
+
     def test_sports(self):
         self.assertEqual(insights.sport_name("boxing"), "Бокс")
         self.assertEqual(insights.sport_name("box-jumps"), "Box jumps")
@@ -654,6 +667,18 @@ class BotTest(unittest.TestCase):
         self.assertIn("<b>Восстановление 82%</b>", self.texts()[-1])
         self.assertEqual(self.db.meals(U, "2026-10-11"), [])
         self.assertNotIn(U, coach.busy)
+
+    def test_progress_report(self):
+        long = "\n\n".join(f"**Блок {i}**\n- " + "пункт " * 120 for i in range(12))
+        with mock.patch.object(ai, "claude", return_value=long) as c, mock.patch.object(coach, "today_of", return_value=TODAY):
+            coach.progress_report(U)
+        self.assertIn("ПО НЕДЕЛЯМ", c.call_args[0][0])
+        texts = self.texts()
+        self.assertIn("Разбор прогресса", "".join(texts))
+        self.assertTrue(all(len(t) <= 4096 for t in texts))
+        self.assertGreater(len(texts), 2)  # длинный разбор разрезан на части
+        r = call("/api/progress", {})
+        self.assertIn("Блок 0", r.json["progress"]["text"])
 
     def test_static(self):
         r = call("/", method="GET", init="")
