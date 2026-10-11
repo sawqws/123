@@ -291,7 +291,12 @@ def finish_connect(state, code):
         db.mark_synced(uid)  # первую загрузку делает first_sync, расписание пусть не дублирует
     except Exception as e:
         print("whoop exchange:", e)
-        return False, "WHOOP не принял вход. Попробуй /connect ещё раз."
+        try:  # новая кнопка сразу в чат — писать /connect не нужно
+            send(uid, "⚠️ WHOOP не принял вход. Вот новая кнопка — попробуй ещё раз.")
+            connect(uid, uid)
+        except Exception as e2:
+            print("reconnect:", e2)
+        return False, "WHOOP не принял вход. Новая кнопка уже в Telegram."
     threading.Thread(target=first_sync, args=(uid,), daemon=True).start()
     return True, "WHOOP подключён. Возвращайся в Telegram."
 

@@ -25,6 +25,8 @@ PATHS = {
     "workout": "/v2/activity/workout",
 }
 _locks = {}
+# WHOOP за Cloudflare: заголовок «Python-urllib/3.x» он режет (403, error 1010), со своим — пускает
+UA = "Forma/1.0 (+https://sawqws.github.io/123/privacy.html)"
 
 
 class NotConnected(Exception):
@@ -40,7 +42,8 @@ def auth_link(client_id, redirect, state):
 
 def _post_form(url, form):
     req = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode(),
-                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
+                                          "User-Agent": UA})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
@@ -90,6 +93,7 @@ class Client:
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
         for attempt in range(3):
             req = urllib.request.Request(url, headers={"Authorization": "Bearer " + self._access(force=attempt == 1),
+                                                       "User-Agent": UA,
                                                        "Accept": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=30) as r:
