@@ -21,6 +21,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -1145,6 +1146,134 @@ def install_planner(chat, token, msg_id=None):
          raw_html=True)
 
 
+AGENT_ENV = "/etc/tg-agent.env"
+agent = {}  # chat -> {"token", "phone", "site", "hash"} — шаги /agent
+
+
+def agent_env():
+    try:
+        with open(AGENT_ENV) as f:
+            return dict(re.findall(r"^\s*([A-Z_]+)\s*=\s*(.*?)\s*$", f.read(), re.M))
+    except OSError:
+        return {}
+
+
+def forget(chat, msg_id):
+    """Токен и коды не должны висеть в чате."""
+    try:
+        tg("deleteMessage", chat_id=chat, message_id=msg_id)
+    except Exception:
+        pass
+
+
+def agent_step(chat, text, msg_id=None):
+    """/agent — ставит секретаря (tgbot/) на этот сервер: токен -> номер -> код с my.telegram.org -> ключи -> install.sh.
+    Ключи получает сервер сам: с телефона через VPN my.telegram.org отвечает «ERROR»."""
+    if os.path.join(REPO, "tgbot") not in sys.path:
+        sys.path.insert(0, os.path.join(REPO, "tgbot"))
+    import get_api
+    if text == "/cancel":
+        agent.pop(chat, None); mode.pop(chat, None)
+        send(chat, "Ок, отменил установку секретаря.", menu=True)
+        return
+    if text.startswith("/agent"):  # начать заново
+        agent[chat] = {}
+        mode.pop(chat, None)
+    st = agent.setdefault(chat, {})
+    step = mode.get(chat)
+    if step == "agent_token":
+        m = BOT_TOKEN.search(text)
+        if msg_id:
+            forget(chat, msg_id)
+        if not m or m.group(0) == TOKEN:
+            send(chat, "🤔 Нужен токен бота-секретаря от @BotFather (не этого бота). /cancel — отмена")
+            return
+        try:
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{m.group(0)}/getMe", timeout=30) as r:
+                st["name"] = json.load(r)["result"].get("username") or "agent"
+        except Exception:
+            send(chat, "❌ Токен не подошёл. Скопируй его из @BotFather целиком. /cancel — отмена")
+            return
+        st["token"] = m.group(0)
+        env = agent_env()
+        if env.get("TG_API_ID") and env.get("TG_API_HASH"):
+            st["keys"] = (env["TG_API_ID"], env["TG_API_HASH"])
+            return agent_install(chat)
+        mode[chat] = "agent_phone"
+        send(chat, "📱 Номер телефона твоего Telegram — получу ключи приложения с my.telegram.org прямо с сервера.")
+        return
+    if step == "agent_phone":
+        st["phone"] = get_api.normalize(text)
+        st["site"] = get_api.Site()
+        try:
+            st["hash"] = st["site"].send_code(st["phone"])
+        except get_api.Fail as e:
+            agent.pop(chat, None); mode.pop(chat, None)
+            send(chat, f"❌ my.telegram.org: {esc(str(e))}\nПопробуй позже: /agent", menu=True, raw_html=True)
+            return
+        mode[chat] = "agent_code"
+        send(chat, "🔢 В чат «Telegram» пришёл код для my.telegram.org (буквы и цифры).\n"
+                   "Пришли его сюда <b>с пробелами между символами</b>, например <code>e W - S G 3</code> — "
+                   "так Telegram не испортит код. /cancel — отмена", raw_html=True)
+        return
+    if step == "agent_code":
+        if msg_id:
+            forget(chat, msg_id)
+        code = re.sub(r"\s+", "", text)
+        site = st["site"]
+        try:
+            site.login(st["phone"], st["hash"], code)
+        except get_api.Fail as e:
+            send(chat, f"❌ {esc(str(e))}. Пришли код ещё раз (с пробелами) или /cancel", raw_html=True)
+            return
+        send(chat, "⏳ Вошёл, создаю приложение…")
+        try:
+            api_id, rest = site.keys()
+            if api_id is None:
+                site.create(rest)
+                api_id, rest = site.keys()
+            if api_id is None:
+                raise get_api.Fail("приложение не создалось")
+        except get_api.Fail as e:
+            agent.pop(chat, None); mode.pop(chat, None)
+            send(chat, f"❌ Ключи не получены: {esc(str(e))}", menu=True, raw_html=True)
+            return
+        st["keys"] = (api_id, rest)
+        return agent_install(chat)
+    mode[chat] = "agent_token"  # /agent — начало
+    m = BOT_TOKEN.search(text)
+    if m:
+        return agent_step(chat, m.group(0), msg_id)
+    send(chat, "🤵 Ставлю секретаря на сервер. Пришли токен его бота от @BotFather. /cancel — отмена")
+
+
+def agent_install(chat):
+    st = agent.pop(chat, {}); mode.pop(chat, None)
+    api_id, api_hash = st["keys"]
+    old = agent_env()
+    fd = os.open(AGENT_ENV, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.write(fd, (f"TG_AGENT_TOKEN={st['token']}\nTG_API_ID={api_id}\nTG_API_HASH={api_hash}\n"
+                  f"TG_ALLOWED_ID={old.get('TG_ALLOWED_ID') or owner() or ''}\n").encode())
+    os.close(fd)
+    send(chat, f"🔑 Ключи получены. Ставлю секретаря @{st.get('name', 'agent')}… Это 3–7 минут (распознавание голоса тяжёлое).")
+    env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin") + ":/usr/local/bin", "HOME": "/root",
+           "LANG": "C.UTF-8", "DEBIAN_FRONTEND": "noninteractive"}
+    try:
+        res = subprocess.run(["bash", os.path.join(REPO, "tgbot", "install.sh")], cwd=REPO, env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        send(chat, "❌ Установка шла дольше 30 минут и остановлена. Логи: pm2 logs horo-bot", menu=True)
+        return
+    if res.returncode != 0:
+        tail = (res.stdout + res.stderr).strip()[-1200:]
+        send(chat, f"❌ Установка не прошла:\n<pre>{esc(tail)}</pre>", menu=True, raw_html=True)
+        return
+    name = st.get("name", "agent")
+    send(chat, f"✅ <b>Секретарь запущен</b>\n\nОткрой @{esc(name)}, нажми /start, затем «Войти в аккаунт».",
+         markup=json.dumps({"inline_keyboard": [[{"text": f"Открыть @{name}", "url": f"https://t.me/{name}"}]]}),
+         raw_html=True)
+
+
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 
@@ -1191,6 +1320,9 @@ def handle(msg):
         return
     if text.startswith("/update"):
         update(chat)
+        return
+    if text.startswith("/agent") or (mode.get(chat) or "").startswith("agent_"):
+        threading.Thread(target=agent_step, args=(chat, text, msg.get("message_id")), daemon=True).start()
         return
     if text.startswith("/planner") or BOT_TOKEN.fullmatch(text):
         m = BOT_TOKEN.search(text)
