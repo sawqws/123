@@ -34,11 +34,23 @@ async function api(path, opts) {
   return data;
 }
 
+// отклик вибрацией (только в Telegram)
+function haptic(kind) {
+  try {
+    const h = tg && tg.HapticFeedback;
+    if (!h) return;
+    if (kind === 'error' || kind === 'success' || kind === 'warning') h.notificationOccurred(kind);
+    else if (kind === 'select') h.selectionChanged();
+    else h.impactOccurred(kind || 'light');
+  } catch (e) {}
+}
+
 let toastTimer;
-function toast(text) {
+function toast(text, kind) {
   const t = $('toast');
   t.textContent = text;
   t.classList.add('on');
+  if (kind) haptic(kind);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('on'), 3500);
 }
@@ -46,16 +58,52 @@ function toast(text) {
 // ---------- состояние разговора ----------
 // off — выключен; listen — слушаю; think — Claude думает; speak — говорю
 let mode = 'off';
-const LABELS = { off: 'Нажми, чтобы говорить', listen: 'Слушаю…', think: 'Думаю…', speak: 'Говорю…' };
-const ICONS = { off: '🎙', listen: '👂', think: '💭', speak: '🔊' };
+const LABELS = { off: 'Готов слушать', listen: 'Слушаю', think: 'Думаю', speak: 'Говорю' };
+const HINTS = {
+  off: 'Нажми «Говорить» — дальше без рук',
+  listen: 'Говори — замолчишь, и я отвечу',
+  think: 'Секунду…',
+  speak: 'Отвечаю в динамики очков',
+};
 let talking = false; // разговор включён (после ответа снова слушаем)
 
 function setMode(m) {
+  const was = mode;
   mode = m;
-  document.body.className = m;
+  document.body.className = m + (talking ? ' talking' : '');
   $('state').textContent = LABELS[m];
-  $('orb-icon').textContent = ICONS[m];
+  $('hint').textContent = HINTS[m];
+  $('talk-label').textContent = talking ? '■ Закончить' : '🎙 Говорить';
+  $('talk-sub').textContent = talking ? 'удерживай' : '';
   if (m !== 'listen') $('ring').style.transform = '';
+  if (was !== m && (m === 'think' || m === 'speak')) haptic('select');
+}
+
+// ---------- лента разговора: пузыри ----------
+const MAX_BUBBLES = 8;
+function bubble(role, text) {
+  const chat = $('chat');
+  const empty = chat.querySelector('.empty');
+  if (empty) empty.remove();
+  const b = document.createElement('div');
+  b.className = 'bubble ' + (role === 'user' ? 'me' : 'ai');
+  b.textContent = text;
+  chat.appendChild(b);
+  while (chat.children.length > MAX_BUBBLES) chat.firstElementChild.remove();
+}
+function renderChat(items) {
+  const chat = $('chat');
+  if (!items || !items.length) return;
+  chat.innerHTML = '';
+  items.slice(-MAX_BUBBLES).forEach((h) => {
+    // «[фото Зимний дворец] что это?» -> «📷 Зимний дворец — что это?»
+    const m = h.role === 'user' && /^\[фото ?([^\]]*)\]\s*(.*)$/s.exec(h.text || '');
+    const text = m ? '📷 ' + (m[1] || 'Фото') + (m[2] ? ' — ' + m[2] : '') : h.text;
+    bubble(h.role, text);
+  });
+}
+function clearChat() {
+  $('chat').innerHTML = '<div class="empty">Скажи что-нибудь — отвечу в динамики очков.</div>';
 }
 
 // ---------- звук: AudioContext (на iPhone играет в любой момент после первого нажатия) ----------
@@ -220,11 +268,13 @@ async function send(pcm) {
     const r = await api('/api/talk', { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav(pcm) });
     if (!r.heard) { $('heard').textContent = ''; setMode(talking ? 'listen' : 'off'); drain(); return; }
     $('heard').textContent = '«' + r.heard + '»';
+    bubble('user', r.heard);
+    if (r.say) bubble('assistant', r.say);
     setMode(talking ? 'listen' : 'off');
     say(r.say, r.audio);
   } catch (e) {
     $('heard').textContent = '';
-    toast(e.message);
+    toast('⚠️ ' + e.message, 'error');
     setMode(talking ? 'listen' : 'off');
     drain();
   }
@@ -253,9 +303,10 @@ $('talk').addEventListener('click', async () => {
   audioCtx();
   unlockSpeech();
   if (talking && Date.now() - downAt < 800) {
-    toast('Чтобы остановить разговор — удерживай кнопку');
+    toast('Чтобы закончить разговор — удерживай кнопку', 'warning');
     return;
   }
+  haptic('medium');
   if (talking) {
     talking = false;
     stopSpeaking();
@@ -286,6 +337,7 @@ function showMicHelp(e) {
     ? 'Микрофон в Telegram не включился. Открой «Глаз» в Safari — там он работает.'
     : 'Нет доступа к микрофону: разреши его для этого сайта (аА → Настройки веб-сайта → Микрофон).';
   n.appendChild(p);
+  haptic('error');
   if (inTg && safari) {
     const b = document.createElement('button');
     b.className = 'btn';
@@ -296,10 +348,14 @@ function showMicHelp(e) {
   console.warn(e);
 }
 
-$('stop').addEventListener('click', () => { stopSpeaking(); queue.length = 0; });
+$('stop').addEventListener('click', () => { haptic('light'); stopSpeaking(); queue.length = 0; });
 $('new').addEventListener('click', async () => {
-  try { await api('/api/new', { method: 'POST' }); $('heard').textContent = ''; $('say').textContent = ''; toast('Начали заново'); }
-  catch (e) { toast(e.message); }
+  haptic('light');
+  try {
+    await api('/api/new', { method: 'POST' });
+    $('heard').textContent = ''; $('say').textContent = ''; clearChat();
+    toast('🧹 Начали заново', 'success');
+  } catch (e) { toast('⚠️ ' + e.message, 'error'); }
 });
 
 $('pick').addEventListener('change', async (ev) => {
@@ -310,8 +366,8 @@ $('pick').addEventListener('change', async (ev) => {
   for (const f of files) {
     try {
       await api('/api/upload', { method: 'POST', headers: { 'Content-Type': f.type || 'image/jpeg' }, body: f });
-      toast('👀 Смотрю на фото…');
-    } catch (e) { toast(e.message); }
+      toast('👀 Смотрю на фото…', 'light');
+    } catch (e) { toast('⚠️ ' + e.message, 'error'); }
   }
 });
 
@@ -341,6 +397,7 @@ async function renderFeed(photos) {
     img.alt = '';
     el.appendChild(img);
     const body = document.createElement('div');
+    body.className = 'body';
     const t = document.createElement('div');
     t.className = 't';
     t.textContent = p.title || (p.text ? 'Фото' : '👀 Смотрю…');
@@ -352,7 +409,7 @@ async function renderFeed(photos) {
     m.textContent = time(p.t) + (p.place ? ' · ' + p.place : '');
     body.append(t, d, m);
     el.appendChild(body);
-    if (p.say) el.onclick = () => { audioCtx(); say(p.say); };
+    if (p.say) el.onclick = () => { haptic('light'); audioCtx(); say(p.say); };
     feed.appendChild(el);
     thumb(p.id).then((u) => { if (u) img.src = u; });
   }
@@ -369,9 +426,9 @@ async function poll() {
     let refresh = false;
     for (const e of r.events) {
       last = Math.max(last, e.id);
-      if (e.kind === 'photo_new') { refresh = true; toast('👀 Смотрю на фото…'); }
+      if (e.kind === 'photo_new') { refresh = true; toast('👀 Смотрю на фото…', 'light'); }
       if (e.kind === 'photo') { refresh = true; if (ctx) say(e.say, e.audio); else $('say').textContent = e.say; }
-      if (e.kind === 'error') toast('😕 ' + e.text);
+      if (e.kind === 'error') toast('⚠️ ' + e.text, 'error');
     }
     if (refresh) load();
   } catch (e) { /* сеть пропала — попробуем позже */ }
@@ -384,9 +441,11 @@ async function load() {
     if (!last) last = s.last;
     safari = s.safari || '';
     if (s.place) $('place').textContent = '📍 ' + s.place;
+    renderChat(s.history);
     renderFeed(s.photos);
   } catch (e) {
-    $('state').textContent = e.message;
+    $('state').textContent = 'Нет связи';
+    $('hint').textContent = e.message;
   }
 }
 
@@ -399,7 +458,7 @@ function locate() {
     const first = !where;
     where = { lat: p.coords.latitude.toFixed(6), lon: p.coords.longitude.toFixed(6) };
     if (first) api('/api/where', { method: 'POST' }).then((r) => { if (r.place) $('place').textContent = '📍 ' + r.place; }).catch(() => {});
-  }, () => { $('place').textContent = '📍 место неизвестно (нет доступа к геопозиции)'; },
+  }, () => { $('place').textContent = '📍 место неизвестно — нет доступа к GPS'; },
   { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 });
 }
 
@@ -408,10 +467,15 @@ if (tg) {
   tg.ready();
   tg.expand();
   try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
-  try { tg.setHeaderColor('#0b0c10'); tg.setBackgroundColor('#0b0c10'); } catch (e) {}
+  // шапка и фон Telegram — в цвет страницы (тема Telegram, светлая или тёмная)
+  const page = (tg.themeParams && tg.themeParams.secondary_bg_color) || '#0b0c10';
+  try { tg.setHeaderColor(page); tg.setBackgroundColor(page); } catch (e) {}
+  try { if (tg.setBottomBarColor) tg.setBottomBarColor(page); } catch (e) {}
 }
+try { document.querySelector('meta[name=theme-color]').content = getComputedStyle(document.body).backgroundColor; } catch (e) {}
 if (!(tg && tg.initData) && !key) {
-  $('state').textContent = 'Открой «Глаз» из Telegram или по ссылке из /link';
+  $('state').textContent = 'Нет доступа';
+  $('hint').textContent = 'Открой «Глаз» из Telegram или по ссылке из /link';
 } else {
   load();
   locate();

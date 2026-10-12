@@ -58,6 +58,8 @@ class Base(unittest.TestCase):
         self.sent.append((method, kw))
         if method == "getFile":
             return {"ok": True, "result": {"file_path": "photos/file_1.jpg"}}
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": len(self.sent)}}
         return {"ok": True, "result": {}}
 
     def fake_file(self, method, field, name, data, ctype, **kw):
@@ -72,7 +74,10 @@ class Base(unittest.TestCase):
         return m
 
     def texts(self):
-        return [kw["text"] for k, kw in self.sent if k == "sendMessage"]
+        return [kw["text"] for k, kw in self.sent if k in ("sendMessage", "editMessageText")]
+
+    def methods(self):
+        return [k for k, kw in self.sent if k not in ("sendChatAction", "getFile")]
 
 
 class ChatTest(Base):
@@ -94,7 +99,13 @@ class ChatTest(Base):
         self.assertIn("Дворцовая площадь", place)
         self.assertEqual(question, "что это?")
         self.assertIn("<b>Зимний дворец</b>", self.texts()[-1])
+        self.assertIn("<blockquote>Зимний дворец — резиденция царей.</blockquote>", self.texts()[-1])
         self.assertIn("📍", self.texts()[-1])
+        # «Смотрю…» превращается в ответ на месте, а не новым сообщением
+        self.assertEqual(self.methods()[-2:], ["sendMessage", "editMessageText"])
+        self.assertIn("Смотрю", self.texts()[-2])
+        wait_id = [kw for k, kw in self.sent if k == "editMessageText"][-1]["message_id"]
+        self.assertEqual(self.sent[wait_id - 1][0], "sendMessage")
         self.assertEqual(self.files[0][0], "sendVoice")  # страница закрыта — ответ голосовым в чат
         ph = eye.recent_photos()
         self.assertEqual(ph[-1]["title"], "Зимний дворец")
@@ -114,6 +125,8 @@ class ChatTest(Base):
                 mock.patch.object(eye.ai, "talk", return_value="В 1762 году.") as talk:
             eye.on_message(self.msg(voice={"file_id": "v"}))
             self.assertIn("1762", self.texts()[-1])
+            self.assertIn("«когда его построили»", self.texts()[-1])  # услышанное — в том же сообщении
+            self.assertEqual(self.methods()[-2:], ["sendMessage", "editMessageText"])
             self.assertEqual(self.files[-1][0], "sendVoice")
             eye.on_message(self.msg("а кто архитектор?"))
         hist = talk.call_args[0][3]
@@ -133,6 +146,50 @@ class ChatTest(Base):
         with mock.patch.object(eye.ai, "talk", side_effect=ai.AIError("у Claude закончился лимит")):
             eye.on_message(self.msg("что это"))
         self.assertIn("лимит", self.texts()[-1])
+        self.assertTrue(self.texts()[-1].startswith("⚠️ У Claude"))
+        self.assertNotIn("\n", self.texts()[-1])
+
+    def test_start_menu_and_callbacks(self):
+        with mock.patch.object(eye, "public_url", "https://eye.example"):
+            eye.on_message(self.msg("/start"))
+        kb = [kw for k, kw in self.sent if k == "sendMessage"][-1]["reply_markup"]["inline_keyboard"]
+        self.assertEqual(kb[0][0]["web_app"]["url"], "https://eye.example/")
+        self.assertEqual(kb[0][0]["style"], "primary")
+        self.assertTrue(all(len(row) <= 3 for row in kb))
+        self.assertTrue(all(len(b["text"]) <= 24 for row in kb for b in row))
+        eye.remember("user", "привет")
+        n = len(self.texts())
+        eye.on_callback({"id": "1", "from": {"id": U}, "data": "new", "message": {"chat": {"id": U}, "message_id": 5}})
+        self.assertEqual(eye.history(), [])
+        self.assertEqual(len(self.texts()), n)  # без нового сообщения — всплывашка
+        self.assertIn("заново", self.sent[-1][1]["text"])
+        eye.on_message(self.msg("/status"))
+        self.assertEqual(self.sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"], "status")
+        eye.on_callback({"id": "2", "from": {"id": U}, "data": "status",
+                         "message": {"chat": {"id": U}, "message_id": 9}})
+        edit = [kw for k, kw in self.sent if k == "editMessageText"][-1]
+        self.assertEqual(edit["message_id"], 9)
+        self.assertIn("Проверка", edit["text"])
+        eye.remember("user", "секрет")
+        eye.on_callback({"id": "3", "from": {"id": 99}, "data": "new", "message": {"chat": {"id": 99}, "message_id": 1}})
+        self.assertIn("личный", self.sent[-1][1]["text"])
+        self.assertEqual(len(eye.history()), 1)
+
+    def test_button_style_fallback(self):
+        def picky(method, **kw):
+            self.sent.append((method, kw))
+            rows = kw.get("reply_markup", {}).get("inline_keyboard", [])
+            if any("style" in b for row in rows for b in row):
+                e = urllib.error.HTTPError("u", 400, "Bad Request", {}, None)
+                e.body = '{"ok":false,"description":"Bad Request: can\'t parse inline keyboard button: style"}'
+                raise e
+            return {"ok": True, "result": {"message_id": 1}}
+        with mock.patch.object(eye, "tg", side_effect=picky), mock.patch.object(eye, "public_url", "https://e.x"):
+            eye.on_message(self.msg("/app"))
+        first, second = self.sent[-2][1], self.sent[-1][1]
+        self.assertEqual(first["reply_markup"]["inline_keyboard"][0][0]["style"], "primary")
+        self.assertNotIn("style", second["reply_markup"]["inline_keyboard"][0][0])
+        self.assertEqual(second["reply_markup"]["inline_keyboard"][0][0]["text"], "👁 Открыть «Глаз»")
 
 
 class WebTest(Base):
