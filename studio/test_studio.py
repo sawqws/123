@@ -163,6 +163,48 @@ class StudioFlow(unittest.TestCase):
         self.assertEqual(studio.draft()["stage"], "done")
         self.assertTrue(any(m == "deleteMessage" for m, _ in self.t.calls))  # токен стёрт из чата
 
+    def test_one_tap_managed_bot(self):
+        """Managed Bots: кнопка «⚡ Создать», подтверждение в Telegram → токен сам → запуск."""
+        created = {"username": "voda_test_bot", "id": 555}
+        with mock.patch.object(studio.bot, "can_manage", lambda: True), \
+                mock.patch.object(studio.bot, "managed_token", lambda i: self.f.token if i == 555 else None), \
+                mock.patch.object(studio, "botfather", lambda n, w: self.fail("Секретарь не нужен")):
+            studio.bot.username = "studio_test_bot"
+            self.t.api("idea", {"text": "вода"})
+            self.t.api("enough")
+            self.t.api("name", {"text": "Вода"})
+            orig = studio.claude
+
+            def build_and_tap(prompt, cwd, **k):  # пока пишется код, Глеб жмёт кнопку и подтверждает
+                link = studio.draft()["newbot"]
+                self.assertTrue(link.startswith("https://t.me/newbot/studio_test_bot/voda_test_bot?name="))
+                self.assertEqual(self.t.api("state")[1]["draft"]["newbot"], link)
+                self.assertNotIn("token", self.t.api("state")[1]["draft"])
+                self.t.bot.handle({"update_id": 2, "managed_bot": {"user": {"id": OWNER}, "bot": created}})
+                return orig(prompt, cwd, **k)
+            with mock.patch.object(studio, "claude", build_and_tap):
+                self.t.api("confirm")
+        self.assertIn("⚡ Создать @voda_test_bot", "\n".join(
+            b["text"] for p in self.t.messages for row in (p.get("reply_markup") or {}).get("inline_keyboard", [])
+            for b in row))
+        self.assertEqual(studio.draft()["stage"], "done")
+        self.assertIn(f"BOT_TOKEN={self.f.token}", read(os.path.join(studio.registry()["voda"]["dir"], ".env")))
+
+    def test_managed_bot_after_code_ready(self):
+        with mock.patch.object(studio.bot, "can_manage", lambda: True), \
+                mock.patch.object(studio.bot, "managed_token", lambda i: self.f.token):
+            studio.bot.username = "studio_test_bot"
+            self.t.api("idea", {"text": "вода"})
+            self.t.api("enough")
+            self.t.api("name", {"text": "Вода"})
+            self.t.api("confirm")
+            self.assertEqual(studio.draft()["stage"], "token")
+            self.assertIn("⚡ Создать @voda_test_bot", self.t.buttons)
+            self.t.bot.handle({"update_id": 3, "managed_bot": {"user": {"id": 999}, "bot": {"id": 1}}})  # чужой
+            self.assertEqual(studio.draft()["stage"], "token")
+            self.t.bot.handle({"update_id": 4, "managed_bot": {"user": {"id": OWNER}, "bot": {"id": 1}}})
+        self.assertEqual(studio.draft()["stage"], "done")
+
     def test_text_during_build_is_queued_and_free_text_asks(self):
         self.t.api("idea", {"text": "трекер"})
         self.t.api("enough")

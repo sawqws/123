@@ -819,10 +819,22 @@ def _build(chat):
     d.update(slug=slug)
     put(d)
 
-    # параллельно: аватар и бот в @BotFather — пока Claude пишет код
+    # параллельно, пока Claude пишет код: бот в Telegram и аватар.
+    # Лучший путь — Managed Bots: Глеб жмёт кнопку, подтверждает окно Telegram, токен приходит сам (@bot.managed).
     got = {}
-    t = threading.Thread(target=lambda: got.update(botfather=botfather(d["name"], d["plan"]["username"])), daemon=True)
-    t.start()
+    t = None
+    if bot.can_manage():
+        d["newbot"] = bot.newbot_link(want_username(d), d["name"])
+        put(d)
+        bot.send(chat, card("⚡ <b>Нажми — и бот появится в Telegram</b>",
+                            [f"Откроется окно с именем «{esc(d['name'])}» и адресом @{esc(want_username(d))} — "
+                             "просто подтверди. Можно поменять адрес, если занят."],
+                            "<i>Пока ты жмёшь, я пишу код.</i>"),
+                 [[kit.url(f"⚡ Создать @{want_username(d)}", d["newbot"], "success")]])
+    else:
+        t = threading.Thread(target=lambda: got.update(botfather=botfather(d["name"], d["plan"]["username"])),
+                             daemon=True)
+        t.start()
     try:
         avatar(path, d)
     except Exception as e:
@@ -856,8 +868,10 @@ def _build(chat):
     reg_set(slug, info)
 
     st.step("создаю бота в Telegram", force=True)
-    t.join(timeout=6 * 60)
-    token, why = got.get("botfather") or (None, "Секретарь не ответил")
+    if t:
+        t.join(timeout=6 * 60)
+    token, why = got.get("botfather") or (None, "Секретарь не ответил" if t else "")
+    token = draft().get("token") or token  # пришёл через Managed Bots, пока писался код
     if not token:
         d = draft()
         d.update(stage="token", why=why)
@@ -867,8 +881,19 @@ def _build(chat):
     deploy(chat, slug, token, st)
 
 
+def want_username(d):
+    """Желаемый @username нового бота (оканчивается на bot)."""
+    u = re.sub(r"_?bot$", "", (d.get("plan") or {}).get("username") or "my_helper", flags=re.I)[:28]
+    return f"{u}_bot"
+
+
 def ask_token(chat, d):
     p = d.get("plan") or {}
+    if d.get("newbot"):
+        return bot.send(chat, card(f"✅ <b>Код «{esc(d['name'])}» готов</b>",
+                                   ["Осталось создать бота в Telegram: нажми кнопку и подтверди окно — дальше я сам."],
+                                   "<i>Или создай в @BotFather вручную и пришли сюда токен.</i>"),
+                        [[kit.url(f"⚡ Создать @{want_username(d)}", d["newbot"], "success")], [b("✖️ Отмена", "cancel")]])
     bot.send(chat, card("🔑 <b>Последний шаг — токен</b>",
                         [f"Сам создать не смог: {esc(d.get('why') or '')}",
                          "1. @BotFather → /newbot",
@@ -887,6 +912,30 @@ def got_token(c):
     d["stage"] = "build"
     put(d)
     bot.later(deploy, c.chat, d["slug"], m.group(0))
+
+
+@bot.managed
+def on_managed(upd):
+    """Глеб подтвердил создание бота (Managed Bots) — забираем токен и запускаем."""
+    if (upd.get("user") or {}).get("id") != bot.owner:
+        return
+    new = upd.get("bot") or {}
+    try:
+        token = bot.managed_token(new["id"])
+    except Exception as e:
+        return bot.notify(kit.error(f"Бот @{esc(new.get('username'))} создан, но токен не выдали: {esc(e)}"))
+    d = draft()
+    if d.get("stage") == "build":
+        d["token"] = token
+        put(d)
+        bot.notify(f"🤖 @{esc(new.get('username'))} создан — запущу, как только допишу код.")
+    elif d.get("stage") == "token":
+        d.update(stage="build", token=token)
+        put(d)
+        bot.later(deploy, bot.owner, d["slug"], token)
+    else:
+        bot.notify(f"🤖 @{esc(new.get('username'))} создан, но я его сейчас не ждал. Опиши, каким он должен быть, "
+                   "— сделаю нового бота (этого можно удалить в @BotFather).")
 
 
 def secretary_ready():
@@ -1149,7 +1198,7 @@ def remove(slug):
 def api_state(r):
     d = draft()
     pub = {k: d.get(k) for k in ("id", "idea", "stage", "qi", "names", "emoji", "name", "plan", "fixes", "steps",
-                                  "error", "started", "result", "queued")}
+                                  "error", "started", "result", "queued", "newbot")}  # токен — не отдаём
     pub["qs"] = [{"q": q["q"], "options": q["options"], "a": q.get("a")} for q in d.get("qs") or []]
     if pub.get("result"):
         info = registry().get(pub["result"].get("slug")) or {}
