@@ -567,15 +567,13 @@ class Agent:
             me = await self.client.get_me()
             await self.say(card("✓ Уже вошёл", esc(actions.who(me))))
             return
-        if self.client is None:  # ключей нет — выбор способа
-            await self.say(card("🔑 Вход в аккаунт", "Как подключиться?\n\n"
-                                "<b>🖥 Как Telegram Desktop</b> — сразу, без my.telegram.org.\n"
-                                "<b>🔑 Свои ключи</b> — через my.telegram.org; с серверов и VPN сайт часто отвечает «ERROR».",
-                                "/cancel — отмена"),
-                           buttons=[[Button.inline("🖥 Войти как Telegram Desktop", "login:desktop", style="primary")],
-                                    [Button.inline("🔑 Свои ключи (my.telegram.org)", "login:own")]])
-            return
-        await self.ask_phone()
+        # не вошли — всегда даём выбор способа (сохранённые ключи или сессия могли не подойти)
+        await self.say(card("🔑 Вход в аккаунт", "Как подключиться?\n\n"
+                            "<b>🖥 Как Telegram Desktop</b> — сразу, без my.telegram.org.\n"
+                            "<b>🔑 Свои ключи</b> — через my.telegram.org; с серверов и VPN сайт часто отвечает «ERROR».",
+                            "/cancel — отмена"),
+                       buttons=[[Button.inline("🖥 Войти как Telegram Desktop", "login:desktop", style="primary")],
+                                [Button.inline("🔑 Свои ключи (my.telegram.org)", "login:own")]])
 
     async def on_login_choice(self, ev, arg):
         if arg == "desktop":
@@ -591,6 +589,7 @@ class Agent:
             s = load_settings()
             s["api_id"], s["api_hash"] = str(DESKTOP["api_id"]), DESKTOP["api_hash"]
             save_settings(s)
+            await self.reset_session()  # чистая сессия: старая могла остаться от прошлых попыток
             self.client = self.make_client(DESKTOP["api_id"], DESKTOP["api_hash"])
             await ev.edit(card("🖥 Вход как Telegram Desktop", "✓ выбрано"), buttons=None)
             await self.ask_phone()
@@ -700,10 +699,37 @@ class Agent:
             self.login = None
             await self.say(oops(self.login_error(e)))
 
+    async def reset_session(self):
+        """Удалить файл сессии аккаунта (только когда вход не выполнен): испорченный ключ даёт AUTH_KEY_*."""
+        if self.client is not None:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
+            try:
+                self.client.session.delete()
+            except Exception:
+                pass
+        for suffix in (".session", ".session-journal"):
+            path = os.path.join(TMP, "account" + suffix)
+            if os.path.exists(path):
+                os.remove(path)
+        self.client = None
+
     async def send_tg_code(self, phone):
-        if not self.client.is_connected():
+        try:
+            if not self.client.is_connected():
+                await self.client.connect()
+            sent = await self.client.send_code_request(phone)
+        except (errors.RPCError, ConnectionError, ValueError) as e:
+            if "AUTH_KEY" not in str(e).upper() and "AUTHKEY" not in type(e).__name__.upper():
+                raise
+            print("send_tg_code: сессия испорчена, начинаю с чистой:", repr(e), flush=True)
+            api_id, api_hash = self.client.api_id, self.client.api_hash
+            await self.reset_session()
+            self.client = self.make_client(api_id, api_hash)
             await self.client.connect()
-        sent = await self.client.send_code_request(phone)
+            sent = await self.client.send_code_request(phone)
         self.login = {"step": "code", "phone": phone, "hash": sent.phone_code_hash, "code": "",
                       "len": getattr(sent.type, "length", 0) or 0}
         await self.send_code_card()
