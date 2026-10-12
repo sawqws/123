@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 
 
-def call(action, body=None):
+def _call(action, body=None):
     url, key = os.environ.get("HUB_URL", "").rstrip("/"), os.environ.get("HUB_KEY", "")
     if not key and os.environ.get("HUB_TOKEN"):  # ключ, выведенный из токена Главного (HUB_REMOTE=1)
         key = hmac.new(os.environ["HUB_TOKEN"].encode(), b"claude-remote-v1", hashlib.sha256).hexdigest()
@@ -29,9 +29,21 @@ def call(action, body=None):
         sys.exit("Нет HUB_URL / HUB_KEY. Глеб включает вход в Главном (/claude) и добавляет их в переменные облачной среды.")
     req = urllib.request.Request(f"{url}/api/{action}", data=json.dumps(body or {}).encode(), method="POST",
                                  headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    for attempt in range(20):  # сбой TLS бывает при рукопожатии (запрос ещё не ушёл) — повтор безопасен
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                return json.load(r)
+        except urllib.error.HTTPError:
+            raise
+        except urllib.error.URLError as e:
+            if "SSL" not in str(e.reason) and "EOF" not in str(e.reason) or attempt == 19:
+                raise
+            time.sleep(2)
+
+
+def call(action, body=None):
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            return json.load(r)
+        return _call(action, body)
     except urllib.error.HTTPError as e:
         try:
             msg = json.load(e).get("error")
