@@ -15,8 +15,9 @@
   KPP_URL      свой https-адрес приложения; если пусто — https://kpp.<ip-через-дефисы>.sslip.io
                (снаружи его проксирует Caddy планера)
 
-Только стандартная библиотека Python. Скриншоты читает `claude -p`, если он есть на сервере;
-голосовые распознаёт common/media.py (faster-whisper), продиктованный словами номер переводит `claude -p`.
+Только стандартная библиотека Python. Скриншоты и кадры видео (запись экрана Яндекс Go) читает `claude -p`,
+если он есть на сервере; речь (голосовые, кружки, видео) распознаёт common/media.py (faster-whisper),
+продиктованный словами номер переводит `claude -p`.
 """
 import datetime
 import hashlib
@@ -54,6 +55,7 @@ STATE = os.path.join(DATA, "state.json")
 REPO = os.path.dirname(HERE)
 TZ = ZoneInfo("Europe/Moscow")
 REPEAT_WINDOW = 20 * 60  # тот же номер в течение 20 минут — не дублируем пропуск
+PHOTO_MAX = 12 * 1024 * 1024  # скриншот из приложения
 PORT = int(os.environ.get("KPP_PORT") or 8792)
 WEB = os.path.join(HERE, "webapp")
 public_url = (os.environ.get("KPP_URL") or "").rstrip("/")
@@ -190,7 +192,8 @@ def setup_bot():
         {"command": "help", "description": "Как пользоваться"},
     ]
     desc = ("Пропуск для такси в ЖК за одно сообщение.\n\n"
-            "Пришли номер машины из Яндекс Go — бот закажет пропуск в «Домиленд+».")
+            "Пришли номер машины из Яндекс Go — текстом, скриншотом, видео или голосом. "
+            "Бот закажет пропуск в «Домиленд+».")
     short = "Пропуск для такси в ЖК за одно сообщение."
     key = hashlib.sha1(json.dumps([commands, desc, short]).encode()).hexdigest()
     if st.get("bot_setup") != key:
@@ -262,27 +265,28 @@ LOGIN_STEPS = (
 LOGIN_NOTE = "Лучше с iPad или компьютера: телефон может открыть приложение Домиленд."
 LOGIN_TEXT = fmt("🔑 Вход через Яндекс", LOGIN_STEPS, LOGIN_NOTE)
 
-HELP_BODY = (
-    "Пришли номер такси — сразу закажу пропуск.\n"
-    "<code>А123ВС777</code>, текст из Яндекс Go, скриншот или голосовое."
-)
+HELP_BODY = "Пришли номер такси — сразу закажу пропуск.\nТекстом, скриншотом, видео или голосом."
 HELP_NOTE = " · ".join(c + NBSP + w for c, w in (("/passes", "пропуска"), ("/place", "адрес"),
-                                                   ("/auto", "автопропуск"), ("/login", "вход")))
-HELP = fmt("🚧 КПП", HELP_BODY, HELP_NOTE)
+                                                   ("/auto", "автопропуск")))
+HELP = fmt("🚕 КПП", HELP_BODY, HELP_NOTE)
 
 
 def menu_buttons():
-    return app_buttons() + [[btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place")]]
+    rows = app_buttons()
+    last = st.get("last")
+    if last and st.get("jwt"):
+        rows.append([btn(f"🔁 {dl.pretty(last)}", f"rp|{last}")])
+    return rows + [[btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place")]]
 
 
 def app_buttons():
-    return [[{"text": "📱 Приложение", "web_app": {"url": public_url + "/"}}]] if public_url else []
+    return [[{"text": "📱 Открыть приложение", "web_app": {"url": public_url + "/"}}]] if public_url else []
 
 
 def welcome(chat, name):
     hi = f"Привет, {esc(name)}! " if name else ""
     if st.get("jwt"):
-        send(chat, fmt("🚧 КПП", hi + HELP_BODY, HELP_NOTE), menu_buttons())
+        send(chat, fmt("🚕 КПП", hi + HELP_BODY, HELP_NOTE), menu_buttons())
     else:
         send(chat, fmt("🔑 Вход через Яндекс",
                        (f"{hi}Сначала один раз войди в Домиленд.\n" if hi else "") + LOGIN_STEPS, LOGIN_NOTE),
@@ -344,7 +348,7 @@ def apply_place(p):
 
 def set_place(chat, p, msg_id=None):
     apply_place(p)
-    text = fmt("📍 Адрес выбран", esc(p["title"]), "Теперь просто пришли номер такси — А123ВС777.")
+    text = fmt("📍 Адрес выбран", esc(p["title"]), "Теперь просто пришли номер такси.")
     edit(chat, msg_id, text, []) if msg_id else send(chat, text)
 
 
@@ -360,7 +364,7 @@ def order(chat, plate, force=False):
     last = recent_pass(plate)
     if last and not force:
         send(chat, fmt("☑️ Пропуск уже заказан", pass_body(plate, last["ts"])),
-             [[btn("Заказать ещё раз", f"again|{plate}")]])
+             [[btn("🔁 Заказать ещё раз", f"again|{plate}")]])
         return
     msg = send(chat, fmt("⏳ Заказываю пропуск…", pass_body(plate)))["result"]["message_id"]
     try:
@@ -396,30 +400,35 @@ def create_pass(plate):
     recent = {k: v for k, v in (st.get("recent") or {}).items() if now - v["ts"] < 86400}
     recent[plate] = {"ts": now, "id": pid}
     st["recent"] = recent
+    st["last"] = plate
     save(st)
     return pid, now
 
 
+def pass_line(it):
+    """Одна строка о пропуске: номер (или название) · статус · дата."""
+    sub = it.get("subtitle") or ""
+    head = plate_tag(dl.plates(sub)[0]) if dl.plates(sub) else f"<b>{esc(sub or it.get('title') or 'Пропуск')}</b>"
+    status = (it.get("status") or {}).get("title") or ""
+    when = next((f["value"] for f in it.get("fields") or [] if f.get("value")), "")
+    return " · ".join(x for x in (head, esc(status), esc(when)) if x)
+
+
+def can_cancel(it):
+    return any("cancel" in str(a.get("type", "")).lower() for a in it.get("actions") or [])
+
+
 def passes_view():
-    items = call(lambda c: c.passes())
+    items = call(lambda c: c.passes())[:6]
     back = [btn("‹ Назад", "m|home")]
     if not items:
-        return fmt("🗂 Мои пропуска", note="Пока пусто — пришли номер такси."), [back]
-    parts, rows = ["<b>🗂 Мои пропуска</b>"], []
-    for it in items[:6]:
-        status = (it.get("status") or {}).get("title") or ""
-        title = it.get("title") or "Пропуск"
-        sub = it.get("subtitle") or ""
-        lines = [f"<b>{esc(title)}</b>" + (f" · {esc(status)}" if status else "")]
-        if sub:
-            lines.append(esc(sub))
-        for f in (it.get("fields") or [])[:3]:
-            if f.get("value"):
-                lines.append(f"<i>{esc(f.get('title') or '')}</i> {esc(f['value'])}")
-        parts.append(quote("\n".join(lines)))
-        if any("cancel" in str(a.get("type", "")).lower() for a in it.get("actions") or []):
-            rows.append([btn(f"✖️ Отменить · {(sub or title)[:24]}", f"x|{it.get('id')}")])
-    return "\n".join(parts), rows + [back]
+        return fmt("🗂 Пропуска", note="Пока пусто — пришли номер такси."), [back]
+    rows = []
+    for it in items:
+        if can_cancel(it):
+            sub = it.get("subtitle") or it.get("title") or ""
+            rows.append([btn(f"✖️ Отменить {sub[:12]}", f"x|{it.get('id')}", "danger")])
+    return fmt("🗂 Пропуска", "\n".join(pass_line(it) for it in items)), rows + [back]
 
 
 def autopass_view():
@@ -461,18 +470,15 @@ def ask_claude(prompt, cwd, read=False):
     return res.stdout
 
 
-def read_photo(msg):
-    """Номер со скриншота (фото или картинка-документ): `claude -p` читает с картинки."""
-    if not shutil.which("claude"):
+def read_image(paths):
+    """Номер с картинок (скриншот, кадры записи экрана): ответ `claude -p` или None, если Claude нет."""
+    if not shutil.which("claude") or not paths:
         return None
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            path = media.photo_path(TOKEN, msg, tmp)
-        except media.MediaError:
-            return None
-        prompt = (f"На скриншоте {path} — заказ такси. Прочитай госномер машины. "
-                  "Ответь только номером, без пробелов, например А123ВС777. Если номера нет — ответь НЕТ.")
-        return ask_claude(prompt, tmp, read=True)
+    folder = os.path.dirname(paths[0])
+    prompt = (f"Картинки: {' '.join(paths)} — скриншоты или кадры записи экрана приложения такси (Яндекс Go). "
+              "Открой каждую и найди госномер машины. Ответь только номером, без пробелов, например А123ВС777. "
+              "Если номера нет — ответь НЕТ.")
+    return ask_claude(prompt, folder, read=True)
 
 
 def spoken_plate(text):
@@ -487,36 +493,92 @@ def spoken_plate(text):
 
 
 def spawn(fn, *args):
-    """Медленное (распознавание речи) — в отдельном потоке, чтобы бот не замирал."""
+    """Медленное (речь, картинки, видео) — в отдельном потоке, чтобы бот не замирал."""
     def run():
         try:
             fn(*args)
         except Exception as e:
-            print("voice:", e)
+            print("media:", e)
             traceback.print_exc()
     threading.Thread(target=run, daemon=True).start()
 
 
-def on_voice(chat, msg):
+def status_msg(chat, text):
+    """Временное сообщение «⏳ …» и функция, которая заменяет его на ответ."""
     tg("sendChatAction", chat_id=chat, action="typing")
-    mid = ((send(chat, "🎙 <b>Слушаю…</b>") or {}).get("result") or {}).get("message_id")
-    say = (lambda t: edit(chat, mid, t)) if mid else (lambda t: send(chat, t))
+    mid = ((send(chat, text) or {}).get("result") or {}).get("message_id")
+    return (lambda t: edit(chat, mid, t)) if mid else (lambda t: send(chat, t))
+
+
+def order_found(chat, found, miss):
+    """Заказать пропуска на найденные номера (до трёх) или сказать, что номера нет."""
+    with LOCK:
+        if not found:
+            send(chat, fail(miss))
+            return
+        for plate in found[:3]:
+            order(chat, plate)
+
+
+def voice_plates(text):
+    """Номера в распознанной речи: сначала цифрами («А, 123, ВС, 777»), потом словами через Claude."""
+    return dl.plates(text.replace(",", " ")) or dl.plates(spoken_plate(text) or "")
+
+
+def on_voice(chat, msg):
+    say = status_msg(chat, "🎙 <b>Слушаю…</b>")
     try:
         text = media.voice_text(TOKEN, msg)
     except media.MediaError as e:
         say(fail(f"Голосовое не разобрал: {esc(e)}"))
         return
     say(f"🎙 <i>«{esc(text)}»</i>")
-    found = dl.plates(text.replace(",", " "))  # «А, 123, ВС, 777»
-    if not found:
-        tg("sendChatAction", chat_id=chat, action="typing")
-        found = dl.plates(spoken_plate(text) or "")
-    with LOCK:
-        if not found:
-            send(chat, fail("Не расслышал номер — повтори по буквам или напиши <code>А123ВС777</code>"))
+    order_found(chat, voice_plates(text), "Не расслышал номер — повтори по буквам или напиши <code>А123ВС777</code>")
+
+
+def on_photo(chat, msg):
+    """Скриншот из Яндекс Go → номер (Claude читает картинку) → пропуск."""
+    say = status_msg(chat, "🔍 <b>Ищу номер на скриншоте…</b>")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            path = media.photo_path(TOKEN, msg, tmp)
+        except media.MediaError as e:
+            say(fail(f"Не открыл картинку: {esc(e)}"))
             return
-        for plate in found[:3]:
-            order(chat, plate)
+        out = read_image([path])
+    if out is None:
+        say(fail("Скриншоты читать не умею: на сервере нет Claude. Напиши номер текстом."))
+        return
+    found = dl.plates(out)
+    if not found:
+        say(fail("Не разглядел номер на скриншоте — напиши текстом: <code>А123ВС777</code>"))
+        return
+    say(f"🔍 <i>Нашёл: {', '.join(plate_tag(p) for p in found[:3])}</i>")
+    order_found(chat, found, "")
+
+
+def on_video(chat, msg):
+    """Запись экрана Яндекс Go, видео или кружок: номер в речи, потом на кадрах, потом продиктованный словами."""
+    say = status_msg(chat, "🎬 <b>Смотрю видео…</b>")
+    caption = (msg.get("caption") or "").strip()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            v = media.video(TOKEN, msg, tmp, frames=6)
+        except media.MediaError as e:
+            say(fail(f"Видео не открылось: {esc(e)}"))
+            return
+        speech = v.get("text") or ""
+        found = dl.plates(caption) or dl.plates(speech.replace(",", " "))
+        if not found and v.get("frames"):
+            found = dl.plates(read_image(v["frames"]) or "")
+    if not found and speech:
+        found = dl.plates(spoken_plate(speech) or "")
+    heard = f"\n🎙 <i>«{esc(speech[:300])}»</i>" if speech else ""
+    if found:
+        say(f"🎬 <i>Нашёл: {', '.join(plate_tag(p) for p in found[:3])}</i>{heard}")
+        order_found(chat, found, "")
+    else:
+        say(fail("Не нашёл номер в видео — пришли скриншот или напиши <code>А123ВС777</code>") + heard)
 
 
 # ---------- обработчики ----------
@@ -540,7 +602,7 @@ def on_message(msg):
         send(chat, HELP, menu_buttons())
     elif cmd == "/app":
         if public_url:
-            send(chat, fmt("📱 Приложение", note="Номер, пропуска и вход — на одном экране."), app_buttons())
+            send(chat, fmt("📱 Приложение", note="Номер, скриншот, пропуска — на одном экране."), app_buttons())
         else:
             send(chat, fail(f"Приложение ещё настраивается: {esc(https_note)}"))
     elif cmd == "/login":
@@ -571,19 +633,15 @@ def on_message(msg):
         do_login(chat, dl.extract_token(text))
         if st.get("pending") and st.get("place_id"):
             order(chat, st.pop("pending"))
-    else:
-        found = dl.plates(text)
-        if not found and media.kind(msg) == "photo":
-            tg("sendChatAction", chat_id=chat, action="typing")
-            found = dl.plates(read_photo(msg) or "")
-            if not found:
-                send(chat, fail("Не разглядел номер на скриншоте — напиши текстом: <code>А123ВС777</code>"))
-                return
-        if not found:
-            send(chat, fail("Не вижу номера — пришли так: <code>А123ВС777</code> или <code>АВ12377</code>"))
-            return
-        for plate in found[:3]:
+    elif dl.plates(text):
+        for plate in dl.plates(text)[:3]:
             order(chat, plate)
+    elif media.kind(msg) == "photo":
+        spawn(on_photo, chat, msg)
+    elif media.kind(msg) == "video":
+        spawn(on_video, chat, msg)
+    else:
+        send(chat, fail("Не вижу номера — пришли так: <code>А123ВС777</code>, скриншотом или голосом"))
 
 
 def on_callback(cq):
@@ -608,6 +666,8 @@ def on_callback(cq):
             note = "Отменил"
         elif data[0] == "again":
             order(chat, data[1], force=True)
+        elif data[0] == "rp":  # повторить последний
+            order(chat, data[1])
         elif data[0] == "pl":
             p = next((p for p in st.get("places") or [] if str(p["id"]) == data[1]), None)
             if p:
@@ -686,7 +746,7 @@ def pass_items():
                     "status": (it.get("status") or {}).get("title") or "", "subtitle": it.get("subtitle") or "",
                     "fields": [{"title": f.get("title") or "", "value": f["value"]}
                                for f in (it.get("fields") or [])[:3] if f.get("value")],
-                    "cancel": any("cancel" in str(a.get("type", "")).lower() for a in it.get("actions") or [])})
+                    "cancel": can_cancel(it)})
     return out
 
 
@@ -699,6 +759,7 @@ def app_state():
            "places": [{"id": p["id"], "title": p["title"]} for p in st.get("places") or []],
            "recent": [{"plate": k, "pretty": dl.pretty(k), "when": when_text(v["ts"]), "id": v.get("id"),
                        "fresh": now - v["ts"] < REPEAT_WINDOW} for k, v in recent[:6]],
+           "last": {"plate": st["last"], "pretty": dl.pretty(st["last"])} if st.get("last") else None,
            "passes": [], "passes_error": ""}
     if st.get("jwt"):
         try:
@@ -746,6 +807,28 @@ def api_cancel(body):
         st["recent"].pop(plate, None)
         save(st)
     return 200, {"ok": True}
+
+
+IMAGE_EXT = {"image/png": ".png", "image/webp": ".webp", "image/heic": ".heic", "image/gif": ".gif"}
+
+
+def api_photo(data, ctype=""):
+    """Скриншот из приложения (тело запроса — сама картинка) → найденные номера. Пропуск не заказывает:
+    номер встаёт в поле, человек проверяет и жмёт «Оформить»."""
+    if not data:
+        return 400, {"error": "Пустая картинка"}
+    ext = IMAGE_EXT.get((ctype or "").split(";")[0].strip().lower(), ".jpg")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "screen" + ext)
+        with open(path, "wb") as f:
+            f.write(data)
+        out = read_image([path])
+    if out is None:
+        return 503, {"error": "Скриншоты читать не умею: на сервере нет Claude"}
+    found = dl.plates(out)
+    if not found:
+        return 422, {"error": "Не разглядел номер — впиши руками"}
+    return 200, {"plates": found, "pretty": [dl.pretty(p) for p in found]}
 
 
 def api_post(chat, path, body):
@@ -831,6 +914,15 @@ class Web(BaseHTTPRequestHandler):
         if not user:
             return self.reply(401, {"error": "Открой приложение из Telegram"})
         n = int(self.headers.get("Content-Length") or 0)
+        if path == "/api/photo":  # картинка целиком в теле; читаем без LOCK — Claude думает долго
+            if n > PHOTO_MAX:
+                return self.reply(413, {"error": "Картинка больше 12 МБ"})
+            try:
+                code, res = api_photo(self.rfile.read(n), self.headers.get("Content-Type"))
+            except Exception as e:
+                traceback.print_exc()
+                code, res = 500, {"error": str(e)[:200]}
+            return self.reply(code, res)
         if n > 64 * 1024:
             return self.reply(413, {"error": "Слишком большой запрос"})
         try:
