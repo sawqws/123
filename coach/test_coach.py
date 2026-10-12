@@ -117,6 +117,12 @@ def seeded(path=None, days=40):
 
 
 class SyncTest(unittest.TestCase):
+    def test_no_own_caddy_next_to_planner(self):
+        with tempfile.NamedTemporaryFile() as f, mock.patch.object(coach, "PLANNER_ENV", f.name):
+            self.assertTrue(coach.planner_here())  # есть Планер — https раздаёт его Caddy, свой не запускаем
+        with mock.patch.object(coach, "PLANNER_ENV", "/nonexistent/planner-bot.env"):
+            self.assertFalse(coach.planner_here())
+
     def test_days_and_pages(self):
         db, fw = seeded()
         self.assertGreater(len([c for c in fw.calls if "cycle" in c]), 1)  # было несколько страниц

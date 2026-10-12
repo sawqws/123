@@ -81,6 +81,12 @@ class Base(unittest.TestCase):
 
 
 class ChatTest(Base):
+    def test_no_own_caddy_next_to_planner(self):
+        with tempfile.NamedTemporaryFile() as f, mock.patch.object(eye, "PLANNER_ENV", f.name):
+            self.assertTrue(eye.planner_here())  # есть Планер — https раздаёт его Caddy, свой не запускаем
+        with mock.patch.object(eye, "PLANNER_ENV", "/nonexistent/planner-bot.env"):
+            self.assertFalse(eye.planner_here())
+
     def test_owner_only(self):
         self.assertEqual(eye.owner(), U)
         self.assertIn("Глаз", self.texts()[-1])

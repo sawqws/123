@@ -949,6 +949,15 @@ def caddy_bin():
     return path
 
 
+PLANNER_ENV = "/etc/planner-bot.env"
+
+
+def planner_here():
+    """На сервере есть Планер — значит, https для всех ботов раздаёт его Caddy (planner.caddyfile).
+    Два Caddy на одном порту 443 делят соединения пополам, и у второго нет сертификатов других ботов."""
+    return os.path.exists(PLANNER_ENV)
+
+
 def own_caddy(host):
     conf = (f"{{\n\tstorage file_system {CADDY_DIR}/data\n\tadmin off\n}}\n"
             f"https://{host} {{\n\treverse_proxy 127.0.0.1:{PORT}\n}}\n")
@@ -985,7 +994,12 @@ def https():
             https_note = "работает" + (" (свой Caddy)" if proc else "")
             time.sleep(300)
             continue
-        if proc is None or proc.poll() is not None:
+        if planner_here():  # https раздаёт Caddy планера; свой Caddy рядом с ним ломает чужие адреса
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+            proc = None
+            https_note = "адрес даёт Caddy планера — жду его"
+        elif proc is None or proc.poll() is not None:
             if port_busy(443) and proc is None:
                 https_note = ("порт 443 занят (Caddy планера?) — нужен перезапуск планера с новым кодом: "
                               "/update в Главном или pm2 restart planner-bot")
