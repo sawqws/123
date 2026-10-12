@@ -115,14 +115,31 @@ def assess(drank, target, hour, trained=False):
                  + (" После тренировки вода особенно важна." if trained else ""))
 
 
+def short(drank, target, hour, trained=False):
+    """Оценка одной строкой для чата: (эмодзи, «по графику, осталось 1,3 л»)."""
+    mark, _ = assess(drank, target, hour, trained)
+    left = max(0, target - drank)
+    if mark == "🟡":
+        return mark, "больше 1,5 нормы — дальше по жажде"
+    if mark == "✅":
+        return mark, "норма выполнена"
+    if mark == "🌙":
+        return mark, f"не хватило {liters(left)} — завтра начни со стакана"
+    if mark == "👍":
+        return mark, f"по графику, осталось {liters(left)}"
+    need_now = max(50, round((expected_share(hour) * target - drank) / 50) * 50)
+    return mark, f"отстаёшь на {liters(need_now)} — выпей стакан"
+
+
 def card(added, drank, target, why, hour, trained=False, title=None, extra="", note=None):
-    """Сообщение о воде в общем стиле бота: заголовок, цитата (выпито, полоска, оценка), примечание курсивом."""
-    mark, text = assess(drank, target, hour, trained)
+    """Сообщение о воде в общем стиле бота: заголовок, цитата (выпито, полоска, оценка), примечание курсивом.
+    Коротко: подробная оценка — в приложении."""
+    mark, text = short(drank, target, hour, trained)
     pct = round(drank / target * 100) if target else 0
     head = title or (f"💧 <b>+{liters(added)} воды</b>" if added else "💧 <b>Вода сегодня</b>")
     body = (f"За день <b>{liters(drank)}</b> из {liters(target)} · {pct}%\n{bar(drank / target if target else 0)}\n"
-            f"{mark} {text}" + (f"\n{extra}" if extra else ""))
-    return f"{head}\n<blockquote>{body}</blockquote>\n<i>{note or f'Норма: {why}.'}</i>"
+            f"{mark} {text[0].upper() + text[1:]}" + (f"\n{extra}" if extra else ""))
+    return f"{head}\n<blockquote>{body}</blockquote>" + (f"\n<i>{note}</i>" if note else "")
 
 
 def day_line(drank, target):

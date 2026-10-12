@@ -520,9 +520,9 @@ class BotTest(unittest.TestCase):
         self.assertEqual(kind, "brief")
         m = self.mornings()
         self.assertEqual(len(m), 1)
-        for w in ("Восстановление <b>82%</b>", "ВСР", "пульс покоя", "Сон <b>", "Выполнение", "эффективность",
-                  "Нагрузка вчера"):
+        for w in ("Восстановление <b>82%</b>", "ВСР", "пульс покоя", "Сон <b>", "Нагрузка вчера"):
             self.assertIn(w, m[0])
+        self.assertLess(len(m[0]), 700)  # коротко: цифры и 3–4 строки
         self.assertIn("ОТБОЙ СЕГОДНЯ", c.call_args[0][0])
         for hm in ((7, 1), (9, 30), (12, 0)):
             self.assertIsNone(self.run_morning(self.at(*hm))[0])
@@ -549,7 +549,7 @@ class BotTest(unittest.TestCase):
         m = self.mornings()
         self.assertEqual(len(m), 1)
         self.assertIn("ещё не посчитал сон", m[0])
-        self.assertIn("Отбой сегодня", m[0])  # план по правилам, Claude недоступен
+        self.assertIn("Отбой до", m[0])  # план по правилам, Claude недоступен
         self.assertIn("Нагрузка вчера", m[0])
         self.assertIsNone(self.run_morning(self.at(10, 1))[0])
         for r in saved:  # WHOOP досчитал сон
@@ -677,7 +677,7 @@ class BotTest(unittest.TestCase):
         self.assertIn(("sendChatAction", {"chat_id": U, "action": "typing"}), self.sent)
 
     def test_voice_goal_and_errors(self):
-        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "video_note": {"file_id": "n1"}}
+        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1"}}
         coach.on_callback({"id": "1", "from": {"id": U}, "data": "g|add", "message": {"chat": {"id": U}, "message_id": 3}})
         with mock.patch.object(coach.media, "voice_text", side_effect=coach.media.MediaError("в голосовом не слышно слов")), \
                 mock.patch.object(coach.threading, "Thread", SyncThread):
@@ -689,15 +689,102 @@ class BotTest(unittest.TestCase):
             coach.on_message(msg)  # цель всё ещё ждём — голосовое стало целью
         self.assertEqual([g["text"] for g in self.db.goals(U)], ["Ложиться до 23:00"])
 
+    # кружок и видео — теперь "video": кадры и речь
+    def video_msg(self, **kw):
+        return {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "video_note": {"file_id": "n1"}, **kw}
+
+    def test_video_goal_by_speech(self):
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "g|add", "message": {"chat": {"id": U}, "message_id": 3}})
+        with mock.patch.object(coach.media, "video", return_value={"frames": ["/x/1.jpg"], "text": "Спать до 23:00",
+                                                                   "seconds": 4}), \
+                mock.patch.object(coach.threading, "Thread", SyncThread), mock.patch.object(ai, "claude") as c:
+            coach.on_message(self.video_msg())
+        c.assert_not_called()
+        self.assertEqual([g["text"] for g in self.db.goals(U)], ["Спать до 23:00"])
+        self.assertIn("🎙 «Спать до 23:00»", self.texts())
+
+    def test_video_exercise_and_food(self):
+        v = {"frames": ["/x/1.jpg", "/x/2.jpg"], "text": "смотри мой джеб", "seconds": 9}
+        with mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_message(self.video_msg())
+        self.assertEqual(th.call_args.kwargs["target"].__name__, "on_video")  # не в главном цикле
+        reply = ('{"kind": "exercise", "title": "Джеб", "text": "- Локоть не уводи в сторону\\n- Возвращай руку к '
+                 'подбородку\\n- Корпус не наклоняй вперёд\\n- Дыши на ударе\\n- Пятый\\n- Шестой"}')
+        with mock.patch.object(coach.media, "video", return_value=v), \
+                mock.patch.object(ai, "claude", return_value=reply) as c:
+            coach.on_video(U, U, self.video_msg(caption="техника?"))
+        self.assertEqual(c.call_args.kwargs["images"], ["/x/1.jpg", "/x/2.jpg"])
+        self.assertIn("смотри мой джеб", c.call_args[0][0])
+        t = self.texts()[-1]
+        self.assertTrue(t.startswith("🎥 <b>Джеб</b>"), t)
+        self.assertNotIn("Шестой", t)  # в чат — коротко
+        self.assertIn("Шестой", self.db.history(U)[-1]["text"])
+        food = '{"kind": "food", "title": "Паста с курицей", "kcal": 640, "protein": 40, "fat": 18, "carbs": 75}'
+        with mock.patch.object(coach.media, "video", return_value=v), mock.patch.object(ai, "claude", return_value=food):
+            coach.on_video(U, U, self.video_msg())
+        self.assertEqual(self.db.meals(U, "2026-10-11")[0]["kcal"], 640)
+        self.assertIn("640 ккал", self.texts()[-1])
+        with mock.patch.object(coach.media, "video", side_effect=coach.media.MediaError("видео больше 20 МБ")):
+            coach.on_video(U, U, self.video_msg())
+        self.assertEqual(self.texts()[-1], "⚠️ Видео: видео больше 20 МБ. Можно написать текстом.")
+
     def test_photo_routing(self):
         base = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "photo": [{"file_id": "p1"}]}
-        with mock.patch.object(coach, "download", return_value="/tmp/p.jpg"), \
-                mock.patch.object(coach.threading, "Thread") as th:
+        with mock.patch.object(coach.threading, "Thread") as th:
             coach.on_message(base)
-            coach.on_message({**base, "caption": "обед"})
-            coach.on_message({**base, "caption": "Разбери мой план на неделю"})
-            coach.on_message({**base, "caption": "это нормально?"})
-        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["log_meal", "log_meal", "answer", "answer"])
+        self.assertEqual(th.call_args.kwargs["target"].__name__, "on_photo")  # скачивание — не в главном цикле
+        with mock.patch.object(coach.media, "photo_path", return_value="/tmp/p.jpg"), \
+                mock.patch.object(coach, "log_meal") as lm, mock.patch.object(coach, "answer") as an:
+            for cap in ("", "обед", "Разбери мой план на неделю", "это нормально?"):
+                coach.on_photo(U, U, base, cap)
+        self.assertEqual([c[0][2] for c in lm.call_args_list], ["", "обед"])
+        self.assertEqual([c[0][2] for c in an.call_args_list], ["Разбери мой план на неделю", "это нормально?"])
+        self.assertEqual(an.call_args[0][3], "/tmp/p.jpg")
+
+    def test_photo_api(self):
+        img = "data:image/jpeg;base64," + __import__("base64").b64encode(b"\xff\xd8fakejpeg").decode()
+        with mock.patch.object(coach, "DATA", tempfile.mkdtemp()):
+            with mock.patch.object(ai, "claude", return_value='{"food": true, "title": "Омлет", "kcal": 300, '
+                                                              '"protein": 20, "fat": 22, "carbs": 3}') as c:
+                r = call("/api/photo", {"image": img})
+            self.assertEqual(r.json["day"]["eaten"]["kcal"], 300)
+            path = c.call_args.kwargs["image"]
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"\xff\xd8fakejpeg")
+            with mock.patch.object(ai, "claude", return_value='{"food": false, "comment": "Это скрин WHOOP."}'):
+                r = call("/api/photo", {"image": img})
+            self.assertEqual(r.code, 400)
+            self.assertIn("Тренер", r.json["error"])
+            with mock.patch.object(ai, "claude", return_value="**Пульс 150** — нормально.") as c:
+                r = call("/api/photo", {"image": img, "mode": "ask", "text": "как тренировка?"})
+            self.assertEqual(r.json["answer"], "**Пульс 150** — нормально.")
+            self.assertEqual(r.json["history"][-2]["text"], "📷 как тренировка?")
+            self.assertTrue(c.call_args.kwargs["image"])
+            self.assertEqual(call("/api/photo", {"image": "@@@"}).code, 400)
+            self.assertEqual(call("/api/photo", {}).code, 400)
+
+    def test_ai_clip_and_images(self):
+        self.assertEqual(ai.clip("a\n\nb\nc", 2), ("a\nb", True))
+        self.assertEqual(ai.clip("a\nb", 5), ("a\nb", False))
+        text, cut = ai.clip("**Итог**\n- " + "слово " * 200, 5, 300)
+        self.assertTrue(cut)
+        self.assertLessEqual(len(text), 310)
+        self.assertTrue(text.endswith("…"))
+        d = tempfile.mkdtemp()
+        frames = []
+        for i in range(2):
+            frames.append(os.path.join(d, f"f{i}.jpg"))
+            open(frames[-1], "wb").close()
+        with mock.patch.object(ai.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout='{"result": "ok"}', stderr="")
+            self.assertEqual(ai.claude("q", images=frames), "ok")
+        cmd = run.call_args[0][0]
+        self.assertIn("Кадры видео", cmd[2])
+        self.assertEqual(cmd[cmd.index("--max-turns") + 1], "5")
+
+    def test_unknown_message(self):
+        coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "sticker": {"file_id": "s"}})
+        self.assertIn("голосовое, фото или видео", self.texts()[-1])
 
     def test_photo_not_food_goes_to_coach(self):
         with mock.patch.object(ai, "claude", side_effect=['{"food": false, "comment": "это скрин WHOOP"}',
@@ -714,12 +801,12 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(ai, "claude", return_value=long) as c, mock.patch.object(coach, "today_of", return_value=TODAY):
             coach.progress_report(U)
         self.assertIn("ПО НЕДЕЛЯМ", c.call_args[0][0])
-        texts = self.texts()
-        self.assertIn("Разбор прогресса", "".join(texts))
-        self.assertTrue(all(len(t) <= 4096 for t in texts))
-        self.assertGreater(len(texts), 2)  # длинный разбор разрезан на части
+        last = [kw for m, kw in self.sent if m == "sendMessage"][-1]
+        self.assertIn("Прогресс", last["text"])
+        self.assertLess(len(last["text"]), 900)  # в чат — только итог
+        self.assertIn("Весь разбор", json.dumps(last["reply_markup"], ensure_ascii=False))
         r = call("/api/progress", {})
-        self.assertIn("Блок 0", r.json["progress"]["text"])
+        self.assertIn("Блок 11", r.json["progress"]["text"])  # целиком — в приложении
 
     def test_water_chat(self):
         coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "выпил 2 стакана воды"})
@@ -745,7 +832,7 @@ class BotTest(unittest.TestCase):
         ctx, t = coach.context(U)
         self.assertIn("ВОДА СЕГОДНЯ", ctx)
         self.assertIn("1,8 л из", ctx)
-        self.assertIn("Вода:", coach.food_text(U))
+        self.assertIn("💧 1,8 л", coach.food_text(U))
 
     def test_water_api(self):
         r = call("/api/water", {"ml": 500})
@@ -775,12 +862,15 @@ class BotTest(unittest.TestCase):
                 self.assertLessEqual(len(row), 3)
                 for b in row:
                     self.assertLessEqual(len(b["text"]), 24, b["text"])
-        # длинный ответ тренера — частями до 4096
+        # длинный ответ тренера — в чат коротко и кнопка «Полностью», целиком — в истории приложения
         self.sent.clear()
-        with mock.patch.object(ai, "claude", return_value="\n\n".join("- " + "слово " * 150 for _ in range(10))):
+        long = "\n\n".join("- " + "слово " * 150 for _ in range(10))
+        with mock.patch.object(ai, "claude", return_value=long):
             coach.answer(U, U, "план?")
-        self.assertGreater(len(self.texts()), 1)
-        self.assertTrue(all(len(t) <= 4096 for t in self.texts()))
+        self.assertEqual(len(self.texts()), 1)
+        self.assertLess(len(self.texts()[0]), 800)
+        self.assertIn("Полностью", json.dumps(self.sent[-1][1]["reply_markup"], ensure_ascii=False))
+        self.assertGreater(len(self.db.history(U)[-1]["text"]), 5000)  # целиком (до предела истории)
 
     def test_button_style_fallback(self):
         """Telegram не принял цвет кнопок — те же кнопки без style, дальше сразу без цвета."""
