@@ -25,8 +25,8 @@ def rules():
         return f.read()
 
 
-def claude(prompt, images=(), system="", timeout=240):
-    """Текст ответа. images — пути к картинкам: Claude откроет их инструментом Read."""
+def claude(prompt, images=(), system="", timeout=240, web=False):
+    """Текст ответа. images — пути к картинкам: Claude откроет их инструментом Read. web — поиск в интернете."""
     os.makedirs(WORK, exist_ok=True)
     tools, paths = [], []
     if images:
@@ -36,7 +36,10 @@ def claude(prompt, images=(), system="", timeout=240):
             paths.append(dst)
         prompt += "\n\nФото вещи (открой каждое инструментом Read):\n" + "\n".join(paths)
         tools = ["--allowedTools", "Read", "--max-turns", str(len(paths) + 3)]
-    cmd = ["claude", "-p", prompt, "--output-format", "json", *tools, *NO_TOOLS]
+    if web:
+        tools = ["--allowedTools", "WebSearch", "WebFetch", "--max-turns", "15"]
+    no = [t for t in NO_TOOLS if not (web and t in ("WebSearch", "WebFetch"))]
+    cmd = ["claude", "-p", prompt, "--output-format", "json", *tools, *no]
     if system:
         cmd += ["--append-system-prompt", system]
     try:
@@ -136,3 +139,24 @@ def reply_buyer(ad, buyer, image=None, history=(), floor=None, notes=""):
     if not reply:
         raise AIError("Claude не написал ответ")
     return {"reply": reply, "note": str(res.get("note") or "").strip()}
+
+
+WEB_PRICES = """Сколько сейчас стоит на вторичном рынке России: {item}
+Ищи в интернете цены объявлений б/у: Авито (через поиск), Юла, Яндекс Маркет б/у, барахолки, свежие статьи с ценами.
+Бери только ту же вещь (модель, объём, комплектация), без новых из магазинов и без trade-in. Не выдумывай: нет цен — пустой список.
+Ответ — только JSON: {{"prices": [цены в рублях], "sources": [ссылки], "note": "откуда цены и насколько свежие, одна строка"}}"""
+
+
+def web_prices(item):
+    """Запасной путь, когда Авито не пускает сервер: цены из поиска в интернете. -> {prices, sources, note}."""
+    res = json_from(claude(WEB_PRICES.format(item=item), timeout=300, web=True))
+    prices = []
+    for p in res.get("prices") or []:
+        try:
+            v = int(float(str(p).replace(" ", "").replace(",", ".")))
+        except ValueError:
+            continue
+        if 0 < v < 100_000_000:
+            prices.append(v)
+    return {"prices": prices, "sources": [str(s) for s in res.get("sources") or []][:10],
+            "note": str(res.get("note") or "")[:300]}

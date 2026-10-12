@@ -322,6 +322,23 @@ class Flow(unittest.TestCase):
             avito.on_message(self.msg(text="добавь про чехол"))
             self.assertEqual(len(calls), 4)
 
+    def test_market_web_fallback(self):
+        d = self.make_ad()
+        blocked = mock.Mock(side_effect=market.Blocked("429"))
+        web = {"prices": [30000, 32000, 34000, 35000, 36000, 38000, 990], "sources": ["https://x.ru"], "note": "Юла, октябрь"}
+        with mock.patch.object(market, "collect", blocked), mock.patch.object(ai, "web_prices", return_value=web):
+            self.cb("mk")
+        m = d["market"]
+        self.assertEqual(m["source"], "web")
+        self.assertEqual(m["stats"]["n"], 6)  # 990 — выброс
+        text = [p for k, p in self.sent if k == "editMessageText"][-1]["text"]
+        self.assertIn("Примерно — по поиску в интернете", text)
+        self.assertIn("Цен найдено: <b>6</b>", text)
+        with mock.patch.object(market, "collect", blocked), \
+                mock.patch.object(ai, "web_prices", return_value={"prices": [], "sources": [], "note": ""}):
+            self.cb("mk|f")
+        self.assertIn("Цены не нашёл", [p for k, p in self.sent if k == "editMessageText"][-1]["text"])
+
     def test_wait_expires(self):
         self.make_ad()
         self.cb("buy")
