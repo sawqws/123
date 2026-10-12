@@ -697,13 +697,19 @@ class AppTest(BotTest):
 
     def test_busy_and_autotests(self):
         bot.save_settings({"owner": CHAT})
-        bot.lock.acquire()
+        for _ in range(bot.MAX_PARALLEL):
+            bot.lock.acquire()
         try:
-            with self.assertRaises(ValueError):
-                bot.app_solve({"url": URL})
+            calls = []
+            with mock.patch.object(bot, "run_task", lambda *a: calls.append(a)):
+                bot.app_solve({"url": URL})  # все места заняты — не ошибка: задание встанет в очередь
+            self.assertEqual(calls[0][1], URL)
             self.assertTrue(bot.app_state()["busy"])
+            with self.assertRaises(ValueError):
+                bot.busy_check()
         finally:
-            bot.lock.release()
+            for _ in range(bot.MAX_PARALLEL):
+                bot.lock.release()
         with self.assertRaises(ValueError):
             bot.app_auto({})  # списка ещё нет — сдавать нечего
         pathlib.Path(bot.OVERVIEW).write_text(json.dumps({"at": 1, "tasks": [
@@ -810,6 +816,73 @@ class AgentTest(BotTest):
 for _name in list(vars(BotTest)):
     if _name.startswith("test_") and _name not in AgentTest.__dict__:
         setattr(AgentTest, _name, None)
+
+
+class ParallelTest(BotTest):
+    """Несколько заданий сразу: до MAX_PARALLEL одновременно, остальные в очереди, черновики — по одному."""
+    URL2 = URL.replace("2222-222222222222", "2222-333333333333")
+    TASK2 = "22222222-2222-2222-2222-333333333333"
+
+    def test_two_tasks_run_at_the_same_time(self):
+        import threading
+        both = threading.Barrier(2, timeout=10)  # дойдут оба — значит, решаются одновременно
+
+        def solve(url, text, show, on_tool=None):
+            both.wait()
+            return True, "Баллы 5/5"
+        with mock.patch.object(bot, "solve", solve):
+            ts = [bot.REAL_THREAD(target=bot.run_task, args=(CHAT, u, "")) for u in (URL, self.URL2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(15)
+        self.assertFalse(both.broken)
+        self.assertEqual(sum("Баллы 5/5" in m for m, _ in self.msgs), 2)
+        self.assertFalse(any("Занят" in m for m, _ in self.msgs))
+        self.assertEqual(bot.lock.busy(), 0)
+
+    def test_queue_when_all_slots_busy_and_same_task_twice(self):
+        import threading
+        go = threading.Event()
+
+        def solve(url, text, show, on_tool=None):
+            go.wait(10)
+            return True, "Баллы 5/5"
+        with mock.patch.object(bot, "lock", bot.Slots(1)), mock.patch.object(bot, "solve", solve):
+            first = bot.REAL_THREAD(target=bot.run_task, args=(CHAT, URL, ""))
+            first.start()
+            for _ in range(100):
+                if bot.lock.busy():
+                    break
+                threading.Event().wait(0.02)
+            bot.run_task(CHAT, URL, "")  # то же задание ещё раз — не запускаем
+            self.assertIn("уже решаю", self.msgs[-1][0])
+            second = bot.REAL_THREAD(target=bot.run_task, args=(CHAT, self.URL2, ""))
+            second.start()
+            for _ in range(100):
+                if any("В очереди" in m for m, _ in self.msgs):
+                    break
+                threading.Event().wait(0.02)
+            self.assertTrue(any("В очереди" in m for m, _ in self.msgs))
+            go.set()
+            first.join(10)
+            second.join(10)
+        self.assertEqual(sum("Баллы 5/5" in m for m, _ in self.msgs), 2)
+
+    def test_drafts_wait_in_line(self):
+        os.makedirs(drafts.task_dir(self.TASK2))
+        with open(os.path.join(drafts.task_dir(self.TASK2), "task.json"), "w") as f:
+            json.dump({"data": {"type": "detailedAnswer", "title": "Конспект §6"}}, f)
+        bot.offer_draft(CHAT, TASK, URL)
+        bot.offer_draft(CHAT, self.TASK2, self.URL2)
+        self.assertEqual(bot.draft()["task"], TASK)
+        self.assertIn("Черновик в очереди", self.last()[0])
+        bot.on_callback({"id": "1", "data": "drop", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual(bot.draft()["task"], self.TASK2)  # следующий показан сам
+        self.assertIn("Конспект §6", self.last()[0])
+        bot.on_callback({"id": "1", "data": "drop", "message": {"chat": {"id": CHAT}, "message_id": 6}})
+        self.assertIsNone(bot.draft())
+
 
 if __name__ == "__main__":
     unittest.main()

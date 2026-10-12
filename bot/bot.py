@@ -55,7 +55,42 @@ LINK = re.compile(r"https://horodigital\.ru/student/topic/[0-9a-f-]{36}/task/[0-
 TIMEOUT = 15 * 60  # секунд на одно задание
 MSK = ZoneInfo("Europe/Moscow")
 
-lock = threading.Lock()
+MAX_PARALLEL = int(os.environ.get("HDP_PARALLEL") or 3)  # сколько заданий решать одновременно (память сервера 2 ГБ)
+
+
+class Slots:
+    """Как Lock, но пускает до n дел сразу. locked() — все места заняты."""
+
+    def __init__(self, n):
+        self.n, self.used, self.cond = n, 0, threading.Condition()
+
+    def acquire(self, blocking=True):
+        with self.cond:
+            while self.used >= self.n:
+                if not blocking:
+                    return False
+                self.cond.wait()
+            self.used += 1
+            return True
+
+    def release(self):
+        with self.cond:
+            self.used = max(0, self.used - 1)
+            self.cond.notify()
+
+    def locked(self):
+        with self.cond:
+            return self.used >= self.n
+
+    def busy(self):
+        with self.cond:
+            return self.used
+
+
+lock = Slots(MAX_PARALLEL)
+running = set()  # задания, которые решаются прямо сейчас (одно и то же дважды не запускаем)
+running_lock = threading.Lock()
+settings_lock = threading.RLock()  # настройки правят параллельные задания
 offset = 0    # следующий update_id из Telegram
 mode = {}     # chat -> "show" | "confirm_all" | "emoji" | "alphabet" | "hand_tune"
 pending = {}  # chat -> список ссылок для «Сдать все автотесты»
@@ -482,8 +517,11 @@ def load_settings():
 
 def save_settings(s):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
-    with open(SETTINGS, "w") as f:
-        json.dump(s, f)
+    with settings_lock:
+        tmp = f"{SETTINGS}.{threading.get_ident()}"
+        with open(tmp, "w") as f:
+            json.dump(s, f)
+        os.replace(tmp, SETTINGS)
 
 
 def owner():
@@ -705,11 +743,28 @@ def result_card(out, title="", secs=0, show=False):
 
 
 def run_task(chat, url, text, show=False, mid=None):
-    if not lock.acquire(blocking=False):
-        send(chat, BUSY)
-        return
+    """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди."""
+    task = drafts.task_id(url)
+    with running_lock:
+        if task in running:
+            send(chat, card("Это задание уже решаю", note="Результат придёт сюда", icon="⏳"), raw_html=True)
+            return
+        running.add(task)
     try:
-        task, t0 = drafts.task_id(url), time.time()
+        if not lock.acquire(blocking=False):
+            react(chat, mid, "🤔")
+            send(chat, card("В очереди", note=f"Уже решаю {MAX_PARALLEL} — начну это, как только одно закончу",
+                            icon="⏳"), raw_html=True)
+            lock.acquire()
+        _run_task(chat, url, text, show, mid, task)
+    finally:
+        with running_lock:
+            running.discard(task)
+
+
+def _run_task(chat, url, text, show, mid, task):
+    try:
+        t0 = time.time()
         react(chat, mid, "👀")
         drafts.clear(task)
         live = Live(chat, "Смотрю ответы" if show else "Решаю задание", esc(drafts.task_info(task)[1]),
@@ -765,8 +820,19 @@ def set_draft(d):
 
 
 def offer_draft(chat, task, url):
+    """Черновик для учителя. Если другой уже ждёт решения — этот встаёт в очередь и покажется после."""
     title = drafts.task_info(task)[1]
-    set_draft({"task": task, "url": url, "title": title, "pairs": [], "own_files": False})
+    with settings_lock:
+        cur = draft()
+        if cur and cur.get("task") != task:
+            s = load_settings()
+            q = [x for x in s.get("draft_queue") or [] if x.get("task") != task]
+            s["draft_queue"] = q + [{"task": task, "url": url}]
+            save_settings(s)
+            send(chat, card("Черновик в очереди", note=f"{esc(title)} — покажу, когда разберёмся с «{esc(cur['title'])}»",
+                            icon="📄"), raw_html=True)
+            return
+        set_draft({"task": task, "url": url, "title": title, "pairs": [], "own_files": False})
     for f in drafts.files(task):
         send_file(chat, f)
     show_draft(chat)
@@ -780,6 +846,19 @@ def show_draft(chat):
                                   "поправить — пришли текст, просьбу или фото") if x)
     send(chat, card("Черновик для учителя", esc(text) if text else "<i>(без текста)</i>", note, "📄"),
          markup=DRAFT_KB, raw_html=True)
+
+
+def finish_draft(chat):
+    """Текущий черновик отправлен или отменён — показать следующий из очереди."""
+    with settings_lock:
+        s = load_settings()
+        s.pop("draft", None)
+        q = s.get("draft_queue") or []
+        nxt = q.pop(0) if q else None
+        s["draft_queue"] = q
+        save_settings(s)
+    if nxt:
+        offer_draft(chat, nxt["task"], nxt["url"])
 
 
 def plural(n, one, few, many):
@@ -852,7 +931,7 @@ def submit_draft(chat):
             return
         send(chat, card("Отправлено учителю", esc(out.strip()), esc(d["title"]), "📬"),
              menu=True, raw_html=True, effect=EFFECT_LIKE)
-        set_draft(None)
+        finish_draft(chat)  # следующий черновик из очереди, если есть
         if d["pairs"]:
             live = Live(chat, "Запоминаю твои правки", progress=False)
             try:
@@ -925,8 +1004,8 @@ def on_callback(cq):
     elif data == "send":
         threading.Thread(target=submit_draft, args=(chat,), daemon=True).start()
     elif data == "drop":
-        set_draft(None)
         send(chat, card("Не отправляю", note="Передумаешь — пришли ссылку ещё раз", icon="👌"), menu=True, raw_html=True)
+        finish_draft(chat)
 
 
 # ---------- Меню «Ещё»: редкие действия, правится на месте ----------
@@ -1849,14 +1928,13 @@ def app_me(_):
 
 def busy_check():
     if lock.locked():
-        raise ValueError("Я сейчас занят другим заданием — подожди, пока закончу")
+        raise ValueError(f"Сейчас решаю {MAX_PARALLEL} задания — подожди, пока одно закончу")
 
 
 def app_solve(b):
     m = LINK.search(str(b.get("url") or ""))
     if not m:
         raise ValueError("Это не ссылка на задание HDP")
-    busy_check()
     threading.Thread(target=run_task, args=(owner(), m.group(0), "", bool(b.get("show"))), daemon=True).start()
     return {"ok": True}
 
@@ -1879,8 +1957,8 @@ def app_draft(action):
             busy_check()
             threading.Thread(target=submit_draft, args=(owner(),), daemon=True).start()
         elif action == "drop":
-            set_draft(None)
             send(owner(), card("Не отправляю", note="Черновик отменён в приложении", icon="👌"), menu=True, raw_html=True)
+            finish_draft(owner())
         elif action == "save":
             text = str(b.get("text") or "").strip()
             before = drafts.read(d["task"])
