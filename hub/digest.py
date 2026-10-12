@@ -222,13 +222,13 @@ def digest_text(st, now, apps, srv, paid_iso):
     srv = srv or {}
     parts = []
     if srv.get("mem_total"):
-        warn = "⚠️ " if srv["mem_free"] / srv["mem_total"] < 0.1 else ""
-        parts.append(f"{warn}память {srv['mem_free']}/{srv['mem_total']} МБ")
+        p = round((srv["mem_total"] - srv["mem_free"]) / srv["mem_total"] * 100)
+        parts.append(f"{'⚠️ ' if p >= 90 else ''}память {p}%")
     if srv.get("disk_total"):
-        warn = "⚠️ " if srv["disk_free"] / srv["disk_total"] < 0.1 else ""
-        parts.append(f"{warn}диск {srv['disk_free']}/{srv['disk_total']} ГБ")
+        p = round((srv["disk_total"] - srv["disk_free"]) / srv["disk_total"] * 100)
+        parts.append(f"{'⚠️ ' if p >= 90 else ''}диск {p}%")
     if parts:
-        lines.append("• Свободно: " + " · ".join(parts))
+        lines.append("• Сервер занят: " + " · ".join(parts))
     if paid_iso:
         paid = datetime.date.fromisoformat(paid_iso)
         left = (paid - today).days
