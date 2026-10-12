@@ -91,10 +91,14 @@ class AgentOverBotApi(unittest.TestCase):
             p = mock.patch.object(agent, name, self.tmp)
             p.start()
             self.addCleanup(p.stop)
-        for name, val in (("SETTINGS", os.path.join(self.tmp, "settings.json")), ("SOCK", os.path.join(self.tmp, "a.sock"))):
+        for name, val in (("SETTINGS", os.path.join(self.tmp, "settings.json")), ("SOCK", os.path.join(self.tmp, "a.sock")),
+                          ("MEMORY", os.path.join(self.tmp, "memory.md")), ("PORT", 0)):
             p = mock.patch.object(agent, name, val)
             p.start()
             self.addCleanup(p.stop)
+        p = mock.patch.object(agent.Agent, "app_link", mock.AsyncMock())  # без интернета: адрес приложения не ищем
+        p.start()
+        self.addCleanup(p.stop)
 
     def run_agent(self, tg, scenario):
         async def go():
