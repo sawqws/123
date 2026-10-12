@@ -1000,20 +1000,22 @@ def healthy(url=None):
 
 
 def use_url(url):
-    """Ставит адрес приложения на кнопку «Планер»; если адрес новый — пишет владельцу, что всё готово."""
+    """Ставит адрес приложения на кнопку «Планер»; при самом первом адресе пишет владельцу, что всё готово."""
     global public_url
     old, public_url = public_url, url
     if not set_menu():
         public_url = old
         return False
+    first = not db.meta("app_url")  # раньше адреса не было — значит, планер только что поставили
     if db.meta("app_url") != url:
         db.meta("app_url", url)
-        if owner():
-            try:
-                send(owner(), card("✨", "Планер готов", "Кнопка «Планер» теперь слева от поля ввода."),
-                     with_app([], "🗓 Открыть планер", style="primary"))
-            except Exception as e:
-                print("notify:", e)
+    # «готово» — один раз за всё время: адрес может меняться (sslip/IP/туннель), кнопка обновляется молча
+    if owner() and first and db.mark_sent("app_ready"):
+        try:
+            send(owner(), card("✨", "Планер готов", "Кнопка «Планер» теперь слева от поля ввода."),
+                 with_app([], "🗓 Открыть планер", style="primary"))
+        except Exception as e:
+            print("notify:", e)
     return True
 
 
@@ -1124,13 +1126,16 @@ def https():
         print(https_note)
     fallback = False
     started = time.time()
+    misses = 0  # адрес меняем только после трёх неудачных проверок подряд, а не от одного сбоя
     while True:
         if proc and proc.poll() is not None:  # Caddy упал (например, порт 443 занят) — пробуем снова
             print("Caddy остановился, перезапускаю")
             https_note = "Caddy перезапускается (занят порт 80/443?)"
             time.sleep(10)
             proc = start_caddy(binary, conf_path)
-        if cands and not (public_url in cands and healthy()):
+        ok_now = public_url in (cands or []) and healthy()
+        misses = 0 if ok_now else misses + 1
+        if cands and not ok_now and (public_url not in cands or misses >= 3):
             for c in cands:
                 if healthy(c) and use_url(c):
                     https_note = "работает через Caddy"
