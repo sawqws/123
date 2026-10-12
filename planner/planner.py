@@ -1312,7 +1312,18 @@ def caddyfile(ip):
     return conf, [f"https://{host}", f"https://{ip}"]
 
 
+def stop_other_caddy():
+    """Лишний Caddy на 443 (оставшийся от прошлого запуска или свой у тренера/глаза) забирает половину соединений,
+    а сертификатов других ботов у него нет — страницы открываются через раз. https на сервере раздаёт только этот."""
+    try:
+        subprocess.run(["pkill", "-f", "caddy run --config"], timeout=10)
+        time.sleep(1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def start_caddy(binary, conf_path):
+    stop_other_caddy()
     proc = subprocess.Popen([binary, "run", "--config", conf_path, "--adapter", "caddyfile"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 

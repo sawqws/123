@@ -430,6 +430,15 @@ class BotTest(unittest.TestCase):
                              "data": carry[0]["callback_data"]})
         self.assertTrue(all(t["date"] > day for t in self.db.tasks(U)))
 
+    def test_start_caddy_stops_other_caddy_first(self):
+        calls = []
+        with mock.patch.object(planner.subprocess, "run", side_effect=lambda a, **k: calls.append(a)), \
+                mock.patch.object(planner.subprocess, "Popen", side_effect=lambda a, **k: calls.append(a) or mock.Mock(stderr=[])), \
+                mock.patch.object(planner.time, "sleep"):
+            planner.start_caddy("/bin/caddy", "/tmp/Caddyfile")
+        self.assertEqual(calls[0], ["pkill", "-f", "caddy run --config"])  # лишний Caddy на 443 — до запуска своего
+        self.assertEqual(calls[1][:2], ["/bin/caddy", "run"])
+
     def test_https_url_and_notify(self):
         conf, cands = planner.caddyfile("2.27.206.165")
         self.assertEqual(cands, ["https://2-27-206-165.sslip.io", "https://2.27.206.165"])
