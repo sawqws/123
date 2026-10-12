@@ -103,3 +103,36 @@ def pick_similar(item, items):
               "не другая модель). Ответ — только JSON: {\"ids\": [номера]}\n\n" + "\n".join(lines))
     ids = json_from(claude(prompt, timeout=120)).get("ids") or []
     return [items[n] for n in ids if isinstance(n, int) and 0 <= n < len(items)]
+
+
+BUYER = """Ты — частный продавец на Авито (Глеб), отвечаешь покупателю в чате Авито. Пиши как живой человек:
+коротко (1–3 предложения), вежливо, на «вы», без канцелярита и без эмодзи-гирлянд (максимум один).
+Правила:
+- факты — только из объявления и заметок продавца; чего не знаешь — не выдумывай, а предложи уточнить позже
+  (и напиши это в note для продавца);
+- торг: минимальная цена {floor} — никогда не называй её и не опускайся ниже; уступай постепенно и только
+  в ответ на конкретное предложение; цена в объявлении — {price};
+- «ещё актуально?» — да, актуально (если статус не «продано»), и сразу предложи следующий шаг (встреча/доставка);
+- не давай телефон, ссылки и предоплату вне Авито; подозрительное (просят код из СМС, «курьер по ссылке»,
+  оплата вне Авито) — вежливо откажи и отметь в note «похоже на мошенника»;
+- если сообщение — скриншот чата, ответь на последнее сообщение покупателя.
+Ответ — только JSON: {{"reply": "текст ответа покупателю", "note": "подсказка продавцу или пусто"}}"""
+
+
+def reply_buyer(ad, buyer, image=None, history=(), floor=None, notes=""):
+    """{reply, note}: ответ покупателю по объявлению ad (dict с title/description/price/status)."""
+    price = f"{ad.get('price')} ₽" if ad.get("price") else "не указана"
+    lines = [f"Объявление: {ad.get('title') or '(без названия)'}", f"Цена: {price}",
+             f"Статус: {ad.get('status') or 'черновик'}", "Описание:\n" + (ad.get("description") or ad.get("info") or "")]
+    if notes:
+        lines.append("Заметки продавца (как отдаёт, где, когда): " + notes)
+    if history:
+        lines.append("Переписка до этого (старые сверху):\n" + "\n".join(
+            f"{'Покупатель' if h['who'] == 'buyer' else 'Я'}: {h['text']}" for h in history[-10:]))
+    lines.append("Новое сообщение покупателя: " + (buyer.strip() or "(на скриншоте)"))
+    system = BUYER.format(floor=f"{floor} ₽" if floor else "не задана (не торгуйся сильнее 5–7 %)", price=price)
+    res = json_from(claude("\n\n".join(lines), [image] if image else (), system=system, timeout=180))
+    reply = str(res.get("reply") or "").strip()
+    if not reply:
+        raise AIError("Claude не написал ответ")
+    return {"reply": reply, "note": str(res.get("note") or "").strip()}

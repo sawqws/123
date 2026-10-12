@@ -40,6 +40,7 @@ body {
   overflow: hidden; text-overflow: ellipsis; }
 .btn.primary { background: var(--accent); color: var(--accent-text); }
 .btn:active { opacity: .7; }
+a.btn { text-decoration: none; }
 .btn[disabled] { opacity: .5; }
 
 input { width: 100%; min-width: 0; border: 0; border-radius: 12px; background: var(--field); color: var(--text);
