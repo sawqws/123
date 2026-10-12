@@ -39,6 +39,8 @@
 Окружение: BOT_TOKEN, APP_PORT (порт мини-приложения на 127.0.0.1), APP_URL (его https-адрес), BOT_OWNER (id
 владельца), BOTKIT_COMMON (папка common/ репозитория: голосовые и фото). Данные — data/ рядом с ботом.
 Тесты без сети: t = bot.testing(); t.send("/start"); t.press("add|250"); t.last, t.buttons, t.api("state").
+🛠 Поддержка встроена: /fix (и кнопка kit.support_button()) — владелец пишет, что сломалось или что улучшить,
+Claude на сервере правит код бота, гоняет test_bot.py и перезапускает его (common/support.py).
 """
 import datetime
 import hashlib
@@ -235,7 +237,7 @@ class Request:
 
 class Bot:
     def __init__(self, name, emoji="✨", about="", short="", commands=None, public=False, app_text=None,
-                 token=None, port=None, app_url=None, data=None, webapp=None):
+                 token=None, port=None, app_url=None, data=None, webapp=None, support=None):
         self.name, self.emoji, self.about, self.short = name, emoji, about, short
         self.commands = commands or [("start", "Главное"), ("help", "Что умею")]
         self.public = public  # True — ботом пользуются все; иначе только владелец (первый /start или BOT_OWNER)
@@ -256,6 +258,8 @@ class Bot:
         self.jobs = []
         self.waits = {}  # chat -> (ключ, data): ждём ответ на c.ask
         self.http_hook = None  # fn(handler, method) -> True, если запрос обработан (для Студии: прокси)
+        self.support_cfg = support  # dict(name, folders, pm2, cwd, tests) или False — без поддержки
+        self.support = None
         self.plain_buttons = False
         self.offset = 0
         self.testing_mode = None
@@ -451,6 +455,8 @@ class Bot:
 
     def handle(self, upd):
         try:
+            if self.support and self.support.intercept(upd):  # 🛠 /fix и ответы поддержке
+                return
             if upd.get("managed_bot"):
                 if self.on_managed:
                     self.on_managed(upd["managed_bot"])
@@ -718,10 +724,29 @@ class Bot:
                     traceback.print_exc()
             time.sleep(20)
 
+    def _start_support(self):
+        """common/support.py: /fix — Claude чинит и дорабатывает этого бота прямо на сервере."""
+        if self.support_cfg is False:
+            return
+        try:
+            media()  # тот же путь к common/
+            import support
+        except (Fail, ImportError) as e:
+            print("support:", e, flush=True)
+            return
+        cfg = self.support_cfg or {}
+        self.support = support.Support(
+            self.token, cfg.get("name", self.name), folders=cfg.get("folders", ["."]),
+            pm2=cfg.get("pm2") or os.environ.get("BOT_PM2") or "bot-" + os.path.basename(self.dir),
+            allowed=lambda uid: bool(uid) and uid == self.owner, cwd=cfg.get("cwd", self.dir),
+            tests=cfg.get("tests", ["python3 test_bot.py"] if os.path.exists(os.path.join(self.dir, "test_bot.py"))
+                          else []))
+
     def run(self):
         if not self.token:
             sys.exit("Нет BOT_TOKEN")
         self.setup()
+        self._start_support()
         if self.port:
             threading.Thread(target=self.serve, daemon=True).start()
         if self.jobs:
@@ -802,6 +827,11 @@ class Tester:
 
 
 # ---------- мелочи ----------
+
+def support_button(text="🛠 Поддержка"):
+    """Кнопка поддержки (ошибка или доработка) — для главного экрана или /help."""
+    return {"text": text, "callback_data": "sup|ask"}
+
 
 def no_style(markup):
     if not isinstance(markup, dict) or "inline_keyboard" not in markup:

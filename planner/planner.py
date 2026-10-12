@@ -45,6 +45,7 @@ import store  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые и фото (common/media.py)
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 TOKEN = os.environ.get("PLANNER_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
@@ -1427,6 +1428,8 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     print(f"{NAME} запущен")
+    sup = support.Support(TOKEN, "Планер «Ритм»", folders=["planner"], pm2="planner-bot",  # только владелец, даже в PUBLIC
+                          allowed=lambda uid: uid == owner() or uid in ALLOWED, tests=["python3 planner/test_planner.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -1436,6 +1439,8 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
+                continue
             try:
                 if u.get("callback_query"):
                     on_callback(u["callback_query"])

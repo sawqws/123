@@ -97,6 +97,7 @@ class Msg:
 class Bot:
     def __init__(self, token, base=API):
         self.token, self.base = token, base
+        self.intercept = None  # fn(update) -> True: обновление уже обработано (🛠 поддержка, common/support.py)
         self.html = {}  # (chat, id) -> HTML, чтобы дописывать к карточке «✓ подтверждено»
 
     # ---------- HTTP ----------
@@ -210,6 +211,8 @@ class Bot:
                 continue
             for u in updates:
                 offset = u["update_id"] + 1
+                if self.intercept and await asyncio.to_thread(self.intercept, u):
+                    continue
                 self.dispatch(u, on_message, on_callback)
 
     def dispatch(self, u, on_message, on_callback):

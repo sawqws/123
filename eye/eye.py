@@ -45,6 +45,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import ai  # noqa: E402
 import media  # noqa: E402
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 import photos  # noqa: E402
 import speech  # noqa: E402
 
@@ -1010,6 +1011,8 @@ def main():
     else:
         threading.Thread(target=https, daemon=True).start()
     print(f"{NAME} запущен")
+    sup = support.Support(TOKEN, "Глаз", folders=["eye"], pm2="eye-bot", allowed=allowed,
+                          tests=["python3 eye/test_eye.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -1019,6 +1022,8 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
+                continue
             try:
                 if u.get("message"):
                     on_message(u["message"])

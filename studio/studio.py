@@ -43,7 +43,9 @@ bot = kit.Bot("Студия", emoji="🏗", app_text="Студия",
               short="Бот, который делает ботов",
               commands=[("start", "Новый бот"), ("bots", "Мои боты"), ("cancel", "Отменить черновик")],
               token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
-              data=os.path.join(HERE, "data"), webapp=os.path.join(HERE, "webapp"))
+              data=os.path.join(HERE, "data"), webapp=os.path.join(HERE, "webapp"),
+              support={"name": "Студия", "folders": ["studio"], "pm2": "studio-bot", "cwd": REPO,
+                       "tests": ["python3 studio/test_studio.py"]})
 if os.environ.get("STUDIO_ALLOWED") and not bot.owner:
     bot.db.set("_owner", int(re.findall(r"\d+", os.environ["STUDIO_ALLOWED"])[0]))
 
@@ -330,6 +332,8 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
   .empty с эмодзи. Действия — через @bot.api, после действия — свежее состояние в ответе.
 - Данные — bot.db. Время — kit.now() (Москва). Напоминания — bot.daily / bot.every.
 - Голосовые уже работают: распознанный текст приходит в @bot.text / @bot.reply. Фото — @bot.photo.
+- Поддержка уже встроена (/fix в меню, Claude чинит бота по просьбе Глеба). В /help последней строкой:
+  «🛠 Что-то не так или хочется улучшить — /fix».
 - Нужен ИИ — kit.claude(prompt) внутри bot.later(...) (это долго), пока думает — c.typing().
 - Только стандартная библиотека Python. Если без пакета никак — requirements.txt (Студия поставит), но лучше обойтись.
 - test_bot.py через bot.testing(): главный экран, каждая кнопка, каждый api, чужой пользователь. Запусти
@@ -988,7 +992,7 @@ def deploy(chat, slug, token, st=None):
     fd = os.open(env, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(f"BOT_TOKEN={token}\nAPP_PORT={info['port']}\nAPP_URL={app_url_of(slug)}\nBOT_OWNER={bot.owner}\n"
-                f"BOTKIT_COMMON={os.path.join(REPO, 'common')}\nPYTHONUNBUFFERED=1\n")
+                f"BOTKIT_COMMON={os.path.join(REPO, 'common')}\nBOT_PM2={info['pm2']}\nPYTHONUNBUFFERED=1\n")
     with open(os.path.join(path, "run.sh"), "w") as f:
         f.write(f"#!/usr/bin/env bash\n# Запуск для pm2 (сделано Студией): секреты из .env\nset -a; . '{env}'; set +a\n"
                 f"cd '{path}' && exec {venv_python(path)} bot.py\n")

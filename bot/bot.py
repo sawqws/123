@@ -39,6 +39,7 @@ import web
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
 import media  # noqa: E402  голосовые -> текст, фото (common/media.py)
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 # pm2 передаёт свой канал связи (NODE_CHANNEL_FD) — node-скрипты бота наследуют его и падают при выходе
 # с кодом -6, хотя всё уже вывели. Скриптам бота этот канал не нужен.
@@ -1997,6 +1998,8 @@ def main():
             send(owner(), card("Обновился", note=esc(head), icon="✨"), menu=True, raw_html=True)
         except Exception as e:
             print("startup:", e)
+    sup = support.Support(TOKEN, "HDP", folders=["bot", "horo"], pm2="horo-bot", allowed=lambda uid: uid == owner(),
+                          tests=["python3 bot/test_bot.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=60)
@@ -2006,6 +2009,8 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
+                continue
             cq = u.get("callback_query")
             if cq:
                 if cq.get("from", {}).get("id") == owner() and cq.get("message"):
