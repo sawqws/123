@@ -199,6 +199,11 @@ class Store:
         rows = self.q(sql + " ORDER BY day, start", args)
         return [dict(json.loads(r["data"]), _day=r["day"]) for r in rows]
 
+    def first_day(self, uid):
+        """С какого дня есть данные WHOOP (для сводки «за всё время»)."""
+        r = self.q("SELECT MIN(day) d FROM records WHERE user=? AND day IS NOT NULL AND day != ''", (uid,))
+        return r[0]["d"] if r and r[0]["d"] else None
+
     def record_count(self, uid):
         return self.q("SELECT COUNT(*) n FROM records WHERE user=?", (uid,))[0]["n"]
 

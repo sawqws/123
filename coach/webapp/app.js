@@ -245,9 +245,12 @@
         <div class="btns">${t.brief || (t.tips || []).length ? '<button class="btn sm ghost" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="btn sm ghost" data-a="brief">Разобрать сейчас</button>' : ''}</div>` : ''}</section>`;
 
     h += `<div class="trio rise">
-      <button class="stat tap" data-a="detail" data-v="rec"><div class="k">ВСР, мс</div><div class="v num">${r && r.hrv != null ? Math.round(r.hrv) : '—'}</div><div class="d">${delta(r && r.hrv, b.hrv, true)}</div></button>
-      <button class="stat tap" data-a="detail" data-v="rec"><div class="k">Пульс</div><div class="v num">${r && r.rhr != null ? r.rhr : '—'}</div><div class="d">${delta(r && r.rhr, b.rhr, false)}</div></button>
-      <button class="stat tap" data-a="detail" data-v="strain"><div class="k">Ккал</div><div class="v num">${c ? big(c.kcal) : '—'}</div><div class="d"><span class="muted">траты</span></div></button></div>`;
+      <button class="stat tap" data-a="explain" data-v="hrv"><div class="k">ВСР, мс <i class="qm">?</i></div><div class="v num">${r && r.hrv != null ? Math.round(r.hrv) : '—'}</div><div class="d">${delta(r && r.hrv, b.hrv, true)}</div></button>
+      <button class="stat tap" data-a="explain" data-v="rhr"><div class="k">Пульс <i class="qm">?</i></div><div class="v num">${r && r.rhr != null ? r.rhr : '—'}</div><div class="d">${delta(r && r.rhr, b.rhr, false)}</div></button>
+      <button class="stat tap" data-a="explain" data-v="kcal"><div class="k">Ккал <i class="qm">?</i></div><div class="v num">${c ? big(c.kcal) : '—'}</div><div class="d"><span class="muted">траты</span></div></button></div>
+      <p class="hint-line">Нажми на любую цифру или кольцо — объясню, что это значит</p>
+      <button class="card summary-entry rise tap" data-a="summary" data-v="day"><span class="se-ic">📊</span><span class="se-main"><b>Сводка и советы</b>
+        <span class="muted">за день, неделю, месяц и всё время с WHOOP</span></span><span class="chev"></span></button>`;
 
     if (isToday) h += waterCard(t.water) + foodMini(t);
     if ((t.workouts || []).length) h += `<div class="label">Тренировки</div><div class="list rise">${t.workouts.map(workoutRow).join('')}</div>`;
@@ -263,13 +266,69 @@
       ${row('🥊', 'После тренировки', 'Что съесть и как восстановиться')}${row('📷', 'Фото еды', 'Ккал и БЖУ за секунды')}${row('🎥', 'Видео упражнения', 'Разбор техники')}</div>`;
   }
 
+  // ---------- расшифровки: что значит цифра и как она у тебя ----------
+  const ABOUT = {
+    rec: { t: 'Что это', p: ['Восстановление — насколько организм отдохнул и готов к нагрузке сегодня. WHOOP считает его ночью по ВСР, пульсу покоя, дыханию и сну.',
+      '🟢 67–100% — можно тренироваться в полную силу, 🟡 34–66% — умеренно, 🔴 0–33% — лучше лёгкий день и отдых.'] },
+    sleep: { t: 'Что это', p: ['Сон — сколько ты спал и сколько тебе было нужно (с учётом вчерашней нагрузки и недосыпа). «Выполнение» — сколько процентов от нужного ты поспал: 85% и выше — хорошо.',
+      'Глубокий сон восстанавливает мышцы, REM — голову и память. Режим — насколько ровно ты ложишься и встаёшь каждый день.'] },
+    strain: { t: 'Что это', p: ['Нагрузка — сколько за день потрудились сердце и мышцы, по шкале от 0 до 21. Считается по пульсу: тренировки, ходьба, всё движение.',
+      '0–9 — лёгкий день, 10–13 — средний, 14–17 — тяжёлый, 18–21 — очень тяжёлый. Ориентир на сегодня зависит от восстановления.'] },
+  };
+  function explainHrv(v, b) {
+    if (v == null) return 'Сегодня ВСР ещё не посчитана — это делается ночью.';
+    if (b == null) return `Сейчас ${Math.round(v)} мс. Норма появится, когда наберётся хотя бы неделя данных.`;
+    const p = (v - b) / b * 100;
+    if (p >= 10) return `Выше твоей нормы на ${Math.round(p)}% — нервная система хорошо отдохнула, организм готов к нагрузке. 💪`;
+    if (p > -10) return 'В пределах твоей нормы — обычный день, можно тренироваться как запланировано.';
+    if (p > -20) return `Ниже нормы на ${Math.round(-p)}% — организм немного устал (нагрузка, недосып, стресс). Тренируйся полегче.`;
+    return `Сильно ниже нормы (на ${Math.round(-p)}%) — организм перегружен или начинается болезнь. Сегодня лучше отдых и сон.`;
+  }
+  function explainRhr(v, b) {
+    if (v == null) return 'Пульс покоя ещё не посчитан — WHOOP меряет его во сне.';
+    if (b == null) return `Сейчас ${v} уд/мин. Норма появится, когда наберётся хотя бы неделя данных.`;
+    const d = v - b;
+    if (d <= -3) return `Ниже твоей нормы на ${Math.round(-d)} — сердцу легче, ты хорошо восстановился. 👍`;
+    if (d < 3) return 'Как обычно — всё в порядке.';
+    if (d < 6) return `Выше нормы на ${Math.round(d)} — организм ещё не восстановился (поздняя тренировка, недосып, мало воды).`;
+    return `Заметно выше нормы (+${Math.round(d)}) — так бывает при перегрузке или начале простуды. Сегодня полегче и больше сна.`;
+  }
+  function explain(kind) {
+    const d = S.data, t = S.dayData || d.today, r = t.recovery || {}, c = t.cycle || {}, b = t.base || {}, n = t.nutrition;
+    haptic('tap');
+    const box = (title, body) => `<div class="label">${title}</div><div class="card prose">${body}</div>`;
+    const norm = (v, base, unit, goodUp) => `<div class="grid2"><div class="stat"><div class="k">Сейчас</div><div class="v num">${v == null ? '—' : Math.round(v)}<small>${unit}</small></div></div>
+      <div class="stat"><div class="k">Твоя норма</div><div class="v num">${base == null ? '—' : Math.round(base)}<small>${unit}</small></div><div class="d">${delta(v, base, goodUp)}</div></div></div>`;
+    let h = '';
+    if (kind === 'hrv') {
+      h = `<h2>ВСР — вариабельность пульса</h2>${norm(r.hrv, b.hrv, ' мс', true)}
+        <div class="note"><span>${r.hrv != null && b.hrv != null && r.hrv >= b.hrv ? '🟢' : '🟡'}</span><span>${esc(explainHrv(r.hrv, b.hrv))}</span></div>
+        ${box('Что это', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. ВСР показывает, насколько они разные, — WHOOP меряет её ночью.</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
+        ${box('Как поднять', '<ul><li>Спать 8–9 ч и ложиться в одно время</li><li>После тяжёлого дня — лёгкий</li><li>Пить воду в течение дня</li><li>Не есть плотно за 2–3 ч до сна, вечером без экрана</li></ul>')}`;
+    } else if (kind === 'rhr') {
+      h = `<h2>Пульс покоя</h2>${norm(r.rhr, b.rhr, ' уд/мин', false)}
+        <div class="note"><span>${r.rhr != null && b.rhr != null && r.rhr <= b.rhr ? '🟢' : '🟡'}</span><span>${esc(explainRhr(r.rhr, b.rhr))}</span></div>
+        ${box('Что это', '<p>Сколько раз в минуту бьётся сердце, когда ты глубоко спишь. Чем ты тренированнее и лучше отдохнул, тем он ниже: сердцу легче качать кровь.</p><p><b>Ниже — лучше.</b> Если он выше обычного на 3–5 и больше — организм не восстановился или начинается болезнь. Стрелка — разница с твоей нормой за 30 дней.</p>')}
+        ${box('Как снизить', '<ul><li>Хороший сон без поздних тренировок</li><li>Спокойное кардио 2–3 раза в неделю (лёгкий бег, вело)</li><li>Вода, меньше сладких напитков и кофеина вечером</li></ul>')}`;
+    } else if (kind === 'kcal') {
+      const eaten = t.eaten ? t.eaten.kcal : null;
+      h = `<h2>Ккал — траты за день</h2><div class="grid2"><div class="stat"><div class="k">Потратил</div><div class="v num">${big(c.kcal)}</div><div class="d">${b.kcal != null ? `обычно ${big(b.kcal)}` : ''}</div></div>
+        <div class="stat"><div class="k">Съел</div><div class="v num">${big(eaten)}</div><div class="d">${n ? `норма ${big(n.kcal)}` : ''}</div></div></div>
+        ${box('Что это', '<p>Сколько энергии тело потратило за день: на дыхание, мозг, учёбу, ходьбу и тренировки. Даже во сне тратится примерно 1200–1600 ккал.</p><p>Чтобы расти и тренироваться, есть нужно примерно столько же, в тяжёлые дни — больше. Если долго есть меньше трат — падают силы, восстановление и рост мышц.</p>')}
+        ${box('Что делать', `<ul><li>Сравни с «Съел» — недобор больше 300–400 ккал лучше закрыть едой</li><li>Белок в каждом приёме пищи (мясо, рыба, творог, яйца)</li><li>Записывай еду фото во вкладке «Питание»</li></ul>`)}`;
+    }
+    sheet(h);
+    animate();
+  }
+
   // подробности по кольцам — в листе снизу
   function detail(kind) {
     const d = S.data, t = S.dayData || d.today, r = t.recovery, s = t.sleep, c = t.cycle, b = t.base || {};
     haptic('tap');
     let h = '';
+    const about = ABOUT[kind] ? `<details class="about"><summary>${ABOUT[kind].t}</summary>${ABOUT[kind].p.map(x => `<p>${esc(x)}</p>`).join('')}</details>` : '';
     if (kind === 'rec') {
-      h = `<h2>Восстановление ${r ? `<span class="num" style="color:${C[r.zone]}">${r.score}%</span>` : ''}</h2>
+      h = `<h2>Восстановление ${r ? `<span class="num" style="color:${C[r.zone]}">${r.score}%</span>` : ''}</h2>${about}
         <div class="grid2"><div class="stat"><div class="k">ВСР, мс</div><div class="v num">${r && r.hrv != null ? Math.round(r.hrv) : '—'}</div><div class="d">норма ${b.hrv != null ? Math.round(b.hrv) : '—'}</div></div>
         <div class="stat"><div class="k">Пульс</div><div class="v num">${r && r.rhr != null ? r.rhr : '—'}<small>уд/мин</small></div><div class="d">норма ${b.rhr != null ? Math.round(b.rhr) : '—'}</div></div></div>
         ${r && r.calibrating ? '<div class="note"><span>⏳</span><span>WHOOP ещё калибруется — первые недели цифры неточные.</span></div>' : ''}
@@ -281,7 +340,7 @@
       else {
         const tot = s.light + s.deep + s.rem + s.awake || 1;
         const st = [['Глубокий', s.deep, 'var(--sleep)'], ['REM', s.rem, 'color-mix(in srgb, var(--sleep) 62%, var(--card))'], ['Лёгкий', s.light, 'color-mix(in srgb, var(--sleep) 32%, var(--card))'], ['Без сна', s.awake, 'var(--field)']];
-        h = `<h2>Сон <span class="num" style="color:var(--sleep)">${hHuman(s.hours)}</span></h2>
+        h = `<h2>Сон <span class="num" style="color:var(--sleep)">${hHuman(s.hours)}</span></h2>${about}
           <p class="muted num">${esc(s.start)} → ${esc(s.end)} · нужно ${hHuman(s.need)}</p>
           <div class="stages">${st.map(([, v, col]) => v ? `<span style="width:${v / tot * 100}%;background:${col}"></span>` : '').join('')}</div>
           <div class="legend">${st.map(([k, v, col]) => `<span><i style="background:${col}"></i>${k}<b class="num">${hm(v)}</b></span>`).join('')}</div>
@@ -291,7 +350,7 @@
       }
     } else {
       const p = v => `${pct(v, 21)}%`;
-      h = `<h2>Нагрузка ${c && c.strain != null ? `<span class="num" style="color:var(--strain)">${num(c.strain, 1)}</span>` : ''}</h2>
+      h = `<h2>Нагрузка ${c && c.strain != null ? `<span class="num" style="color:var(--strain)">${num(c.strain, 1)}</span>` : ''}</h2>${about}
         <p class="muted num">${t.band ? `Ориентир на сегодня ${t.band[0]}–${t.band[1]}` : 'Шкала 0–21'}${b.strain != null ? ` · обычно ${num(b.strain, 1)}` : ''}</p>
         ${c ? `<div class="gauge">${t.band ? `<div class="band" style="left:${p(t.band[0])};width:calc(${p(t.band[1])} - ${p(t.band[0])})"></div>` : ''}<div class="fill" style="width:${p(c.strain || 0)}"></div></div>
         <div class="scale num"><span>0</span><span>7</span><span>14</span><span>21</span></div>` : ''}
@@ -303,9 +362,92 @@
     animate();
   }
 
+  // ---------- сводка и советы за период ----------
+  const PERIODS = [['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['all', 'Всё время']];
+  S.sum = {};
+  function cmp(v, p, goodUp, unit = '', d = 0) {
+    if (v == null || p == null) return '';
+    const x = v - p;
+    if (Math.abs(x) < (d ? .05 : .5)) return '<span class="muted">как было</span>';
+    const cls = goodUp == null ? 'muted' : (goodUp ? x > 0 : x < 0) ? 'up' : 'down';  // null — ни хорошо, ни плохо
+    return `<span class="${cls}">${x > 0 ? '↑' : '↓'} ${num(Math.abs(x), d)}${unit}</span>`;
+  }
+  function sumBody(per) {
+    const z = S.sum[per];
+    if (!z || z.loading && !z.summary) return skel(4);
+    if (z.error && !z.summary) return `<div class="empty"><span class="e">⚠️</span>${esc(z.error)}</div>`;
+    const s = z.summary, x = s.stats, p = s.prev || {};
+    const fmtD = iso => { const d = parseDay(iso); return `${d.getDate()} ${MON_S[d.getMonth()]}`; };
+    const range = per === 'day' ? dateLine(s.until) : `${fmtD(s.since)} — ${fmtD(s.until)} · ${s.span} ${plural(s.span, 'день', 'дня', 'дней')}`;
+    const tile = (k, v, c) => `<div class="stat"><div class="k">${k}</div><div class="v sm num">${v}</div><div class="d">${c || ''}</div></div>`;
+    const dd = s.day || {};
+    const recV = per === 'day' ? (dd.recovery ? dd.recovery.score : null) : x.recovery;
+    const hrvV = per === 'day' ? (dd.recovery ? dd.recovery.hrv : null) : x.hrv;
+    const rhrV = per === 'day' ? (dd.recovery ? dd.recovery.rhr : null) : x.rhr;
+    const slV = per === 'day' ? (dd.sleep ? dd.sleep.hours : null) : x.sleep;
+    const stV = per === 'day' ? (dd.cycle ? dd.cycle.strain : null) : x.strain;
+    let h = `<p class="small muted">${range} · сравнение: ${esc(s.prev_label)}</p>
+      <div class="grid2">${tile('Восстановление', recV != null ? Math.round(recV) + '%' : '—', cmp(recV, p.recovery, true, '%'))}
+      ${tile('ВСР', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true))}
+      ${tile('Пульс покоя', rhrV != null ? Math.round(rhrV) : '—', cmp(rhrV, p.rhr, false))}
+      ${tile('Сон', hm(slV), cmp(slV != null ? slV * 60 : null, p.sleep != null ? p.sleep * 60 : null, true, ' мин'))}
+      ${tile('Нагрузка', stV != null ? num(stV, 1) : '—', cmp(stV, p.strain, null, '', 1))}
+      ${per === 'day' ? tile('Тренировки', (dd.workouts || []).length, '') : tile('Тренировки', x.workouts, `<span class="muted">${x.minutes} мин</span>`)}</div>`;
+    if (per !== 'day' && x.days) {
+      const zb = (n, c) => n ? `<span style="flex:${n};background:${c}"></span>` : '';
+      h += `<div class="zones">${zb(x.green, C.green)}${zb(x.yellow, C.yellow)}${zb(x.red, C.red)}</div>
+        <p class="small muted num">🟢 ${x.green} · 🟡 ${x.yellow} · 🔴 ${x.red} ${plural(x.days, 'день', 'дня', 'дней')} · отбой в среднем ${x.bed != null ? esc(clockH(x.bed)) : '—'}${x.bed_spread != null ? ` ±${num(x.bed_spread * 60)} мин` : ''}</p>`;
+    }
+    h += `<div class="label">✨ Итог и советы</div>`;
+    if (z.text) h += `<div class="card prose">${md(z.text)}</div><button class="btn sm ghost" data-a="sum-make" data-v="${per}">Обновить советы</button>`;
+    else if (z.making) h += `<div class="card">${skel(3)}<p class="small muted">Разбираю данные — 20–40 секунд…</p></div>`;
+    else h += `<button class="btn primary" data-a="sum-make" data-v="${per}">Получить советы</button>`;
+    return h;
+  }
+  // отбой хранится в часах от полудня (23:30 -> 11,5)
+  const clockH = h => { const m = Math.round((((h + 12) % 24) + 24) % 24 * 60); return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+  let sumEl = null, sumPer = 'day';
+  function sumHtml() {
+    return `<h2>📊 Сводка и советы</h2><div class="seg" role="tablist">${PERIODS.map(([k, l]) => `<button class="${sumPer === k ? 'on' : ''}" data-a="sum-per" data-v="${k}" role="tab">${l}</button>`).join('')}</div>
+      <div id="sum-body">${sumBody(sumPer)}</div>`;
+  }
+  function sumRender() { const b = sumEl && sumEl.querySelector('#sum-body'); if (b) { b.innerHTML = sumBody(sumPer); animate(); } }
+  async function sumLoad(per, make) {
+    const z = S.sum[per] = S.sum[per] || {};
+    if (make) { if (z.making) return; z.making = true; } else z.loading = true;
+    if (per === sumPer) sumRender();
+    try {
+      const r = await api('/api/summary', make ? { period: per, make: 1 } : { period: per });
+      Object.assign(z, { summary: r.summary, text: r.text, error: null });
+      if (make) haptic('success');
+      else if (!r.text && (r.summary.stats.days || (r.summary.day && r.summary.day.cycle))) { z.loading = false; return sumLoad(per, true); }  // советы — сразу, без лишней кнопки
+    } catch (e) { z.error = e.message || String(e); if (make) fail(e); }
+    z.loading = false; z.making = false;
+    if (per === sumPer) sumRender();
+  }
+  function summarySheet(per) {
+    haptic('tap');
+    sumPer = per || 'day';
+    sumEl = sheet(sumHtml());
+    sumEl.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-a]');
+      if (!b) return;
+      ev.stopPropagation();
+      if (b.dataset.a === 'sum-per') {
+        sumPer = b.dataset.v; haptic('select');
+        sumEl.querySelectorAll('[data-a="sum-per"]').forEach(x => x.classList.toggle('on', x.dataset.v === sumPer));
+        sumRender();
+        if (!S.sum[sumPer]) sumLoad(sumPer);
+      } else if (b.dataset.a === 'sum-make') sumLoad(b.dataset.v, true);
+    });
+    if (!S.sum[sumPer] || !S.sum[sumPer].summary) sumLoad(sumPer); else sumRender();
+  }
+
   // ---------- Тренды ----------
   function trendsView() {
     let h = hero('Тренды', `Последние ${S.range} дней`);
+    h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">📊</span><span class="se-main"><b>Сводка и советы</b>
+      <span class="muted">день · неделя · месяц · всё время</span></span><span class="chev"></span></button>`;
     h += `<div class="seg" role="tablist">${[7, 30, 90].map(n => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${n} дней</button>`).join('')}</div>`;
     const pr = S.progress;
     h += `<section class="card feature rise">${head('✨ Разбор прогресса', pr && !S.progressing ? '<button class="link" data-a="progress">Обновить</button>' : '')}
@@ -536,6 +678,8 @@
     else if (a === 'connect') connect();
     else if (a === 'brief') brief();
     else if (a === 'detail') detail(v);
+    else if (a === 'explain') explain(v);
+    else if (a === 'summary') summarySheet(v);
     else if (a === 'progress') loadProgress(true);
     else if (a === 'more') progressSheet();
     else if (a === 'day') shiftDay(Number(v));
@@ -595,6 +739,7 @@
     if (S.tab === 'trends') { if (!S.series[S.range]) loadSeries(S.range); loadProgress(); }
     if (S.tab === 'coach') loadHistory();
     if (p === 'profile') profileSheet();
+    if (p === 'summary') summarySheet('week');
     if (tg && tg.onEvent) tg.onEvent('themeChanged', () => render(false));
     // данные обновляются сами, пока приложение открыто
     setInterval(async () => {
