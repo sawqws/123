@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>КПП</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <link rel="stylesheet" href="app.css?v={{v}}">
+</head>
+<body>
+  <main id="app">
+    <header class="top">
+      <div class="brand">КПП</div>
+      <div id="who" class="chip">…</div>
+    </header>
+    <div id="address" class="sub"></div>
+
+    <section id="login" class="card" hidden>
+      <h2>Вход через Яндекс</h2>
+      <ol class="steps">
+        <li>Войди тем же Яндекс ID, что в Домиленде.</li>
+        <li>Откроется пустая страница или ошибка — так и надо.</li>
+        <li>Скопируй её адрес целиком и вставь сюда.</li>
+      </ol>
+      <button id="open-yandex" class="btn primary">Открыть Яндекс</button>
+      <textarea id="token" rows="2" placeholder="https://oauth.yandex.ru/…#access_token=…" autocomplete="off"></textarea>
+      <button id="do-login" class="btn">Войти</button>
+      <p class="hint">Лучше с iPad или компьютера: телефон может открыть приложение Домиленд.</p>
+    </section>
+
+    <section id="places" class="card" hidden>
+      <h2>Куда заказывать пропуск?</h2>
+      <div id="place-list" class="list"></div>
+    </section>
+
+    <section id="order" class="card" hidden>
+      <h2>Пропуск для такси</h2>
+      <form id="order-form" autocomplete="off">
+        <input id="plate" class="plate-input" placeholder="А123ВС777" maxlength="40"
+               autocapitalize="characters" spellcheck="false" enterkeyhint="go">
+        <button id="go" class="btn primary" type="submit">Оформить пропуск</button>
+      </form>
+      <div id="result" class="result" hidden></div>
+    </section>
+
+    <section id="passes-box" hidden>
+      <h3 class="section">Последние пропуска</h3>
+      <div id="passes" class="list"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="app.js?v={{v}}"></script>
+</body>
+</html>
