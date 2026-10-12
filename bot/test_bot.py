@@ -675,6 +675,19 @@ class AgentTest(BotTest):
         self.assertIn("TG_API_ID=555\nTG_API_HASH=abc\n", text)
         self.assertIn(f"TG_AGENT_TOKEN={self.TOK}", text)
 
+    def test_with_hub_no_token_needed(self):
+        """Есть Главный — Секретарь его часть: /agent ничего не ставит и не просит токен."""
+        self.start_agent()
+        hub_env = os.path.join(self.tmp.name, "hub-bot.env")
+        with open(hub_env, "w") as f:
+            f.write("HUB_TOKEN=1:x\n")
+        with mock.patch.object(bot, "HUB_ENV", hub_env):
+            self.say(f"/agent {self.TOK}", mid=9)
+        self.assertEqual(self.deleted, [9])
+        self.assertIn("часть Главного", self.msgs[-1][0])
+        self.assertEqual(self.runs, [])
+        self.assertNotIn(CHAT, bot.mode)
+
     def test_cancel_and_this_bot_token(self):
         self.start_agent()
         self.say("/agent")

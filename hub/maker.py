@@ -36,8 +36,8 @@ CATALOG = {
                   "фото на белом фоне, описание, средняя цена"),
     "eye-bot": ("👁 Глаз", ["eye"], "/etc/eye-bot.env", "EYE_TOKEN", "eye",
                 "Claude в очках Ray-Ban Meta: фото и разговор голосом"),
-    "tg-agent": ("🤖 Секретарь", ["tgbot"], "/etc/tg-agent.env", "TG_AGENT_TOKEN", "tgbot",
-                 "твой Telegram: чаты, ответы, расписания"),
+    # Секретарь — часть Главного (тот же бот), своего токена и ссылки у него нет
+    "tg-agent": ("🤖 Секретарь", ["tgbot"], "", "", None, "часть Главного: вопросы, голос, фото, твой Telegram"),
     "hub-bot": ("👑 Главный", ["hub"], "/etc/hub-bot.env", "HUB_TOKEN", None, "следит за ботами, делает новых"),
 }
 
@@ -141,9 +141,11 @@ def bots_buttons(rows):
             btns.append({"text": ui.clip(f"▶️ {ui.short(r['label'])}"), "url": f"https://t.me/{r['username']}?start=hub"})
         elif not r["status"] and r["install"]:
             btns.append(ui.b(ui.clip(f"➕ {ui.short(r['label'])}"), f"add|{r['install']}", "success"))
+        elif not r["status"] and r["pm2"] == "tg-agent":
+            btns.append(ui.b("➕ Секретарь", "srst", "success"))
     btns = ui.pairs(btns)
     btns.append([ui.b("🛠 Сделать бота", "mk"), ui.b("✏️ Доработать", "fix")])
-    btns.append([ui.b("‹ К ботам", "home")])
+    btns.append([ui.b("‹ К ботам", "bots")])
     return btns
 
 
@@ -351,7 +353,7 @@ def _make(chat, tz):
 
 
 def secretary_ready():
-    """Секретарь подключён к аккаунту Глеба — может сам создать бота в @BotFather."""
+    """Секретарь (часть Главного) запущен — через аккаунт Глеба может сам создать бота в @BotFather."""
     return os.path.exists(os.path.join(ui.REPO, "tgbot", "tmp", "agent.sock"))
 
 
@@ -359,7 +361,7 @@ def botfather(name, want):
     """(токен, None) или (None, почему не вышло). Через Секретаря — аккаунт Глеба, он подтверждает кнопкой."""
     tg_py = os.path.join(ui.REPO, "tgbot", "tg.py")
     if not secretary_ready():
-        return None, "Секретарь не запущен — поставь его: «📂 Все боты» → «➕ Поставить Секретарь»"
+        return None, "Секретарь не запущен — нажми «🔄 Секретарь» на главном экране (/start)"
     code, out = ui.sh("python3", tg_py, "newbot", name, want, "--auto", timeout=5 * 60)
     m = re.search(r"TOKEN (\S+) @(\w+)", out)
     if code == 0 and m:
@@ -513,7 +515,7 @@ def delete(chat, slug):
     set_made(slug, None)
     ui.send(chat, ui.card(f"🗑 <b>«{ui.esc(info['name'])}» удалён</b>",
                           ["Остановлен, код и данные стёрты. В @BotFather его можно удалить командой /deletebot."]),
-            [[ui.b("‹ К ботам", "home")]])
+            [[ui.b("‹ К ботам", "bots")]])
 
 
 # ---------- скриншоты к ТЗ и «что сделать?» ----------

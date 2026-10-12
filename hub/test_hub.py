@@ -35,11 +35,12 @@ def jlist(**status):
 
 class Base(unittest.TestCase):
     def setUp(self):
-        d = tempfile.mkdtemp()
+        d = self.dir = tempfile.mkdtemp()
         self.p = [mock.patch.object(hub, "DATA", d), mock.patch.object(hub, "STATE", os.path.join(d, "s.json")),
                   mock.patch.object(hub, "tg", side_effect=self.fake_tg),
                   mock.patch.object(hub, "server", return_value={"mem_total": 2000, "mem_free": 900,
                                                                  "disk_total": 80.0, "disk_free": 40.0})]
+        self.p.append(mock.patch.object(hub, "AGENT_SOCK", os.path.join(d, "agent.sock")))  # Секретаря пока нет
         for p in self.p:
             p.start()
         self.sent = []
@@ -74,6 +75,12 @@ class Base(unittest.TestCase):
 class HubTest(Base):
     def test_owner_and_home(self):
         self.assertEqual(hub.owner(), U)
+        text, btns = self.last()  # /start — один главный экран
+        self.assertIn("Все боты работают · 3", text)
+        self.assertIn("Секретарь не отвечает", text)
+        self.assertIn('"srst"', btns)
+        self.assertIn('"bots"', btns)
+        hub.on_message(self.msg("/bots"))
         text, btns = self.last()
         self.assertIn("работает 3 из 3", text)
         self.assertIn("Тренер «Форма»", text)
@@ -81,6 +88,8 @@ class HubTest(Base):
         self.assertNotIn("app|hub-bot", btns)
         hub.on_message(self.msg("/bots", uid=99))
         self.assertIn("личный", self.last()[0])
+        hub.on_message(self.msg("привет", uid=99))
+        self.assertIn("личный", self.last()[0])  # чужой текст Секретарю не уходит
 
     def test_alerts(self):
         self.assertEqual(hub.watch_once(), [])
@@ -282,6 +291,7 @@ class AppTest(Base):
         for p in self.p2:
             p.start()
         hub.fails.clear()
+        hub.live.clear()
         self.httpd = hub.ThreadingHTTPServer(("127.0.0.1", 0), hub.Web)
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -464,6 +474,207 @@ class ChatTest(Base):
                 self.assertEqual(len(calls), 3)  # дальше сразу без цвета
         finally:
             self.p[2].start()
+
+
+class FakeSecretary:
+    """Сокет Секретаря (как у tgbot/agent.py): пишет запросы, на _status отвечает аккаунтом."""
+
+    def __init__(self, path, account=None):
+        import socketserver
+        self.got = []
+        fake = self
+
+        class H(socketserver.StreamRequestHandler):
+            def handle(self):
+                req = json.loads(self.rfile.readline())
+                fake.got.append(req)
+                out = {"account": account, "busy": False, "jobs": 0} if req.get("cmd") == "_status" else "ok"
+                self.wfile.write(json.dumps({"ok": True, "out": out}).encode() + b"\n")
+
+        self.srv = socketserver.ThreadingUnixStreamServer(path, H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.open = True
+
+    def updates(self):
+        return [r["update"] for r in self.got if r.get("cmd") == "_hub"]
+
+    def close(self):
+        if self.open:
+            self.open = False
+            self.srv.shutdown()
+            self.srv.server_close()
+
+
+def sync_threads():
+    """threading.Thread, который выполняет работу сразу (для проверок без ожиданий)."""
+    return mock.patch.object(hub.threading, "Thread",
+                             lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args)))
+
+
+class SecretaryTest(Base):
+    """Один бот: что Главный оставляет себе, что отдаёт Секретарю, кнопки с префиксом, Секретарь не отвечает."""
+
+    def setUp(self):
+        super().setUp()
+        self.sec = FakeSecretary(hub.AGENT_SOCK, {"name": "Глеб Смирнов", "username": "gleb_s"})
+        self.addCleanup(self.sec.close)
+
+    def test_home_shows_account(self):
+        hub.on_message(self.msg("/start"))
+        text, btns = self.last()
+        self.assertIn("👤 Глеб Смирнов · @gleb_s", text)
+        self.assertIn('"s:m:home"', btns)  # «Аккаунт» — экран Секретаря
+        for label in ("Боты", "Аккаунт", "Сделать бота", "Обновить всех"):
+            self.assertIn(label, btns)
+        self.assertEqual(self.sec.updates(), [])
+
+    def test_what_goes_where(self):
+        hub.on_message(self.msg("Ответьте Пете, что буду в 6"))
+        hub.on_message(self.msg("/login"))
+        hub.on_message(self.msg("/jobs"))
+        hub.on_message({**self.msg(""), "contact": {"phone_number": "79990001122"}})  # номер для входа
+        texts = [u["message"].get("text") for u in self.sec.updates()]
+        self.assertEqual(texts, ["Ответьте Пете, что буду в 6", "/login", "/jobs", ""])
+        self.assertEqual({r["owner"] for r in self.sec.got if r.get("cmd") == "_hub"}, {U})
+        n = len(self.sec.updates())
+        for own in ("/bots", "/help", "/server", "/claude", "/paid 07.11", "✦ Меню", "/make"):
+            hub.on_message(self.msg(own))
+        self.assertEqual(len(self.sec.updates()), n)  # команды Главного — себе
+        with mock.patch.object(hub.maker, "make") as make, sync_threads():
+            hub.on_message(self.msg("бот, который напоминает пить воду"))  # ждём ТЗ после /make — это Главному
+        make.assert_called_once_with(U, "бот, который напоминает пить воду")
+        self.assertEqual(len(self.sec.updates()), n)
+        hub.on_message(self.msg("/make"))
+        hub.on_message(self.msg("/login"))  # передумал: вход в аккаунт — ожидание ТЗ снято
+        hub.on_message(self.msg("+79990001122"))
+        self.assertEqual([u["message"]["text"] for u in self.sec.updates()[-2:]], ["/login", "+79990001122"])
+
+    def test_media(self):
+        with sync_threads(), mock.patch.object(hub.media, "voice_text", return_value="что я пропустил"):
+            hub.on_message({**self.msg(""), "voice": {"file_id": "v"}})
+        self.assertIn("🎙 <i>«что я пропустил»</i>", [kw.get("text") for _, kw in self.sent])
+        self.assertEqual(self.sec.updates()[-1]["message"]["text"], "что я пропустил")
+        self.assertNotIn("voice", self.sec.updates()[-1]["message"])
+        hub.on_message({**self.msg(""), "photo": [{"file_id": "p"}], "caption": "что это?"})
+        hub.on_message({**self.msg(""), "video": {"file_id": "v", "duration": 5}})
+        self.assertIn("photo", self.sec.updates()[-2]["message"])
+        self.assertIn("video", self.sec.updates()[-1]["message"])
+
+    def test_photo_to_task_while_fixing(self):
+        n = len(self.sec.updates())
+        hub.setting("wait", "fix|coach-bot")
+        with sync_threads(), mock.patch.object(hub.media, "photo_path", return_value="/tmp/shot.jpg"), \
+                mock.patch.object(hub.maker, "fix") as fix:
+            hub.on_message({**self.msg(""), "photo": [{"file_id": "p"}], "caption": "кнопка не работает"})
+        self.assertEqual(len(self.sec.updates()), n)  # скриншот к ТЗ, а не Секретарю
+        self.assertEqual(hub.setting("shots"), ["/tmp/shot.jpg"])
+        fix.assert_called_once_with(U, "coach-bot", "кнопка не работает")
+
+    def test_callbacks(self):
+        cq = {"id": "1", "from": {"id": U}, "data": "s:m:home", "message": {"chat": {"id": U}, "message_id": 3}}
+        n = len(self.sent)
+        hub.on_callback(cq)
+        self.assertEqual(self.sec.updates()[-1], {"callback_query": cq})
+        self.assertEqual(self.sent[n:], [])  # на кнопку отвечает сам Секретарь
+        hub.on_callback({**cq, "data": "bots"})
+        self.assertEqual(len(self.sec.updates()), 1)
+        self.assertIn("работает", self.last()[0])
+        hub.on_callback({**cq, "from": {"id": 99}})  # чужой — никуда
+        self.assertEqual(len(self.sec.updates()), 1)
+
+    def test_secretary_down(self):
+        self.sec.close()
+        os.remove(hub.AGENT_SOCK)
+        with mock.patch.object(hub, "revive") as rv, sync_threads():
+            hub.on_message(self.msg("привет"))
+        text, btns = self.last()
+        self.assertIn("Секретарь не отвечает", text)
+        self.assertIn('"srst"', btns)
+        rv.assert_called_once()
+        with mock.patch.object(hub, "revive"), sync_threads():
+            hub.on_callback({"id": "1", "from": {"id": U}, "data": "s:m:home",
+                             "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertEqual(self.sent[-1], ("answerCallbackQuery", {"callback_query_id": "1",
+                                                                 "text": "Секретарь не отвечает"}))
+
+    def test_revive_restarts_or_installs(self):
+        self.pm2["tg-agent"] = ("errored", 4)
+        with mock.patch.object(hub.time, "sleep", lambda s: None):
+            hub.revive(U, force=True)
+        self.assertIn(("pm2", "restart", "tg-agent"), [r[0] for r in self.runs])
+        del self.pm2["tg-agent"]
+        with mock.patch.object(hub.time, "sleep", lambda s: None):
+            ok, _ = hub.revive(U, force=True)
+        cmd, env = [r for r in self.runs if r[0][0] == "bash"][-1]
+        self.assertTrue(cmd[1].endswith("tgbot/install.sh"))
+        self.assertEqual(env["TG_MODE"], "hub")
+        self.assertNotIn("TG_AGENT_TOKEN", env)  # своего токена у Секретаря больше нет
+        self.assertTrue(ok)
+        self.assertFalse(hub.revive(U)[0])  # сам по себе — не чаще раза в 2 минуты
+        self.assertNotIn("tgbot", hub.INSTALL)  # ставить Секретаря по токену больше нельзя
+
+
+class ProxyTest(AppTest):
+    """Вкладка «Секретарь» мини-приложения: /app/agent/api/* → сервер приложения Секретаря."""
+
+    def setUp(self):
+        super().setUp()
+        import http.server
+        got = self.got = []
+
+        class Agent(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                got.append((self.path, self.headers.get("X-Init-Data"), body))
+                code = 401 if self.headers.get("X-Init-Data") == "bad" else 200
+                data = json.dumps({"ok": code == 200, "path": self.path}).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.agent = hub.ThreadingHTTPServer(("127.0.0.1", 0), Agent)
+        threading.Thread(target=self.agent.serve_forever, daemon=True).start()
+        p = mock.patch.object(hub, "AGENT_PORT", self.agent.server_address[1])
+        p.start()
+        self.addCleanup(p.stop)
+        self.agent_up = True
+
+    def tearDown(self):
+        if self.agent_up:
+            self.agent.shutdown()
+            self.agent.server_close()
+        super().tearDown()
+
+    def test_proxy(self):
+        code, body = self.call("/app/agent/api/ask", {"text": "привет"}, init="sig")
+        self.assertEqual((code, json.loads(body)["path"]), (200, "/api/ask"))
+        self.assertEqual(self.got[-1], ("/api/ask", "sig", json.dumps({"text": "привет"}).encode()))
+        self.assertEqual(self.call("/app/agent/api/state", {}, init="bad")[0], 401)  # подпись проверяет Секретарь
+        self.assertEqual(self.call("/app/agent/index.html", init="")[0], 404)  # только API
+        self.agent.shutdown()
+        self.agent.server_close()
+        self.agent_up = False
+        code, body = self.call("/app/agent/api/state", {})
+        self.assertEqual((code, json.loads(body)["error"]), (502, "Секретарь не запущен"))
+
+    def test_page_has_kit_and_secretary_state(self):
+        code, page = self.call("/app", init="")
+        self.assertIn(b"/app/kit.css?v=", page)
+        self.assertIn(b"/app/kit.js?v=", page)
+        self.assertEqual(self.call("/app/kit.js", init="")[0], 200)
+        self.assertEqual(self.call("/app/health", init="")[1], b"ok")
+        s = json.loads(self.call("/app/api/state")[1])
+        self.assertFalse(s["secretary"]["running"])
+        self.pm2["tg-agent"] = ("online", 0)
+        s = json.loads(self.call("/app/api/state")[1])
+        self.assertTrue(s["secretary"]["running"])
+        sec = [b for b in s["bots"] if b["name"] == "tg-agent"][0]
+        self.assertTrue(sec["part"])
+        self.assertIsNone(sec["username"])  # своего бота у Секретаря нет
 
 
 if __name__ == "__main__":

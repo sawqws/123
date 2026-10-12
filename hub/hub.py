@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Telegram-бот «Главный»: следит за остальными ботами на сервере.
+"""Telegram-бот «Главный»: следит за остальными ботами на сервере, и он же — личный Секретарь (один бот на двоих).
+
+Один бот: Telegram опрашивает только Главный. Свои команды, кнопки и ожидания ввода (токен, ТЗ) он обрабатывает сам,
+а всё остальное — свободный текст, голос (сначала расшифровывает), фото, видео, /login и прочие команды Секретаря,
+кнопки с префиксом «s:» — передаёт процессу Секретаря (tgbot/agent.py, pm2 tg-agent) через его сокет
+tgbot/tmp/agent.sock. Секретарь отвечает тем же токеном. Не запущен — Главный говорит об этом и поднимает его сам.
 
 - список ботов с состоянием (pm2), перезапуск и последние строки логов одной кнопкой;
 - сам пишет, если бот упал или постоянно перезапускается, и когда он снова заработал;
@@ -28,6 +33,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -56,6 +62,10 @@ ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("HUB_ALLOWED", ""))
 SELF = "hub-bot"
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 PORT = int(os.environ.get("HUB_PORT") or 8790)
+SECRETARY = "tg-agent"  # Секретарь — часть Главного: свой процесс, но без своего бота
+AGENT_SOCK = os.path.join(REPO, "tgbot", "tmp", "agent.sock")
+AGENT_PORT = int(os.environ.get("TG_AGENT_PORT") or 8794)
+SEC_PREFIX = "s:"  # данные кнопок Секретаря
 
 APPS = {  # имя в pm2 -> подпись
     "horo-bot": "📚 HDP",
@@ -63,7 +73,7 @@ APPS = {  # имя в pm2 -> подпись
     "planner-bot": "🗓 Планер «Ритм»",
     "kpp-bot": "🚧 КПП",
     "avito-bot": "🛍 Авито",
-    "tg-agent": "🤖 Секретарь",
+    SECRETARY: "🤖 Секретарь",
     "eye-bot": "👁 Глаз",
     SELF: "👑 Главный",
 }
@@ -74,8 +84,6 @@ INSTALL = {  # что умеем ставить по одному токену: 
     "avito": ("AVITO_TOKEN", "🛍 Авито", "Открой @{name}, нажми /start и пришли фото вещи."),
     "eye": ("EYE_TOKEN", "👁 Глаз (очки)", "Открой @{name} и нажми /start — через минуту появится кнопка «Глаз»: "
             "там «🎙 Говорить» и «📷 Фото»."),
-    "tgbot": ("TG_AGENT_TOKEN", "🤖 Секретарь", "Открой @{name}, нажми /start и «Войти в аккаунт» — после этого "
-                                                "я сам создаю новых ботов в @BotFather."),
 }
 BOTFATHER = {  # имя и желаемый username, если бота создаёт Секретарь (без «bot» на конце)
     "coach": ("Форма", "forma_coach"),
@@ -112,12 +120,19 @@ def save(st):
     os.replace(tmp, STATE)
 
 
-def setting(key, value=None):
+_GET = object()
+
+
+def setting(key, value=_GET):
+    """setting(k) — прочитать, setting(k, v) — записать, setting(k, None) — стереть."""
     with lock:
         st = load()
-        if value is None:
+        if value is _GET:
             return st.get(key)
-        st[key] = value
+        if value is None:
+            st.pop(key, None)
+        else:
+            st[key] = value
         save(st)
         return value
 
@@ -303,13 +318,147 @@ def server():
     return info
 
 
+# ---------- Секретарь (часть Главного) ----------
+
+class SecretaryDown(Exception):
+    pass
+
+
+def secretary(req, timeout=5):
+    """Запрос в сокет Секретаря (тот же, что у tgbot/tg.py): строка JSON туда, строка JSON обратно."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(AGENT_SOCK)
+        s.sendall(json.dumps(req, ensure_ascii=False).encode() + b"\n")
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        return json.loads(data)
+    except (OSError, ValueError) as e:
+        raise SecretaryDown(str(e)) from None
+    finally:
+        s.close()
+
+
+def secretary_status():
+    """{"account": {"name", "username"} | None, "busy", "jobs", ...} или None, если Секретарь не отвечает."""
+    try:
+        r = secretary({"cmd": "_status"}, timeout=3)
+        return r.get("out") if r.get("ok") else None
+    except SecretaryDown:
+        return None
+
+
+def to_secretary(update, chat):
+    """Обновление Telegram — Секретарю. Не отвечает — объясняем и поднимаем его сами."""
+    try:
+        secretary({"cmd": "_hub", "update": update, "owner": owner()})
+        return True
+    except SecretaryDown as e:
+        print("secretary:", e)
+    secretary_down(chat)
+    return False
+
+
+def secretary_down(chat):
+    send(chat, card("⚠️ <b>Секретарь не отвечает</b>", ["Поднимаю его сам — через минуту напиши ещё раз."]),
+         [[b("🔄 Перезапустить", "srst", "primary")]])
+    threading.Thread(target=revive, daemon=True).start()
+
+
+revive_lock = threading.Lock()
+revived_at = 0.0
+
+
+def revive(chat=None, force=False):
+    """Поднять Секретаря: перезапуск в pm2, а если его там нет — поставить (tgbot/install.sh, режим «через Главного»).
+    Не чаще раза в 2 минуты (кроме кнопки). chat — куда сказать, чем кончилось."""
+    global revived_at
+    if not revive_lock.acquire(blocking=False):
+        return False, "уже поднимаю"
+    try:
+        if not force and time.time() - revived_at < 120:
+            return False, "недавно поднимал"
+        revived_at = time.time()
+        if SECRETARY in {a["name"] for a in apps() or []}:
+            ok, text = restart_app(SECRETARY, wait=6)
+        else:
+            ok, text = install_secretary()
+        if chat:
+            send(chat, card(f"{'✅' if ok else '⚠️'} <b>{'Секретарь работает' if ok else 'Секретарь не поднялся'}</b>",
+                            [] if ok else [esc(text)]), [[b("‹ Главная", "home")]])
+        return ok, text
+    finally:
+        revive_lock.release()
+
+
+def install_secretary():
+    """Секретарь внутри Главного: tgbot/install.sh без токена (он берёт токен Главного)."""
+    env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin") + ":/usr/local/bin", "HOME": "/root",
+           "LANG": "C.UTF-8", "DEBIAN_FRONTEND": "noninteractive", "TG_MODE": "hub"}
+    code, out = sh("bash", os.path.join(REPO, "tgbot", "install.sh"), timeout=1800, env=env)
+    return code == 0, ("Секретарь поставлен" if code == 0 else out.strip()[-600:])
+
+
+def check_secretary():
+    """После запуска: Секретаря нет в pm2 — ставим сам (не чаще раза в 6 часов, если не выходит)."""
+    time.sleep(60)
+    rows = apps()
+    if rows is None or not owner() or SECRETARY in {a["name"] for a in rows}:
+        return
+    if time.time() - (setting("sec_try") or 0) < 6 * 3600:
+        return
+    setting("sec_try", time.time())
+    send(owner(), card("🤖 <b>Ставлю Секретаря</b>", ["Он теперь часть Главного: отвечает на вопросы, голос, фото "
+                                                     "и ведёт твой Telegram. Это 3–7 минут."]))
+    revive(owner(), force=True)
+
+
 # ---------- экраны ----------
 
 def home(chat, mid=None):
+    """Главный экран (/start): коротко, как дела у ботов и у Секретаря, и главные кнопки."""
+    rows = apps()
+    sec = secretary_status()
+    lines = []
+    if rows is None:
+        lines.append("⚠️ pm2 не отвечает")
+    else:
+        down = [a for a in rows if a["status"] != "online"]
+        if down:
+            lines.append("🔴 Не работает: " + ", ".join(esc(short(a["label"])) for a in down))
+            lines.append(f"🟢 Работают {len(rows) - len(down)} из {len(rows)}")
+        else:
+            lines.append(f"🟢 Все боты работают · {len(rows)}")
+    acc = (sec or {}).get("account")
+    if sec is None:
+        lines.append("⚪️ Секретарь не отвечает")
+    elif acc:
+        lines.append("👤 " + esc(acc.get("name") or "Аккаунт") + (f" · @{esc(acc['username'])}" if acc.get("username") else ""))
+    else:
+        lines.append("👤 Аккаунт не подключён")
+    if sec and sec.get("busy"):
+        lines.append("⏳ Секретарь занят поручением")
+    btns = []
+    web = app_button()
+    if web:
+        btns.append([web])
+    btns += [[b("🤖 Боты", "bots", "danger" if rows and any(a["status"] != "online" for a in rows) else None),
+              b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary")],
+             [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")]]
+    return show(chat, mid, card("👑 <b>Главный</b>", lines,
+                                "<i>💬 Пиши или говори что угодно — отвечу. Фото и видео тоже.</i>"), btns)
+
+
+def bots_screen(chat, mid=None):
     rows = apps()
     if rows is None:
         return show(chat, mid, card("⚠️ <b>pm2 не отвечает</b>", ["Попробуй через минуту."]),
-                    [[b("🔄 Ещё раз", "home")]])
+                    [[b("🔄 Ещё раз", "bots"), b("‹ Главная", "home")]])
     up = sum(1 for a in rows if a["status"] == "online")
     lines = []
     for a in rows:
@@ -322,10 +471,10 @@ def home(chat, mid=None):
         btns.append([web])
     btns += pairs([b(clip(a["label"]), f"app|{a['name']}", None if a["status"] == "online" else "danger")
                    for a in rows if a["name"] != SELF])
-    btns += [[b("⬆️ Обновить всех", "upd"), b("🛠 Сделать бота", "mk")],
-             [b("✏️ Доработать", "fix"), b("📂 Все боты", "all")],
-             [b("🖥 Сервер", "srv"), b("⋯ Ещё", "more")]]
-    return show(chat, mid, card(f"👑 <b>Главный</b> · работает {up} из {len(rows)}", lines), btns)
+    btns += [[b("⬆️ Обновить всех", "upd"), b("✏️ Доработать", "fix")],
+             [b("📂 Все боты", "all"), b("🖥 Сервер", "srv")],
+             [b("‹ Главная", "home"), b("⋯ Ещё", "more")]]
+    return show(chat, mid, card(f"🤖 <b>Боты</b> · работает {up} из {len(rows)}", lines), btns)
 
 
 def more(chat, mid):
@@ -334,21 +483,21 @@ def more(chat, mid):
                                                  "• 🤖 Claude — вход для Claude из облака",
                                                  "• ⏰ Напоминания и вечерняя отбивка"]),
                 [[b("➕ Поставить", "add"), b("🤖 Claude", "cl")],
-                 [b("⏰ Напоминания", "rmd|list"), b("🔄 Обновить", "home")],
-                 [b("‹ Назад", "home")]])
+                 [b("⏰ Напоминания", "rmd|list"), b("🔄 Обновить", "bots")],
+                 [b("‹ Назад", "bots")]])
 
 
 def app_card(chat, mid, name):
     a = next((x for x in apps() or [] if x["name"] == name), None)
     if not a:
-        return show(chat, mid, card("🤷 <b>Нет такого бота</b>", [f"{esc(name)} нет в pm2."]), [[b("‹ Назад", "home")]])
+        return show(chat, mid, card("🤷 <b>Нет такого бота</b>", [f"{esc(name)} нет в pm2."]), [[b("‹ Назад", "bots")]])
     ok = a["status"] == "online"
     lines = ["🟢 Работает " + ago(a["uptime"]) if ok else "🔴 Не работает: " + esc(a["status"]),
              f"• Память {a['mem']} МБ · CPU {a['cpu']}%",
              f"• Перезапусков: {a['restarts']}"]
     return show(chat, mid, card(f"<b>{esc(a['label'])}</b>", lines),
                 [[b("🔄 Перезапустить", f"rs|{name}", "primary"), b("📜 Логи", f"lg|{name}")],
-                 [b("‹ Назад", "home")]])
+                 [b("‹ Назад", "bots")]])
 
 
 def log_text(name, lines=30, limit=3500):
@@ -359,7 +508,7 @@ def log_text(name, lines=30, limit=3500):
 
 def logs(chat, name):
     send(chat, f"📜 <b>Логи · {esc(short(label(name)))}</b>\n<pre>{esc(log_text(name))}</pre>",
-         [[b("🔄 Перезапустить", f"rs|{name}"), b("‹ К ботам", "home")]])
+         [[b("🔄 Перезапустить", f"rs|{name}"), b("‹ К ботам", "bots")]])
 
 
 def restart_app(name, wait=4):
@@ -379,31 +528,58 @@ def restart(chat, name):
     ok, text = restart_app(name)
     head, _, why = text.partition(": ")
     send(chat, card(f"{'✅' if ok else '⚠️'} <b>{esc(head)}</b>", [esc(why)] if why else []),
-         [[b("📜 Логи", f"lg|{name}"), b("‹ К ботам", "home")]])
+         [[b("📜 Логи", f"lg|{name}"), b("‹ К ботам", "bots")]])
 
 
 def paid_left(paid, today=None):
     return (datetime.date.fromisoformat(paid) - (today or datetime.datetime.now(TZ).date())).days
 
 
+def usage(s, cpus=None):
+    """Сколько занято, в процентах: {"mem": 27, "disk": 17, "cpu": 23}. Процессор — средняя нагрузка
+    за минуту на все ядра (load 1.0 на одном ядре = 100%)."""
+    out = {}
+    if s.get("mem_total"):
+        out["mem"] = round((s["mem_total"] - s["mem_free"]) / s["mem_total"] * 100)
+    if s.get("disk_total"):
+        out["disk"] = round((s["disk_total"] - s["disk_free"]) / s["disk_total"] * 100)
+    try:
+        out["cpu"] = round(float(s["load"]) / (cpus or os.cpu_count() or 1) * 100)
+    except (KeyError, TypeError, ValueError):
+        pass
+    return out
+
+
+def level(p):
+    return "🟢" if p < 70 else "🟡" if p < 90 else "🔴"
+
+
 def server_card(chat, mid):
     s = server()
+    u = usage(s)
     lines = []
-    if "mem_total" in s:
-        lines.append(f"• Память: свободно {s['mem_free']} из {s['mem_total']} МБ")
-    if "disk_total" in s:
-        lines.append(f"• Диск: свободно {s['disk_free']} из {s['disk_total']} ГБ")
-    if "load" in s:
-        lines.append(f"• Нагрузка {s['load']} · без перезагрузки {ago(s.get('uptime', 0))}")
+    if "mem" in u:
+        lines.append(f"{level(u['mem'])} Память: занято {u['mem']}% "
+                     f"({s['mem_total'] - s['mem_free']} из {s['mem_total']} МБ)")
+    if "disk" in u:
+        lines.append(f"{level(u['disk'])} Диск: занято {u['disk']}% "
+                     f"({round(s['disk_total'] - s['disk_free'], 1)} из {s['disk_total']} ГБ)")
+    if "cpu" in u:
+        lines.append(f"{level(u['cpu'])} Процессор: занят {u['cpu']}%")
+    if s.get("uptime"):
+        lines.append(f"• Работает без перезагрузки {ago(s['uptime'])}")
     paid = setting("paid")
-    foot = ""
     if paid:
         left = paid_left(paid)
         lines.append(f"• Оплачен до {fmt_date(paid)} — " + (f"осталось {left} дн" if left > 0 else
                                                             "срок сегодня!" if left == 0 else "срок прошёл!"))
-    else:
-        foot = "<i>Срок оплаты не указан — пришли /paid ДД.ММ, напомню заранее.</i>"
-    return show(chat, mid, card("🖥 <b>Сервер</b>", lines, foot), [[b("‹ Назад", "home")]])
+    worst = max(u.values(), default=0)
+    title = ("🖥 <b>Сервер: всё в порядке</b>" if worst < 70 else
+             "🖥 <b>Сервер: тесновато</b>" if worst < 90 else "🖥 <b>Сервер: перегружен</b>")
+    foot = "<i>🟢 до 70% — нормально · 🟡 70–90% — тесно · 🔴 больше 90% — боты могут падать</i>"
+    if not paid:
+        foot += "\n<i>Срок оплаты не указан — пришли /paid ДД.ММ, напомню заранее.</i>"
+    return show(chat, mid, card(title, lines, foot), [[b("‹ Назад", "home")]])
 
 
 def fmt_date(iso):
@@ -429,7 +605,7 @@ def update_all(chat, reset=False):
     if old.strip() == new.strip():
         progress("Уже последняя версия", done=True)
         return send(chat, card("✅ <b>Уже последняя версия</b>", ["Перезапускать никого не нужно."]),
-                    [[b("‹ К ботам", "home")]])
+                    [[b("‹ К ботам", "bots")]])
     _, changed = git("diff", "--name-only", old.strip(), new.strip())
     if "package.json" in changed or "package-lock.json" in changed:
         progress("Ставлю пакеты npm…")
@@ -510,7 +686,7 @@ def install(chat, kind, token, msg_id=None):
     if code != 0:
         return send(chat, f"❌ <b>Не получилось</b>\n<pre>{esc(out.strip()[-1200:])}</pre>")
     send(chat, card(f"✅ <b>{esc(short(label))} запущен</b>", [esc(after.format(name=name))]),
-         [[{"text": "▶️ Открыть бота", "url": f"https://t.me/{name}", "style": "success"}], [b("‹ К ботам", "home")]])
+         [[{"text": "▶️ Открыть бота", "url": f"https://t.me/{name}", "style": "success"}], [b("‹ К ботам", "bots")]])
 
 
 # ---------- присмотр ----------
@@ -617,6 +793,7 @@ def hub_url():
 # Тот же https-адрес, что у входа Claude (Caddy планера → 127.0.0.1:HUB_PORT), путь /app.
 # Доступ — только владельцу: подпись initData от Telegram (заголовок X-Init-Data).
 WEB = os.path.join(HERE, "webapp")
+WEB_FILES = ("index.html", "kit.css", "app.css", "kit.js", "app.js")
 BOOT = time.time()  # приложение видит, что Главный перезапустился (после «Обновить всех»)
 live = {}  # живой статус долгого действия: {kind, text, done, ok, at}
 NO_APP = ("📱 <b>Приложение пока не открыть</b>\n<blockquote>Ему нужен https-адрес сервера, а его нет: Главный не узнал "
@@ -655,9 +832,9 @@ def open_app(chat):
     btn = app_button("📱 Открыть приложение")
     if not btn:
         return send(chat, NO_APP)
-    send(chat, card("📱 <b>Приложение Главного</b>", ["• Боты: состояние, перезапуск, логи",
-                                                     "• Сервер: память, диск, оплата",
-                                                     "• Напоминания и вечерняя отбивка"],
+    send(chat, card("📱 <b>Приложение Главного</b>", ["• Секретарь: вопросы, поручения, непрочитанное",
+                                                     "• Боты и сервер: перезапуск, логи, обновить всех",
+                                                     "• Дела: расписание, напоминания, память"],
                     "<i>Оно всегда под кнопкой «Приложение» слева от поля ввода.</i>"), [[btn]])
 
 
@@ -699,13 +876,14 @@ def progress(text, done=False, ok=True, kind=None):
 def app_state():
     rows = apps()
     run = {a["name"]: a for a in rows or []}
+    run_all = dict(run)
     bots = []
     for r in maker.all_bots(rows or []):
         a = run.pop(r["pm2"], None) or {}
         bots.append({"name": r["pm2"], "label": r["label"], "title": short(r["label"]), "about": r["about"],
                      "username": r["username"], "status": a.get("status"), "uptime": round(a.get("uptime") or 0),
                      "mem": a.get("mem") or 0, "cpu": a.get("cpu") or 0, "restarts": a.get("restarts") or 0,
-                     "self": r["pm2"] == SELF})
+                     "self": r["pm2"] == SELF, "part": r["pm2"] == SECRETARY})
     for a in run.values():  # что-то ещё в pm2, чего нет в каталоге
         bots.append({"name": a["name"], "label": a["label"], "title": short(a["label"]), "about": "", "username": None,
                      "status": a["status"], "uptime": round(a["uptime"]), "mem": a["mem"], "cpu": a["cpu"],
@@ -718,6 +896,7 @@ def app_state():
             "paid": {"date": paid, "text": fmt_date(paid), "left": paid_left(paid)} if paid else None,
             "reminders": [{"id": r["id"], "time": r["time"], "when": digest.describe(r), "text": r["text"]} for r in rs],
             "digest": st.get("digest_time") or digest.DEFAULT_TIME,
+            "secretary": {"running": (run_all.get(SECRETARY) or {}).get("status") == "online"},
             "live": dict(live), "boot": BOOT, "now": time.time()}
 
 
@@ -741,6 +920,9 @@ def app_action(action, arg):
         progress("Скачиваю свежий код из main…", kind="update")
         threading.Thread(target=update_all, args=(owner(),), daemon=True).start()
         return {"ok": True, "text": "Обновляю…", "at": live["at"]}
+    if action == "secretary":  # поднять Секретаря (перезапуск или установка) — в фоне, итог придёт в чат
+        threading.Thread(target=revive, args=(owner(), True), daemon=True).start()
+        return {"ok": True, "text": "Поднимаю Секретаря…"}
     if action == "reminder_delete":
         if not arg.isdigit():
             raise ValueError("нет такого напоминания")
@@ -874,19 +1056,40 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             return self.reply(200, "ok")
+        if path in ("/app/health", "/app/agent/health"):
+            return self.reply(200, b"ok", "text/plain; charset=utf-8") if path == "/app/health" else self.proxy("/health")
+        if path.startswith("/app/agent/"):
+            return self.proxy(path[len("/app/agent"):])
         if path in ("/app", "/app/", "/app/index.html"):
-            files = [os.path.join(WEB, f) for f in ("index.html", "app.css", "app.js")]
+            files = [os.path.join(WEB, f) for f in WEB_FILES]
             ver = str(int(max(os.path.getmtime(f) for f in files if os.path.exists(f))))
             with open(files[0], encoding="utf-8") as f:
                 return self.reply(200, f.read().replace("{{v}}", ver).encode(), "text/html; charset=utf-8")
         if path == "/app/api/state":
             return self.app_api(lambda body: app_state())
         name = path[5:] if path.startswith("/app/") else ""
-        ctype = {"app.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8"}.get(name)
+        ctype = {"app.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
+                 "kit.css": "text/css; charset=utf-8", "kit.js": "text/javascript; charset=utf-8"}.get(name)
         if ctype:
             with open(os.path.join(WEB, name), "rb") as f:
                 return self.reply(200, f.read(), ctype, "public, max-age=31536000, immutable")
         self.reply(404, {"error": "not found"})
+
+    def proxy(self, path, body=None):
+        """Вкладка «Секретарь» мини-приложения: /app/agent/api/* → сервер приложения Секретаря (127.0.0.1:AGENT_PORT).
+        Подпись Telegram проверяет он сам (тот же токен), здесь — только пересылка."""
+        if not (path.startswith("/api/") or path == "/health"):
+            return self.reply(404, {"error": "not found"})
+        headers = {k: self.headers[k] for k in ("X-Init-Data", "Content-Type") if self.headers.get(k)}
+        req = urllib.request.Request(f"http://127.0.0.1:{AGENT_PORT}{path}", data=body,
+                                     method="POST" if body is not None else "GET", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return self.reply(r.status, r.read(), r.headers.get("Content-Type") or "application/json")
+        except urllib.error.HTTPError as e:
+            return self.reply(e.code, e.read(), e.headers.get("Content-Type") or "application/json")
+        except (OSError, ValueError):
+            return self.reply(502, {"error": "Секретарь не запущен", "down": True})
 
     def app_api(self, handler, body=None):
         user = check_init_data(self.headers.get("X-Init-Data") or "")
@@ -903,7 +1106,13 @@ class Web(BaseHTTPRequestHandler):
             self.reply(500, {"error": str(e)})
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path == "/app/api/action":  # мини-приложение: вход по подписи Telegram
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/app/agent/"):
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 300_000:
+                return self.reply(413, {"error": "слишком большой запрос"})
+            return self.proxy(path[len("/app/agent"):], self.rfile.read(n) if n else b"")
+        if path == "/app/api/action":  # мини-приложение: вход по подписи Telegram
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(min(n, 100_000)) or b"{}") if n else {}
@@ -956,7 +1165,7 @@ def claude_card(chat, mid):
         btns = [[b("🔑 Показать ключ", "cl|show"), b("♻️ Новый ключ", "cl|new")], [b("⛔ Выключить", "cl|off", "danger")]]
     else:
         btns = [[b("🔑 Включить", "cl|on", "success")]]
-    btns.append([b("‹ Назад", "home")])
+    btns.append([b("‹ Назад", "more")])
     return show(chat, mid, card("🤖 <b>Вход для Claude</b>", lines), btns)
 
 
@@ -1002,16 +1211,22 @@ def parse_paid(text, today=None):
     return date.isoformat()
 
 
-HELP = card("👑 <b>Главный</b> — следит за ботами на сервере", [
-    "• Сам напишет, если бот упал или перезапускается по кругу, и когда заработал снова.",
-    "• 📱 /app — приложение: боты, сервер, напоминания (кнопка «Приложение» у поля ввода).",
-    "• Кнопки: перезапуск, логи, «Обновить всех», «Поставить» нового бота по токену.",
-    "• /paid 07.11 — срок оплаты сервера, напомню за 7, 3 и 1 день.",
-    "• /claude — вход для Claude: сам смотрит логи и чинит ботов, о каждой команде пишу сюда.",
-    "• 🛠 /make — сделаю нового бота по ТЗ (код, @BotFather, запуск), ✏️ /fix — доработаю любого бота.",
-    "• 📂 /all — все боты со ссылками.",
-    digest.HELP_LINES.rstrip("\n"),
-    "• /bots — боты, /server — сервер, /update — обновить всех."], expand=True)
+HELP = card("👑 <b>Главный</b> — боты и секретарь в одном", [
+    "• 💬 Пиши или говори что угодно — отвечу: вопросы, учёба, поиск в интернете. Фото и видео тоже разберу.",
+    "• 👤 Твой Telegram: что пропустил, ответы, папки, сообщения по расписанию — /login, /jobs, /new, /stop.",
+    "• 🤖 /bots — боты: упадёт — напишу сам; перезапуск, логи, /update — обновить всех.",
+    "• 🛠 /make — новый бот по ТЗ, ✏️ /fix — доработать любого, 📂 /all — все со ссылками.",
+    "• 📱 /app — приложение: секретарь, боты, дела (кнопка «Приложение» у поля ввода).",
+    "• /paid 07.11 — срок оплаты сервера, /server — сервер, /claude — вход для Claude.",
+    digest.HELP_LINES.rstrip("\n")], expand=True)
+
+MENU_TEXTS = {"✦ Меню"}  # кнопка клавиатуры Секретаря «Меню» — главный экран
+
+
+def maker_wait():
+    """Главный ждёт ТЗ для «Сделать бота» / «Доработать»: фото и видео — к задаче, а не Секретарю."""
+    wait = setting("wait") or ""
+    return wait == "make" or wait.startswith("fix|")
 
 
 def on_message(msg):
@@ -1027,17 +1242,17 @@ def on_message(msg):
     if not allowed(uid):
         return send(chat, "🔒 Это личный бот.")
     kind = media.kind(msg)
-    if kind == "voice":
+    if kind == "voice":  # сначала текст — дальше как обычное сообщение (Главному или Секретарю)
         return threading.Thread(target=hear, args=(msg,), daemon=True).start()
-    if kind == "photo":
-        return on_photo(msg)
+    if kind in ("photo", "video"):
+        if maker_wait():
+            return threading.Thread(target=on_photo if kind == "photo" else on_video, args=(msg,), daemon=True).start()
+        return to_secretary({"message": msg}, chat)
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     wait = setting("wait")
-    if cmd in ("/start", "/bots", "/menu"):
+    if cmd in ("/start", "/bots", "/menu") or text in MENU_TEXTS:
         setting("wait", None)
-        if cmd == "/start":
-            send(chat, HELP)
-        home(chat)
+        bots_screen(chat) if cmd == "/bots" else home(chat)
     elif cmd == "/help":
         send(chat, HELP)
     elif cmd == "/app":
@@ -1060,8 +1275,11 @@ def on_message(msg):
             res = digest.command(st, text, time.time())
             save(st)
         if res and cmd == "/reminders":
-            res = (res[0], (res[1] or []) + [[b("‹ К ботам", "home")]])
+            res = (res[0], (res[1] or []) + [[b("‹ Назад", "more")]])
         send(chat, *res) if res else send(chat, HELP)
+    elif cmd == "/cancel" and wait:
+        setting("wait", None)
+        send(chat, "👌 Отменил")
     elif not cmd and wait and maker.on_text(chat, wait, text, msg):
         pass
     elif cmd == "/paid":
@@ -1089,38 +1307,42 @@ def on_message(msg):
         setting("token_hint", BOT_TOKEN.search(text).group(0))
         send(chat, card("🔑 <b>Вижу токен</b>", ["Сообщение с ним удалил. Какого бота поставить?"]),
              pairs([b(clip(INSTALL[k][1]), f"addt|{k}") for k in INSTALL]))
-    elif text and not cmd:
-        maker.ask_what(chat, text)
-    else:
-        home(chat)
+    else:  # свободный текст, команды Секретаря, номер телефона для входа — Секретарю
+        if cmd and wait:  # /login и т. п. отменяют ожидание Главного: номер и код не должны стать ТЗ
+            setting("wait", None)
+        to_secretary({"message": msg}, chat)
 
 
 def hear(msg):
     """Голосовое → текст → дальше как обычное сообщение."""
     chat = msg["chat"]["id"]
-    tg("sendChatAction", chat_id=chat, action="typing")
     try:
+        tg("sendChatAction", chat_id=chat, action="typing")
         text = media.voice_text(TOKEN, msg)
     except media.MediaError as e:
-        return send(chat, f"🎙 {esc(e)}")
+        return send(chat, f"⚠️ 🎙 {esc(e)}")
     except Exception as e:
-        return send(chat, f"🎙 Не получилось: {esc(e)}")
+        return send(chat, f"⚠️ 🎙 Не получилось: {esc(e)}")
     send(chat, f"🎙 <i>«{esc(text)}»</i>")
-    rest = {k: v for k, v in msg.items() if k not in ("voice", "audio", "video_note", "document")}
+    rest = {k: v for k, v in msg.items() if k not in ("voice", "audio", "video_note", "document", "caption")}
     on_message({**rest, "text": text})
 
 
+def add_shots(paths):
+    with lock:
+        st = load()
+        st["shots"] = ((st.get("shots") or []) + list(paths))[-10:]
+        save(st)
+
+
 def on_photo(msg):
-    """Фото и скриншоты прикладываются к ТЗ (Claude их посмотрит). Подпись — сам текст ТЗ."""
+    """Фото и скриншоты прикладываются к ТЗ «Сделать бота» / «Доработать» (Claude их посмотрит). Подпись — текст ТЗ."""
     chat = msg["chat"]["id"]
     try:
         path = media.photo_path(TOKEN, msg, os.path.join(DATA, "shots"))
     except Exception as e:
-        return send(chat, f"😕 Не скачал фото: {esc(e)}")
-    with lock:
-        st = load()
-        st["shots"] = (st.get("shots") or [])[-9:] + [path]
-        save(st)
+        return send(chat, f"⚠️ Не скачал фото: {esc(e)}")
+    add_shots([path])
     cap = (msg.get("caption") or "").strip()
     if cap:
         rest = {k: v for k, v in msg.items() if k not in ("photo", "document", "caption")}
@@ -1129,10 +1351,30 @@ def on_photo(msg):
         send(chat, "📎 Фото приложу к задаче — теперь напиши или надиктуй, что сделать.")
 
 
+def on_video(msg):
+    """Видео к ТЗ: кадры — как скриншоты, речь или подпись — как текст задачи."""
+    chat = msg["chat"]["id"]
+    try:
+        v = media.video(TOKEN, msg, os.path.join(DATA, "shots", f"v{int(time.time())}"))
+    except Exception as e:
+        return send(chat, f"⚠️ Видео: {esc(e)}")
+    add_shots(v["frames"])
+    said = "\n".join(x for x in ((msg.get("caption") or "").strip(), v.get("text") or "") if x)
+    if said:
+        send(chat, f"🎬 <i>«{esc(said[:600])}»</i>")
+        rest = {k: v_ for k, v_ in msg.items() if k not in ("video", "video_note", "animation", "document", "caption")}
+        return on_message({**rest, "text": said})
+    send(chat, f"📎 Приложу к задаче {len(v['frames'])} кадр(а) из видео — теперь напиши, что сделать.")
+
+
 def on_callback(cq):
     uid = cq["from"]["id"]
     msg = cq.get("message") or {}
     chat, mid = msg.get("chat", {}).get("id"), msg.get("message_id")
+    if (cq.get("data") or "").startswith(SEC_PREFIX) and allowed(uid):  # кнопка Секретаря — ему, он и ответит
+        if to_secretary({"callback_query": cq}, chat):
+            return
+        return tg("answerCallbackQuery", callback_query_id=cq["id"], text="Секретарь не отвечает")
     data = (cq.get("data") or "").split("|")
     arg = data[1] if len(data) > 1 else ""
     note = ""
@@ -1141,6 +1383,12 @@ def on_callback(cq):
     elif data[0] == "home":
         setting("wait", None)
         home(chat, mid)
+    elif data[0] == "bots":
+        setting("wait", None)
+        bots_screen(chat, mid)
+    elif data[0] == "srst":
+        note = "Поднимаю Секретаря…"
+        threading.Thread(target=revive, args=(chat, True), daemon=True).start()
     elif data[0] == "app":
         app_card(chat, mid, arg)
     elif data[0] == "rs" and arg:
@@ -1164,13 +1412,13 @@ def on_callback(cq):
             save(st)
         if res:
             note = res[0]
-            show(chat, mid, res[1], (res[2] or []) + [[b("‹ Назад", "home")]])
+            show(chat, mid, res[1], (res[2] or []) + [[b("‹ Назад", "more")]])
     elif data[0] in ("all", "mk", "mkr", "fix", "rb", "del?", "del", "mkh", "fixh"):
         note = maker.on_callback(chat, mid, data) or ""
     elif data[0] == "add" and len(data) == 1:
         show(chat, mid, card("➕ <b>Какого бота поставить?</b>", ["Выбери — дальше пришлёшь токен от @BotFather "
                                                                  "или я создам бота сам через Секретаря."]),
-             pairs([b(clip(INSTALL[k][1]), f"add|{k}") for k in INSTALL]) + [[b("‹ Назад", "home")]])
+             pairs([b(clip(INSTALL[k][1]), f"add|{k}") for k in INSTALL]) + [[b("‹ Назад", "more")]])
     elif data[0] == "add" and arg in INSTALL:
         ask_token(chat, mid, arg)
     elif data[0] == "bf" and arg in INSTALL:
@@ -1190,21 +1438,22 @@ def on_callback(cq):
         pass
 
 
+COMMANDS = [("start", "Главная"), ("app", "Приложение"), ("bots", "Боты и сервер"), ("login", "Войти в аккаунт"),
+            ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
+            ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
+ABOUT = "Боты на сервере и личный секретарь: пишите или говорите что угодно."
+DESCRIPTION = ("👑 Главный — один бот на всё.\n\nОтвечаю на вопросы, понимаю голос, фото и видео, веду ваш Telegram. "
+               "Слежу за ботами на сервере, чиню и делаю новых.")
+
+
 def main():
     global offset
     if not TOKEN:
         sys.exit("Нет HUB_TOKEN (токен от @BotFather). Впиши его в /etc/hub-bot.env")
     try:
-        tg("setMyCommands", commands=[{"command": "bots", "description": "Мои боты"},
-                                      {"command": "app", "description": "Приложение"},
-                                      {"command": "server", "description": "Сервер"},
-                                      {"command": "update", "description": "Обновить всех"},
-                                      {"command": "all", "description": "Все боты"},
-                                      {"command": "make", "description": "Сделать бота"},
-                                      {"command": "fix", "description": "Доработать бота"},
-                                      {"command": "reminders", "description": "Напоминания"},
-                                      {"command": "claude", "description": "Вход для Claude"},
-                                      {"command": "help", "description": "Что я умею"}])
+        tg("setMyCommands", commands=[{"command": c, "description": d} for c, d in COMMANDS])
+        tg("setMyShortDescription", short_description=ABOUT)
+        tg("setMyDescription", description=DESCRIPTION)
     except Exception as e:
         print("setup:", e)
     chat = setting("updated_chat")
@@ -1222,6 +1471,7 @@ def main():
     threading.Thread(target=watch, daemon=True).start()
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=set_menu, args=(True,), daemon=True).start()  # узнаёт IP — дальше кнопка и в меню
+    threading.Thread(target=check_secretary, daemon=True).start()  # Секретаря нет — поставить
     print("Главный запущен")
     while True:
         try:

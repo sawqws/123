@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Отдельный бот, который по просьбе Глеба работает с его аккаунтом Telegram:
-анализирует чаты, пишет, управляет группами, раскладывает папки, шлёт по расписанию.
+"""Секретарь: по просьбе Глеба работает с его аккаунтом Telegram и отвечает на любые вопросы:
+анализирует чаты, пишет, управляет группами, раскладывает папки, шлёт по расписанию; понимает голос, фото и видео.
 Думает Claude Code (`claude -p`), а с аккаунтом работает через команды
 tgbot/tg.py -> этот агент -> Telethon. Всё, что меняет Telegram, Глеб подтверждает кнопкой.
 Сам бот — обычный Bot API (tgbot/botapi.py, нужен только токен), Telethon — только для аккаунта.
 Оформление сообщений — tgbot/ui.py, картинки — tgbot/art/.
 
+Два режима:
+  через Главного (обычный) — отдельного бота нет: Telegram опрашивает только Главный (hub/hub.py) и передаёт сюда
+      через сокет агента всё, что не его (свободный текст, фото, видео, /login, кнопки с префиксом «s:»).
+      Секретарь отвечает тем же токеном Главного (HUB_TOKEN из /etc/hub-bot.env). Включается сам, если Главный
+      стоит на сервере; TG_MODE=own в /etc/tg-agent.env — вернуть отдельного бота.
+  отдельный бот — сам опрашивает Telegram своим токеном TG_AGENT_TOKEN (так было до объединения).
+
 Переменные окружения (/etc/tg-agent.env):
-  TG_AGENT_TOKEN       токен бота от @BotFather — единственное обязательное
+  TG_MODE              hub | own (по умолчанию hub, если есть Главный)
+  TG_AGENT_TOKEN       токен своего бота — только для режима own
   TG_API_ID, TG_API_HASH  ключи приложения с my.telegram.org; если их нет, бот сам получит их при входе
                        в аккаунт (tgbot/get_api.py) и сохранит в tgbot/tmp/settings.json
   TG_ALLOWED_ID        Telegram ID Глеба; если пусто — владелец тот, кто первым нажмёт /start
@@ -21,6 +29,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -28,13 +37,16 @@ import uuid
 
 from telethon import TelegramClient, errors, functions
 
-import actions
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
+import actions  # noqa: E402
+import botapi  # noqa: E402
 import get_api
-import jobs
-import ui
-import web
-from botapi import Bot, BotError, Button
-from ui import card, esc
+import jobs  # noqa: E402
+import media  # noqa: E402
+import ui  # noqa: E402
+import web  # noqa: E402
+from botapi import Bot, BotError, Button  # noqa: E402
+from ui import card, esc  # noqa: E402
 
 for _k in ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"):  # pm2, см. bot/bot.py
     os.environ.pop(_k, None)
@@ -54,6 +66,9 @@ CLAUDE_TIMEOUT = 20 * 60
 CONFIRM_TIMEOUT = 10 * 60
 PORT = int(os.environ.get("TG_AGENT_PORT") or 8794)
 HISTORY_KEEP = 30
+HUB_ENV = "/etc/hub-bot.env"
+AGENT_ENV = "/etc/tg-agent.env"
+HUB_PREFIX = "s:"  # данные кнопок Секретаря внутри Главного (hub.py отдаёт их сюда по этому префиксу)
 
 BTN_MISSED = "📬 Что я пропустил"
 BTN_PSY = "🧠 Разбор чата"
@@ -114,6 +129,42 @@ def manual_keys(text):
     return (i.group(1), h.group(1).lower()) if h and i else None
 
 
+def env_file(path):
+    """Переменные из файла вида KEY=value (как /etc/*.env). Читаем сами: pm2 restart не перечитывает env-файлы."""
+    try:
+        with open(path) as f:
+            return dict(re.findall(r"^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$", f.read(), re.M))
+    except OSError:
+        return {}
+
+
+def resolve(environ=None, hub_env=None, agent_env=None):
+    """(токен, через Главного?, старый токен своего бота). Есть Главный — работаем внутри него (один бот),
+    если только явно не просили отдельного: TG_MODE=own."""
+    environ = os.environ if environ is None else environ
+    own_file = env_file(agent_env or AGENT_ENV)
+    mode = (environ.get("TG_MODE") or own_file.get("TG_MODE") or "").strip().lower()
+    hub = (environ.get("HUB_TOKEN") or env_file(hub_env or HUB_ENV).get("HUB_TOKEN") or "").strip()
+    own = (environ.get("TG_AGENT_TOKEN") or own_file.get("TG_AGENT_TOKEN") or "").strip()
+    if mode != "own" and hub:
+        return hub, True, (own if own != hub else "")
+    if own:
+        return own, False, ""
+    raise SystemExit("Нет токена: поставьте Главного (hub/install.sh) или впишите TG_AGENT_TOKEN в " + AGENT_ENV)
+
+
+def hub_owner():
+    """Владелец Главного: HUB_ALLOWED или тот, кто первым нажал там /start (hub/data/state.json)."""
+    ids = re.findall(r"\d+", env_file(HUB_ENV).get("HUB_ALLOWED", ""))
+    if ids:
+        return int(ids[0])
+    try:
+        with open(os.path.join(REPO, "hub", "data", "state.json")) as f:
+            return int(json.load(f).get("owner") or 0)
+    except (OSError, ValueError, TypeError):
+        return 0
+
+
 def load_settings():
     try:
         with open(SETTINGS) as f:
@@ -161,13 +212,18 @@ class Agent:
     confirm_text = ""      # о чём сейчас спрашиваем «Да/Нет» в чате
     app_url = None         # https-адрес мини-приложения, когда он отвечает
     web = None
+    via_hub = False        # один бот с Главным (см. resolve)
+    old_token = ""
 
-    def __init__(self, token, api_id=0, api_hash="", allowed=0):
+    def __init__(self, token, api_id=0, api_hash="", allowed=0, via_hub=False, old_token=""):
         os.makedirs(TMP, exist_ok=True)
         os.makedirs(WORK, exist_ok=True)
         os.chmod(TMP, 0o700)
         self.token = token
         self.allowed = allowed
+        self.via_hub = via_hub      # один бот с Главным: Telegram опрашивает он, кнопки — с префиксом
+        self.old_token = old_token  # токен прежнего отдельного бота — один раз сказать там, что переехали
+        botapi.PREFIX = HUB_PREFIX if via_hub else ""
         self.bot = Bot(token)
         s = load_settings()
         api_id, api_hash = api_id or s.get("api_id"), api_hash or s.get("api_hash")
@@ -185,7 +241,7 @@ class Agent:
     # ---------- основа ----------
 
     def owner(self):
-        return self.allowed or int(load_settings().get("owner") or 0)
+        return self.allowed or int(load_settings().get("owner") or 0) or (hub_owner() if self.via_hub else 0)
 
     async def say(self, text, **kw):
         """HTML-сообщение владельцу; длинное режется на части (кнопки — у последней).
@@ -345,17 +401,23 @@ class Agent:
 
     # ---------- меню-панель ----------
 
+    def app_open_url(self):
+        """Что открывает кнопка приложения: своё (agent.<host>/) или общее с Главным, вкладка «Секретарь»."""
+        if not self.app_url:
+            return None
+        return self.app_url + ("?tab=sec" if self.via_hub else "/")
+
     def app_button(self):
         """«📱 Приложение»: открывает мини-приложение, а пока https-адреса нет — объясняет, почему."""
         if self.app_url:
-            return Button.web_app("📱 Приложение", self.app_url + "/")
+            return Button.web_app("📱 Приложение", self.app_open_url())
         return Button.inline("📱 Приложение", "m:app")
 
     def app_card(self):
         if self.app_url:
             return (card("📱 Приложение", "Главная, поручения, расписание и память — на одном экране.\n"
                          "Подтверждения «Да/Нет» по-прежнему приходят сюда, в чат."),
-                    [[Button.web_app("📱 Открыть приложение", self.app_url + "/")]])
+                    [[Button.web_app("📱 Открыть приложение", self.app_open_url())]])
         return card("📱 Приложение", "Пока не открывается: ещё не готов https-адрес сервера. "
                     "Как только он заработает, я напишу, а кнопка появится слева от поля ввода.\n\n"
                     "Всё то же самое доступно здесь, в чате.", "/check — проверка"), None
@@ -367,11 +429,18 @@ class Agent:
         body = esc(text) if text else "Пока пусто. Скажите, например: «запомните, что тренировки по вторникам в 18:00»."
         return card("📝 Память", body, "править — словами в чате или в приложении")
 
+    def home_button(self):
+        """Внутри Главного — назад на его главный экран (кнопка Главного, без префикса Секретаря)."""
+        return {"text": "‹ Главная", "callback_data": "home"}
+
     async def dashboard(self):
         if not await self.authorized():
-            return card("✦ Секретарь", "👤 Аккаунт не подключён\nНа вопросы отвечаю и без него."), [
-                [Button.inline("🔑 Войти в аккаунт", "login:", style="primary")],
-                [self.app_button(), Button.inline("❓ Что я умею", "m:help")]]
+            rows = [[Button.inline("🔑 Войти в аккаунт", "login:", style="primary")],
+                    [self.app_button(), Button.inline("❓ Что я умею", "m:help")]]
+            if self.via_hub:
+                rows.append([self.home_button()])
+            return card("👤 Аккаунт", "Аккаунт не подключён — на вопросы отвечаю и без него.\n"
+                        "Подключите, чтобы я вёл ваш Telegram: сводки, ответы, папки, расписания."), rows
         me = await self.client.get_me()
         ds = await actions.dialogs(self, fresh=True)
         unread = [d for d in ds if d.unread_count and not d.archived]
@@ -386,9 +455,13 @@ class Agent:
         buttons = [[self.app_button()],
                    [Button.inline("🆕 Новый разговор", "m:new"), Button.inline("🩺 Проверка", "m:check")],
                    [Button.inline("⏰ Расписание", "m:jobs"), Button.inline("📝 Память", "m:memory")],
-                   [Button.inline("❓ Что я умею", "m:help"), Button.inline("🔄 Обновить бота", "m:update")],
+                   [Button.inline("❓ Что я умею", "m:help")] +
+                   ([] if self.via_hub else [Button.inline("🔄 Обновить бота", "m:update")]),
                    [Button.inline("Выйти из аккаунта", "m:logout", style="danger")]]
-        return card("✦ Секретарь", "\n".join(lines), datetime.datetime.now(actions.MSK).strftime("обновлено в %H:%M")), buttons
+        if self.via_hub:
+            buttons.append([self.home_button()])
+        title = "👤 Аккаунт" if self.via_hub else "✦ Секретарь"
+        return card(title, "\n".join(lines), datetime.datetime.now(actions.MSK).strftime("обновлено в %H:%M")), buttons
 
     async def on_menu(self, ev, arg):
         back = [[Button.inline("← Назад", "m:home")]]
@@ -470,7 +543,12 @@ class Agent:
     async def on_conn(self, reader, writer):
         try:
             req = json.loads(await reader.readline())
-            ok, out = await self.execute(req.get("cmd"), req.get("args") or {})
+            if req.get("cmd") == "_hub":  # обновление Telegram от Главного — отвечаем сразу, работаем в фоне
+                ok, out = self.from_hub(req), "ok"
+            elif req.get("cmd") == "_status":
+                ok, out = True, await self.status()
+            else:
+                ok, out = await self.execute(req.get("cmd"), req.get("args") or {})
         except Exception as e:
             ok, out = False, f"плохой запрос: {e}"
         writer.write(json.dumps({"ok": ok, "out": out}, ensure_ascii=False).encode() + b"\n")
@@ -478,6 +556,28 @@ class Agent:
             await writer.drain()
         finally:
             writer.close()
+
+    def from_hub(self, req):
+        """Главный опрашивает Telegram за двоих и отдаёт сюда то, что не его. Владелец — его владелец."""
+        uid = int(req.get("owner") or 0)
+        if uid and uid != self.owner():
+            self.allowed = uid
+            s = load_settings()
+            s["owner"] = uid
+            save_settings(s)
+        return self.bot.dispatch(req.get("update") or {}, self.on_message, self.on_callback)
+
+    async def status(self):
+        """Коротко для экрана /start Главного: вошёл ли в аккаунт, занят ли."""
+        me = None
+        try:
+            if await asyncio.wait_for(self.authorized(), 4):
+                m = await asyncio.wait_for(self.client.get_me(), 4)
+                me = {"name": actions.name(m), "username": m.username or ""}
+        except Exception as e:
+            print("status:", repr(e), flush=True)
+        return {"account": me, "keys": self.client is not None, "busy": self.busy, "jobs": len(self.jobs.load()),
+                "login": bool(self.login)}
 
     async def execute(self, cmd, args):
         if not await self.authorized():
@@ -974,13 +1074,17 @@ class Agent:
             body += "\n\n👉 Чтобы я вёл ваш Telegram, подключите аккаунт — это минута. На вопросы отвечаю и без этого."
             buttons = [[Button.inline("🔑 Войти в аккаунт", "login:", style="primary")]]
         try:
+            if self.via_hub:  # внутри Главного — без картинки Секретаря, просто карточка
+                raise RuntimeError("без баннера")
             await self.bot.send_file(self.owner(), BANNER, caption=body, parse_mode="html", buttons=buttons)
         except Exception as e:  # картинка не ушла — шлём текстом
             print("welcome:", repr(e), flush=True)
             await self.say(body, buttons=buttons)
 
     async def set_profile(self):
-        """Описание, «о боте» и команды — при каждом запуске (идемпотентно)."""
+        """Описание, «о боте» и команды — при каждом запуске (идемпотентно). Внутри Главного их ставит он."""
+        if self.via_hub:
+            return
         try:
             await self.bot.call("setMyShortDescription", short_description=ABOUT)
             await self.bot.call("setMyDescription", description=DESCRIPTION)
@@ -989,7 +1093,10 @@ class Agent:
             print("profile:", repr(e), flush=True)
 
     async def set_avatar(self):
-        """Аватар бота ставит владелец — поэтому через аккаунт Глеба, один раз."""
+        """Аватар бота ставит владелец — поэтому через аккаунт Глеба, один раз. Внутри Главного — не трогаем:
+        это аватар Главного."""
+        if self.via_hub:
+            return
         s = load_settings()
         if s.get("avatar") == os.path.getmtime(AVATAR):
             return
@@ -1058,10 +1165,61 @@ class Agent:
             print("Владелец:", ev.sender_id, flush=True)
         if ev.sender_id != self.owner():
             return
+        kind = media.kind(getattr(ev, "raw", None) or {})
+        if kind in ("photo", "video") and not self.login:
+            asyncio.create_task(self.on_visual(ev, kind))
+            return
         if not text and self.is_voice(ev.message) and not self.login:
             asyncio.create_task(self.on_voice(ev))
             return
         await self.route(ev, text)
+
+    @staticmethod
+    def visual_prompt(kind, caption, paths, speech="", seconds=0):
+        """Поручение Claude по фото или видео: картинки он открывает сам (Read), речь из видео — текстом."""
+        if kind == "photo":
+            ask = caption or ("Что на фото? Если это задача, скриншот или документ — помогите с ним, "
+                              "если что-то другое — коротко опишите и подскажите, что с этим сделать.")
+            note = "Глеб прислал фото — откройте его инструментом Read: " + paths[0]
+        else:
+            ask = caption or "Что в этом видео? Коротко перескажите и, если там вопрос или задача, помогите."
+            note = (f"Глеб прислал видео{f' ({int(seconds)} с)' if seconds else ''}. Кадры по порядку — откройте "
+                    "каждый инструментом Read:\n" + "\n".join(paths))
+            if speech:
+                note += f"\nВ видео говорят (распознано автоматически, возможны ошибки): «{speech}»"
+        return f"{ask}\n\n[{note}]"
+
+    async def on_visual(self, ev, kind):
+        """Фото -> Claude смотрит картинку; видео/кружок -> кадры (ffmpeg) и речь (whisper) -> Claude.
+        Файлы — в папке Claude (WORK), после ответа удаляются."""
+        raw = ev.raw
+        if self.busy:
+            await self.say(card("⏳ Ещё занимаюсь прошлым поручением", "Пришлите это, когда отвечу."))
+            return
+        status = await self.say(card("📷 Смотрю фото…" if kind == "photo" else "🎬 Смотрю видео…"))
+        folder = os.path.join(WORK, "media", uuid.uuid4().hex[:10])
+        try:
+            if kind == "photo":
+                paths, speech, secs = [await asyncio.to_thread(media.photo_path, self.token, raw, folder)], "", 0
+            else:
+                v = await asyncio.to_thread(media.video, self.token, raw, folder)
+                paths, speech, secs = v["frames"], v.get("text") or "", v.get("seconds") or 0
+        except Exception as e:
+            shutil.rmtree(folder, ignore_errors=True)
+            why = str(e) if isinstance(e, media.MediaError) else "не скачал файл из Telegram"
+            print("visual:", repr(e), flush=True)
+            await status.edit(oops(("Фото: " if kind == "photo" else "Видео: ") + why), parse_mode="html")
+            return
+        try:
+            await status.delete()
+        except BotError:
+            pass
+        caption = (raw.get("caption") or "").strip()
+        title = ("📷 " if kind == "photo" else "🎬 ") + (caption or ("Фото" if kind == "photo" else "Видео"))
+        try:
+            await self.ask(self.visual_prompt(kind, caption, paths, speech, secs), title)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     @staticmethod
     def is_voice(msg):
@@ -1153,6 +1311,8 @@ class Agent:
     # ---------- мини-приложение: кнопка слева от поля ввода ----------
 
     async def set_menu_button(self, url):
+        if self.via_hub:  # кнопку приложения слева от поля ввода ставит Главный
+            return
         button = {"type": "web_app", "text": "Секретарь", "web_app": {"url": url + "/"}} if url else {"type": "commands"}
         await self.bot.call("setChatMenuButton", chat_id=self.owner(), menu_button=button)
 
@@ -1162,7 +1322,7 @@ class Agent:
         url, fails = None, 0
         while True:
             try:
-                url = url or await asyncio.to_thread(web.public_url)
+                url = url or await asyncio.to_thread(web.hub_url if self.via_hub else web.public_url)
                 ok = bool(url) and await asyncio.to_thread(web.healthy, url)
                 fails = 0 if ok else fails + 1
                 if ok and self.owner() and self.app_url != url:
@@ -1172,9 +1332,10 @@ class Agent:
                     if s.get("app_url") != url:  # первый раз — рассказать
                         s["app_url"] = url
                         save_settings(s)
-                        await self.say(card("📱 Приложение готово", "Кнопка «Секретарь» — слева от поля ввода, или /app.\n"
-                                            "Чат с кнопками работает как прежде."),
-                                       buttons=[[Button.web_app("📱 Открыть", url + "/")]])
+                        if not self.via_hub:
+                            await self.say(card("📱 Приложение готово", "Кнопка «Секретарь» — слева от поля ввода, "
+                                                "или /app.\nЧат с кнопками работает как прежде."),
+                                           buttons=[[Button.web_app("📱 Открыть", url + "/")]])
                 elif not ok and self.app_url and fails >= 3:
                     self.app_url = None
                     await self.set_menu_button(None)
@@ -1205,10 +1366,38 @@ class Agent:
             save_settings(s)
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
             await self.say(card("✦ Обновился", esc(head)), buttons=MENU)
-        await self.bot.run(self.on_message, self.on_callback)
+        if not self.via_hub:
+            await self.bot.run(self.on_message, self.on_callback)
+            return
+        print("Режим «через Главного»: Telegram опрашивает hub-bot, обновления приходят в сокет", flush=True)
+        asyncio.create_task(self.moved())
+        await asyncio.Event().wait()
+
+    async def moved(self):
+        """Один раз: в чате прежнего отдельного бота сказать, что Секретарь теперь живёт в Главном,
+        и убрать там клавиатуру и кнопку приложения. Старый бот больше не опрашивается."""
+        s = load_settings()
+        if not self.old_token or s.get("moved") or not self.owner():
+            return
+        try:
+            hub = await self.bot.get_me()
+            old = Bot(self.old_token, base=self.bot.base)
+            text = (f"<b>✦ Я переехал в @{esc(hub.username)}</b>\n<blockquote>Теперь Секретарь и Главный — один бот. "
+                    "Пишите и говорите туда: вход в аккаунт, расписания и память на месте.</blockquote>")
+            await old.call("sendMessage", chat_id=self.owner(), text=text, parse_mode="html",
+                           reply_markup={"remove_keyboard": True})
+            await old.call("setChatMenuButton", chat_id=self.owner(), menu_button={"type": "commands"})
+            await old.call("setMyCommands", commands=[])
+            await old.call("setMyShortDescription", short_description=f"Переехал в @{hub.username}")
+        except Exception as e:
+            print("moved:", repr(e), flush=True)
+        s = load_settings()
+        s["moved"] = True
+        save_settings(s)
 
 
 if __name__ == "__main__":
-    agent = Agent(os.environ["TG_AGENT_TOKEN"], int(os.environ.get("TG_API_ID") or 0), os.environ.get("TG_API_HASH", ""),
-                  int(os.environ.get("TG_ALLOWED_ID") or 0))
+    token, via_hub, old_token = resolve()
+    agent = Agent(token, int(os.environ.get("TG_API_ID") or 0), os.environ.get("TG_API_HASH", ""),
+                  int(os.environ.get("TG_ALLOWED_ID") or 0), via_hub=via_hub, old_token=old_token)
     asyncio.run(agent.main())

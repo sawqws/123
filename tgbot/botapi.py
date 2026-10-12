@@ -20,6 +20,9 @@ import urllib.request
 import uuid
 
 API = "https://api.telegram.org"
+# Секретарь внутри Главного (один бот на двоих): данные его кнопок начинаются с PREFIX — по нему Главный
+# отдаёт нажатия Секретарю. Ставит agent.py в режиме «через Главного»; входящие данные PREFIX теряют.
+PREFIX = ""
 
 
 class BotError(Exception):
@@ -33,7 +36,7 @@ class Button:
 
     @staticmethod
     def inline(text, data=None, style=None):
-        b = {"text": text, "callback_data": (data or text)[:64]}
+        b = {"text": text, "callback_data": (PREFIX + (data or text))[:64]}
         if style:
             b["style"] = style
         return b
@@ -207,10 +210,17 @@ class Bot:
                 continue
             for u in updates:
                 offset = u["update_id"] + 1
-                if "message" in u:
-                    asyncio.create_task(self._safe(on_message, MessageEvent(self, u["message"])))
-                elif "callback_query" in u:
-                    asyncio.create_task(self._safe(on_callback, CallbackEvent(self, u["callback_query"])))
+                self.dispatch(u, on_message, on_callback)
+
+    def dispatch(self, u, on_message, on_callback):
+        """Одно обновление Telegram -> обработчик (в своей задаче). Так же приходят обновления от Главного."""
+        if "message" in u:
+            asyncio.create_task(self._safe(on_message, MessageEvent(self, u["message"])))
+            return True
+        if "callback_query" in u:
+            asyncio.create_task(self._safe(on_callback, CallbackEvent(self, u["callback_query"])))
+            return True
+        return False
 
     @staticmethod
     async def _safe(handler, ev):
@@ -255,7 +265,8 @@ class CallbackEvent:
         self.bot, self.raw = bot, q
         self.id = q["id"]
         self.sender_id = q["from"]["id"]
-        self.data = (q.get("data") or "").encode()
+        data = q.get("data") or ""
+        self.data = (data[len(PREFIX):] if PREFIX and data.startswith(PREFIX) else data).encode()
         m = q.get("message") or {}
         self.chat_id, self.msg_id = (m.get("chat") or {}).get("id"), m.get("message_id")
         self.plain = m.get("text") or m.get("caption") or ""
