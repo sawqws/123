@@ -366,13 +366,26 @@ def home(c):
     if d.get("stage") and d["stage"] not in ("done",):
         return resume(c)
     n = len(registry())
+    tip = "" if one_tap() or secretary_ready() else (
+        "\n⚡ <b>Один раз:</b> @BotFather → «Open» → Студия → <b>Bot Management Mode</b> — и новые боты будут "
+        "создаваться в один тап, без токенов.")
     c.show(card("🏗 <b>Студия ботов</b>",
                 ["Напиши, какой бот нужен — одним сообщением, текстом или голосом.",
                  "Я уточню пару деталей, ты дашь имя и подтвердишь план — дальше всё сам: код, мини-приложение, "
                  "аватар, @BotFather, запуск."],
-                "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>"),
+                "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>" + tip),
            [[bot.app_button("📱 Открыть Студию")],
             [b(f"🧩 Мои боты · {n}", "bots")] if n else None])
+
+
+_one_tap = {"at": 0, "ok": False}
+
+
+def one_tap():
+    """Включён ли у Студии Bot Management Mode (getMe раз в 10 минут, не на каждый /start)."""
+    if time.time() - _one_tap["at"] > 600:
+        _one_tap.update(at=time.time(), ok=bot.can_manage())
+    return _one_tap["ok"]
 
 
 @bot.command("cancel")
@@ -928,6 +941,10 @@ def on_managed(upd):
         token = bot.managed_token(new["id"])
     except Exception as e:
         return bot.notify(kit.error(f"Бот @{esc(new.get('username'))} создан, но токен не выдали: {esc(e)}"))
+    try:  # личный бот: в Telegram его откроет только Глеб (бот и сам пускает только владельца)
+        bot.call("setManagedBotAccessSettings", user_id=new["id"], is_access_restricted=True)
+    except Exception as e:
+        print("access:", e, flush=True)
     d = draft()
     if d.get("stage") == "build":
         d["token"] = token
@@ -940,6 +957,13 @@ def on_managed(upd):
     else:
         bot.notify(f"🤖 @{esc(new.get('username'))} создан, но я его сейчас не ждал. Опиши, каким он должен быть, "
                    "— сделаю нового бота (этого можно удалить в @BotFather).")
+
+
+def to_folder(username):
+    """Новый бот — сразу в папку «Bot» Глеба (через Секретаря; нет входа — молча пропускаем)."""
+    if username and secretary_ready():
+        bot.later(lambda: sh("python3", os.path.join(REPO, "tgbot", "tg.py"), "botsfolder", "--bots", username, "--auto",
+                             timeout=120))
 
 
 def secretary_ready():
@@ -1017,6 +1041,7 @@ def deploy(chat, slug, token, st=None):
     queued = d.get("queued") or []
     put({"stage": "done", "result": {"slug": slug}})
     st.done(done_card(info), done_buttons(info))
+    to_folder(info.get("username"))
     if queued:
         bot.later(fix, chat, slug, "\n".join(queued))
 
