@@ -121,6 +121,17 @@ class Bot(BotBase):
         self.assertIn("уже заказан", self.texts()[2])
         self.assertEqual(kpp.st["recent"]["А123ВС777"]["id"], 9)
 
+    def test_login_deletes_link_and_hides_flat(self):
+        places = [{"id": 5, "buildingId": 6, "placeTypeId": 1, "address": "Мосфильмовская ул, д. 70 кв 854"}]
+        with mock.patch.object(dl.Client, "login"), mock.patch.object(dl.Client, "me", return_value={"fullName": "Г"}), \
+                mock.patch.object(dl.Client, "places", return_value=places), \
+                mock.patch.object(dl.Client, "calibrate", return_value=(1, 5)):
+            kpp.on_message({"chat": {"id": 1, "type": "private"}, "from": {"id": 1}, "message_id": 42,
+                            "text": "https://yxe9.oauth.yandex.ru/auth/finish?platform=ios#access_token=y0_abcdefghijklmnopqrstuvwxyz0123"})
+        self.assertIn(("deleteMessage", {"chat_id": 1, "message_id": 42}), self.sent)
+        self.assertEqual(kpp.st["address"], "Мосфильмовская ул, д. 70")
+        self.assertNotIn("854", json.dumps(kpp.st, ensure_ascii=False) + "".join(self.texts()))
+
     def test_stranger(self):
         self.msg("А123ВС777", uid=2)
         self.assertIn("личный", self.texts()[0])
@@ -445,6 +456,21 @@ class Style(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(len(bodies), 2)
         self.assertEqual(bodies[1]["reply_markup"]["inline_keyboard"][0][0], {"text": "✖️ Отменить", "callback_data": "x|1"})
+
+
+
+class NoFlat(unittest.TestCase):
+    def test_no_flat(self):
+        self.assertEqual(dl.no_flat("Мосфильмовская ул, д. 70 кв 854"), "Мосфильмовская ул, д. 70")
+        self.assertEqual(dl.no_flat("ул. Ленина, 5, кв. 12а"), "ул. Ленина, 5")
+        self.assertEqual(dl.no_flat("Ленина 5, квартира №3, подъезд 2"), "Ленина 5, подъезд 2")
+        self.assertEqual(dl.no_flat("ЖК Сад, корпус 2"), "ЖК Сад, корпус 2")
+
+    def test_scrub_state(self):
+        s = {"address": "Мосфильмовская ул, д. 70 кв 854", "places": [{"title": "Мосфильмовская ул, д. 70 кв 854"}]}
+        self.assertTrue(kpp.scrub(s))
+        self.assertNotIn("854", json.dumps(s, ensure_ascii=False))
+        self.assertFalse(kpp.scrub(s))
 
 
 if __name__ == "__main__":

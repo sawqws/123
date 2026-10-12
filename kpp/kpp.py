@@ -82,6 +82,17 @@ def load():
         return {}
 
 
+def scrub(st):
+    """Номер квартиры из уже сохранённых адресов (сохранены до того, как его стали вырезать)."""
+    changed = False
+    if st.get("address") and dl.no_flat(st["address"]) != st["address"]:
+        st["address"], changed = dl.no_flat(st["address"]), True
+    for p in st.get("places") or []:
+        if p.get("title") and dl.no_flat(p["title"]) != p["title"]:
+            p["title"], changed = dl.no_flat(p["title"]), True
+    return changed
+
+
 def save(st):
     os.makedirs(DATA, exist_ok=True)
     tmp = STATE + ".tmp"
@@ -316,7 +327,7 @@ def do_login(chat, token):
         return
     st.update(yandex_token=token, jwt=c.jwt, name=me.get("shortName") or me.get("fullName") or "")
     st["places"] = [{"id": p.get("id"), "building": p.get("buildingId"),
-                     "title": p.get("address") or p.get("title") or p.get("buildingTitle") or str(p.get("id")),
+                     "title": dl.no_flat(p.get("address") or p.get("title") or p.get("buildingTitle") or str(p.get("id"))),
                      "flat": p.get("placeTypeId") == 1} for p in places if p.get("id") is not None]
     save(st)
     edit(chat, msg, fmt("✅ Вход выполнен", note=f"Аккаунт: {esc(st['name'])}" if st.get("name") else ""))
@@ -632,6 +643,10 @@ def on_message(msg):
     elif media.kind(msg) == "voice":
         spawn(on_voice, chat, msg)
     elif dl.extract_token(text):
+        try:  # в ссылке — доступ к Яндекс ID Глеба: в чате не оставляем
+            tg("deleteMessage", chat_id=chat, message_id=msg["message_id"])
+        except Exception:
+            pass
         do_login(chat, dl.extract_token(text))
         if st.get("pending") and st.get("place_id"):
             order(chat, st.pop("pending"))
@@ -1021,6 +1036,8 @@ def main():
     if not TOKEN:
         sys.exit("Нет KPP_TOKEN (токен от @BotFather). Впиши его в /etc/kpp-bot.env")
     st = load()
+    if scrub(st):
+        save(st)
     threading.Thread(target=serve, daemon=True).start()
     setup_bot()
     if public_url:

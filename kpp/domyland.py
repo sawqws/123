@@ -58,6 +58,14 @@ class AuthError(Error):
 _TOKEN_RE = re.compile(r"(y[0-3]_[A-Za-z0-9_-]{20,})")
 
 
+_FLAT = re.compile(r"[,;]?\s*(?:кв(?:артира)?\.?|apt\.?|flat)\s*№?\s*\d+\s*[а-яa-z]?\b", re.I)
+
+
+def no_flat(address):
+    """Адрес без номера квартиры: Глеб просил, чтобы номер был только в самом Домиленде (боту он не нужен)."""
+    return re.sub(r"\s{2,}", " ", _FLAT.sub("", address or "")).strip(" ,;")
+
+
 def extract_token(raw):
     """Токен из того, что прислал человек: сам y0_… или вся ссылка с #access_token=…"""
     raw = (raw or "").strip()
