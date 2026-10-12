@@ -3,9 +3,11 @@
 
 Как пользоваться:
   1. Прислать 1–10 фото (можно альбомом) — бот убирает фон, вещь остаётся на чисто белом квадрате.
-  2. Написать, что это (бренд, размер, состояние…) — Claude пишет название и описание для Авито.
+     Видео или кружок — 1–3 самых чётких кадра идут как фото, а сказанное в видео — как рассказ о вещи.
+  2. Написать или наговорить, что это (бренд, размер, состояние…) — Claude пишет название и описание.
   3. Число («3500», «3.5к») — цена; любой другой текст — правка описания («короче», «добавь, что есть чек»).
   4. «📊 Средняя цена» — до 100 похожих объявлений на Авито → медиана, «быстро продать», «дороже».
+  То же самое — в мини-приложении (/app): загрузка фото, описание, цена с гистограммой, прошлые объявления.
 
 Переменные окружения (на сервере — /etc/avito-bot.env):
   AVITO_TOKEN    токен от @BotFather
@@ -29,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -55,6 +58,7 @@ DRAFTS = os.path.join(DATA, "drafts")
 REPO = os.path.dirname(HERE)
 VENV_PY = os.path.join(HERE, ".venv", "bin", "python")
 MAX_PHOTOS = 10
+MAX_UPLOAD = 15 * 1024 * 1024  # одно фото из приложения
 ALBUM_WAIT = 2.5      # секунд ждём остальные фото альбома
 MARKET_TTL = 6 * 3600  # средняя цена считается заново не чаще, чем раз в 6 часов (или по кнопке)
 KEEP_ADS = 15          # папки (и карточки в приложении) последних объявлений
@@ -366,6 +370,26 @@ def download(file_id, dst):
     urllib.request.urlretrieve(FILES + info["file_path"], dst)
 
 
+def new_orig(d):
+    """Путь для нового фото объявления."""
+    os.makedirs(ddir(d), exist_ok=True)
+    return os.path.join(ddir(d), f"orig_{len(d['photos']) + 1:02d}_{uuid.uuid4().hex[:4]}.jpg")
+
+
+def keep_photo(d, path):
+    with lock:
+        d["photos"].append({"orig": path, "clean": None})
+        save()
+
+
+def add_info(d, text):
+    text = (text or "").strip()
+    if text:
+        with lock:
+            d["info"] = (d.get("info", "") + "\n" + text).strip()
+            save()
+
+
 def add_photo(chat, msg):
     """Сохранить фото из сообщения в текущее объявление и через ALBUM_WAIT секунд обработать все новые."""
     if msg.get("photo"):
@@ -379,16 +403,63 @@ def add_photo(chat, msg):
             save()
             send(chat, fail(f"На Авито хватит {MAX_PHOTOS} фото — остальные пропускаю."))
         return
-    n = len(d["photos"]) + 1
-    path = os.path.join(ddir(d), f"orig_{n:02d}_{uuid.uuid4().hex[:4]}.jpg")
+    path = new_orig(d)
     download(fid, path)
-    with lock:
-        d["photos"].append({"orig": path, "clean": None})
-        cap = (msg.get("caption") or "").strip()
-        if cap:
-            d["info"] = (d.get("info", "") + "\n" + cap).strip()
-        save()
+    keep_photo(d, path)
+    add_info(d, msg.get("caption"))
     schedule_photos(chat, ALBUM_WAIT)
+
+
+def best_frames(paths, k=3):
+    """k самых чётких кадров (в порядке видео). Чёткость — размер JPEG: размытый кадр сжимается сильнее."""
+    sizes = {p: os.path.getsize(p) for p in paths if os.path.exists(p)}
+    top = set(sorted(sizes, key=sizes.get, reverse=True)[:k])
+    return [p for p in paths if p in top]
+
+
+def from_video(chat, msg):
+    """Видео или кружок: 1–3 лучших кадра → фото вещи (белый фон), речь и подпись → рассказ о вещи."""
+    mid = (send(chat, fmt("🎬 Смотрю видео…")).get("result") or {}).get("message_id")
+    tg("sendChatAction", chat_id=chat, action="upload_photo")
+    tmp = tempfile.mkdtemp(prefix="video-", dir=DATA)
+    try:
+        try:
+            v = media.video(TOKEN, msg, tmp, frames=6)
+        except media.MediaError as e:
+            return edit(chat, mid, fail(f"Видео не открылось: {esc(e)}"))
+        d = draft(create=True)
+        had_title = bool(d.get("title"))
+        room = MAX_PHOTOS - len(d["photos"])
+        frames = best_frames(v["frames"], min(3, max(room, 0)))
+        for f in frames:
+            dst = new_orig(d)
+            shutil.copyfile(f, dst)
+            keep_photo(d, dst)
+        speech = (v.get("text") or "").strip()
+        text = "\n".join(t for t in ((msg.get("caption") or "").strip(), speech) if t)
+        try:
+            tg("deleteMessage", chat_id=chat, message_id=mid)
+        except Exception:
+            pass
+        if speech:
+            send(chat, f"🎙 <i>«{esc(speech)}»</i>")
+        if not frames:
+            if text:
+                return on_text(chat, text, now=True)
+            return send(chat, fail(f"На Авито хватит {MAX_PHOTOS} фото — кадры не добавляю." if room <= 0
+                                   else "В видео не нашлось кадров с вещью — пришли фото."))
+        if v.get("cover_only"):
+            send(chat, "<i>Видео больше 20 МБ — взял только обложку.</i>")
+        if had_title:
+            process_photos(chat, card=not text)
+            if text:
+                add_info(d, text)
+                write(chat, text)
+        else:
+            add_info(d, text)
+            process_photos(chat)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def schedule_photos(chat, delay):
@@ -418,17 +489,28 @@ def remove_bg(pairs):
         return [{"src": s, "dst": t, "ok": False, "error": "обработка фото упала"} for s, t in pairs]
 
 
-def process_photos(chat):
-    d = draft()
-    if not d:
-        return
-    todo = [p for p in d["photos"] if not p.get("clean") and not p.get("err")]
+def todo_photos(d):
+    return [p for p in d.get("photos") or [] if not p.get("clean") and not p.get("err")]
+
+
+def clean_photos(d, on_start=None):
+    """Убрать фон у ещё не обработанных фото объявления -> (готовые пути, ошибки).
+    Фото, которые уже обрабатываются (из чата или приложения), второй раз не берём."""
+    with lock:
+        todo = [p for p in todo_photos(d) if not p.get("work")]
+        for p in todo:
+            p["work"] = True
     if not todo:
-        return
-    msg = send(chat, fmt(f"🪄 Убираю фон · {len(todo)} фото…"))["result"]["message_id"]
-    tg("sendChatAction", chat_id=chat, action="upload_photo")
+        return [], []
+    if on_start:
+        on_start(len(todo))
     pairs = [(p["orig"], p["orig"].replace("orig_", "white_")) for p in todo]
-    res = {r["src"]: r for r in remove_bg(pairs)}
+    try:
+        res = {r["src"]: r for r in remove_bg(pairs)}
+    finally:
+        with lock:
+            for p in todo:
+                p.pop("work", None)
     ok, bad = [], []
     with lock:
         for p in todo:
@@ -440,21 +522,38 @@ def process_photos(chat):
                 p["err"] = r.get("error") or "не получилось"
                 bad.append(p["err"])
         save()
+    return ok, bad
+
+
+def process_photos(chat, card=True):
+    d = draft()
+    if not d:
+        return
+    status = {}
+
+    def started(n):
+        status["mid"] = send(chat, fmt(f"🪄 Убираю фон · {n} фото…"))["result"]["message_id"]
+        tg("sendChatAction", chat_id=chat, action="upload_photo")
+    ok, bad = clean_photos(d, started)
+    if not status:
+        return
     try:
-        tg("deleteMessage", chat_id=chat, message_id=msg)
+        tg("deleteMessage", chat_id=chat, message_id=status["mid"])
     except Exception:
         pass
     if ok:
         send_album(chat, ok, f"✅ Фон убран · {len(ok)} фото")
     if bad:
         send(chat, fail(f"{len(bad)} фото не получилось: {esc(bad[0])} — возьми оригинал."))
+    if not card:
+        return
     if d.get("title"):
         show_card(chat)
     elif d.get("info"):
         write(chat)  # подпись к фото уже есть — сразу пишем описание
     else:
-        send(chat, fmt("✍️ Расскажи о вещи", "Что это, бренд, размер, состояние, комплект — коротко, своими словами.",
-                       "Или опишу сам по фото."), [[b("✨ Описание по фото", "gen", "primary")]])
+        send(chat, fmt("✍️ Что это за вещь?", note="Бренд, размер, состояние — текстом или голосом."),
+             [[b("✨ Опиши по фото", "gen", "primary")]])
 
 
 # ---------- описание ----------
@@ -464,18 +563,24 @@ def write(chat, request="", mid=None):
     status = fmt("✍️ Переписываю…" if request or d.get("title") else "✍️ Пишу описание…")
     mid = ((edit(chat, mid, status) if mid else send(chat, status)).get("result") or {}).get("message_id", mid)
     tg("sendChatAction", chat_id=chat, action="typing")
-    images = [p.get("orig") for p in d.get("photos") or []][:6]
-    prev = {k: d[k] for k in ("title", "description") if d.get(k)} or None
     try:
-        ad = ai.write_ad(d.get("info", ""), images, prev, request)
+        compose(d, request)
     except ai.AIError as e:
         return edit(chat, mid, fail(f"Описание не получилось: {esc(e)}"), [[b("🔁 Ещё раз", "gen")]])
+    show_card(chat, mid)
+
+
+def compose(d, request=""):
+    """Claude пишет (или переписывает) название и описание объявления. Ошибка — ai.AIError."""
+    images = [p.get("orig") for p in d.get("photos") or []][:6]
+    prev = {k: d[k] for k in ("title", "description") if d.get(k)} or None
+    ad = ai.write_ad(d.get("info", ""), images, prev, request)
     with lock:
         if ad["query"] != d.get("query"):
             d.pop("market", None)
         d.update(ad)
         save()
-    show_card(chat, mid)
+    return d
 
 
 # ---------- средняя цена ----------
@@ -536,6 +641,7 @@ def market_for(d, query):
             print("pick_similar:", e)
             similar = market.relevant(query, items)
     m = {"query": query, "ts": time.time(), "seen": len(items), "stats": market.stats(similar),
+         "prices": market.trim_outliers([i["price"] for i in similar]),  # для гистограммы в приложении
          "sample": [{"t": i["title"], "p": i["price"], "u": i["url"]} for i in similar[:10]]}
     with lock:
         d["market"] = m
@@ -579,7 +685,7 @@ def check_market(chat, force=False, mid=None):
 
 # ---------- обработчики ----------
 
-HELP_BODY = "Пришли фото вещи — уберу фон, напишу описание и подскажу цену."
+HELP_BODY = "Пришли фото или видео вещи — уберу фон, напишу описание и подскажу цену."
 HELP_STEPS = (
     "• Фото — до 10, можно альбомом.\n"
     "• Пара слов о вещи: бренд, размер, состояние.\n"
@@ -634,13 +740,32 @@ def run(chat, fn, *args, later=None):
     threading.Thread(target=go, daemon=True).start()
 
 
-def new_ad(chat):
+def set_region(arg):
+    """«moskva», «https://www.avito.ru/moskva/…», «all» -> код региона (и сброс старой цены) или None."""
+    arg = re.sub(r"^https?://(www\.)?avito\.ru/", "", (arg or "").strip().lower()).split("/")[0].split("?")[0]
+    if not re.fullmatch(r"[a-z_\-]+", arg or ""):
+        return None
+    with lock:
+        st["region"] = arg
+        d = st.get("draft")
+        if d:
+            d.pop("market", None)
+        save()
+    return arg
+
+
+def archive():
+    """Убрать текущее объявление в прошлые (они остаются в приложении)."""
     with lock:
         old = st.pop("draft", None)
-        if old and (old.get("title") or old.get("photos")):  # прошлые объявления — для приложения
+        if old and (old.get("title") or old.get("photos")):
             st["ads"] = ([old] + [a for a in st.get("ads") or [] if a.get("id") != old.get("id")])[:KEEP_ADS - 1]
         save()
-    send(chat, fmt("🆕 Новое объявление", note="Пришли фото вещи или опиши её текстом."))
+
+
+def new_ad(chat):
+    archive()
+    send(chat, fmt("🆕 Новое объявление", note="Пришли фото, видео или опиши вещь."))
 
 
 def copy_text(chat):
@@ -886,6 +1011,9 @@ def on_message(msg):
     if media.kind(msg) == "voice":
         run(chat, hear, chat, msg)
         return
+    if media.kind(msg) == "video":
+        run(chat, from_video, chat, msg)
+        return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     if cmd in ("/start", "/help"):
         send(chat, help_text(frm.get("first_name") if cmd == "/start" else ""), help_buttons() or None)
@@ -912,24 +1040,18 @@ def on_message(msg):
         else:
             send(chat, fail("Фото пока нет — пришли их сюда."))
     elif cmd == "/region":
-        arg = text.split(maxsplit=1)[1].strip().lower() if len(text.split()) > 1 else ""
-        arg = re.sub(r"^https?://(www\.)?avito\.ru/", "", arg).split("/")[0].split("?")[0]
-        if not re.fullmatch(r"[a-z_\-]+", arg or ""):
+        arg = set_region(text.split(maxsplit=1)[1] if len(text.split()) > 1 else "")
+        if not arg:
             return send(chat, fmt(f"📍 Регион: {esc(region_name())}",
                                   "<code>/region moskva</code> — как в адресе avito.ru/moskva\n"
                                   "<code>/region all</code> — вся Россия"))
-        st["region"] = arg
-        d = draft()
-        if d:
-            d.pop("market", None)
-        save()
         send(chat, fmt(f"📍 Регион: {esc(region_name(arg))}", note="Цены сравниваю здесь."))
     elif cmd == "/update" and uid == (st.get("owner") or min(ALLOWED or {0})):
         update(chat)
     elif cmd:
         send(chat, fail("Такой команды нет — /help"))
     elif not text:
-        send(chat, fmt("📸 Пришли фото вещи", note="Или опиши её текстом или голосовым."))
+        send(chat, fmt("📸 Пришли фото вещи", note="Или видео, текст, голосовое."))
     else:
         on_text(chat, text)
 
@@ -943,6 +1065,10 @@ def hear(chat, msg):
         return send(chat, fail(f"Голосовое не разобрал: {esc(e)}"))
     send(chat, f"🎙 <i>«{esc(text)}»</i>")
     on_text(chat, text, now=True)
+
+
+ASK_PRICE = re.compile(r"сколько\s+(\w+\s+){0,2}сто[ия]т|почём|почем\b|средн\w*\s+цен|за\s+сколько\s+продать|"
+                       r"какую\s+(\w+\s+)?цену", re.I)
 
 
 def on_text(chat, text, now=False):
@@ -962,6 +1088,9 @@ def on_text(chat, text, now=False):
         d["price"] = price
         save()
         show_card(chat)  # в карточке уже новая цена
+        return
+    if ASK_PRICE.search(text) and (d.get("title") or d.get("info")):
+        later(check_market, chat)  # «сколько такое стоит?» — средняя цена
         return
     with lock:
         d["info"] = (d.get("info", "") + "\n" + text).strip()
@@ -1106,6 +1235,7 @@ def market_json(m):
     s = m.get("stats") or {}
     return {"query": m.get("query"), "seen": m.get("seen", 0), "n": s.get("n", 0), "median": s.get("median"),
             "fast": s.get("fast"), "high": s.get("high"), "min": s.get("min"), "max": s.get("max"),
+            "prices": m.get("prices") or [], "sample": m.get("sample") or [],
             "when": datetime.datetime.fromtimestamp(m["ts"]).strftime("%d.%m %H:%M") if m.get("ts") else ""}
 
 
@@ -1120,11 +1250,85 @@ def ad_json(d):
             "sold_price": d.get("sold_price")}
 
 
+def ad_view(d):
+    """Объявление для приложения: ad_json + состояние каждого фото и дел (фон, описание)."""
+    out = ad_json(d)
+    photos = d.get("photos") or []
+    date = re.match(r"\d{4}(\d\d)(\d\d)", d.get("id") or "")
+    out.update({
+        # ?c — у фото на белом свой адрес: кэш браузера не покажет оригинал вместо готового
+        "photos": [{"url": f"/api/photo/{d['id']}/{n}" + ("?c" if p.get("clean") else ""),
+                    "state": photo_state(p)} for n, p in enumerate(photos)],
+        "pending": len(todo_photos(d)), "info": bool(d.get("info")), "questions": d.get("questions") or [],
+        "date": f"{date.group(2)}.{date.group(1)}" if date else "",
+        "job": d.get("job") or "", "error": d.get("error") or ""})
+    return out
+
+
+def photo_state(p):
+    if p.get("clean"):
+        return "clean"
+    return "err" if p.get("err") else "wait"
+
+
 def app_state():
-    return {"region": region_name(), "ads": [ad_json(a) for a in all_ads()]}
+    region = st.get("region") or "all"
+    return {"region": region, "region_name": region_name(region), "ads": [ad_view(a) for a in all_ads()]}
 
 
-def api_post(path, body):
+def spawn(fn):
+    threading.Thread(target=fn, daemon=True).start()
+
+
+def web_job(d, name, fn):
+    """Долгое дело из приложения (фон, описание) — в отдельном потоке. Ход виден в d["job"], приложение
+    спрашивает /api/state, пока он не пустой; ошибка — в d["error"]. False — уже чем-то занято."""
+    with lock:
+        if d.get("job"):
+            return False
+        d["job"], d["error"] = name, ""
+
+    def go():
+        try:
+            fn()
+        except ai.AIError as e:
+            d["error"] = f"Описание не получилось: {e}"
+        except Exception as e:
+            traceback.print_exc()
+            d["error"] = f"Что-то сломалось: {e}"[:200]
+        finally:
+            with lock:
+                d["job"] = ""
+                save()
+    spawn(go)
+    return True
+
+
+def web_photos(d):
+    """Из приложения: убрать фон у новых фото, затем (если описания ещё нет) написать его."""
+    ok, bad = clean_photos(d)
+    if bad:
+        d["error"] = f"{len(bad)} фото не получилось: {bad[0]}"
+    if not d.get("title"):
+        d["job"] = "write"
+        compose(d)
+
+
+def save_upload(data, ctype):
+    """Фото из приложения (тело запроса — сама картинка) -> в текущее объявление. -> (код, ответ)."""
+    if not ctype.startswith("image/") or len(data) < 100:
+        return 400, {"error": "Это не фото"}
+    d = draft(create=True)
+    if len(d["photos"]) >= MAX_PHOTOS:
+        return 400, {"error": f"На Авито хватит {MAX_PHOTOS} фото"}
+    path = new_orig(d)
+    with open(path, "wb") as f:
+        f.write(data)
+    keep_photo(d, path)
+    return 200, {"ad": ad_view(d)}
+
+
+def api_post(path, body, user=None):
     """POST /api/… от владельца. -> (код, ответ)."""
     if path == "/api/market":
         ad = find_ad(str(body.get("id"))) if body.get("id") else None
@@ -1140,7 +1344,7 @@ def api_post(path, body):
             return 503, {"error": "Авито не пустил к поиску — попробуй через пару минут",
                          "url": market.search_url(query, st.get("region"))}
         return 200, {"market": market_json(m), "url": market.search_url(query, st.get("region")),
-                     "ad": ad_json(ad) if ad else None}
+                     "ad": ad_view(ad) if ad else None}
     if path == "/api/price":
         d = find_ad(str(body.get("id") or ""))
         try:
@@ -1152,7 +1356,43 @@ def api_post(path, body):
         with lock:
             d["price"] = price
             save()
-        return 200, {"ad": ad_json(d)}
+        return 200, {"ad": ad_view(d)}
+    if path == "/api/process":  # после загрузки фото: фон и описание
+        d = find_ad(str(body.get("id") or "")) or draft()
+        if not d:
+            return 404, {"error": "Нет такого объявления"}
+        if todo_photos(d) or not d.get("title"):
+            web_job(d, "bg" if todo_photos(d) else "write", lambda: web_photos(d))
+        return 200, {"ad": ad_view(d)}
+    if path == "/api/write":  # рассказ о вещи, правка или «другой вариант»
+        d = find_ad(str(body.get("id"))) if body.get("id") else draft(create=True)
+        if not d:
+            return 404, {"error": "Нет такого объявления"}
+        info = str(body.get("info") or "").strip()[:2000]
+        request = str(body.get("request") or "").strip()[:500]
+        if not (info or request or d.get("info") or d.get("photos")):
+            return 400, {"error": "Расскажи о вещи или добавь фото"}
+        add_info(d, info)
+        if d.get("title") and info and not request:
+            request = info
+        if not web_job(d, "write", lambda: compose(d, request)):
+            return 409, {"error": "Ещё занят — секунду"}
+        return 200, {"ad": ad_view(d)}
+    if path == "/api/new":
+        archive()
+        return 200, app_state()
+    if path == "/api/region":
+        if not set_region(str(body.get("region") or "")):
+            return 400, {"error": "Регион — как в адресе avito.ru/moskva, или all"}
+        return 200, app_state()
+    if path == "/api/send":  # фото на белом — в чат, чтобы сохранить на телефон
+        d = find_ad(str(body.get("id") or ""))
+        chat = (user or {}).get("id")
+        paths = [p.get("clean") or p["orig"] for p in (d or {}).get("photos") or []]
+        if not d or not chat or not paths:
+            return 400, {"error": "Фото пока нет"}
+        spawn(lambda: send_album(chat, paths, (d.get("title") or "🖼 Фото для объявления")[:1000]))
+        return 200, {"ok": True}
     return 404, {"error": "Нет такого метода"}
 
 
@@ -1226,6 +1466,10 @@ class Web(BaseHTTPRequestHandler):
         if not web_user(self.headers):
             return self.reply(401, {"error": "Открой приложение из Telegram"})
         n = int(self.headers.get("Content-Length") or 0)
+        if path == "/api/upload":
+            if n > MAX_UPLOAD:
+                return self.reply(413, {"error": "Фото больше 15 МБ"})
+            return self.reply(*save_upload(self.rfile.read(n), self.headers.get("Content-Type") or ""))
         if n > 64 * 1024:
             return self.reply(413, {"error": "Слишком большой запрос"})
         try:
@@ -1235,7 +1479,7 @@ class Web(BaseHTTPRequestHandler):
         except ValueError:
             return self.reply(400, {"error": "Плохой запрос"})
         try:
-            code, res = api_post(path, body)
+            code, res = api_post(path, body, web_user(self.headers))
         except Exception as e:
             traceback.print_exc()
             code, res = 500, {"error": str(e)[:200]}
@@ -1317,6 +1561,10 @@ def main():
     if not TOKEN:
         sys.exit("Нет AVITO_TOKEN (токен от @BotFather). Впиши его в /etc/avito-bot.env")
     st = load()
+    for a in all_ads():  # дела, прерванные перезапуском
+        a.pop("job", None)
+        for ph in a.get("photos") or []:
+            ph.pop("work", None)
     os.makedirs(DRAFTS, exist_ok=True)
     threading.Thread(target=serve, daemon=True).start()
     setup_bot()
