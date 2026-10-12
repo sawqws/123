@@ -143,6 +143,7 @@ class Flow(unittest.TestCase):
             mock.patch.object(avito, "remove_bg", remove_bg),
             mock.patch.object(avito, "run", run),
             mock.patch.object(avito, "schedule_photos", lambda chat, delay: avito.process_photos(chat)),
+            mock.patch.object(avito, "spawn", lambda fn: fn()),
             mock.patch.object(ai, "write_ad", lambda info, imgs=(), prev=None, req="": {
                 "title": "iPhone 13 128 ГБ", "description": "Отличный телефон.\n" + info,
                 "query": "iphone 13 128", "category": "Телефоны", "questions": ["Есть ли коробка?"]}),
@@ -165,7 +166,7 @@ class Flow(unittest.TestCase):
     def test_flow(self):
         avito.on_message(self.msg(photo=[{"file_id": "a"}], media_group_id="g"))
         self.assertEqual(len(self.albums), 1)
-        self.assertTrue(any("Расскажи о вещи" in t for t in self.texts()))
+        self.assertTrue(any("Что это за вещь?" in t for t in self.texts()))
         d = avito.draft()
         self.assertTrue(d["photos"][0]["clean"].endswith(".jpg"))
 
@@ -220,7 +221,7 @@ class Flow(unittest.TestCase):
         s = avito.app_state()
         self.assertEqual(s["ads"][0]["title"], "iPhone 13 128 ГБ")
         self.assertTrue(s["ads"][0]["current"])
-        self.assertEqual(s["ads"][0]["photos"], [f"/api/photo/{aid}/0"])
+        self.assertEqual(s["ads"][0]["photos"], [{"url": f"/api/photo/{aid}/0?c", "state": "clean"}])
         code, res = avito.api_post("/api/price", {"id": aid, "price": "4500"})
         self.assertEqual((code, res["ad"]["price_text"]), (200, market.fmt_rub(4500)))
         self.assertEqual(avito.api_post("/api/price", {"id": aid, "price": "abc"})[0], 400)
@@ -248,7 +249,7 @@ class Flow(unittest.TestCase):
         base = f"http://127.0.0.1:{srv.server_address[1]}"
         try:
             with urllib.request.urlopen(base + "/") as r:
-                self.assertIn("Средняя цена", r.read().decode())
+                self.assertIn("kit.css?v=", r.read().decode())
             with self.assertRaises(urllib.error.HTTPError) as e:
                 urllib.request.urlopen(base + "/api/state")
             self.assertEqual(e.exception.code, 401)
@@ -260,6 +261,10 @@ class Flow(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as e:
                 urllib.request.urlopen(urllib.request.Request(base + f"/api/photo/{aid}/9", headers=h))
             self.assertEqual(e.exception.code, 404)
+            req = urllib.request.Request(base + "/api/upload", data=b"\xff\xd8" + b"y" * 300, method="POST",
+                                         headers=dict(h, **{"Content-Type": "image/jpeg"}))
+            with urllib.request.urlopen(req) as r:
+                self.assertEqual(len(json.load(r)["ad"]["photos"]), 2)
         finally:
             srv.shutdown()
             srv.server_close()
@@ -285,6 +290,88 @@ class Flow(unittest.TestCase):
     def test_text_only(self):
         avito.on_message(self.msg(text="Продаю велосипед Stels, 26 дюймов"))
         self.assertEqual(avito.draft()["title"], "iPhone 13 128 ГБ")
+
+    def test_video(self):
+        """Видео: 3 самых чётких кадра — фото на белом, речь — рассказ о вещи, сразу описание."""
+        def video(tok, msg, folder, frames=4):
+            paths = []
+            for n, size in enumerate([50, 400, 300, 10, 500, 200]):
+                path = os.path.join(folder, f"frame-{n}.jpg")
+                write_file(path, b"x" * size)
+                paths.append(path)
+            return {"frames": paths, "text": "кроссовки найк сорок второй", "seconds": 9}
+        with mock.patch.object(avito.media, "video", video):
+            avito.on_message(self.msg(video_note={"file_id": "v", "duration": 9}))
+        d = avito.draft()
+        self.assertEqual(len(d["photos"]), 3)
+        self.assertTrue(all(p["clean"] for p in d["photos"]))
+        self.assertEqual(len(self.albums[-1]), 3)
+        self.assertIn("кроссовки найк", d["info"])
+        self.assertEqual(d["title"], "iPhone 13 128 ГБ")
+        self.assertTrue(any("🎙" in t and "кроссовки найк" in t for t in self.texts()))
+        # у готового объявления речь из видео — правка описания
+        calls = []
+        with mock.patch.object(avito.media, "video", video), \
+                mock.patch.object(avito, "write", lambda chat, req="", mid=None: calls.append(req)):
+            avito.on_message(self.msg(video={"file_id": "v2"}, caption="добавь про коробку"))
+        self.assertEqual(len(d["photos"]), 6)
+        self.assertEqual(calls, ["добавь про коробку\nкроссовки найк сорок второй"])
+        with mock.patch.object(avito.media, "video", mock.Mock(side_effect=avito.media.MediaError("битое"))):
+            avito.on_message(self.msg(video={"file_id": "v3"}))
+        self.assertIn("⚠️ Видео не открылось: битое", self.texts()[-1])
+
+    def test_best_frames(self):
+        tmp = tempfile.mkdtemp()
+        paths = []
+        for n, size in enumerate([5, 50, 20, 40]):
+            paths.append(os.path.join(tmp, f"{n}.jpg"))
+            write_file(paths[-1], b"x" * size)
+        self.assertEqual(avito.best_frames(paths, 2), [paths[1], paths[3]])  # в порядке видео
+        self.assertEqual(avito.best_frames(paths, 0), [])
+
+    def test_voice_asks_price(self):
+        avito.on_message(self.msg(text="кроссовки nike 42"))
+        with mock.patch.object(avito.media, "voice_text", lambda tok, msg: "а сколько такое стоит?"):
+            avito.on_message(self.msg(voice={"file_id": "v"}))
+        self.assertEqual(avito.draft()["market"]["stats"]["median"], 36000)
+        self.assertNotIn("сколько", avito.draft()["info"])
+
+    def test_web_upload_and_write(self):
+        code, res = avito.save_upload(b"\xff\xd8" + b"x" * 500, "image/jpeg")
+        self.assertEqual((code, res["ad"]["photos"][0]["state"], res["ad"]["pending"]), (200, "wait", 1))
+        self.assertEqual(avito.save_upload(b"<html>", "text/html")[0], 400)
+        aid = res["ad"]["id"]
+        code, res = avito.api_post("/api/process", {"id": aid})
+        self.assertEqual(code, 200)
+        d = avito.draft()
+        self.assertTrue(d["photos"][0]["clean"])  # фон убран
+        self.assertEqual(d["title"], "iPhone 13 128 ГБ")  # и сразу описание
+        self.assertEqual(avito.ad_view(d)["job"], "")
+        self.assertEqual(self.albums, [])  # из приложения чат не засоряем
+        seen = {}
+        with mock.patch.object(ai, "write_ad", lambda info, imgs=(), prev=None, req="": seen.update(req=req) or {
+                "title": "T", "description": "D", "query": "q", "category": "", "questions": []}):
+            code, res = avito.api_post("/api/write", {"id": aid, "request": "короче"})
+        self.assertEqual((code, res["ad"]["title"], seen["req"]), (200, "T", "короче"))
+        with mock.patch.object(ai, "write_ad", mock.Mock(side_effect=ai.AIError("лимит"))):
+            avito.api_post("/api/write", {"id": aid, "info": "есть чек"})
+        self.assertIn("лимит", avito.ad_view(d)["error"])
+        self.assertIn("есть чек", d["info"])
+        code, res = avito.api_post("/api/send", {"id": aid}, {"id": 7})
+        self.assertEqual((code, len(self.albums[-1])), (200, 1))
+        code, res = avito.api_post("/api/region", {"region": "https://www.avito.ru/moskva/odezhda"})
+        self.assertEqual((code, res["region"]), (200, "moskva"))
+        self.assertEqual(avito.api_post("/api/region", {"region": "Москва!"})[0], 400)
+        code, res = avito.api_post("/api/new", {})
+        self.assertIsNone(avito.draft())
+        self.assertFalse(res["ads"][0]["current"])
+        self.assertEqual(avito.api_post("/api/write", {})[0], 400)  # ни фото, ни слов
+
+    def test_market_has_histogram_data(self):
+        avito.on_message(self.msg(text="айфон 13"))
+        code, res = avito.api_post("/api/market", {"id": avito.draft()["id"]})
+        self.assertEqual(res["market"]["prices"], [35000, 37000])
+        self.assertEqual(res["market"]["sample"][0]["p"], 35000)
 
 
 def init_data(token, uid=7, age=0):
