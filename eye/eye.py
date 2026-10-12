@@ -2,12 +2,12 @@
 """Telegram-бот «Глаз»: Claude смотрит через очки Ray-Ban Meta и разговаривает голосом через их динамики.
 
 Как пользоваться:
-- фото с очков (из «Фото» или приложения Meta AI) — в чат боту или кнопкой «📷» на странице «Глаз»:
-  Claude узнаёт, что это (здание, вещь, текст), и говорит вслух;
+- фото или видео с очков (из «Фото» или приложения Meta AI) — в чат боту или кнопкой «📷» на странице «Глаз»:
+  Claude узнаёт, что это (здание, вещь, текст), и говорит вслух; у видео — несколько кадров и речь;
 - «🎙 Говорить» на странице (кнопка «Глаз» слева от поля ввода или ссылка для Safari, /link): разговор
   без рук — слушает, пока ты говоришь, отвечает голосом. Очки подключены к iPhone как Bluetooth-гарнитура,
   поэтому микрофон и звук — очки;
-- в чате тоже можно: текст, голосовые, геопозиция (📎 → Геопозиция) — всё идёт в один разговор.
+- в чате тоже можно: текст, голосовые (это вопрос), геопозиция (📎 → Геопозиция) — всё идёт в один разговор.
 Где ты сейчас, бот знает по GPS телефона (страница спрашивает разрешение) и подсказывает Claude адрес.
 
 Переменные окружения (на сервере — /etc/eye-bot.env):
@@ -30,6 +30,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -41,7 +42,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import ai  # noqa: E402
+import media  # noqa: E402
 import photos  # noqa: E402
 import speech  # noqa: E402
 
@@ -278,17 +281,12 @@ def set_menu():
 
 
 HELP = card("👁", "Глаз", (
-    "Claude смотрит через твои очки и отвечает голосом в их динамики.\n\n"
-    "<b>Фото.</b> Снимки с очков Meta AI сохраняет в «Фото» iPhone — пришли их сюда, "
-    "можно несколько и с вопросом в подписи. "
-    "Скажу, что это за здание, вещь или надпись.\n\n"
-    "<b>Разговор.</b> Кнопка «Глаз» слева от поля ввода → «Говорить». Дальше без рук: "
-    "говоришь — слушаю, замолчал — отвечаю. Очки подключены к iPhone по Bluetooth, "
-    "поэтому микрофон и звук — их.\n\n"
-    "<b>Место.</b> Страница берёт GPS телефона — так точнее узнаю здания. "
-    "В чате: 📎 → Геопозиция.\n\n"
-    "<b>Нет микрофона в Telegram?</b> Открой ту же страницу в Safari: /link"
-), "/new — разговор заново · /status — проверка")
+    "📷 Фото или 🎬 видео с очков — скажу, что это.\n"
+    "🎙 Голосовое или текст — отвечу.\n"
+    "👁 «Глаз» слева от поля ввода — разговор без рук."
+), "/link — для Safari · /new — заново · /status — проверка")
+
+UNKNOWN = card("🤷", "Это не разберу", note="Пришли фото, видео, голосовое или просто напиши.")
 
 
 # ---------- память разговора и фото ----------
@@ -387,8 +385,9 @@ def last_event_id():
 
 # ---------- главное: фото и ответы ----------
 
-def add_photo(data, where=None, source="chat"):
-    """Сохранить фото; вернуть его запись. where — (lat, lon) с телефона, если в фото нет своего GPS."""
+def add_photo(data, where=None, source="chat", video=False):
+    """Сохранить фото (у видео — кадр из середины); вернуть его запись.
+    where — (lat, lon) с телефона, если в фото нет своего GPS."""
     jpeg, own = photos.prepare(data)
     pid = time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
     os.makedirs(PICS, exist_ok=True)
@@ -397,7 +396,7 @@ def add_photo(data, where=None, source="chat"):
         f.write(jpeg)
     spot = own or where or where_now()
     rec = {"id": pid, "path": path, "t": time.time(), "source": source,
-           "where": list(spot) if spot else None, "text": "", "say": "", "title": ""}
+           "where": list(spot) if spot else None, "text": "", "say": "", "title": "", "video": bool(video)}
     with lock:
         st = load()
         st["photos"] = (st.get("photos") or []) + [rec]
@@ -408,7 +407,7 @@ def add_photo(data, where=None, source="chat"):
                 pass
         st["photos"] = st["photos"][-KEEP_PHOTOS:]
         save(st)
-    push_event("photo_new", photo=pid)
+    push_event("photo_new", photo=pid, video=bool(video))
     return rec
 
 
@@ -421,14 +420,16 @@ def update_photo(pid, **fields):
         save(st)
 
 
-def analyze(rec, question="", chat=None, wait=None):
-    """Разбор фото: в разговор, на страницу (вслух) и в чат. wait — заглушка «Смотрю…», её правим на месте."""
+def analyze(rec, question="", chat=None, wait=None, frames=None, heard=""):
+    """Разбор фото или видео (frames — кадры, heard — речь в нём): в разговор, на страницу (вслух) и в чат.
+    wait — заглушка «Смотрю…», её правим на месте."""
     pid = rec["id"]
     spot = rec.get("where")
+    what = "видео" if rec.get("video") else "фото"
     try:
         place = photos.place(tuple(spot)) if spot else ""
         with think:
-            res = ai.look(rec["path"], place, history(6), question)
+            res = ai.look(frames or rec["path"], place, history(6), question, heard)
     except ai.AIError as e:
         push_event("error", text=str(e))
         if chat:
@@ -436,21 +437,74 @@ def analyze(rec, question="", chat=None, wait=None):
         return
     except Exception as e:
         traceback.print_exc()
-        push_event("error", text="не получилось разобрать фото")
+        push_event("error", text=f"не получилось разобрать {what}")
         if chat:
-            put(chat, err(f"Не получилось разобрать фото: {e}"), wait)
+            put(chat, err(f"Не получилось разобрать {what}: {e}"), wait)
         return
     update_photo(pid, text=res["text"], say=res["say"], title=res["title"], place=place)
-    remember("user", f"[фото {res['title'] or ''}]" + (f" {question}" if question else ""))
+    asked = question or heard
+    remember("user", f"[{what} {res['title'] or ''}]" + (f" {asked}" if asked else ""))
     remember("assistant", res["say"])
     mp3 = speech.tts(res["say"])
     push_event("photo", photo=pid, say=res["say"], text=res["text"], title=res["title"], audio=keep_audio(mp3))
     chat = chat or chat_id()
     if chat:
-        put(chat, card("👁", res["title"] or "Что на фото", esc(res["text"]),
-                       f"📍 {place}" if place else ""), wait)
+        note = " · ".join(x for x in (f"🎙 «{short(heard)}»" if heard else "", f"📍 {place}" if place else "") if x)
+        put(chat, card("🎬" if rec.get("video") else "👁", res["title"] or f"Что на {what}", esc(res["text"]), note),
+            wait)
         if mp3 and not page_open():
             voice_reply(chat, mp3)
+
+
+def short(text, n=80):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def video_file(src, folder):
+    """Видео с диска (загрузка со страницы): кадры и речь — как media.video для сообщений Telegram."""
+    seconds = media._seconds(src)
+    try:
+        frames = media._frames(src, folder, 1 if seconds < 3 else 4, seconds)
+    except (OSError, subprocess.TimeoutExpired):
+        frames = []
+    text = ""
+    try:
+        text = media.transcribe(src)
+    except media.MediaError:
+        pass
+    if not frames and not text:
+        raise media.MediaError("не получилось открыть видео")
+    return {"frames": frames, "text": text, "seconds": seconds}
+
+
+def look_video(frames, heard="", question="", chat=None, wait=None, where=None, source="chat"):
+    """Видео -> как фото: кадр из середины в «Что видел», разбор по всем кадрам и речи."""
+    if not frames:
+        if chat and heard:  # кадры не достались, но есть речь — это вопрос
+            return reply_in_chat(chat, heard, voice=True, wait=wait)
+        raise media.MediaError("не получилось открыть видео")
+    with open(frames[len(frames) // 2], "rb") as f:
+        rec = add_photo(f.read(), where, source=source, video=True)
+    analyze(rec, question, chat, wait, frames=frames, heard=heard)
+
+
+def page_video(data, where=None):
+    """Видео со страницы: разбор в фоне, ответ — событием на страницу и в чат."""
+    folder = tempfile.mkdtemp(prefix="eye-video-")
+    try:
+        src = os.path.join(folder, "video")
+        with open(src, "wb") as f:
+            f.write(data)
+        v = video_file(src, folder)
+        look_video(v["frames"], v["text"], where=where, source="page")
+    except media.MediaError as e:
+        push_event("error", text=str(e))
+    except Exception:
+        traceback.print_exc()
+        push_event("error", text="не получилось разобрать видео")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def answer(text, where=None):
@@ -501,7 +555,7 @@ def on_photo(msg):
 
 def on_voice(msg):
     chat = msg["chat"]["id"]
-    obj = msg.get("voice") or msg.get("audio") or msg.get("video_note") or msg.get("document") or {}
+    obj = msg.get("voice") or msg.get("audio") or msg.get("document") or {}
     typing(chat, "record_voice")
     try:
         data, ext = download(obj["file_id"])
@@ -514,6 +568,24 @@ def on_voice(msg):
         return send(chat, err("Не слышно слов — скажи ещё раз."))
     wait = msg_id(send(chat, f"🎙 <i>«{esc(text)}»</i>"))
     reply_in_chat(chat, text, voice=True, wait=wait)
+
+
+def on_video(msg):
+    """Видео или кружок: кадры и речь (media.video) -> Claude, ответ как для фото."""
+    chat = msg["chat"]["id"]
+    typing(chat)
+    wait = msg_id(send(chat, "🎬 <b>Смотрю видео…</b>"))
+    folder = tempfile.mkdtemp(prefix="eye-video-")
+    try:
+        v = media.video(TOKEN, msg, folder)
+        look_video(v["frames"], v["text"], (msg.get("caption") or "").strip(), chat, wait)
+    except media.MediaError as e:
+        put(chat, err(e), wait)
+    except Exception as e:
+        traceback.print_exc()
+        put(chat, err(f"Не получилось разобрать видео: {e}"), wait)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def reply_in_chat(chat, text, voice=False, wait=None):
@@ -570,12 +642,10 @@ def on_message(msg):
         print("Владелец:", uid)
     if not allowed(uid):
         return send(chat, "🔒 Это личный бот.")
-    doc = msg.get("document") or {}
-    mime = doc.get("mime_type") or ""
-    if msg.get("photo") or mime.startswith("image/"):
-        return threading.Thread(target=on_photo, args=(msg,), daemon=True).start()
-    if msg.get("voice") or msg.get("audio") or msg.get("video_note") or mime.startswith("audio/"):
-        return threading.Thread(target=on_voice, args=(msg,), daemon=True).start()
+    kind = media.kind(msg)
+    if kind:  # тяжёлое (Claude, распознавание, ffmpeg) — не в потоке опроса Telegram
+        work = {"photo": on_photo, "voice": on_voice, "video": on_video}[kind]
+        return threading.Thread(target=work, args=(msg,), daemon=True).start()
     if msg.get("location"):
         loc = msg["location"]
         save_where(loc["latitude"], loc["longitude"])
@@ -602,6 +672,8 @@ def on_message(msg):
         send(chat, status_text(), status_buttons())
     elif text and not cmd:
         threading.Thread(target=reply_in_chat, args=(chat, text), daemon=True).start()
+    elif not text:
+        send(chat, UNKNOWN)
     else:
         send(chat, HELP, menu_buttons())
 
@@ -662,7 +734,8 @@ def photo_list(n=12):
     with lock:
         items = (load().get("photos") or [])[-n:]
     return [{"id": p["id"], "t": p["t"], "title": p.get("title") or "", "say": p.get("say") or "",
-             "text": p.get("text") or "", "place": p.get("place") or ""} for p in reversed(items)]
+             "text": p.get("text") or "", "place": p.get("place") or "", "video": bool(p.get("video"))}
+            for p in reversed(items)]
 
 
 def asset_version():
@@ -765,6 +838,9 @@ class Web(BaseHTTPRequestHandler):
             if path == "/api/upload":
                 if not raw:
                     return self.reply(400, {"error": "пустой файл"})
+                if ctype.startswith("video/"):
+                    threading.Thread(target=page_video, args=(raw, where), daemon=True).start()
+                    return self.reply(200, {"id": "", "video": True})
                 rec = add_photo(raw, where, source="page")
                 threading.Thread(target=analyze, args=(rec, q.get("q", "")), daemon=True).start()
                 return self.reply(200, {"id": rec["id"]})
