@@ -142,7 +142,7 @@ function goalsFor(hz, day) {
 const notesOf = g => [...S.notes.values()].filter(n => n.goal === g.id).sort((a, b) => b.created.localeCompare(a.created) || b.id - a.id);
 
 /* ---------- маленькие куски разметки ---------- */
-function ring(p, size = 56, sw = 6, label) {
+function ring(p, size = 48, sw = 5, label) {
   const r = size / 2 - sw / 2 - 1, c = 2 * Math.PI * r;
   return `<div class="ring${size > 70 ? ' big' : ''}${p >= 100 ? ' full' : ''}" style="width:${size}px;height:${size}px">
     <svg viewBox="0 0 ${size} ${size}"><circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}"/>
@@ -157,10 +157,10 @@ function taskRow(t, day, opts = {}) {
   const g = t.goal && S.goals.get(t.goal);
   const meta = [];
   if (opts.showDate && t.date && !t.repeat) meta.push(`<span>${I.cal}${rel(t.date) || dms(t.date)}</span>`);
-  if (g) meta.push(`<span style="color:${gc(g)}">${esc(g.emoji)} ${esc(g.title)}</span>`);
+  if (g && !opts.noGoal) meta.push(`<span style="color:${gc(g)}"><em>${esc(g.emoji)} ${esc(g.title)}</em></span>`);
   if (t.repeat) meta.push(`<span>${I.repeat}${repeatText(t.repeat)}</span>`);
   if (t.time && t.remind >= 0) meta.push(`<span>${I.bell}${t.remind ? t.remind + ' мин' : ''}</span>`);
-  if (t.note) meta.push(`<span>${I.note}заметка</span>`);
+  if (t.note) meta.push(`<span>${I.note}<em>${esc(t.note.split('\n')[0].slice(0, 60))}</em></span>`);
   const key = t.id + '|' + day;
   return `<div class="task${done ? ' done' : ''}${t.important ? ' imp' : ''}${opts.now ? ' now' : ''}" data-a="edit-task" data-id="${t.id}" data-date="${day || ''}">
     ${opts.noTime ? '' : `<div class="time${t.time ? '' : ' none'}">${t.time || '—'}</div>`}
@@ -173,7 +173,7 @@ function miniRow(t, day) {
   const done = isDone(t, day), g = t.goal && S.goals.get(t.goal), key = t.id + '|' + day;
   return `<div class="mini${done ? ' done' : ''}" data-a="edit-task" data-id="${t.id}" data-date="${day}">
     <span data-a="toggle" data-id="${t.id}" data-date="${day}">${checkBox(done, g ? gc(g) : null).replace('class="check', `class="check${S.pop === key ? ' pop' : ''}`)}</span>
-    <span class="t">${t.important ? '<b style="color:var(--bad)">! </b>' : ''}${g ? esc(g.emoji) + ' ' : ''}${esc(t.title)}</span>
+    <span class="t">${t.important ? '<b class="flag">! </b>' : ''}${g ? esc(g.emoji) + ' ' : ''}${esc(t.title)}</span>
     ${t.time ? `<span class="tm">${t.time}</span>` : ''}${t.repeat ? `<span class="tm">${I.repeat.replace('<svg', '<svg style="width:13px;height:13px"')}</span>` : ''}
   </div>`;
 }
@@ -189,13 +189,13 @@ function goalChip(g) {
 function goalRow(g) {
   const p = pct(g), st = steps(g), nn = notesOf(g).length, sub = [];
   const end = periodEnd(g);
-  if (g.due) sub.push(`🏁 ${dms(g.due)}`);
+  if (g.due) sub.push(`дедлайн ${dms(g.due)}`);
   else if (g.status === 'active' && end) sub.push(g.horizon === 'year' ? `до конца ${end.slice(0, 4)}` : `до ${dms(end)}`);
   if (st.length) sub.push(`${st.filter(t => t.done).length}/${st.length} ${plural(st.length, 'шаг', 'шага', 'шагов')}`);
-  if (nn) sub.push(`📝 ${nn}`);
+  if (nn) sub.push(`${nn} ${plural(nn, 'заметка', 'заметки', 'заметок')}`);
   return `<button class="goal${g.status === 'done' ? ' isdone' : ''}" style="--gc:${gc(g)}" data-a="open-goal" data-id="${g.id}">
     <div class="em">${esc(g.emoji)}</div>
-    <div class="gb"><div class="gt">${esc(g.title)}</div><div class="gs">${sub.join('<span>·</span>') || '&nbsp;'}</div>${bar(p, 'thin')}</div>
+    <div class="gb"><div class="gt">${esc(g.title)}</div><div class="gs">${sub.map(x => `<span>${x}</span>`).join('<span>·</span>') || '&nbsp;'}</div>${bar(p, 'thin')}</div>
     <div class="gp">${p}%</div></button>`;
 }
 function sec(title, extra = '', link = '') {
@@ -229,17 +229,17 @@ function viewDay() {
 
   const nothing = !S.tasks.size && !S.goals.size;
   if (nothing && !store.get('welcomed')) {
-    html += `<div class="card welcome"><button class="x" data-a="welcome-close">${I.x}</button>
-      <b>Привет! Это твой планер ✨</b><p>Всё просто:</p>
-      <ul><li>📝 Нажми <b>+</b> — добавь задачу на день, время и напоминание</li>
-      <li>🎯 Во вкладке <b>Цели</b> поставь цель на неделю, месяц или год и веди к ней заметки</li>
-      <li>💬 Или просто напиши боту: <i>«завтра в 18:00 тренировка»</i></li></ul>
+    html += `<div class="card welcome"><button class="x" data-a="welcome-close" aria-label="Закрыть">${I.x}</button>
+      <b>Привет! Это твой планер</b><p>Три вещи, которые стоит знать:</p>
+      <ul><li><span class="ic">${I.plus}</span><span><b style="display:inline;font-size:inherit;padding:0">+</b> внизу — задача на день, со временем и напоминанием</span></li>
+      <li><span class="ic">${I.goals}</span><span>Во вкладке «Цели» — цели на неделю, месяц или год, с шагами и заметками</span></li>
+      <li><span class="ic">${I.send}</span><span>Или просто напиши боту: <i>завтра в 18:00 тренировка</i></span></li></ul>
       <button class="btn wide" data-a="fab">Добавить первую задачу</button></div>`;
   }
 
   if (tasks.length) {
     const p = Math.round(100 * done / tasks.length), left = tasks.length - done;
-    const msg = left === 0 ? 'Всё сделано. Ты молодец 🎉' : done === 0 ? (isToday ? 'Начни с самого важного' : 'Запланировано') : `Осталось ${left} — продолжай в том же духе`;
+    const msg = left === 0 ? 'Всё сделано — ты молодец' : done === 0 ? (isToday ? 'Начни с самого важного' : 'Запланировано') : `Осталось ${left} — так держать`;
     html += `<div class="card summary">${ring(p)}<div class="txt"><b>${done} из ${tasks.length} ${plural(tasks.length, 'задачи', 'задач', 'задач')}</b><span>${msg}</span></div></div>`;
   }
 
@@ -254,7 +254,7 @@ function viewDay() {
   const focus = [...goalsFor('week', day), ...goalsFor('month', day)];
   if (focus.length) {
     html += sec('Цели в фокусе', '', `<button class="link" data-a="tab" data-v="goals">Все</button>`);
-    html += `<div class="goal-chips">${focus.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week">＋ Цель</button></div>`;
+    html += `<div class="goal-chips">${focus.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week">+ Цель</button></div>`;
   }
 
   html += sec('План', tasks.length ? `${tasks.length}` : '');
@@ -283,21 +283,21 @@ function viewWeek() {
     <div class="nav"><button class="icon-btn" data-a="shift" data-n="-1">${I.left}</button><button class="icon-btn" data-a="shift" data-n="1">${I.right}</button></div></div>`;
   if (total) {
     const p = Math.round(100 * done / total);
-    html += `<div class="card summary" style="margin-top:10px">${ring(p)}<div class="txt"><b>${done} из ${total} за неделю</b>
-      <span>${p === 100 ? 'Идеальная неделя 🔥' : p >= 60 ? 'Отличный темп' : 'Шаг за шагом'}</span></div></div>`;
+    html += `<div class="card summary" style="margin-top:8px">${ring(p)}<div class="txt"><b>${done} из ${total} за неделю</b>
+      <span>${p === 100 ? 'Идеальная неделя' : p >= 60 ? 'Отличный темп' : 'Шаг за шагом'}</span></div></div>`;
   }
   const goals = goalsFor('week', mon);
   html += sec('Цели недели', goals.length || '');
-  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week" data-start="${mon}">＋ Цель на неделю</button></div>`;
+  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week" data-start="${mon}">+ Цель на неделю</button></div>`;
   html += sec('Дни');
   html += days.map(({ d, ts, dn }) => {
     const past = d < S.today, today = d === S.today;
     return `<div class="card day-card${today ? ' today' : ''}${past && !today ? ' past' : ''}">
       <div class="dh" data-a="open-day" data-date="${d}"><div class="dn"><b>${D.day(d)}</b><small>${WD[D.wd(d)]}</small></div>
-        <div class="dtx"><b>${WDL[D.wd(d)]}</b>${today ? ' <span style="color:var(--accent);font-size:13px;font-weight:600">· сегодня</span>' : ''}${ts.length ? bar(Math.round(100 * dn / ts.length), 'thin') : ''}</div>
-        <span class="dc">${ts.length ? `${dn}/${ts.length}` : ''}</span>${I.right.replace('<svg', '<svg style="color:var(--muted);width:16px"')}</div>
+        <div class="dtx">${WDL[D.wd(d)]}${today ? ' <em>· сегодня</em>' : ''}</div>
+        <span class="dc">${ts.length ? `${dn}/${ts.length}` : ''}</span>${I.right}</div>
       ${ts.length ? ts.map(t => miniRow(t, d)).join('') : '<div class="free">Свободно</div>'}
-      <button class="add-line" data-a="new-task" data-date="${d}">${I.plus}Добавить</button></div>`;
+      <button class="add-line" data-a="new-task" data-date="${d}">${I.plus}Добавить задачу</button></div>`;
   }).join('');
   const inbox = [...S.tasks.values()].filter(t => !t.date && !t.repeat && !t.done);
   html += sec('Без даты', inbox.length || '');
@@ -322,21 +322,21 @@ function viewMonth() {
   let html = `<div class="top"><div class="grow"><div class="eyebrow">${D.year(first)}${isCur ? ' · этот месяц' : ''}</div><div class="title">${MN[D.mon(first)]}</div></div>
     ${isCur ? '' : `<button class="pill-btn" data-a="go-today">Сейчас</button>`}
     <div class="nav"><button class="icon-btn" data-a="shift" data-n="-1">${I.left}</button><button class="icon-btn" data-a="shift" data-n="1">${I.right}</button></div></div>`;
-  html += `<div class="card cal" data-swipe="month" style="margin-top:10px"><div class="wds">${WD.map(w => `<div>${w}</div>`).join('')}</div><div class="grid">${grid}</div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>задачи</span><span><i style="background:var(--good)"></i>всё сделано</span></div></div>`;
+  html += `<div class="card cal" data-swipe="month" style="margin-top:8px"><div class="wds">${WD.map(w => `<div>${w}</div>`).join('')}</div><div class="grid">${grid}</div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>есть задачи</span><span><i style="background:var(--good)"></i>всё сделано</span></div></div>`;
 
   const sel = S.msel, ts = dayTasks(sel);
   html += sec(`${rel(sel) ? rel(sel) + ', ' : ''}${dm(sel)}`, ts.length ? `${ts.filter(t => isDone(t, sel)).length}/${ts.length}` : '', `<button class="link" data-a="open-day" data-date="${sel}">Открыть день</button>`);
-  html += `<div class="card" style="padding:4px 0">${ts.length ? ts.map(t => miniRow(t, sel)).join('') : '<div class="free" style="padding-top:12px">Ничего не запланировано</div>'}${quickRow(sel)}</div>`;
+  html += `<div class="card" style="padding-top:4px">${ts.length ? ts.map(t => miniRow(t, sel)).join('') : '<div class="free" style="padding:12px 16px 4px">Ничего не запланировано</div>'}${quickRow(sel)}</div>`;
 
   if (total) {
     const p = Math.round(100 * done / total);
     html += sec('Итог месяца');
-    html += `<div class="card summary">${ring(p)}<div class="txt"><b>${done} из ${total} задач</b><span>${p >= 80 ? 'Мощный месяц 💪' : 'Каждый день — шаг вперёд'}</span></div></div>`;
+    html += `<div class="card summary">${ring(p)}<div class="txt"><b>${done} из ${total} задач</b><span>${p >= 80 ? 'Мощный месяц' : 'Каждый день — шаг вперёд'}</span></div></div>`;
   }
   const goals = goalsFor('month', first);
   html += sec('Цели месяца', goals.length || '');
-  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="month" data-start="${first}">＋ Цель на месяц</button></div>`;
+  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="month" data-start="${first}">+ Цель на месяц</button></div>`;
   return html;
 }
 
@@ -345,24 +345,24 @@ function viewGoals() {
   const active = all.filter(g => g.status === 'active'), doneG = all.filter(g => g.status === 'done'), arch = all.filter(g => g.status === 'archived');
   const tab = S.goalsTab;
   let html = `<div class="top"><div class="grow"><div class="eyebrow">${active.length} в работе · ${doneG.length} ${plural(doneG.length, 'достигнута', 'достигнуты', 'достигнуто')}</div><div class="title">Цели</div></div>
-    <button class="icon-btn" data-a="settings">${I.gear}</button></div>
+    <button class="icon-btn" data-a="settings" aria-label="Настройки">${I.gear}</button></div>
     <div class="seg">${[['active', 'В работе'], ['done', 'Достигнуты'], ['archived', 'Архив']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-a="goals-tab" data-t="${k}">${l}</button>`).join('')}</div>`;
   const list = tab === 'active' ? active : tab === 'done' ? doneG : arch;
   if (!list.length) {
     if (tab === 'active') {
-      html += `<div class="card" style="margin-top:14px"><div class="empty"><div class="big">🎯</div><b>Поставь первую цель</b>
+      html += `<div class="card" style="margin-top:16px"><div class="empty"><div class="big">🎯</div><b>Поставь первую цель</b>
         <p>Цель — это то, к чему ты идёшь неделю, месяц или год.</p>
         <div class="tips"><div><span>🪜</span><span>Разбей на <b>шаги</b> — прогресс посчитается сам</span></div>
         <div><span>📝</span><span>Пиши <b>заметки</b>: мысли, идеи, что получилось</span></div>
         <div><span>☀️</span><span>Цели недели и месяца бот присылает по утрам</span></div></div>
-        <button class="btn" data-a="new-goal" data-h="month">＋ Новая цель</button></div></div>`;
+        <button class="btn" data-a="new-goal" data-h="month">Новая цель</button></div></div>`;
     } else {
-      html += `<div class="card" style="margin-top:14px"><div class="empty"><div class="big">${tab === 'done' ? '🏆' : '🗄'}</div>
+      html += `<div class="card" style="margin-top:16px"><div class="empty"><div class="big">${tab === 'done' ? '🏆' : '🗄'}</div>
         <b>${tab === 'done' ? 'Здесь будут твои победы' : 'Архив пуст'}</b><p>${tab === 'done' ? 'Достигнутые цели остаются здесь навсегда.' : 'Сюда уходят цели, которые больше не актуальны.'}</p></div></div>`;
     }
     return html;
   }
-  if (tab !== 'active') return html + `<div class="card" style="margin-top:14px">${list.map(goalRow).join('')}</div>`;
+  if (tab !== 'active') return html + `<div class="card" style="margin-top:16px">${list.map(goalRow).join('')}</div>`;
   const label = { week: 'Неделя', month: 'Месяц', year: 'Год', none: 'Без срока' };
   for (const hz of ['week', 'month', 'year', 'none']) {
     const part = list.filter(g => g.horizon === hz).sort((a, b) => (b.start || '').localeCompare(a.start || '') || a.pos - b.pos);
@@ -382,18 +382,18 @@ function viewGoal() {
   if (g.horizon === 'week' && g.start) period = 'Неделя · ' + span(g.start);
   if (g.horizon === 'month' && g.start) period = MN[D.mon(g.start)] + ' ' + D.year(g.start);
   if (g.horizon === 'year' && g.start) period = 'Год ' + D.year(g.start);
-  const status = g.status === 'done' ? '🏆 Достигнута' : g.status === 'archived' ? '🗄 В архиве' : end && end < S.today ? '⌛ Срок прошёл' : '';
-  let html = `<div class="hero" style="--gc:${gc(g)}"><div class="row"><div class="he">${esc(g.emoji)}</div><div class="grow"></div>${ring(p, 84, 8)}</div>
+  const status = g.status === 'done' ? 'Достигнута' : g.status === 'archived' ? 'В архиве' : end && end < S.today ? 'Срок прошёл' : '';
+  let html = `<div class="hero" style="--gc:${gc(g)}"><div class="row"><div class="he">${esc(g.emoji)}</div><div class="grow"></div>${ring(p, 72, 7)}</div>
     <div class="ht">${esc(g.title)}</div>
-    <div class="hs"><span>${period}</span>${g.due ? `<span>🏁 ${dm(g.due)}</span>` : ''}${status ? `<span>${status}</span>` : ''}</div>
+    <div class="hs"><span>${period}</span>${g.due ? `<span>Дедлайн ${dm(g.due)}</span>` : ''}${status ? `<span>· ${status}</span>` : ''}</div>
     ${g.why ? `<div class="why">${esc(g.why)}</div>` : ''}</div>`;
   if (!st.length && g.status === 'active') {
-    html += `<div class="card slider-card" style="margin-top:12px"><div class="lbl"><span>Прогресс вручную</span><b id="pv">${g.progress || 0}%</b></div>
+    html += `<div class="card slider-card" style="margin-top:8px"><div class="lbl"><span>Прогресс вручную</span><b id="pv">${g.progress || 0}%</b></div>
       <input type="range" min="0" max="100" step="5" value="${g.progress || 0}" data-progress="${g.id}" style="--gc:${gc(g)}">
       <div class="hint">Или добавь шаги ниже — тогда прогресс посчитается сам.</div></div>`;
   }
   html += sec('Шаги', st.length ? `${st.filter(t => t.done).length}/${st.length}` : '');
-  html += `<div class="card">${st.map(t => taskRow(t, t.date, { noTime: true, showDate: true })).join('')}${quickRow('', g.id, st.length ? 'Ещё шаг…' : 'Первый шаг…')}</div>`;
+  html += `<div class="card">${st.map(t => taskRow(t, t.date, { noTime: true, showDate: true, noGoal: true })).join('')}${quickRow('', g.id, st.length ? 'Ещё шаг…' : 'Первый шаг…')}</div>`;
   if (hb.length) {
     html += sec('Регулярно');
     html += `<div class="card">${hb.map(t => `<div class="task" data-a="edit-task" data-id="${t.id}" data-date="${S.today}"><div class="body"><div class="t">${esc(t.title)}</div>
@@ -408,10 +408,10 @@ function viewGoal() {
   }
   html += `<div class="actions">`;
   if (g.status === 'active') {
-    html += `<button class="btn good wide" data-a="goal-status" data-s="done">🏆 Цель достигнута</button>
+    html += `<button class="btn good wide" data-a="goal-status" data-s="done">Цель достигнута</button>
       <div class="two"><button class="btn ghost" data-a="edit-goal">Изменить</button><button class="btn ghost" data-a="goal-status" data-s="archived">В архив</button></div>`;
   } else {
-    html += `<button class="btn ghost wide" data-a="goal-status" data-s="active">↩️ Вернуть в работу</button>
+    html += `<button class="btn ghost wide" data-a="goal-status" data-s="active">Вернуть в работу</button>
       <div class="two"><button class="btn ghost" data-a="edit-goal">Изменить</button><button class="btn danger" data-a="goal-delete">Удалить</button></div>`;
   }
   return html + `</div>`;
@@ -532,7 +532,7 @@ async function toggleTask(id, day) {
   const list = day ? dayTasks(day) : [];
   const allDone = !was && day && list.length > 1 && list.every(x => isDone(x, day));
   render();
-  if (allDone) { setTimeout(confetti, 150); haptic('success'); toast(day === S.today ? 'День закрыт! 🎉' : 'Всё сделано 🎉'); }
+  if (allDone) { setTimeout(confetti, 150); haptic('success'); toast(day === S.today ? 'День закрыт!' : 'Всё сделано'); }
   try {
     const r = await api('task/toggle', { id, date: day, done: !was });
     if (r.task) S.tasks.set(r.task.id, r.task);
@@ -662,13 +662,13 @@ function taskSheet(t, day, defaults = {}) {
       <button class="chip" data-v="">Весь день</button>
       <label class="chip" data-v="pick">${I.clock}<span id="time-txt">${f.time && !['09:00', '16:00', '18:00', '20:00'].includes(f.time) ? f.time : 'Выбрать'}</span><input type="time" id="f-time" value="${f.time || ''}"></label>
       ${['09:00', '16:00', '18:00', '20:00'].map(x => `<button class="chip" data-v="${x}">${x}</button>`).join('')}</div>
-    <div id="remind-box" class="${f.time ? '' : 'hidden'}"><div class="row-lbl">${I.bell.replace('<svg', '<svg style="width:14px;height:14px"')} Напомнить</div>
+    <div id="remind-box" class="${f.time ? '' : 'hidden'}"><div class="row-lbl">${I.bell} Напомнить</div>
       ${chips('remind', [[-1, 'Нет'], [0, 'В это время'], [10, 'За 10 мин'], [15, 'За 15 мин'], [30, 'За 30 мин'], [60, 'За час']], f.remind, 'scroll')}</div>
     <div class="row-lbl">Повтор</div>
     ${chips('repeat', [['', 'Нет'], ['daily', 'Каждый день'], ['weekdays', 'По будням'], ['custom', 'Дни недели']], repKey(f.repeat), 'scroll')}
-    <div id="wd-box" class="${repKey(f.repeat) === 'custom' ? '' : 'hidden'}" style="margin-top:10px"><div class="chips" data-wd>${WD.map((w, i) => `<button class="chip wd${(f.repeat || '').includes(String(i + 1)) ? ' on' : ''}" data-d="${i + 1}">${w}</button>`).join('')}</div></div>
+    <div id="wd-box" class="${repKey(f.repeat) === 'custom' ? '' : 'hidden'}" style="margin-top:8px"><div class="chips" data-wd>${WD.map((w, i) => `<button class="chip wd${(f.repeat || '').includes(String(i + 1)) ? ' on' : ''}" data-d="${i + 1}">${w}</button>`).join('')}</div></div>
     ${goals.length ? `<div class="row-lbl">Цель</div>${chips('goal', [['', 'Без цели'], ...goals.map(g => [g.id, `${esc(g.emoji)} ${esc(g.title.length > 22 ? g.title.slice(0, 21) + '…' : g.title)}`])], f.goal || '', 'scroll')}` : ''}
-    <div class="switch-row" data-a2="imp"><span style="font-size:20px">❗</span><div class="grow"><b>Важное</b><small>Будет выше в списке и с красной отметкой</small></div><span class="switch${f.important ? ' on' : ''}" id="f-imp"></span></div>
+    <div class="switch-row" data-a2="imp"><div class="grow"><b>Важное</b><small>Выше в списке, с красной отметкой</small></div><span class="switch${f.important ? ' on' : ''}" id="f-imp"></span></div>
     <div class="row-lbl">Заметка</div>
     <textarea class="field" id="f-note" placeholder="Детали, ссылки, мысли…" maxlength="5000">${esc(f.note || '')}</textarea>
     <div class="actions"><button class="btn wide" id="f-save">${isNew ? 'Добавить' : 'Сохранить'}</button>
@@ -730,7 +730,7 @@ function taskSheet(t, day, defaults = {}) {
       try {
         await saveTask({ id: t && t.id, title: f.title, date: f.date, time: f.time, repeat: f.repeat || '', goal: f.goal, remind: f.time ? f.remind : -1, important: f.important, note: f.note });
         haptic('success'); closeSheet(); render();
-        if (isNew) toast('Добавлено ✓');
+        if (isNew) toast('Добавлено');
       } catch (err) { e.target.disabled = false; toast(err.message); }
     });
     const mv = $('#f-move', sh);
@@ -762,8 +762,8 @@ function goalSheet(g, defaults = {}) {
     <div class="seg" data-group="hz" style="margin:0">${Object.entries(HZ).map(([k, l]) => `<button class="${k === f.horizon ? 'on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>
     <div class="period ${f.horizon === 'none' ? 'hidden' : ''}" id="g-period"><button data-n="-1">${I.left}</button><div class="pl" id="g-pl">${periodLabel(f.horizon, f.start)}</div><button data-n="1">${I.right}</button></div>
     <div class="row-lbl">Дедлайн</div>
-    <div class="chips"><label class="chip${f.due ? ' on' : ''}" id="g-due-chip">🏁 <span id="g-due-txt">${f.due ? dm(f.due) : 'Выбрать дату'}</span><input type="date" id="g-due" value="${f.due || ''}"></label>
-      <button class="chip ${f.due ? '' : 'hidden'}" id="g-due-x">${I.x.replace('<svg', '<svg style="width:14px;height:14px"')} Убрать</button></div>
+    <div class="chips"><label class="chip${f.due ? ' on' : ''}" id="g-due-chip">${I.flag}<span id="g-due-txt">${f.due ? dm(f.due) : 'Выбрать дату'}</span><input type="date" id="g-due" value="${f.due || ''}"></label>
+      <button class="chip ${f.due ? '' : 'hidden'}" id="g-due-x">${I.x} Убрать</button></div>
     <div class="row-lbl">Цвет</div>
     <div class="swatches">${Object.entries(COLORS).map(([k, c]) => `<button class="sw${k === f.color ? ' on' : ''}" style="--gc:${c}" data-c="${k}"></button>`).join('')}</div>
     <div class="row-lbl">Зачем мне это</div>
@@ -826,7 +826,7 @@ function goalSheet(g, defaults = {}) {
 }
 
 function noteSheet(n) {
-  openSheet(`<h2><span class="grow">Заметка</span></h2><div class="hint" style="margin:-8px 0 12px">${noteDate(n.created)}</div>
+  openSheet(`<h2><span class="grow">Заметка</span></h2><div class="hint" style="margin:-8px 0 16px">${noteDate(n.created)}</div>
     <textarea class="field" id="n-text" style="min-height:180px" maxlength="10000">${esc(n.text)}</textarea>
     <div class="actions"><button class="btn wide" id="n-save">Сохранить</button><button class="btn danger wide" id="n-del">Удалить заметку</button></div>`, sh => {
     $('#n-save', sh).addEventListener('click', async () => {
@@ -855,7 +855,7 @@ function settingsSheet() {
   let tzs = TZ.slice();
   try { const dev = Intl.DateTimeFormat().resolvedOptions().timeZone; if (dev && !tzs.some(t => t[0] === dev)) tzs.push([dev, dev + ' (это устройство)']); } catch (e) { /* */ }
   if (!tzs.some(t => t[0] === f.tz)) tzs.push([f.tz, f.tz]);
-  const row = (key, icon, title, sub) => `<div class="switch-row"><span style="font-size:22px">${icon}</span><div class="grow"><b>${title}</b><small>${sub}</small>
+  const row = (key, icon, title, sub) => `<div class="switch-row"><div class="grow"><b>${title}</b><small>${sub}</small>
     <div class="${f[key] ? '' : 'hidden'}" id="s-${key}-box" style="margin-top:8px"><input type="time" class="time-input" id="s-${key}-t" value="${f[key] || (key === 'morning' ? '07:30' : '21:30')}"></div></div>
     <span class="switch${f[key] ? ' on' : ''}" id="s-${key}"></span></div>`;
   openSheet(`<h2><span class="grow">Настройки</span></h2>
@@ -866,7 +866,7 @@ function settingsSheet() {
     <div class="row-lbl">Часовой пояс</div>
     <select class="field" id="s-tz">${tzs.map(([v, l]) => `<option value="${v}"${v === f.tz ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
     <div class="row-lbl">Подсказка</div>
-    <div class="card" style="padding:14px;font-size:14px;line-height:1.5;color:var(--text-2)">Задачи можно добавлять сообщением боту:<br>
+    <div class="card tip-card">Задачи можно добавлять сообщением боту:<br>
       <i>«завтра в 18:00 тренировка»</i>, <i>«по пн и ср английский в 19:00»</i>, <i>«12.10 контрольная!»</i>.<br>Команда /today — план с галочками прямо в чате.</div>
     <div class="actions"><button class="btn wide" id="s-save">Сохранить</button></div>`, sh => {
     for (const k of ['morning', 'evening']) {
@@ -881,7 +881,7 @@ function settingsSheet() {
     $('#s-save', sh).addEventListener('click', async () => {
       const body = { remind: f.remind, tz: $('#s-tz', sh).value };
       for (const k of ['morning', 'evening']) body[k] = $(`#s-${k}`, sh).classList.contains('on') ? $(`#s-${k}-t`, sh).value : '';
-      try { const r = await api('settings', body); S.user = r.user; closeSheet(); toast('Сохранено ✓'); haptic('success'); } catch (e) { toast(e.message); }
+      try { const r = await api('settings', body); S.user = r.user; closeSheet(); toast('Сохранено'); haptic('success'); } catch (e) { toast(e.message); }
     });
   });
 }
@@ -913,7 +913,7 @@ const A = {
   'new-task': el => taskSheet(null, el.dataset.date),
   'to-today': async (el, e) => {
     e.stopPropagation();
-    try { await saveTask({ id: +el.dataset.id, date: S.today }); haptic('light'); render(); } catch (err) { toast(err.message); }
+    try { await saveTask({ id: +el.dataset.id, date: S.today }); haptic('success'); render(); } catch (err) { toast(err.message); }
   },
   'all-today': async () => {
     const late = overdue();
@@ -927,7 +927,7 @@ const A = {
     try {
       await saveGoal({ id: S.goalId, status: s });
       render();
-      if (s === 'done') { confetti(); haptic('success'); toast('Цель достигнута! Горжусь 🏆'); }
+      if (s === 'done') { confetti(); haptic('success'); toast('Цель достигнута! Горжусь'); }
       else toast(s === 'archived' ? 'Цель в архиве' : 'Снова в работе');
     } catch (e) { toast(e.message); }
   },
@@ -960,6 +960,8 @@ const A = {
     taskSheet(null, day);
   },
 };
+// эти действия сами дают отклик (выбор, галочка, успех) — общий «тап» им не нужен
+const OWN_HAPTIC = new Set(['tab', 'pick-day', 'open-day', 'cal-day', 'go-today', 'shift', 'toggle', 'open-goal', 'goals-tab', 'to-today']);
 function shift(n) {
   if (S.view === 'week') S.week = D.add(S.week, 7 * n);
   else if (S.view === 'month') { S.month = D.addMonths(S.month, n); S.msel = S.month.slice(0, 7) === S.today.slice(0, 7) ? S.today : S.month; }
@@ -972,6 +974,7 @@ document.addEventListener('click', e => {
   if (a) { e.preventDefault(); if (tg && tg.openLink) tg.openLink(a.href); else window.open(a.href, '_blank'); return; }
   const el = e.target.closest('[data-a]');
   if (!el || !A[el.dataset.a]) return;
+  if (!OWN_HAPTIC.has(el.dataset.a)) haptic('light');
   A[el.dataset.a](el, e);
 });
 document.addEventListener('keydown', e => {
@@ -980,7 +983,7 @@ document.addEventListener('keydown', e => {
 document.addEventListener('change', e => {
   if (e.target.matches('[data-progress]')) {
     const g = S.goals.get(+e.target.dataset.progress);
-    saveGoal({ id: g.id, progress: +e.target.value }).then(() => { render(); haptic('light'); if (+e.target.value === 100) toast('100%! Отметь цель достигнутой 🏆'); }).catch(err => toast(err.message));
+    saveGoal({ id: g.id, progress: +e.target.value }).then(() => { render(); haptic('light'); if (+e.target.value === 100) toast('100%! Отметь цель достигнутой'); }).catch(err => toast(err.message));
   }
 });
 document.addEventListener('input', e => {
@@ -1001,11 +1004,6 @@ document.addEventListener('focusout', () => document.body.classList.remove('kb')
 
 /* ---------- запуск ---------- */
 async function boot() {
-  document.body.insertAdjacentHTML('afterbegin', `<svg width="0" height="0" style="position:absolute"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#9b7cff"/><stop offset="1" stop-color="#4fb2ff"/></linearGradient></defs></svg>`);
-  const style = document.createElement('style');
-  style.textContent = 'body.kb .tabs, body.kb .fab { transform: translateY(150%); opacity: 0; } .tabs { transition: transform .25s var(--ease), opacity .2s; }';
-  document.head.appendChild(style);
   if (tg) {
     tg.ready(); tg.expand();
     try { if (tg.isVersionAtLeast('7.7')) tg.disableVerticalSwipes(); } catch (e) { /* */ }
@@ -1015,15 +1013,18 @@ async function boot() {
   applyTheme();
   const v = $('#view');
   if (!tg || !tg.initData) {
-    v.innerHTML = `<div class="error-box"><div class="big">📱</div><h2>Открой через Telegram</h2><p>Планер работает внутри Telegram: кнопка «Планер» в чате с ботом.</p></div>`;
+    v.innerHTML = `<div class="error-box"><div class="big">📱</div><h2>Открой через Telegram</h2><p>Планер работает внутри Telegram — кнопка «Планер» в чате с ботом.</p></div>`;
     $('#fab').classList.add('hide');
     return;
   }
-  v.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  v.innerHTML = `<div class="skel" aria-busy="true" aria-label="Загрузка"><div class="sk sk-l"></div><div class="sk sk-h"></div>
+    <div class="sk sk-strip"></div><div class="sk sk-card"></div><div class="sk sk-card tall"></div></div>`;
+  $('#tabs').innerHTML = TABS.map(([k, l, ic]) => `<button class="tab${k === 'day' ? ' on' : ''}">${ic}<span>${l}</span></button>`).join('');
   try {
     load(await api('all'));
   } catch (e) {
     v.innerHTML = `<div class="error-box"><div class="big">😕</div><h2>Не загрузилось</h2><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Обновить</button></div>`;
+    $('#fab').classList.add('hide');
     return;
   }
   S.sel = S.today; S.week = D.monday(S.today); S.month = D.first(S.today); S.msel = S.today;

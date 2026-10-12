@@ -174,12 +174,54 @@ class BotTest(unittest.TestCase):
         self.assertIn("Неделя", joined)
         self.assertIn("🥊 Спарринг", joined)
 
+    def test_message_style(self):
+        """Единый вид: заголовок с одним эмодзи, цитата, короткие кнопки, без выравнивания пробелами."""
+        today = planner.today_of(U)
+        self.db.save_task(U, {"title": "Очень-очень длинное название задачи про контрольную по алгебре",
+                              "date": today.isoformat(), "time": "18:00"})
+        self.db.save_goal(U, {"title": "Спарринг", "emoji": "🥊", "horizon": "week"})
+        for c in ("/today", "/week", "/goals", "/help", "/start"):
+            self.msg(c)
+        for m, p in self.sent:
+            if m != "sendMessage":
+                continue
+            first = p["text"].split("\n")[0]
+            self.assertRegex(first, r"^\S+ <b>.+</b>$")
+            self.assertNotIn("  ", p["text"])
+            for row in p.get("reply_markup", {}).get("inline_keyboard", []):
+                self.assertLessEqual(len(row), 3)
+                for b in row:
+                    self.assertLessEqual(len(b["text"]), 28, b["text"])
+        self.assertIn("<blockquote", self.texts()[0])
+
+    def test_style_fallback(self):
+        """Если Telegram не принимает цвет кнопок — те же кнопки уходят без цвета, и дальше без него."""
+        calls = []
+
+        def fake(m, **p):
+            calls.append(p)
+            if any("style" in b for row in p["reply_markup"]["inline_keyboard"] for b in row):
+                raise planner.TgError(m, 400, "Bad Request: can't parse inline keyboard button: unknown field style")
+            return {"ok": True, "result": {"message_id": 1}}
+
+        with mock.patch.object(planner, "tg", side_effect=fake), mock.patch.object(planner, "STYLE_OK", True):
+            planner.send(U, "x", [[planner.btn("ok", "a", "success")]])
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[-1]["reply_markup"]["inline_keyboard"], [[{"text": "ok", "callback_data": "a"}]])
+            self.assertFalse(planner.STYLE_OK)
+            planner.send(U, "y", [[planner.btn("ok", "a", "success")]])
+            self.assertEqual(len(calls), 3)  # уже без повторной попытки
+        with mock.patch.object(planner, "tg", side_effect=planner.TgError("sendMessage", 400, "chat not found")):
+            with self.assertRaises(planner.TgError):
+                planner.send(U, "z", [[planner.btn("ok", "a")]])
+
     def media_msg(self, **extra):
         planner.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, **extra})
 
     def test_voice_like_text(self):
         voice = {"voice": {"file_id": "v1", "duration": 3}}
-        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+        fake = lambda m, **p: self.sent.append((m, p)) or {"ok": True, "result": {"message_id": 55}}  # noqa: E731
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), mock.patch.object(planner, "tg", side_effect=fake), \
                 mock.patch.object(planner.media, "voice_text", return_value="завтра в 18:00 бокс <b>") as vt:
             self.media_msg(**voice)
         vt.assert_called_once()
@@ -187,7 +229,10 @@ class BotTest(unittest.TestCase):
         self.assertEqual((t["title"], t["time"]), ("Бокс <b>", "18:00"))
         texts = self.texts()
         self.assertIn("Слушаю", texts[0])
-        self.assertIn("🎙 «завтра в 18:00 бокс &lt;b&gt;»", texts)
+        # статус «Слушаю…» заменяется карточкой задачи, где видно и что услышал
+        self.assertEqual(self.sent[-1][0], "editMessageText")
+        self.assertEqual(self.sent[-1][1]["message_id"], 55)
+        self.assertIn("🎙 «завтра в 18:00 бокс &lt;b&gt;»", texts[-1])
         self.assertIn("Бокс &lt;b&gt;", texts[-1])
         self.assertIn("sendChatAction", [m for m, p in self.sent])
 
@@ -274,6 +319,8 @@ class BotTest(unittest.TestCase):
         self.assertEqual(cands, ["https://2-27-206-165.sslip.io", "https://2.27.206.165"])
         self.assertIn("profile shortlived", conf)
         self.assertIn(f"reverse_proxy 127.0.0.1:{planner.PORT}", conf)
+        for name, port in (("coach", 8789), ("hub", 8790), ("eye", 8791), ("kpp", 8792), ("avito", 8793), ("agent", 8794)):
+            self.assertIn(f"https://{name}.2-27-206-165.sslip.io {{\n\treverse_proxy 127.0.0.1:{port}\n}}", conf)
         self.db.meta("owner", U)
         with mock.patch.object(planner, "public_url", ""):
             self.assertTrue(planner.use_url(cands[0]))
