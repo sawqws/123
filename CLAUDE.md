@@ -9,6 +9,18 @@
 
 Логин и пароль лежат в переменных окружения `HORO_LOGIN` и `HORO_PASSWORD`. Не выводить их и не коммитить.
 
+## Скиллы — подбирать самому, всегда (Глеб, 2026-10-12)
+
+В `.claude/skills/` ~217 скиллов (откуда — `.claude/skills/SOURCES.md`). Перед каждой задачей самому выбрать 1–3 подходящих по описанию и вызвать через Skill, Глеба не спрашивать и команд от него не ждать. Не тянуть скиллы ради галочки: если задача простая (вопрос, мелкая правка) — без них.
+- Новая фича / бот / большая правка: `sp-brainstorming` → `sp-writing-plans` → `sp-executing-plans` (или `sp-subagent-driven-development`), в конце `sp-verification-before-completion` и `sp-requesting-code-review`.
+- Баг, упавший бот, красные тесты: `sp-systematic-debugging`; в Python — `ws-python-resilience`, `ws-python-error-handling`.
+- Мини-приложения и сайты: `an-frontend-design`, `ws-responsive-design`, `ws-interaction-design`; проверка в браузере — `an-webapp-testing`.
+- Тесты: `ws-python-testing-patterns`, `tob-property-based-testing`, `ws-e2e-testing-patterns`.
+- Скрипты установки (`install.sh`): `ws-bash-defensive-patterns`, `ws-shellcheck-configuration`.
+- Безопасность (репозиторий публичный!): `tob-open-sourcing` (секреты), `tob-supply-chain-risk-auditor` (зависимости), `tob-differential-review` (перед слиянием важных PR).
+- Промпты ботов (`prompt.md`): `ws-prompt-engineering-patterns`.
+- Глеб просит «сам скажи, когда...» — кнопку/правило не нужно, это поведение по умолчанию.
+
 ## Второй мозг (память о Глебе)
 
 В начале каждой новой сессии: если репозиторий `sawqws/Brain` (приватный) не подключён — подключи его (add_repo, клон в /home/user/brain), прочитай `wiki/INDEX.md` и нужные страницы wiki и опирайся на них. Новое важное о Глебе (проекты, планы, привычки) сохраняй заметкой в `raw/` по правилам из его CLAUDE.md и пушь в main. Компиляция идёт сама раз в неделю (рутина «Компиляция второго мозга»), но по просьбе — сразу.
