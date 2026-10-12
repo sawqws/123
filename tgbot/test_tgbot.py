@@ -198,12 +198,24 @@ class Actions(unittest.TestCase):
     def test_botsfolder(self):
         ctx = Ctx()
         ctx.client.dialogs.append(dialog(user(50, "HDP", username="HDP_DIGITALBOT")))
+        avito, taxi = user(51, "Avito", username="Avitooo1bot"), user(52, "Taxi", username="Taxii111bot")
+
+        async def send_message(entity, text, **kw):  # после «Начать» бот появляется в чатах
+            ctx.client.sent.append((entity, text, kw))
+            ctx.client.dialogs.append(dialog(avito if entity == "Avitooo1bot" else taxi))
+        ctx.client.send_message = send_message
         out = run(actions.run(ctx, "botsfolder", {"bots": ["HDP_DIGITALBOT", "Avitooo1bot", "Taxii111bot"]}))
         self.assertEqual([x[:2] for x in ctx.client.sent], [("Avitooo1bot", "/start"), ("Taxii111bot", "/start")])
         req = ctx.client.calls[-1]
-        self.assertTrue(req.filter.bots)
+        self.assertFalse(req.filter.bots)  # только боты Глеба, не все боты Telegram
         self.assertEqual(req.filter.title.text, "Bot")
         self.assertIn("3 ботах", ctx.asked[0])
+        self.assertEqual(len(ctx.asked), 1)  # одно подтверждение на всё
+        auto = Ctx()
+        auto.client.dialogs.append(dialog(user(51, "Avito", username="Avitooo1bot")))
+        run(actions.run(auto, "botsfolder", {"bots": ["Avitooo1bot"], "auto": True}))
+        self.assertEqual(auto.asked, [])
+        self.assertEqual(len(auto.client.calls[-1].filter.include_peers), 1)
         self.assertIn("@Avitooo1bot", out)
         no = Ctx(answer=False)
         self.assertIn("не подтвердил", run(actions.run(no, "botsfolder", {"bots": ["Avitooo1bot"]})))

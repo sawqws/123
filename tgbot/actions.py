@@ -598,7 +598,8 @@ async def folder(ctx, a):
             + ("\n🤖 все боты — и те, что появятся потом" if bots else "")
             + (":\n➕ " + ", ".join(name(c) for c in add) if add else "")
             + ("\n➖ " + ", ".join(name(c) for c in rem) if rem else ""))
-    await ctx.confirm(what)
+    if not a.get("auto"):
+        await ctx.confirm(what)
     if f:
         f.include_peers = peers
         f.pinned_peers = [p for p in f.pinned_peers if utils.get_peer_id(p) not in drop]
@@ -762,11 +763,15 @@ def bot_usernames(tokens):
 
 @command("botsfolder", write=True)
 async def botsfolder(ctx, a):
-    """Нажать «Начать» во всех ботах Глеба, которых ещё нет в чатах, и собрать всех ботов в папку (тип «боты»)."""
+    """«Начать» во всех ботах Глеба, которых ещё нет в чатах, и все они — в папку (по одному, а не типом «все боты»:
+    иначе туда попадут и чужие — BotFather, Stickers…). auto — без вопроса (так просил Глеб: Главный зовёт после создания бота)."""
     import asyncio
     name_ = a.get("name") or "Bot"
     names = a.get("bots") or await asyncio.to_thread(lambda: bot_usernames(bot_tokens()))
-    await ctx.confirm(f"🤖 Нажать «Начать» в {len(names)} ботах и собрать всех ботов в папку «{name_}»")
+    if not names:
+        raise Fail("не нашёл ни одного бота")
+    if not a.get("auto"):
+        await ctx.confirm(f"🤖 Нажать «Начать» в {len(names)} ботах и собрать их в папку «{name_}»")
     have = {(getattr(d.entity, "username", None) or "").lower() for d in await dialogs(ctx, fresh=True)}
     started = []
     for u in names:
@@ -774,9 +779,6 @@ async def botsfolder(ctx, a):
             await ctx.client.send_message(u, "/start")
             started.append("@" + u)
     _dialogs.pop(id(ctx.client), None)
-    trust, ctx.trust = getattr(ctx, "trust", False), True  # одно подтверждение на всё
-    try:
-        out = await folder(ctx, {"name": name_, "all_bots": True, "emoji": "🤖"})
-    finally:
-        ctx.trust = trust
+    # уже подтверждено выше (или auto) — папку второй раз не спрашиваем
+    out = await folder(ctx, {"name": name_, "chats": ["@" + u for u in names], "emoji": "🤖", "auto": True})
     return out + (f"\n▶️ Нажал «Начать»: {', '.join(started)}" if started else "")
