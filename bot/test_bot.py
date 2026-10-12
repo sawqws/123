@@ -193,7 +193,7 @@ class BotTest(unittest.TestCase):
         self.assertNotIn("«", self.last()[0])
 
     def test_voice_kinds(self):
-        self.assertEqual(bot.media.kind({"video_note": {"file_id": "x"}}), "voice")
+        self.assertEqual(bot.media.kind({"video_note": {"file_id": "x"}}), "video")  # речь из кружка — как голосовое
         self.assertEqual(bot.media.kind({"audio": {"file_id": "x"}}), "voice")
         self.assertEqual(bot.media.kind({"photo": [{"file_id": "x"}]}), "photo")
 

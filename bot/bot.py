@@ -1450,7 +1450,7 @@ def hear_voice(msg):
 
 def handle(msg):
     chat = msg["chat"]["id"]
-    if media.kind(msg) == "voice":  # распознаём не в цикле опроса Telegram
+    if media.kind(msg) in ("voice", "video"):  # распознаём не в цикле опроса Telegram
         threading.Thread(target=hear_voice, args=(msg,), daemon=True).start()
         return
     text = (msg.get("text") or "").strip()

@@ -1036,7 +1036,7 @@ def on_message(msg):
         is_question = text.endswith("?") or len(text) > 80 or bool(QUESTION.match(text))
         target = answer if is_question else log_meal
         threading.Thread(target=target, args=(chat, uid, text, path), daemon=True).start()
-    elif media.kind(msg) == "voice":
+    elif media.kind(msg) in ("voice", "video"):
         threading.Thread(target=on_voice, args=(chat, uid, msg, wait), daemon=True).start()
     elif text:
         on_text(chat, uid, text, wait)
