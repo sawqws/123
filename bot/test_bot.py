@@ -100,7 +100,8 @@ class BotTest(unittest.TestCase):
     def test_draft_edit_and_submit(self):
         self.say(URL)
         self.assertIn("horo/tmp/" + TASK + "/draft.txt", self.prompts[0])
-        self.assertTrue(any("Черновик для учителя</b>\n<i>Конспект §5</i>" in m and kb for m, kb in self.msgs))
+        self.assertTrue(any("Черновик для учителя</b>" in m and "Конспект §5" in m and "Это важно" in m and kb
+                            for m, kb in self.msgs))
         self.assertEqual(self.files[-1], os.path.join(drafts.files_dir(TASK), "hand.png"))
         self.assertEqual(self.nodes, [])  # без подтверждения ничего не отправлено
 
@@ -188,7 +189,7 @@ class BotTest(unittest.TestCase):
     def test_voice_error_reported(self):
         with mock.patch.object(bot, "run_task", lambda *a: self.fail("не должно запускаться")):
             self.voice(error="в голосовом не слышно слов")
-        self.assertEqual(self.last()[0], "🎙 В голосовом не слышно слов.")
+        self.assertEqual(self.last()[0], "⚠️ В голосовом не слышно слов.")
         self.assertNotIn("«", self.last()[0])
 
     def test_voice_kinds(self):
@@ -239,7 +240,7 @@ class BotTest(unittest.TestCase):
         sent = []
         real_tg = self.fake_tg
         def tg(method, **p):
-            if method == "sendMessage":
+            if method in ("sendMessage", "editMessageText"):
                 sent.append(p["text"])
             return real_tg(method, **p)
         with mock.patch.object(bot, "tg", tg), \
@@ -249,13 +250,15 @@ class BotTest(unittest.TestCase):
             self.say(photo=[{"file_id": "p"}])  # фото без черновика — подсказка
             self.voice("Что <это> & то")        # эхо голосового
             for t in ("/start", bot.BTN_HELP, bot.BTN_DIGEST, bot.BTN_DIGEST, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
-                      "что-то непонятное", bot.BTN_HAND):
+                      "что-то непонятное", bot.BTN_MORE, bot.BTN_APP, "/kpp", "/emoji", bot.BTN_HAND):
                 self.say(t)
             self.say(photo=[{"file_id": "a"}])
             self.say("готово")
             self.say(URL)                      # черновик
             self.say("Новый <текст> & ещё")    # правка с символами HTML
             bot.on_callback({"id": "1", "data": "send", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+            for data in ("m:digest", "m:help", "m:more", "all:no"):
+                bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": 6}})
         self.assertGreater(len(sent), 15)
         for text in sent:
             c = Check(); c.feed(text); c.close()
@@ -285,7 +288,7 @@ class BotTest(unittest.TestCase):
             self.say(bot.BTN_HAND)
             self.assertEqual(len(self.files), 4)
             self.say(photo=[{"file_id": "a"}])
-            self.assertTrue(any("Добавил знаков: 2\nа б" in m for m, _ in self.msgs))
+            self.assertTrue(any("Добавил знаков: 2" in m and "а б" in m for m, _ in self.msgs))
             self.say("готово")
         self.assertNotIn(CHAT, bot.mode)
 
@@ -332,10 +335,10 @@ class BotTest(unittest.TestCase):
             self.assertEqual(p.count("<blockquote>"), p.count("</blockquote>"))
 
     def test_steps_from_tools(self):
-        self.assertEqual(bot.step_of("Bash", {"command": "node horo/fetch.js " + URL})[0], "📖 Читаю условие")
-        self.assertEqual(bot.step_of("Bash", {"command": "node horo/submit.js u horo/tmp/x/answers.json"})[0], "📤 Сдаю на сайт")
-        self.assertEqual(bot.step_of("Write", {"file_path": "horo/tmp/x/answers.json"})[0], "🧠 Записываю ответы")
-        self.assertEqual(bot.step_of("Read", {"file_path": "horo/tmp/x/q1.png"})[0], "🖼 Разглядываю картинки")
+        self.assertEqual(bot.step_of("Bash", {"command": "node horo/fetch.js " + URL})[0], "Читаю условие")
+        self.assertEqual(bot.step_of("Bash", {"command": "node horo/submit.js u horo/tmp/x/answers.json"})[0], "Сдаю на сайт")
+        self.assertEqual(bot.step_of("Write", {"file_path": "horo/tmp/x/answers.json"})[0], "Записываю ответы")
+        self.assertEqual(bot.step_of("Read", {"file_path": "horo/tmp/x/q1.png"})[0], "Разглядываю картинки")
         self.assertIsNone(bot.step_of("Glob", {"pattern": "*"}))
 
     def test_claude_stream(self):
@@ -378,7 +381,55 @@ class BotTest(unittest.TestCase):
         self.say("📊 Мои оценки")
         self.assertEqual(self.nodes[-1], ("horo/grades.js", "--html"))
         kb = json.loads(bot.menu_kb())
-        self.assertIn(bot.BTN_GRADES, sum(kb["keyboard"], []))
+        shown = [b["text"] for b in sum(kb["keyboard"], [])]
+        self.assertIn(bot.BTN_GRADES, shown)
+        self.assertIn(bot.BTN_APP, shown)  # приложение открывается и из меню
+        self.assertLessEqual(max(map(len, kb["keyboard"])), 3)  # не больше 3 кнопок в ряд
+        self.assertTrue(all(len(t) <= 24 for t in shown))
+        for old in (bot.BTN_HELP, bot.BTN_CHECK, "🔕 Сводка", bot.BTN_LATE):  # кнопки старой клавиатуры работают
+            self.say(old)
+        self.assertEqual(self.nodes[-1], ("horo/status.js", "--late", "--html"))
+
+    def test_more_menu_edits_in_place(self):
+        """«⚙️ Ещё»: просрочки, сводка, почерк, проверка, помощь; сводка и помощь правят то же сообщение."""
+        calls = []
+        real = self.fake_tg
+        with mock.patch.object(bot, "tg", lambda m, **p: calls.append((m, p)) or real(m, **p)):
+            self.say(bot.BTN_MORE)
+            menu = self.last()[1]
+            for data in ("m:late", "m:digest", "m:help", "m:check", "m:hand"):
+                self.assertIn(data, menu)
+            cb = lambda data: bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": 8}})
+            cb("m:digest")
+            self.assertTrue(bot.load_settings().get("digest"))
+            edits = [p for m, p in calls if m == "editMessageText"]
+            self.assertEqual(edits[-1]["message_id"], 8)
+            self.assertIn("Сводка: вкл", edits[-1]["reply_markup"])
+            cb("m:help")
+            self.assertIn("Что я умею", [p for m, p in calls if m == "editMessageText"][-1]["text"])
+            cb("m:late")
+        self.assertEqual(self.nodes[-1], ("horo/status.js", "--late", "--html"))
+
+    def test_colors_fall_back(self):
+        """Telegram не принял цветные кнопки (style) — то же сообщение уходит без цвета, и дальше без него."""
+        import io, urllib.error
+        calls = []
+        def tg(method, **p):
+            calls.append(p)
+            if '"style"' in (p.get("reply_markup") or ""):
+                raise urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(b"Bad Request: can't parse inline keyboard button"))
+            return {"ok": True, "result": {"message_id": 3}}
+        with mock.patch.object(bot, "tg", tg), mock.patch.object(bot, "COLORS", [True]):
+            self.assertEqual(bot.send(CHAT, "x", markup=bot.DRAFT_KB), 3)
+            self.assertNotIn("style", calls[-1]["reply_markup"])
+            self.assertIn('"send"', calls[-1]["reply_markup"])
+            n = len(calls)
+            bot.send(CHAT, "y", markup=bot.DRAFT_KB)
+            self.assertEqual(len(calls), n + 1)  # второй раз сразу без цветов
+        def html_error(method, **p):
+            raise urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(b"can't parse entities"))
+        with mock.patch.object(bot, "tg", html_error), self.assertRaises(urllib.error.HTTPError):
+            bot.call("sendMessage", text="<b>", reply_markup=bot.DRAFT_KB)  # не про кнопки — ошибка дальше
 
     def test_planner_install(self):
         tok = "8800000000:AAH" + "x" * 32

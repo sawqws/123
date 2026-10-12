@@ -18,6 +18,7 @@
 """
 import datetime
 import html
+import io
 import json
 import os
 import re
@@ -68,77 +69,106 @@ BTN_DIGEST = "🔔 Сводка"
 BTN_HAND = "✍️ Почерк"
 BTN_CHECK = "🩺 Проверка"
 BTN_HELP = "❓ Помощь"
+BTN_APP = "✨ Приложение"
+BTN_MORE = "⚙️ Ещё"
 ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением) и «выключенная» сводка
     "📋 Что надо сделать": BTN_LIST, "⚡ Сдать все автотесты": BTN_ALL, "💬 Комментарии учителя": BTN_COMM,
     "📊 Мои оценки": BTN_GRADES, "🔔 Сводка каждый день": BTN_DIGEST, "✍️ Мой почерк": BTN_HAND, "🔕 Сводка": BTN_DIGEST,
 }
-BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_DIGEST, BTN_HAND, BTN_CHECK, BTN_HELP}
+BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_DIGEST, BTN_HAND, BTN_CHECK, BTN_HELP,
+           BTN_APP, BTN_MORE}
 
 
 def menu_kb():
-    digest = BTN_DIGEST if load_settings().get("digest") else "🔕 Сводка"
+    """Клавиатура у поля ввода: главное действие первым, редкое — в «Ещё» (там же просрочки, сводка, почерк,
+    проверка и помощь). Старые кнопки (❗ Просрочки, 🔔 Сводка…) по-прежнему понимаются текстом."""
+    b = lambda text, style=None: {"text": text, **({"style": style} if style else {})}
     return json.dumps({
         "keyboard": [
-            [BTN_DO, BTN_SHOW],
-            [BTN_LIST, BTN_LATE, BTN_ALL],
-            [BTN_COMM, BTN_GRADES, BTN_HAND],
-            [digest, BTN_CHECK, BTN_HELP],
+            [b(BTN_DO, "primary"), b(BTN_SHOW)],
+            [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
+            [b(BTN_ALL), b(BTN_APP), b(BTN_MORE)],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
         "input_field_placeholder": "Ссылка на задание…",
-    })
+    }, ensure_ascii=False)
 
 
 HELP = (  # HTML: отправляется с raw_html=True
-    "📖 <b>Что я умею</b>\n\n"
-    "<b>Задания</b>\n"
-    "<blockquote>"
-    f"{BTN_DO} — пришли ссылку, решу и сдам\n"
-    f"{BTN_SHOW} — только покажу ответы\n"
-    f"{BTN_ALL} — найду новые тесты и сдам пачкой"
-    "</blockquote>\n"
-    "<b>Учёба</b>\n"
-    "<blockquote>"
-    f"{BTN_LIST} — всё несделанное по предметам\n"
-    f"{BTN_LATE} — только просроченное\n"
-    f"{BTN_COMM} — что написали учителя\n"
-    f"{BTN_GRADES} — оценки и сколько до следующей\n"
-    f"{BTN_DIGEST} — список дел каждый день в {DIGEST_HOUR}:00 мск"
-    "</blockquote>\n"
-    "<b>Ответы учителю</b>\n"
-    "<blockquote>Сначала присылаю черновик. Поправь текстом, просьбой («убери второй абзац») "
-    "или своими фото — и жми «✅ Отправить». Правки запоминаю.</blockquote>\n"
-    "<b>Голос и фото</b>\n"
-    "<blockquote>🎙 Голосовое — как обычное сообщение: распознаю и сделаю то же, что по тексту "
-    "(правка черновика, «ок», «оценки», «готово»…)\n"
-    "📸 Фото — в черновик для учителя или листом алфавита</blockquote>\n"
-    "<b>Приложение</b>\n"
-    "<blockquote>Кнопка «HDP» слева от поля ввода или /app — всё то же самое в красивом окне. "
-    "Кнопки здесь тоже работают, выбирай, как удобнее.</blockquote>\n"
-    "<b>Почерк и настройки</b>\n"
-    "<blockquote>"
-    f"{BTN_HAND} — алфавит, чтобы писать решения твоим почерком\n"
-    "/style — как пишу: небрежность, толщина, размер\n"
-    f"{BTN_CHECK} — проверю, что всё работает\n"
-    "/update — обновиться · /emoji — премиум-эмодзи\n"
-    "/planner токен — поставить бота-планера на этот сервер\n"
-    "/kpp токен — поставить бота «КПП» (пропуск для такси)"
-    "</blockquote>"
+    "❓ <b>Что я умею</b>\n"
+    "<blockquote>Пришли ссылку на задание — решу и сдам. Ответ учителю сначала покажу черновиком: "
+    "поправь текстом, просьбой или фото и нажми «Отправить учителю».</blockquote>\n"
+    "<blockquote expandable><b>Задания</b>\n"
+    "• «Решить и сдать» — пришли ссылку, решу и сдам\n"
+    "• «Только ответы» — покажу ответы, ничего не отправлю\n"
+    "• «Автотесты» — сдам все новые тесты пачкой\n"
+    "\n<b>Учёба</b>\n"
+    "• «Задания» — всё несделанное по предметам\n"
+    "• «Оценки» — и сколько до следующей\n"
+    "• «Учителя» — комментарии и доработки\n"
+    "• «Ещё» → «Просрочки» — только просроченное\n"
+    f"• «Ещё» → «Сводка» — список дел в {DIGEST_HOUR}:00 мск\n"
+    "\n<b>Голос, фото, почерк</b>\n"
+    "• Голосовое — как обычный текст\n"
+    "• Фото — в черновик учителю или лист алфавита\n"
+    "• «Ещё» → «Почерк» — алфавит для решений от руки\n"
+    "• /style — небрежность, толщина, размер почерка\n"
+    "\n<b>Служебное</b>\n"
+    "• «Ещё» → «Проверка» — всё ли работает\n"
+    "• /update — обновиться, /emoji — премиум-эмодзи\n"
+    "• /planner, /coach, /kpp, /hub, /agent + токен — поставить соседнего бота</blockquote>\n"
+    "<i>Всё то же — в приложении: кнопка «HDP» слева от поля ввода</i>"
 )
 COMMANDS = [  # меню команд у поля ввода
     ("start", "Главное меню"), ("app", "Открыть приложение"), ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
 ]
-ABOUT = ("Помощник по HDP ⚡ Решаю и сдаю задания по ссылке, пишу ответы учителю твоим почерком, "
+ABOUT = ("Помощник по HDP. Решаю и сдаю задания по ссылке, пишу ответы учителю твоим почерком, "
          "слежу за дедлайнами, комментариями и оценками.")
-ABOUT_SHORT = "Решаю задания HDP, слежу за дедлайнами и оценками ⚡"
-BUSY = "⏳ Занят другим заданием — освобожусь через пару минут, тогда пришли ещё раз."
+ABOUT_SHORT = "Решаю задания HDP, слежу за дедлайнами и оценками"
+BUSY = "⏳ Занят другим заданием — пришли ещё раз через пару минут"
 
 
 def esc(x):
     return html.escape(str(x), quote=False)
+
+
+def card(title, body="", note="", icon=""):
+    """Единый вид сообщения (всё уже HTML): «эмодзи <b>Заголовок</b>», содержимое цитатой (длиннее 6 строк —
+    свёрнутой), второстепенное — одной строкой курсивом в конце."""
+    lines = [f"{icon} <b>{title}</b>" if icon else f"<b>{title}</b>"]
+    if body:
+        if len(body) > 3000:  # в одно сообщение не влезет: без цитаты, split() режет по абзацам
+            lines.append("\n" + body + "\n")
+        else:
+            tag = "blockquote expandable" if body.count("\n") >= 6 or len(body) > 600 else "blockquote"
+            lines.append(f"<{tag}>{body}</blockquote>")
+    if note:
+        lines.append(f"<i>{note}</i>")
+    return "\n".join(lines)
+
+
+def err(text, note=""):
+    """Ошибка — одна понятная строка «⚠️ …» (HTML), под ней при желании приписка курсивом."""
+    t = re.sub(r"^\s*(⚠️|⚠|❌|😕)\s*", "", str(text or "")).strip()
+    line = next((x.strip() for x in t.splitlines() if x.strip()), "Что-то пошло не так")
+    return f"⚠️ {esc(line[:300])}" + (f"\n<i>{note}</i>" if note else "")
+
+
+def kb(*rows):
+    """Инлайн-кнопки: kb([("Текст", "data"), ("Текст", "data", "success")], …). Вместо data можно {"url": …}."""
+    out = []
+    for row in rows:
+        r = []
+        for text, act, *style in row:
+            btn = {"text": text, **(act if isinstance(act, dict) else {"callback_data": act})}
+            if style and style[0]:
+                btn["style"] = style[0]
+            r.append(btn)
+        out.append(r)
+    return json.dumps({"inline_keyboard": out}, ensure_ascii=False)
 
 
 # ---------- Telegram ----------
@@ -147,6 +177,43 @@ def tg(method, **params):
     data = urllib.parse.urlencode(params).encode()
     with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
         return json.load(r)
+
+
+COLORS = [True]  # Telegram принимает цветные кнопки (поле style)? Один отказ — дальше без цветов
+
+
+def no_style(markup):
+    """reply_markup без поля style (цвет кнопок)."""
+    try:
+        m = json.loads(markup)
+    except (TypeError, ValueError):
+        return markup
+    for key in ("inline_keyboard", "keyboard"):
+        for row in m.get(key) or []:
+            for b in row:
+                if isinstance(b, dict):
+                    b.pop("style", None)
+    return json.dumps(m, ensure_ascii=False)
+
+
+def call(method, **params):
+    """tg() для сообщений с кнопками: цветные кнопки — новинка Telegram; если он ответил 400 про кнопки/разметку,
+    тот же запрос уходит без цветов (как _with_markup в tgbot/botapi.py)."""
+    mk = params.get("reply_markup")
+    styled = isinstance(mk, str) and '"style"' in mk
+    if styled and not COLORS[0]:
+        return tg(method, **{**params, "reply_markup": no_style(mk)})
+    try:
+        return tg(method, **params)
+    except urllib.error.HTTPError as e:
+        body = e.read() if hasattr(e, "read") else b""
+        why = (body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)).lower()
+        if not (styled and e.code == 400 and any(w in why for w in ("button", "markup", "keyboard", "style"))):
+            raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body or b""))  # тело — дальше
+        res = tg(method, **{**params, "reply_markup": no_style(mk)})
+        COLORS[0] = False
+        print("Цветные кнопки Telegram не принял — дальше без цветов")
+        return res
 
 
 def premium(text, raw_html=False):
@@ -208,7 +275,7 @@ def send(chat, text, menu=False, markup=None, raw_html=False, effect=None):
         tries.append(dict(text=plain, **extra))  # Telegram не принял разметку или эмодзи — простым текстом
         for n, t in enumerate(tries):
             try:
-                mid = msg_id(tg("sendMessage", chat_id=chat, disable_web_page_preview="true", **t))
+                mid = msg_id(call("sendMessage", chat_id=chat, disable_web_page_preview="true", **t))
                 break
             except urllib.error.HTTPError as e:
                 print("sendMessage:", e)
@@ -220,7 +287,7 @@ def send(chat, text, menu=False, markup=None, raw_html=False, effect=None):
 def quiet(method, **params):
     """Вызов Telegram, ошибка которого не важна (правка, удаление, реакция)."""
     try:
-        return tg(method, **params)
+        return call(method, **params)
     except Exception as e:
         if "not modified" not in str(getattr(e, "read", lambda: b"")() or e):
             print(method, e)
@@ -276,17 +343,17 @@ class Live:
         REAL_THREAD(target=self.loop, daemon=True).start()
 
     def render(self):
-        lines = [f"{SPIN[self.tick % len(SPIN)]} <b>{self.title}</b>"]
-        if self.sub:
-            lines.append(f"<i>{self.sub}</i>")
-        if self.done_steps or self.current:
-            lines.append("")
-            lines += [f"✓ {s}" for s in self.done_steps[-3:]]
-            if self.current:
-                lines.append(f"▸ <b>{self.current}</b>")
-        lines.append("")
+        """◐ <b>Решаю задание</b> / цитата: название и шаги (✓ сделано, ▸ сейчас) / полоска, проценты, время."""
+        head = f"{SPIN[self.tick % len(SPIN)]} <b>{self.title}</b>"
         clock = mmss(time.time() - self.t0)
-        lines.append(f"<code>{bar(self.frac)}</code>  {int(self.frac * 100)}% · {clock}" if self.progress else f"<i>{clock}</i>")
+        steps = [f"✓ {s}" for s in self.done_steps[-3:]] + ([f"▸ <b>{self.current}</b>"] if self.current else [])
+        foot = f"<code>{bar(self.frac)}</code> <i>{int(self.frac * 100)}% · {clock}</i>" if self.progress else ""
+        if not steps and not self.progress:  # просто ожидание: подпись и время одной строкой
+            return f"{head}\n<i>{self.sub + ' · ' if self.sub else ''}{clock}</i>"
+        body = [self.sub] if self.sub else []
+        body += steps
+        lines = [head] + ([f"<blockquote>{chr(10).join(body)}</blockquote>"] if body else [])
+        lines.append(foot or f"<i>{clock}</i>")
         return "\n".join(lines)
 
     def step(self, label, frac=None):
@@ -402,14 +469,15 @@ def save_emoji(chat, msg):
             found[alt] = e["custom_emoji_id"]
             found[alt.replace("\ufe0f", "")] = e["custom_emoji_id"]  # и без невидимого вариационного знака
     if not found:
-        send(chat, "Премиум-эмодзи в сообщении не нашёл. Пришли именно премиум-эмодзи (из набора Telegram Premium).", menu=True)
+        send(chat, err("Премиум-эмодзи в сообщении не нашёл", "Пришли именно премиум-эмодзи из набора Telegram Premium"),
+             menu=True, raw_html=True)
         return
     s = load_settings()
     s.setdefault("emoji", {}).update(found)
     save_settings(s)
     shown = sorted({a for a in found if "\ufe0f" not in a} | {a for a in found if a.replace("\ufe0f", "") not in found})
-    send(chat, "Запомнил: " + " ".join(shown) + "\nТеперь в моих сообщениях эти эмодзи будут премиальными. "
-               "Чтобы сбросить все: /emoji_reset", menu=True)
+    send(chat, card("Запомнил премиум-эмодзи", esc(" ".join(shown)), "Сбросить все: /emoji_reset", "✨"),
+         menu=True, raw_html=True)
 
 
 # ---------- Настройки ----------
@@ -438,7 +506,7 @@ def node(*args, timeout=300, prog="node"):
     try:
         res = subprocess.run([prog, *args], cwd=REPO, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, "Сайт не ответил вовремя, попробуй позже."
+        return False, "⚠️ Сайт не ответил вовремя, попробуй позже."
     if res.returncode != 0:
         print(prog, *args, "->", res.returncode, (res.stderr or res.stdout)[-3000:])  # подробности — в лог pm2
         return False, explain(res.stderr or res.stdout)
@@ -469,7 +537,7 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
     try:
         proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     except FileNotFoundError:
-        return False, "Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
+        return False, "⚠️ Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
     late, finished = threading.Event(), threading.Event()
 
     def watchdog():
@@ -500,7 +568,7 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
         finished.set()
         proc.stdout.close()
     if late.is_set():
-        return False, f"Не успел за {timeout // 60} минут, остановил."
+        return False, f"⚠️ Не успел за {timeout // 60} минут, остановил."
     if proc.returncode != 0 or not result or result.get("is_error"):
         log = "".join(other)[-3000:] + (json.dumps(result, ensure_ascii=False)[-2000:] if result else "")
         print("claude ->", proc.returncode, log)  # подробности — в лог pm2
@@ -514,15 +582,15 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
 
 
 STEPS = [  # (что в команде или пути, подпись шага, доля готовности)
-    ("submit.js", "📤 Сдаю на сайт", 0.88),
-    ("answer.js", "📤 Отправляю учителю", 0.9),
-    ("fetch.js", "📖 Читаю условие", 0.2),
-    ("pdftoppm", "📄 Листаю рабочий лист", 0.3),
-    ("pdftotext", "📄 Листаю рабочий лист", 0.3),
-    ("shot.js", "📸 Снимаю задание", 0.45),
-    ("answers.json", "🧠 Записываю ответы", 0.6),
-    ("draft.txt", "📝 Пишу ответ учителю", 0.6),
-    ("draw.py", "✍️ Пишу от руки", 0.75),
+    ("submit.js", "Сдаю на сайт", 0.88),
+    ("answer.js", "Отправляю учителю", 0.9),
+    ("fetch.js", "Читаю условие", 0.2),
+    ("pdftoppm", "Листаю рабочий лист", 0.3),
+    ("pdftotext", "Листаю рабочий лист", 0.3),
+    ("shot.js", "Снимаю задание", 0.45),
+    ("answers.json", "Записываю ответы", 0.6),
+    ("draft.txt", "Пишу ответ учителю", 0.6),
+    ("draw.py", "Пишу от руки", 0.75),
 ]
 
 
@@ -533,9 +601,9 @@ def step_of(name, inp):
         if key in what:
             return label, frac
     if name == "Read" and drafts.IMAGE.search(what):
-        return "🖼 Разглядываю картинки", 0.3
+        return "Разглядываю картинки", 0.3
     if name == "Read":
-        return "🔍 Изучаю материалы", 0.25
+        return "Изучаю материалы", 0.25
     return None
 
 
@@ -553,7 +621,10 @@ def run_script(chat, *args):
             ok, out = node(*args)
         finally:
             live.done()
-        send(chat, out, menu=True, raw_html=ok and "--html" in args)
+        if ok:
+            send(chat, out, menu=True, raw_html="--html" in args)
+        else:
+            send(chat, err(out), menu=True, raw_html=True)
     finally:
         lock.release()
 
@@ -620,23 +691,26 @@ def num(x):
 
 
 def result_card(out, title="", secs=0, show=False):
-    """Карточка результата: счёт крупно с полоской, название, ответ Claude цитатой, время. -> (текст, полный балл?)"""
+    """Карточка результата: счёт в заголовке, ответ Claude цитатой, название и время — приписка. -> (текст, полный балл?)"""
     score, body = parse_score(out)
     full = bool(score) and score[2] >= 100
     if score:
         got, total, pct = score
         mark = "🏆" if full else "✅" if pct >= 70 else "📊"
-        lines = [f"{mark} <b>{num(got)} / {num(total)}</b> · {pct}%" if total else f"{mark} <b>{pct}%</b>",
-                 f"<code>{bar(pct / 100)}</code>"]
+        head = f"{mark} <b>{num(got)} / {num(total)}</b> · {pct}%" if total else f"{mark} <b>{pct}%</b>"
     else:
-        lines = ["👀 <b>Ответы</b>" if show else "✅ <b>Готово</b>"]
-    if title:
-        lines.append(f"<i>{esc(title)}</i>")
+        head = "👀 <b>Ответы</b>" if show else "✅ <b>Готово</b>"
+    lines = [head]
     if body:
-        quote = "blockquote expandable" if len(body) > 600 else "blockquote"
-        lines += ["", f"<{quote}>{md(body)}</blockquote>" if len(body) < 3000 else md(body)]
-    if secs:
-        lines += ["", f"⏱ {mmss(secs)}" + (" · на сайт не отправлял" if show else "")]
+        text = md(body)
+        if len(body) >= 3000:
+            lines += ["", text, ""]
+        else:
+            quote = "blockquote expandable" if len(body) > 600 or body.count("\n") >= 6 else "blockquote"
+            lines.append(f"<{quote}>{text}</blockquote>")
+    note = " · ".join(x for x in (esc(title), mmss(secs) if secs else "", "на сайт не отправлял" if show else "") if x)
+    if note:
+        lines.append(f"<i>{note}</i>")
     return "\n".join(lines), full
 
 
@@ -650,7 +724,7 @@ def run_task(chat, url, text, show=False, mid=None):
         drafts.clear(task)
         live = Live(chat, "Смотрю ответы" if show else "Решаю задание", esc(drafts.task_info(task)[1]),
                     sub_fn=lambda: esc(drafts.task_info(task)[1]))
-        live.step("🤖 Запускаю Claude", 0.05)
+        live.step("Запускаю Claude", 0.05)
         try:
             ok, out = solve(url, text, show, on_tool=live.tool)
         finally:
@@ -659,20 +733,21 @@ def run_task(chat, url, text, show=False, mid=None):
         if "НУЖЕН_АЛФАВИТ" in out:
             drafts.clear(task)
             react(chat, mid, "✍")
-            send(chat, "✍️ <b>Нужен твой почерк</b>\n\nЭто задание решается от руки, а твоего алфавита у меня ещё нет. "
-                       f"Нажми «{BTN_HAND}», заполни 4 листа и пришли ссылку на задание снова.", menu=True, raw_html=True)
+            send(chat, card("Нужен твой почерк", "Это задание решается от руки, а алфавита у меня ещё нет. "
+                            "Заполни 4 листа — и пришли ссылку на задание снова.", icon="✍️"),
+                 markup=kb([("✍️ Заполнить алфавит", "m:hand", "primary")]), raw_html=True)
             return
         if not ok:
             react(chat, mid, "🤔")
             remember(title or "Задание", False, plain(out), url=url, show=show, secs=time.time() - t0)
-            send(chat, f"😕 <b>Не получилось</b>\n<i>{esc(title)}</i>\n\n{esc(out)}" if title else out, menu=True, raw_html=bool(title))
+            send(chat, err(out, esc(title)), menu=True, raw_html=True)
             return
-        card, full = result_card(out, title, time.time() - t0, show)
+        result, full = result_card(out, title, time.time() - t0, show)
         has_draft = drafts.fresh(task, t0)
         score, body = parse_score(out)
         remember(title or "Задание", True, body, score=score, url=url, show=show, secs=time.time() - t0, draft=has_draft)
         react(chat, mid, "🏆" if full else "✍" if has_draft else "👍")
-        send(chat, card, menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
+        send(chat, result, menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
         if has_draft:
             offer_draft(chat, task, url)
     finally:
@@ -683,10 +758,7 @@ def run_task(chat, url, text, show=False, mid=None):
 
 # ---------- Черновики для учителя ----------
 
-DRAFT_KB = json.dumps({"inline_keyboard": [[
-    {"text": "✅ Отправить учителю", "callback_data": "send"},
-    {"text": "❌ Не отправлять", "callback_data": "drop"},
-]]})
+DRAFT_KB = kb([("✅ Отправить учителю", "send", "success")], [("Не отправлять", "drop")])  # главное — во всю ширину
 
 
 def draft():
@@ -714,11 +786,9 @@ def show_draft(chat):
     d = draft()
     text = drafts.read(d["task"])
     n = len(drafts.files(d["task"]))
-    quote = "blockquote expandable" if len(text) > 700 else "blockquote"  # длинный текст свёрнут, раскрывается по нажатию
-    send(chat, f"📄 <b>Черновик для учителя</b>\n<i>{esc(d['title'])}</i>\n\n"
-               + (f"<{quote}>{esc(text)}</{quote.split()[0]}>\n" if text else "")
-               + (f"🖼 {n} {plural(n, 'картинка', 'картинки', 'картинок')} — выше\n" if n else "")
-               + "\n<i>✏️ Поправь: пришли новый текст, просьбу («убери второй абзац») или свои фото</i>",
+    note = " · ".join(x for x in (esc(d["title"]), f"{n} {plural(n, 'картинка', 'картинки', 'картинок')} выше" if n else "",
+                                  "поправить — пришли текст, просьбу или фото") if x)
+    send(chat, card("Черновик для учителя", esc(text) if text else "<i>(без текста)</i>", note, "📄"),
          markup=DRAFT_KB, raw_html=True)
 
 
@@ -748,7 +818,7 @@ def edit_draft(chat, text):
         finally:
             lock.release()
         if not ok:
-            send(chat, "Не получилось поправить:\n" + out, markup=DRAFT_KB)
+            send(chat, err(out, "Черновик не изменился — можно поправить ещё раз"), markup=DRAFT_KB, raw_html=True)
             return
     else:
         drafts.write(d["task"], text)
@@ -766,8 +836,8 @@ def add_draft_photo(chat, msg):
     d["own_files"] = True
     set_draft(d)
     n = len(drafts.files(d["task"]))
-    send(chat, f"🖼 Фото добавил — всего {n} {plural(n, 'картинка', 'картинки', 'картинок')}.\n"
-               "Когда всё — жми «✅ Отправить учителю».", markup=DRAFT_KB)
+    send(chat, card("Фото добавил", note=f"Всего {n} {plural(n, 'картинка', 'картинки', 'картинок')}. "
+                                          "Когда всё — «Отправить учителю»", icon="🖼"), markup=DRAFT_KB, raw_html=True)
 
 
 def submit_draft(chat):
@@ -777,7 +847,7 @@ def submit_draft(chat):
     try:
         d = draft()
         if not d:
-            send(chat, "Черновика уже нет.", menu=True)
+            send(chat, "⚠️ Черновика уже нет", menu=True)
             return
         if not os.path.exists(drafts.text_path(d["task"])):
             drafts.write(d["task"], "")
@@ -787,14 +857,11 @@ def submit_draft(chat):
         finally:
             live.done()
         remember(d["title"], ok, "Отправлено учителю" if ok else plain(out), url=d["url"], kind="sent")
-        if ok:
-            send(chat, f"📬 <b>Отправлено учителю</b>\n<i>{esc(d['title'])}</i>\n\n"
-                       f"<blockquote expandable>{esc(out.strip())}</blockquote>", menu=True, raw_html=True, effect=EFFECT_LIKE)
-        else:
-            send(chat, out, menu=True)
         if not ok:
-            send(chat, "⚠️ Не отправилось. Черновик остался, можно нажать ещё раз.", markup=DRAFT_KB)
+            send(chat, err(out, "Не отправилось. Черновик остался — можно нажать ещё раз"), markup=DRAFT_KB, raw_html=True)
             return
+        send(chat, card("Отправлено учителю", esc(out.strip()), esc(d["title"]), "📬"),
+             menu=True, raw_html=True, effect=EFFECT_LIKE)
         set_draft(None)
         if d["pairs"]:
             live = Live(chat, "Запоминаю твои правки", progress=False)
@@ -820,46 +887,90 @@ def learn_style(pairs):
         "Старые правила сохраняй, противоречащие заменяй новыми, не больше 30 пунктов. "
         "В ответе только новые или изменённые пункты, коротко, без markdown.",
         ["Read", "Write", "Edit"], timeout=300)
-    return (f"🧠 <b>Запомнил, как ты пишешь</b>\n<blockquote>{esc(out.strip())}</blockquote>" if ok
-            else "Правки сохранил, но обобщить не вышло:\n" + esc(out))
+    return (card("Запомнил, как ты пишешь", esc(out.strip()), "Учту в следующих ответах учителю", "🧠") if ok
+            else err("Правки сохранил, но обобщить не вышло"))
 
 
 def on_callback(cq):
     chat = cq["message"]["chat"]["id"]
-    if (cq.get("data") or "").startswith("hand:"):
+    mid = cq["message"].get("message_id")
+    data = cq.get("data") or ""
+    if data.startswith("m:"):  # меню «Ещё»: правится на месте
+        on_more(chat, mid, cq["id"], data[2:])
+        return
+    if data.startswith("hand:"):
         try:
             tg("answerCallbackQuery", callback_query_id=cq["id"])
         except urllib.error.HTTPError as e:
             print("callback:", e)
-        _, key, *sign = cq["data"].split(":")
+        _, key, *sign = data.split(":")
+        quiet("editMessageReplyMarkup", chat_id=chat, message_id=mid,  # кнопки остаются только под новым примером
+              reply_markup=json.dumps({"inline_keyboard": []}))
         if key == "ok":
             mode.pop(chat, None)
-            send(chat, "✅ Запомнил стиль. Задания «от руки» теперь пишу так.", menu=True)
+            send(chat, HAND_OK, menu=True, raw_html=True)
         else:
             adjust_hand(key, int(sign[0]))
-            threading.Thread(target=send_sample, args=(chat, "🔄 Перерисовал."), daemon=True).start()
+            threading.Thread(target=send_sample, args=(chat, "Перерисовал"), daemon=True).start()
         return
     try:
         tg("answerCallbackQuery", callback_query_id=cq["id"])
-        tg("editMessageReplyMarkup", chat_id=chat, message_id=cq["message"]["message_id"],  # убрать кнопки: не нажать дважды
+        tg("editMessageReplyMarkup", chat_id=chat, message_id=mid,  # убрать кнопки: не нажать дважды
            reply_markup=json.dumps({"inline_keyboard": []}))
     except urllib.error.HTTPError as e:
         print("callback:", e)
-    if (cq.get("data") or "").startswith("all:"):
+    if data.startswith("all:"):
         mode.pop(chat, None)
         rows = pending.pop(chat, [])
-        if cq["data"] == "all:yes" and rows:
+        if data == "all:yes" and rows:
             threading.Thread(target=run_all, args=(chat, rows), daemon=True).start()
         else:
-            send(chat, "👌 Отменил.", menu=True)
+            edit(chat, mid, card("Автотесты не сдаю", note=f"Передумаешь — кнопка «{BTN_ALL}»", icon="👌"))
         return
     if not draft():
-        send(chat, "Этот черновик уже не актуален.", menu=True)
-    elif cq.get("data") == "send":
+        send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
+    elif data == "send":
         threading.Thread(target=submit_draft, args=(chat,), daemon=True).start()
-    elif cq.get("data") == "drop":
+    elif data == "drop":
         set_draft(None)
-        send(chat, "👌 Не отправляю. Если передумаешь, пришли ссылку ещё раз.", menu=True)
+        send(chat, card("Не отправляю", note="Передумаешь — пришли ссылку ещё раз", icon="👌"), menu=True, raw_html=True)
+
+
+# ---------- Меню «Ещё»: редкие действия, правится на месте ----------
+
+def more_text():
+    on = load_settings().get("digest")
+    return card("Ещё", note=f"Сводка в {DIGEST_HOUR}:00 мск {'включена' if on else 'выключена'}", icon="⚙️")
+
+
+def more_kb():
+    on = load_settings().get("digest")
+    rows = [
+        [("❗ Просрочки", "m:late"), ("🔔 Сводка: вкл" if on else "🔕 Сводка: выкл", "m:digest")],
+        [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
+        [("❓ Помощь", "m:help")] + ([("✨ Приложение", {"web_app": {"url": APP_URL + "/"}})] if APP_URL else []),
+    ]
+    return kb(*rows)
+
+
+def on_more(chat, mid, cq_id, key):
+    tip = ""
+    if key == "digest":
+        s = load_settings()
+        s["digest"] = not s.get("digest")
+        save_settings(s)
+        tip = f"Сводка включена: каждый день в {DIGEST_HOUR}:00" if s["digest"] else "Сводка выключена"
+    quiet("answerCallbackQuery", callback_query_id=cq_id, **({"text": tip} if tip else {}))
+    if key in ("more", "digest"):
+        edit(chat, mid, more_text(), more_kb())
+    elif key == "help":
+        edit(chat, mid, HELP, kb([("‹ Назад", "m:more")]))
+    elif key == "late":
+        threading.Thread(target=run_script, args=(chat, "horo/status.js", "--late", "--html"), daemon=True).start()
+    elif key == "hand":
+        threading.Thread(target=send_alphabet, args=(chat,), daemon=True).start()
+    elif key == "check":
+        threading.Thread(target=check, args=(chat,), daemon=True).start()
 
 
 # ---------- Почерк ----------
@@ -870,17 +981,17 @@ GLEB_EXTRA = os.path.join(REPO, "horo", "tmp", "fonts", "gleb_extra.npz")  # б�
 
 def send_alphabet(chat):
     os.makedirs(ALPHA_DIR, exist_ok=True)
-    send(chat, "✍️ <b>Алфавит твоим почерком</b>\n\n"
-               "1. Сохрани 4 листа ниже: русские буквы (2 листа), латиница, цифры и знаки.\n"
-               "2. На iPad открой лист в «Фото» → Править → Разметка.\n"
-               "3. Пиши синим или белым, на линии. В рамке слева — большая буква, справа — маленькая. Пустые клетки можно оставить.\n"
-               "4. Не обрезай лист: розовые квадраты по углам должны быть видны.\n"
-               "5. Пришли листы сюда, потом напиши «готово».", raw_html=True)
+    send(chat, card("Алфавит твоим почерком",
+                    "1. Сохрани 4 листа ниже: русские буквы (2 листа), латиница, цифры и знаки.\n"
+                    "2. На iPad открой лист в «Фото» → Править → Разметка.\n"
+                    "3. Пиши синим или белым на линии: слева большая буква, справа маленькая. Пустые клетки можно оставить.\n"
+                    "4. Не обрезай лист: розовые квадраты по углам должны быть видны.",
+                    "Пришли листы сюда, потом напиши «готово»", "✍️"), raw_html=True)
     for page in (1, 2, 3, 4):
         out = os.path.join(ALPHA_DIR, f"alphabet_{page}.png")
-        ok, err = py("horo/alphabet.py", "template", str(page), out)
+        ok, why = py("horo/alphabet.py", "template", str(page), out)
         if not ok:
-            send(chat, err, menu=True)
+            send(chat, err(why), menu=True, raw_html=True)
             return
         send_file(chat, out)
     mode[chat] = "alphabet"
@@ -905,12 +1016,13 @@ HAND_WORDS = [  # (слова в просьбе, что менять, куда)
     (("наклон",), "slant", +1),
     (("прям",), "slant", -1),
 ]
-HAND_KB = json.dumps({"inline_keyboard": [
-    [{"text": "😬 Небрежнее", "callback_data": "hand:mess:1"}, {"text": "✨ Аккуратнее", "callback_data": "hand:mess:-1"}],
-    [{"text": "🖊 Толще", "callback_data": "hand:width:1"}, {"text": "✏️ Тоньше", "callback_data": "hand:width:-1"}],
-    [{"text": "🔍 Крупнее", "callback_data": "hand:size:1"}, {"text": "🔎 Мельче", "callback_data": "hand:size:-1"}],
-    [{"text": "✅ Нравится", "callback_data": "hand:ok"}],
-]})
+HAND_KB = kb(
+    [("Небрежнее", "hand:mess:1"), ("Аккуратнее", "hand:mess:-1")],
+    [("Толще", "hand:width:1"), ("Тоньше", "hand:width:-1")],
+    [("Крупнее", "hand:size:1"), ("Мельче", "hand:size:-1")],
+    [("✅ Нравится", "hand:ok", "success")],
+)
+HAND_OK = card("Запомнил стиль", note="Задания «от руки» теперь пишу так", icon="✅")
 
 
 def hand_style():
@@ -931,18 +1043,18 @@ def adjust_hand(key, sign, half=False):
 
 
 def send_sample(chat, note=""):
-    """Пример решённого задания его почерком с кнопками настройки."""
+    """Пример решённого задания его почерком с кнопками настройки. note — заголовок («Перерисовал»)."""
     out = os.path.join(ALPHA_DIR, "sample.png")
     os.makedirs(ALPHA_DIR, exist_ok=True)
-    ok, err = py("horo/alphabet.py", "sample", out)
+    ok, why = py("horo/alphabet.py", "sample", out)
     if not ok:
-        send(chat, err, menu=True)
+        send(chat, err(why), menu=True, raw_html=True)
         return
     mode[chat] = "hand_tune"
     send_file(chat, out)
-    send(chat, (note + "\n\n" if note else "") + "✍️ <b>Так буду писать решения от руки.</b>\n"
-         "Поправь кнопками или словами («чуть небрежнее», «тоньше», «крупнее», «с наклоном») — "
-         "перерисую. Когда нравится — «✅ Нравится».", markup=HAND_KB, raw_html=True)
+    send(chat, card(note or "Так буду писать от руки",
+                    "Поправь кнопками или словами: «чуть небрежнее», «тоньше», «крупнее», «с наклоном» — перерисую.",
+                    "Нравится — жми «Нравится» или напиши «ок»", "✍️"), markup=HAND_KB, raw_html=True)
 
 
 def tune_hand(chat, text):
@@ -950,17 +1062,18 @@ def tune_hand(chat, text):
     low = text.lower()
     if low.strip(".! ") in ("ок", "ok", "да", "нравится", "подтверждаю", "готово", "отлично", "норм"):
         mode.pop(chat, None)
-        send(chat, "✅ Запомнил стиль. Задания «от руки» теперь пишу так.", menu=True)
+        send(chat, HAND_OK, menu=True, raw_html=True)
         return
     half = any(w in low for w in ("чуть", "немного", "слегка"))
     changed = [(key, sign) for words, key, sign in HAND_WORDS if any(w in low for w in words)]
     if not changed:
-        send(chat, "🤔 Не понял, что поменять. Можно: небрежнее, аккуратнее, толще, тоньше, крупнее, мельче, "
-                   "с наклоном, прямее — или «ок».", markup=HAND_KB)
+        send(chat, card("Не понял, что поменять", note="Можно: небрежнее, аккуратнее, толще, тоньше, крупнее, мельче, "
+                                                       "с наклоном, прямее — или «ок»", icon="🤔"),
+             markup=HAND_KB, raw_html=True)
         return
     for key, sign in changed:
         adjust_hand(key, sign, half)
-    send_sample(chat, "🔄 Перерисовал.")
+    send_sample(chat, "Перерисовал")
 
 
 def take_alphabet(chat, msg):
@@ -978,11 +1091,11 @@ def take_alphabet(chat, msg):
         added = [] if added == ["ничего"] else added
         errors = [l.split(":", 1)[1].strip() for l in lines if l.startswith("Ошибка:")]
         if added:
-            send(chat, f"✅ Добавил знаков: {len(added)}\n" + " ".join(added))
+            send(chat, card(f"Добавил знаков: {len(added)}", esc(" ".join(added)), icon="✅"), raw_html=True)
         for e in errors:
-            send(chat, f"⚠️ Лист не разобрал: {e}")
+            send(chat, err(f"Лист не разобрал: {e}"), raw_html=True)
         if not ok and not errors:
-            send(chat, out)  # непонятная ошибка — как есть
+            send(chat, err(out), raw_html=True)  # непонятная ошибка — первой строкой
         if added:
             prev = os.path.join(ALPHA_DIR, "preview.png")
             if py("horo/alphabet.py", "preview", prev)[0]:
@@ -1009,25 +1122,24 @@ def check(chat):
             return res, f"{time.time() - t:.1f} с"
 
         try:
-            (ok, out), t = timed("🌐 Захожу на сайт", 0.1, lambda: node("horo/grades.js", timeout=180))
+            (ok, out), t = timed("Захожу на сайт", 0.1, lambda: node("horo/grades.js", timeout=180))
             rows.append(f"✅ <b>Сайт</b> · вход за {t}" if ok else "❌ <b>Сайт</b> · " + esc(out.strip()[-300:]))
             bad += not ok
-            (ok, out), t = timed("🤖 Спрашиваю Claude", 0.5, lambda: claude("Ответь одним словом: ok", [], timeout=120))
+            (ok, out), t = timed("Спрашиваю Claude", 0.5, lambda: claude("Ответь одним словом: ok", [], timeout=120))
             ok = ok and bool(out.strip())
             rows.append(f"✅ <b>Claude</b> · ответил за {t}" if ok else "❌ <b>Claude</b> · " + esc(out.strip()[-300:]))
             bad += not ok
-            (ok, _), t = timed("✍️ Проверяю почерк", 0.9, lambda: py("-c", "import numpy, scipy, skimage, PIL"))
+            (ok, _), t = timed("Проверяю почерк", 0.9, lambda: py("-c", "import numpy, scipy, skimage, PIL"))
             rows.append("✅ <b>Почерк</b> · библиотеки на месте" if ok else "❌ <b>Почерк</b> · нет библиотек, нужна переустановка (install.sh)")
             bad += not ok
         finally:
             live.done()
-        rows.append("✅ <b>Алфавит</b> · заполнен" if os.path.exists(GLEB_EXTRA) else f"✍️ <b>Алфавит</b> · ещё не заполнен ({BTN_HAND})")
+        rows.append("✅ <b>Алфавит</b> · заполнен" if os.path.exists(GLEB_EXTRA) else "✍️ <b>Алфавит</b> · ещё не заполнен («Ещё» → «Почерк»)")
         rows.append("✅ <b>Голосовые</b> · распознавание на месте" if media.whisper_python()
                     else "🎙 <b>Голосовые</b> · распознавание не установлено (common/setup.sh)")
-        head = "🩺 <b>Проверка</b> · " + ("всё работает ✨" if not bad else f"проблем: {bad}")
         when = git("log", "-1", "--format=%cd", "--date=format:%d.%m %H:%M")
-        send(chat, "\n".join([head, "", *rows, "", f"<i>Версия {esc(git('rev-parse', '--short', 'HEAD'))} от {esc(when)}</i>"]),
-             menu=True, raw_html=True)
+        send(chat, card("Всё работает" if not bad else f"Проверка: проблем {bad}", "\n".join(rows),
+                        f"Версия {esc(git('rev-parse', '--short', 'HEAD'))} от {esc(when)}", "🩺"), menu=True, raw_html=True)
     finally:
         lock.release()
 
@@ -1043,21 +1155,18 @@ def find_auto_tests(chat):
         finally:
             live.done()
         if not ok:
-            send(chat, out, menu=True)
+            send(chat, err(out), menu=True, raw_html=True)
             return
         tests = [r for r in json.loads(out) if r["auto"] and r["rawStatus"] == "appointed"]
         if not tests:
-            send(chat, "🎉 <b>Новых автотестов нет</b>\nВсё, что бот может сдать сам, уже сдано.", menu=True, raw_html=True)
+            send(chat, card("Новых автотестов нет", note="Всё, что могу сдать сам, уже сдано", icon="🎉"), menu=True, raw_html=True)
             return
         pending[chat] = tests
         mode[chat] = "confirm_all"
         lines = "\n".join(f"{r.get('icon', '📘')} <b>{esc(r['subj'])}</b> — {esc(r['title'])}" for r in tests)
-        kb = json.dumps({"inline_keyboard": [[
-            {"text": f"⚡ Сдать все ({len(tests)})", "callback_data": "all:yes"},
-            {"text": "✖️ Не надо", "callback_data": "all:no"},
-        ]]})
-        send(chat, f"⚡ <b>Нашёл автотесты: {len(tests)}</b>\n\n<blockquote>{lines}</blockquote>\n"
-                   f"Сдам по очереди, это примерно {len(tests) * 2}–{len(tests) * 3} мин.", markup=kb, raw_html=True)
+        send(chat, card(f"Нашёл автотесты: {len(tests)}", lines,
+                        f"Сдам по очереди, это примерно {len(tests) * 2}–{len(tests) * 3} мин", "⚡"),
+             markup=kb([(f"Сдать все ({len(tests)})", "all:yes", "success"), ("Не надо", "all:no")]), raw_html=True)
     finally:
         lock.release()
 
@@ -1089,8 +1198,9 @@ def run_all(chat, tests):
             live.done()
         perfect = sum(r.startswith("🏆") for r in rows)
         remember(f"Автотесты · {n}", True, "\n".join(plain(r) for r in rows), secs=time.time() - t0)
-        send(chat, f"⚡ <b>Автотесты сданы</b> · {n}\n⏱ {mmss(time.time() - t0)}\n\n" + "\n".join(rows)
-             + "\n\n<blockquote expandable>" + "\n\n".join(details) + "</blockquote>",
+        send(chat, f"⚡ <b>Автотесты сданы: {n}</b>\n<blockquote>" + "\n".join(rows) + "</blockquote>\n"
+             "<blockquote expandable>" + "\n\n".join(details) + "</blockquote>\n"
+             f"<i>Заняло {mmss(time.time() - t0)} · подробности — в свёрнутой цитате</i>",
              menu=True, raw_html=True, effect=EFFECT_CONFETTI if perfect == n else None)
     finally:
         lock.release()
@@ -1106,13 +1216,14 @@ def update(chat):
             res = git("checkout", "-B", "main", "origin/main")
     else:
         res = git("pull", "--ff-only", "origin", "main")
-    send(chat, (res.stdout + res.stderr).strip()[-1500:] or "ok")
+    log = esc((res.stdout + res.stderr).strip()[-1500:] or "ok")
     if res.returncode != 0:
+        send(chat, "⚠️ Не обновился\n<blockquote expandable>" + log + "</blockquote>", raw_html=True)
         return
     if git("diff", "--name-only", old, "HEAD", "--", "package.json", "package-lock.json").stdout.strip():
         subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=REPO, capture_output=True)
     s = load_settings(); s["updated"] = chat; save_settings(s)
-    send(chat, "Перезапускаюсь… Напишу, когда поднимусь.")
+    send(chat, card("Обновляюсь", log, "Перезапускаюсь — напишу, когда поднимусь", "🔄"), raw_html=True)
     tg("getUpdates", offset=offset, timeout=0)  # подтверждаем /update, чтобы не выполнить его повторно
     os._exit(0)  # pm2 сам запустит бота заново
 
@@ -1122,20 +1233,36 @@ BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 
 SIDE_BOTS = {  # соседние боты, которых HDP-бот умеет ставить на этот же сервер по токену
     "planner": {"env": "PLANNER_TOKEN", "what": "бота-планера", "short": "планер", "timeout": 900,
-                "done": "✅ <b>Планер запущен</b>\n\nОткрой @{name} и нажми /start — станешь владельцем. "
-                        "Через минуту слева от поля ввода появится кнопка «Планер»."},
+                "icon": "🗓", "title": "Бот-планер",
+                "done": card("Планер запущен", "Открой @{name} и нажми /start — станешь владельцем. "
+                             "Через минуту слева от поля ввода появится кнопка «Планер».", icon="✅")},
     "coach": {"env": "COACH_TOKEN", "what": "бота-тренера", "short": "тренера", "timeout": 900,
-              "done": "✅ <b>Тренер запущен</b>\n\nОткрой @{name} и нажми /start — станешь владельцем. "
-                      "Потом /connect — подключим WHOOP."},
+              "icon": "💪", "title": "Бот-тренер (WHOOP)",
+              "done": card("Тренер запущен", "Открой @{name} и нажми /start — станешь владельцем. "
+                           "Потом /connect — подключим WHOOP.", icon="✅")},
     # «Главный» сразу с входом для Claude (ключ выводится из токена — Claude его знает); владелец — этот чат
     "hub": {"env": "HUB_TOKEN", "what": "бота «Главный»", "short": "Главного", "timeout": 600,
-            "extra": {"HUB_REMOTE": "1"},
-            "done": "✅ <b>Главный запущен</b>\n\nОткрой @{name} и нажми /start — туда будут приходить "
-                    "сообщения о ботах и о каждой команде Claude. Дальше Claude ставит и чинит ботов сам."},
+            "icon": "👑", "title": "Бот «Главный»", "extra": {"HUB_REMOTE": "1"},
+            "done": card("Главный запущен", "Открой @{name} и нажми /start — туда будут приходить "
+                         "сообщения о ботах и о каждой команде Claude. Дальше Claude ставит и чинит ботов сам.", icon="✅")},
     "kpp": {"env": "KPP_TOKEN", "what": "бота «КПП»", "short": "КПП", "timeout": 600,
-            "done": "✅ <b>КПП запущен</b>\n\nОткрой @{name}, нажми /start и войди через Яндекс — "
-                    "дальше просто присылай номер такси."},
+            "icon": "🚧", "title": "Бот «КПП»",
+            "done": card("КПП запущен", "Открой @{name}, нажми /start и войди через Яндекс — "
+                         "дальше просто присылай номер такси.", icon="✅")},
 }
+
+
+def open_kb(name):
+    """Кнопка «Открыть @бот»: длинное имя Telegram обрезал бы — тогда просто «Открыть бота»."""
+    text = f"Открыть @{name}" if len(name) <= 16 else "Открыть бота"
+    return kb([(text, {"url": f"https://t.me/{name}"}, "primary")])
+
+
+def side_prompt(chat, kind):
+    """/planner, /coach, /kpp, /hub без токена: что прислать."""
+    side = SIDE_BOTS[kind]
+    send(chat, card(side["title"], f"Пришли токен {side['what']} от @BotFather — поставлю его на этот сервер.",
+                    f"Например: /{kind} 123456789:AAH…", side["icon"]), menu=True, raw_html=True)
 
 
 def install_planner(chat, token, msg_id=None, kind="planner"):
@@ -1148,16 +1275,16 @@ def install_planner(chat, token, msg_id=None, kind="planner"):
         except Exception:
             pass
     if token == TOKEN:
-        send(chat, f"🤔 Это токен этого бота. Нужен токен нового {side['what']} от @BotFather.")
+        send(chat, err(f"Это токен этого бота — нужен токен нового {side['what']} от @BotFather"), raw_html=True)
         return
     try:
         with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=30) as r:
             me = json.load(r)["result"]
     except Exception:
-        send(chat, "❌ Токен не подошёл. Скопируй его из @BotFather целиком и пришли ещё раз.")
+        send(chat, err("Токен не подошёл. Скопируй его из @BotFather целиком и пришли ещё раз"), raw_html=True)
         return
     name = me.get("username") or kind
-    send(chat, f"⏳ Ставлю {side['short']} @{name} на сервер… Это 1–2 минуты.")
+    wait = send(chat, card(f"Ставлю {side['short']} @{esc(name)}", note="Это 1–2 минуты", icon="⏳"), raw_html=True)
     env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": "/root",  # без секретов этого бота
            "LANG": "C.UTF-8", side["env"]: token, **side.get("extra", {})}
     if kind == "hub":
@@ -1166,15 +1293,17 @@ def install_planner(chat, token, msg_id=None, kind="planner"):
         res = subprocess.run(["bash", os.path.join(REPO, kind, "install.sh")], cwd=REPO, env=env,
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=side["timeout"])
     except subprocess.TimeoutExpired:
-        send(chat, f"❌ Установка шла дольше {side['timeout'] // 60} минут и остановлена. Логи: pm2 logs horo-bot")
+        delete(chat, wait)
+        send(chat, err(f"Установка шла дольше {side['timeout'] // 60} минут и остановлена", "Логи: pm2 logs horo-bot"),
+             raw_html=True)
         return
+    delete(chat, wait)
     if res.returncode != 0:
         tail = (res.stdout + res.stderr).strip()[-1200:]
-        send(chat, f"❌ Не получилось поставить {side['short']}:\n<pre>{esc(tail)}</pre>", raw_html=True)
+        send(chat, err(f"Не получилось поставить {side['short']}") + f"\n<blockquote expandable>{esc(tail)}</blockquote>",
+             raw_html=True)
         return
-    send(chat, side["done"].format(name=esc(name)),
-         markup=json.dumps({"inline_keyboard": [[{"text": f"Открыть @{name}", "url": f"https://t.me/{name}"}]]}),
-         raw_html=True)
+    send(chat, side["done"].format(name=esc(name)), markup=open_kb(name), raw_html=True)
 
 
 AGENT_ENV = "/etc/tg-agent.env"
@@ -1202,25 +1331,26 @@ def agent_step(chat, text, msg_id=None):
     а ключи my.telegram.org для аккаунта секретарь получит сам, когда Глеб нажмёт у него «Войти в аккаунт»."""
     if text == "/cancel":
         agent.pop(chat, None); mode.pop(chat, None)
-        send(chat, "Ок, отменил установку секретаря.", menu=True)
+        send(chat, "👌 Отменил установку секретаря", menu=True)
         return
     m = BOT_TOKEN.search(text)
     if msg_id and m:
         forget(chat, msg_id)
     if not m:
         mode[chat] = "agent_token"
-        send(chat, "🤵 Ставлю секретаря на сервер. Пришли токен его бота от @BotFather. /cancel — отмена")
+        send(chat, card("Секретарь", "Пришли токен его бота от @BotFather — поставлю на этот сервер.", "/cancel — отмена",
+                        "🤵"), raw_html=True)
         return
     if m.group(0) == TOKEN:
         mode[chat] = "agent_token"
-        send(chat, "🤔 Нужен токен бота-секретаря от @BotFather (не этого бота). /cancel — отмена")
+        send(chat, err("Нужен токен бота-секретаря от @BotFather, не этого бота", "/cancel — отмена"), raw_html=True)
         return
     try:
         with urllib.request.urlopen(f"https://api.telegram.org/bot{m.group(0)}/getMe", timeout=30) as r:
             name = json.load(r)["result"].get("username") or "agent"
     except Exception:
         mode[chat] = "agent_token"
-        send(chat, "❌ Токен не подошёл. Скопируй его из @BotFather целиком. /cancel — отмена")
+        send(chat, err("Токен не подошёл. Скопируй его из @BotFather целиком", "/cancel — отмена"), raw_html=True)
         return
     agent[chat] = {"token": m.group(0), "name": name}
     agent_install(chat)
@@ -1233,24 +1363,27 @@ def agent_install(chat):
     os.write(fd, (f"TG_AGENT_TOKEN={st['token']}\nTG_API_ID={old.get('TG_API_ID', '')}\nTG_API_HASH={old.get('TG_API_HASH', '')}\n"
                   f"TG_ALLOWED_ID={old.get('TG_ALLOWED_ID') or owner() or ''}\n").encode())
     os.close(fd)
-    send(chat, f"⏳ Ставлю секретаря @{st.get('name', 'agent')}… Это 3–7 минут (распознавание голоса тяжёлое).")
+    wait = send(chat, card(f"Ставлю секретаря @{esc(st.get('name', 'agent'))}",
+                           note="Это 3–7 минут: распознавание голоса тяжёлое", icon="⏳"), raw_html=True)
     env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin") + ":/usr/local/bin", "HOME": "/root",
            "LANG": "C.UTF-8", "DEBIAN_FRONTEND": "noninteractive"}
     try:
         res = subprocess.run(["bash", os.path.join(REPO, "tgbot", "install.sh")], cwd=REPO, env=env,
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1800)
     except subprocess.TimeoutExpired:
-        send(chat, "❌ Установка шла дольше 30 минут и остановлена. Логи: pm2 logs horo-bot", menu=True)
+        delete(chat, wait)
+        send(chat, err("Установка шла дольше 30 минут и остановлена", "Логи: pm2 logs horo-bot"), menu=True, raw_html=True)
         return
+    delete(chat, wait)
     if res.returncode != 0:
         tail = (res.stdout + res.stderr).strip()[-1200:]
-        send(chat, f"❌ Установка не прошла:\n<pre>{esc(tail)}</pre>", menu=True, raw_html=True)
+        send(chat, err("Установка секретаря не прошла") + f"\n<blockquote expandable>{esc(tail)}</blockquote>",
+             menu=True, raw_html=True)
         return
     name = st.get("name", "agent")
-    send(chat, f"✅ <b>Секретарь запущен</b>\n\nОткрой @{esc(name)} и нажми /start — он уже отвечает на вопросы и голосовые. "
-               "Чтобы он вёл твой Telegram, нажми там «Войти в аккаунт».",
-         markup=json.dumps({"inline_keyboard": [[{"text": f"Открыть @{name}", "url": f"https://t.me/{name}"}]]}),
-         raw_html=True)
+    send(chat, card("Секретарь запущен", f"Открой @{esc(name)} и нажми /start — он уже отвечает на вопросы и голосовые.",
+                    "Чтобы он вёл твой Telegram, нажми там «Войти в аккаунт»", "✅"),
+         markup=open_kb(name), raw_html=True)
 
 
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -1267,7 +1400,7 @@ def digest_loop():
             ok, out = node("horo/status.js", "--html")
             day = f"{WEEKDAYS[now.weekday()]}, {now.day} {MONTHS[now.month - 1]}"
             try:
-                send(owner(), f"🔔 <b>Сводка</b> · {day}\n\n" + (out if ok else esc(out)), menu=True, raw_html=True)
+                send(owner(), f"🔔 <b>Сводка · {day}</b>\n\n" + (out if ok else err(out)), menu=True, raw_html=True)
             except Exception as e:
                 print("digest:", e)
         time.sleep(60)
@@ -1297,12 +1430,12 @@ def hear_voice(msg):
     except media.MediaError as e:
         delete(chat, mid)
         why = str(e)
-        send(chat, f"🎙 {why[:1].upper()}{why[1:]}.", menu=True)
+        send(chat, f"⚠️ {why[:1].upper()}{why[1:]}.", menu=True)
         return
     except Exception as e:
         print("voice:", e)
         delete(chat, mid)
-        send(chat, "🎙 Не получилось скачать голосовое, пришли ещё раз.", menu=True)
+        send(chat, "⚠️ Не получилось скачать голосовое, пришли ещё раз.", menu=True)
         return
     finally:
         stop.set()
@@ -1325,14 +1458,13 @@ def handle(msg):
     name = msg.get("from", {}).get("first_name") or ""
 
     if text.startswith("/start"):
-        send(chat, f"👋 <b>Привет{', ' + esc(name) if name else ''}!</b>\n"
-                   "Я твой помощник по HDP ⚡\n\n"
-                   "<blockquote>📝 Решаю и сдаю задания по ссылке\n"
-                   "✍️ Пишу ответы учителю — твоим почерком\n"
-                   "📋 Слежу за дедлайнами и просрочками\n"
-                   f"📊 Считаю оценки · 🔔 сводка в {DIGEST_HOUR}:00</blockquote>\n"
-                   "Кинь ссылку на задание или выбери действие 👇\n"
-                   "<i>✨ Или открой приложение — кнопка «HDP» слева от поля ввода</i>", menu=True, raw_html=True)
+        send(chat, card(f"Привет{', ' + esc(name) if name else ''}!",
+                        "Я твой помощник по HDP.\n"
+                        "• Решаю и сдаю задания по ссылке\n"
+                        "• Пишу ответы учителю — твоим почерком\n"
+                        "• Слежу за дедлайнами, оценками и комментариями",
+                        "Пришли ссылку на задание или выбери действие внизу. Приложение — кнопка «HDP» слева", "👋"),
+             menu=True, raw_html=True)
         if APP_URL:
             on_app_url(APP_URL)  # кнопка приложения — новому владельцу
         return
@@ -1351,8 +1483,7 @@ def handle(msg):
     if text.startswith("/kpp"):
         m = BOT_TOKEN.search(text)
         if not m:
-            send(chat, "🚧 Пришли токен бота «КПП» от @BotFather — поставлю его на этот сервер.\n"
-                       "Например: /kpp 123456789:AAH…", menu=True)
+            side_prompt(chat, "kpp")
             return
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "kpp"),
                          daemon=True).start()
@@ -1360,8 +1491,7 @@ def handle(msg):
     if text.startswith("/hub"):
         m = BOT_TOKEN.search(text)
         if not m:
-            send(chat, "👑 Пришли токен бота «Главный» от @BotFather — поставлю его на этот сервер.\n"
-                       "Например: /hub 123456789:AAH…", menu=True)
+            side_prompt(chat, "hub")
             return
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "hub"),
                          daemon=True).start()
@@ -1369,8 +1499,7 @@ def handle(msg):
     if text.startswith("/coach"):
         m = BOT_TOKEN.search(text)
         if not m:
-            send(chat, "⚡ Пришли токен бота-тренера (WHOOP) от @BotFather — поставлю его на этот сервер.\n"
-                       "Например: /coach 123456789:AAH…", menu=True)
+            side_prompt(chat, "coach")
             return
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id"), "coach"),
                          daemon=True).start()
@@ -1378,19 +1507,18 @@ def handle(msg):
     if text.startswith("/planner") or BOT_TOKEN.fullmatch(text):
         m = BOT_TOKEN.search(text)
         if not m:
-            send(chat, "🗓 Пришли токен бота-планера от @BotFather — поставлю его на этот сервер.\n"
-                       "Например: /planner 123456789:AAH…", menu=True)
+            side_prompt(chat, "planner")
             return
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id")), daemon=True).start()
         return
     if text.startswith("/emoji_reset"):
         s = load_settings(); s.pop("emoji", None); save_settings(s)
-        send(chat, "Премиум-эмодзи сброшены, снова обычные.", menu=True)
+        send(chat, "👌 Премиум-эмодзи сброшены, снова обычные", menu=True)
         return
     if text.startswith("/emoji"):
         mode[chat] = "emoji"
-        send(chat, "Пришли одним сообщением премиум-эмодзи, которые хочешь видеть вместо обычных "
-                   "(например 📝 👀 📋 ❗ ⚡ 💬 📊 🔔 ❓ ✅ 🎉 👋 ⏱ 🤔). Работает, если у тебя есть Telegram Premium.")
+        send(chat, card("Премиум-эмодзи", "Пришли одним сообщением премиум-эмодзи — буду ставить их в своих "
+                        "сообщениях вместо обычных.", "Работает, если у тебя есть Telegram Premium", "✨"), raw_html=True)
         return
     if mode.get(chat) == "emoji":
         mode.pop(chat)
@@ -1398,7 +1526,7 @@ def handle(msg):
         return
     if text.startswith("/alphabet_reset"):
         ok, out = py("horo/alphabet.py", "reset")
-        send(chat, out, menu=True)
+        send(chat, out if ok else err(out), menu=True, raw_html=not ok)
         return
     if text.startswith("/alphabet") or text == BTN_HAND:
         threading.Thread(target=send_alphabet, args=(chat,), daemon=True).start()
@@ -1413,12 +1541,14 @@ def handle(msg):
         if text.lower().strip(".! ") in ("готово", "все", "всё", "хватит"):
             mode.pop(chat)
             if os.path.exists(GLEB_EXTRA):
-                threading.Thread(target=send_sample, args=(chat, "✍️ Алфавит записал!"), daemon=True).start()
+                threading.Thread(target=send_sample, args=(chat, "Алфавит записал"), daemon=True).start()
             else:
-                send(chat, "Пока ни одного листа не разобрал. Пришли листы алфавита, потом напиши «готово».", menu=True)
+                send(chat, err("Пока ни одного листа не разобрал", "Пришли листы алфавита, потом напиши «готово»"),
+                     menu=True, raw_html=True)
             return
         if text not in BUTTONS and not LINK.search(text):
-            send(chat, "📸 Жду листы алфавита (скриншот или фото). Закончил — напиши «готово».")
+            send(chat, card("Жду листы алфавита", note="Скриншот или фото. Закончил — напиши «готово»", icon="📸"),
+                 raw_html=True)
             return
         mode.pop(chat)
     if text.startswith("/style"):
@@ -1435,7 +1565,7 @@ def handle(msg):
         if text.lower() in ("да", "yes", "ок", "давай"):
             threading.Thread(target=run_all, args=(chat, rows), daemon=True).start()
         else:
-            send(chat, "👌 Отменил.", menu=True)
+            send(chat, "👌 Отменил", menu=True)
         return
     if draft() and attachment(msg):
         threading.Thread(target=add_draft_photo, args=(chat, msg), daemon=True).start()
@@ -1447,10 +1577,9 @@ def handle(msg):
             edit_draft(chat, text)
         return
     if media.kind(msg) == "photo":  # фото сейчас некуда приложить
-        send(chat, "📸 <b>Фото пригодится, когда:</b>\n"
-                   "<blockquote>📄 жду черновик для учителя — фото заменит мои картинки\n"
-                   f"✍️ заполняешь алфавит почерка ({BTN_HAND})</blockquote>\n"
-                   "Чтобы решить задание, пришли ссылку на него.", menu=True, raw_html=True)
+        send(chat, card("Фото пригодится позже", "• В черновик учителю — заменит мои картинки\n"
+                        "• В алфавит почерка — «Ещё» → «Почерк»", "Чтобы решить задание, пришли ссылку на него", "📸"),
+             menu=True, raw_html=True)
         return
 
     simple = {
@@ -1465,13 +1594,21 @@ def handle(msg):
     if text == BTN_HELP:
         send(chat, HELP, menu=True, raw_html=True)
         return
+    if text == BTN_MORE:
+        send(chat, more_text(), markup=more_kb(), raw_html=True)
+        return
+    if text == BTN_APP:
+        send_app(chat)
+        return
     if text == BTN_DO:
         mode.pop(chat, None)
-        send(chat, "🔗 <b>Жду ссылку на задание</b>\nРешу и сдам сам. Задания для учителя сначала покажу черновиком.", raw_html=True)
+        send(chat, card("Жду ссылку на задание", note="Решу и сдам сам. Ответ учителю сначала покажу черновиком",
+                        icon="🔗"), raw_html=True)
         return
     if text == BTN_SHOW:
         mode[chat] = "show"
-        send(chat, "🔗 <b>Жду ссылку на задание</b>\nПокажу ответы, на сайт ничего не отправлю.", raw_html=True)
+        send(chat, card("Жду ссылку на задание", note="Покажу ответы, на сайт ничего не отправлю", icon="👀"),
+             raw_html=True)
         return
     if text == BTN_ALL:
         threading.Thread(target=find_auto_tests, args=(chat,), daemon=True).start()
@@ -1480,14 +1617,15 @@ def handle(msg):
         s = load_settings()
         s["digest"] = not s.get("digest")
         save_settings(s)
-        send(chat, (f"🔔 <b>Сводка включена</b>\nКаждый день в {DIGEST_HOUR}:00 по Москве пришлю, что надо сделать."
-                    if s["digest"] else "🔕 <b>Сводка выключена</b>\nВключить снова — та же кнопка."),
-             menu=True, raw_html=True)
+        send(chat, card("Сводка включена", note=f"Каждый день в {DIGEST_HOUR}:00 по Москве пришлю, что надо сделать",
+                        icon="🔔") if s["digest"] else
+             card("Сводка выключена", note="Включить снова — «Ещё» → «Сводка»", icon="🔕"), menu=True, raw_html=True)
         return
 
     m = LINK.search(text)
     if not m:
-        send(chat, "🤔 Не понял. Пришли ссылку на задание или выбери действие внизу.", menu=True)
+        send(chat, card("Не понял", note="Пришли ссылку на задание или выбери действие внизу", icon="🤔"),
+             menu=True, raw_html=True)
         return
     show = mode.pop(chat, None) == "show"
     threading.Thread(target=run_task, args=(chat, m.group(0), text, show, msg.get("message_id")), daemon=True).start()
@@ -1607,7 +1745,7 @@ def app_draft(action):
             threading.Thread(target=submit_draft, args=(owner(),), daemon=True).start()
         elif action == "drop":
             set_draft(None)
-            send(owner(), "👌 Черновик не отправляю (решил в приложении).", menu=True)
+            send(owner(), card("Не отправляю", note="Черновик отменён в приложении", icon="👌"), menu=True, raw_html=True)
         elif action == "save":
             text = str(b.get("text") or "").strip()
             before = drafts.read(d["task"])
@@ -1645,7 +1783,7 @@ ROUTES = {
 
 
 def app_kb(text="✨ Открыть приложение"):
-    return json.dumps({"inline_keyboard": [[{"text": text, "web_app": {"url": APP_URL + "/"}}]]}) if APP_URL else None
+    return kb([(text, {"web_app": {"url": APP_URL + "/"}}, "primary")]) if APP_URL else None
 
 
 def on_app_url(url):
@@ -1662,10 +1800,11 @@ def on_app_url(url):
 
 def send_app(chat):
     if APP_URL:
-        send(chat, "✨ <b>Приложение HDP</b>\nЗадания, оценки и комментарии учителей — в одном окне. "
-                   "Кнопка «HDP» тоже всегда слева от поля ввода.", markup=app_kb(), raw_html=True)
+        send(chat, card("Приложение HDP", note="Задания, оценки и учителя в одном окне. Кнопка «HDP» — "
+                        "всегда слева от поля ввода, кнопки чата тоже работают", icon="✨"), markup=app_kb(), raw_html=True)
     else:
-        send(chat, "⏳ Приложение ещё запускается (нужна минута после старта бота). Попробуй чуть позже.", menu=True)
+        send(chat, err("Приложение ещё запускается — попробуй через минуту", "Пока всё то же — кнопками внизу"),
+             menu=True, raw_html=True)
 
 
 def setup_profile():
@@ -1687,7 +1826,7 @@ def main():
         save_settings(s)
         try:
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
-            send(owner(), f"✨ <b>Обновился</b>\n<i>{esc(head)}</i>", menu=True, raw_html=True)
+            send(owner(), card("Обновился", note=esc(head), icon="✨"), menu=True, raw_html=True)
         except Exception as e:
             print("startup:", e)
     while True:
