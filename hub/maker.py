@@ -398,6 +398,14 @@ def botfather(name, want):
     return None, "Секретарь не смог: " + out.replace("Ошибка: ", "").strip()[-200:]
 
 
+def to_folder(name):
+    """Новый бот — сразу в папку «Bot» Глеба (через Секретаря, без вопроса; нет входа — молча пропускаем)."""
+    if not name or not os.path.exists(os.path.join(ui.REPO, "tgbot", "tmp", "agent.sock")):
+        return
+    threading.Thread(target=ui.sh, args=("python3", os.path.join(ui.REPO, "tgbot", "tg.py"), "botsfolder",
+                                         "--bots", name, "--auto"), kwargs={"timeout": 120}, daemon=True).start()
+
+
 def deploy(chat, slug, token, st=None):
     info = made().get(slug)
     if not info:
@@ -425,6 +433,7 @@ def deploy(chat, slug, token, st=None):
     ui.sh("pm2", "save", timeout=30)
     info["username"] = username(token)
     set_made(slug, info)
+    to_folder(info["username"])
     time.sleep(5)
     a = next((x for x in ui.apps() or [] if x["name"] == info["pm2"]), {})
     if code != 0 or a.get("status") != "online":

@@ -540,6 +540,7 @@ def install(chat, kind, token, msg_id=None):
     code, out = sh("bash", os.path.join(REPO, kind, "install.sh"), timeout=1200, env=env)
     if code != 0:
         return send(chat, f"❌ <b>Не получилось</b>\n<pre>{esc(out.strip()[-1200:])}</pre>")
+    maker.to_folder(name)  # сразу в папку «Bot» (если Секретарь вошёл в аккаунт)
     send(chat, card(f"✅ <b>{esc(short(label))} запущен</b>", [esc(after.format(name=name))]),
          [[{"text": "▶️ Открыть бота", "url": f"https://t.me/{name}", "style": "success"}], [b("‹ К ботам", "home")]])
 

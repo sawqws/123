@@ -114,6 +114,8 @@ def parser():
 
     c = cmd("botsfolder", "⚠ «Начать» во всех ботах Глеба и все боты — в папку (по умолчанию «Bot»)")
     c.add_argument("--name", default="Bot", help="название папки")
+    c.add_argument("--bots", nargs="+", help="только эти боты (username); без — все боты с сервера")
+    c.add_argument("--auto", action="store_true", help="без подтверждения (Главный после создания бота)")
 
     cmd("folders", "папки Telegram и чаты в них")
     c = cmd("folder", "⚠ создать папку или добавить/убрать в ней чаты")

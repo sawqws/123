@@ -958,7 +958,7 @@ class Agent:
             return
         old, self.trust = self.trust, True
         try:
-            out = await actions.run(self, "botsfolder", {"name": "Bot"})
+            out = await actions.run(self, "botsfolder", {"name": "Bot", "auto": True})
         except Exception as e:
             print("bots_folder:", repr(e), flush=True)
             return
@@ -967,7 +967,7 @@ class Agent:
         s = load_settings()
         s["bots_folder"] = True
         save_settings(s)
-        await self.say(card("📁 Папка «Bot»", esc(out) + "\nНовые боты будут попадать туда сами."))
+        await self.say(card("📁 Папка «Bot»", esc(out) + "\nНовых ботов Главный добавит туда сам."))
     async def logout(self):
         if await self.authorized():
             await self.client.log_out()  # сессия удаляется и у Telegram, и на сервере
