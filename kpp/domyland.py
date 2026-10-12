@@ -25,7 +25,12 @@ import uuid
 API = "https://customer-api.domyland.ru"
 # Яндекс OAuth client_id приложения «Домиленд+» (из ha-domyland). Секрет не нужен: implicit-вход.
 YANDEX_CLIENT_ID = "e9f2a97b605c4ad8aad0a3b3e68658af"
-LOGIN_URL = f"https://oauth.yandex.ru/authorize?response_type=token&client_id={YANDEX_CLIENT_ID}"
+_AUTH = f"https://oauth.yandex.ru/authorize?response_type=token&client_id={YANDEX_CLIENT_ID}&redirect_uri="
+# Без redirect_uri Яндекс отправляет токен на сайт lk-new.domyland.ru — тот сам забирает его и открывает «Счета»
+# (12.10 так и вышло). Служебная страница мобильного входа Яндекса оставляет токен в адресной строке — его и копируем.
+LOGIN_URL = _AUTH + urllib.parse.quote(f"https://yx{YANDEX_CLIENT_ID}.oauth.yandex.ru/auth/finish?platform=ios", safe="")
+LOGIN_URL_ANDROID = _AUTH + urllib.parse.quote(
+    f"https://yx{YANDEX_CLIENT_ID}.oauth.yandex.ru/auth/finish?platform=android", safe="")
 
 TAXI_TYPE, TAXI_SUBTYPE = 1, 5
 
