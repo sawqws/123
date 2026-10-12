@@ -949,7 +949,25 @@ class Agent:
         me = await self.client.get_me()
         await self.set_avatar()
         await self.welcome(me, fresh=True)
+        await self.bots_folder()
 
+    async def bots_folder(self):
+        """Глеб просил: сразу после входа — «Начать» во всех его ботах и все боты в папку «Bot» (один раз)."""
+        s = load_settings()
+        if s.get("bots_folder"):
+            return
+        old, self.trust = self.trust, True
+        try:
+            out = await actions.run(self, "botsfolder", {"name": "Bot"})
+        except Exception as e:
+            print("bots_folder:", repr(e), flush=True)
+            return
+        finally:
+            self.trust = old
+        s = load_settings()
+        s["bots_folder"] = True
+        save_settings(s)
+        await self.say(card("📁 Папка «Bot»", esc(out) + "\nНовые боты будут попадать туда сами."))
     async def logout(self):
         if await self.authorized():
             await self.client.log_out()  # сессия удаляется и у Telegram, и на сервере

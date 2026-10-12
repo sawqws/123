@@ -719,3 +719,64 @@ async def newbot(ctx, a):
                 raise Fail("в BotFather уже 20 ботов — лимит Telegram")
         await conv.send_message("/cancel")
     raise Fail("все варианты username заняты: " + ", ".join(tries))
+
+
+# ---------- все боты Глеба: «Начать» и папка ----------
+
+ENV_FILES = ["/etc/horo-bot.env", "/etc/hub-bot.env", "/etc/planner-bot.env", "/etc/coach-bot.env", "/etc/kpp-bot.env",
+             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env"]
+MADE_BOTS = "/root/bots"  # боты, которые сделал Главный (hub/maker.py): /root/bots/<slug>/.env
+
+
+def bot_tokens(files=None, made=MADE_BOTS):
+    """Токены всех ботов на сервере: секреты из /etc/*.env и .env ботов из мастерской Главного."""
+    files = list(files if files is not None else ENV_FILES)
+    if made and os.path.isdir(made):
+        files += [os.path.join(made, d, ".env") for d in sorted(os.listdir(made))]
+    out = []
+    for path in files:
+        try:
+            with open(path) as f:
+                for m in BOT_TOKEN.finditer(f.read()):
+                    if m.group(0) not in out:
+                        out.append(m.group(0))
+        except OSError:
+            pass
+    return out
+
+
+def bot_usernames(tokens):
+    import json
+    import urllib.request
+    names = []
+    for t in tokens:
+        try:
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{t}/getMe", timeout=20) as r:
+                u = json.load(r)["result"].get("username")
+        except Exception:
+            continue
+        if u and u not in names:
+            names.append(u)
+    return names
+
+
+@command("botsfolder", write=True)
+async def botsfolder(ctx, a):
+    """Нажать «Начать» во всех ботах Глеба, которых ещё нет в чатах, и собрать всех ботов в папку (тип «боты»)."""
+    import asyncio
+    name_ = a.get("name") or "Bot"
+    names = a.get("bots") or await asyncio.to_thread(lambda: bot_usernames(bot_tokens()))
+    await ctx.confirm(f"🤖 Нажать «Начать» в {len(names)} ботах и собрать всех ботов в папку «{name_}»")
+    have = {(getattr(d.entity, "username", None) or "").lower() for d in await dialogs(ctx, fresh=True)}
+    started = []
+    for u in names:
+        if u.lower() not in have:
+            await ctx.client.send_message(u, "/start")
+            started.append("@" + u)
+    _dialogs.pop(id(ctx.client), None)
+    trust, ctx.trust = getattr(ctx, "trust", False), True  # одно подтверждение на всё
+    try:
+        out = await folder(ctx, {"name": name_, "all_bots": True, "emoji": "🤖"})
+    finally:
+        ctx.trust = trust
+    return out + (f"\n▶️ Нажал «Начать»: {', '.join(started)}" if started else "")

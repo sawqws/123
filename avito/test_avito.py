@@ -106,6 +106,25 @@ class AI(unittest.TestCase):
         self.assertTrue(long.startswith(ad["title"]))
         self.assertEqual(ad["questions"], [])
 
+    def test_reply_buyer(self):
+        seen = {}
+
+        def fake(prompt, images=(), system="", timeout=0):
+            seen.update(prompt=prompt, images=images, system=system)
+            return '```json\n{"reply": "Да, актуально! Когда удобно забрать?", "note": ""}\n```'
+        with mock.patch.object(ai, "claude", fake):
+            r = ai.reply_buyer({"title": "Велосипед", "price": 9000, "description": "Stels 26"}, "Актуально?",
+                               "/tmp/x.jpg", [{"who": "buyer", "text": "Здравствуйте"}, {"who": "me", "text": "Добрый день"}],
+                               floor=8000, notes="самовывоз м. Сокол")
+        self.assertEqual(r["reply"], "Да, актуально! Когда удобно забрать?")
+        self.assertIn("8000 ₽", seen["system"])
+        self.assertIn("Покупатель: Здравствуйте", seen["prompt"])
+        self.assertIn("самовывоз м. Сокол", seen["prompt"])
+        self.assertEqual(seen["images"], ["/tmp/x.jpg"])
+        with mock.patch.object(ai, "claude", lambda *a, **k: '{"reply": ""}'):
+            with self.assertRaises(ai.AIError):
+                ai.reply_buyer({}, "привет")
+
     def test_pick_similar(self):
         items = market.parse(PAGE)
         with mock.patch.object(ai, "claude", lambda *a, **k: '{"ids": [0, 1, 7]}'):
@@ -211,8 +230,104 @@ class Flow(unittest.TestCase):
             self.assertLessEqual(sum(1 for ch in line if ord(ch) > 0x1F000), 1, line)
         rows = avito.card_buttons(d)
         self.assertLessEqual(max(len(r) for r in rows), 3)
-        self.assertEqual({x["callback_data"] for r in rows for x in r}, {"mk", "cp", "re", "new"})
+        self.assertEqual({x["callback_data"] for r in rows for x in r}, {"pub", "mk", "cp", "re", "new"})
         self.assertTrue(all(len(x["text"]) <= 24 for r in rows for x in r))
+        live = dict(d, status="live", url="https://www.avito.ru/moskva/obuv/krossovki_123", floor=3000)
+        self.assertIn("🟢 На Авито", avito.card(live))
+        self.assertIn("Торг до", avito.card(live))
+        rows = avito.card_buttons(live)
+        self.assertEqual({x["callback_data"] for r in rows for x in r}, {"buy", "sold", "floor", "mk", "cp", "re", "new"})
+        self.assertTrue(all(len(x["text"]) <= 24 for r in rows for x in r))
+        self.assertLessEqual(max(len(r) for r in rows), 3)
+        self.assertIn("Продано за", avito.card(dict(d, status="sold", sold_price=3200)))
+
+    def cb(self, data):
+        avito.on_callback({"id": "1", "from": {"id": 7}, "data": data, "message": {"chat": {"id": 7}, "message_id": 9}})
+
+    def make_ad(self):
+        avito.on_message(self.msg(photo=[{"file_id": "a"}]))
+        avito.on_message(self.msg(text="айфон 13"))
+        avito.on_message(self.msg(text="35000"))
+        return avito.draft()
+
+    def test_publish_live_sold(self):
+        d = self.make_ad()
+        self.cb("pub")
+        self.assertEqual(len(self.albums), 2)  # после фона и в наборе для Авито
+        kit = [p for m, p in self.sent if m == "sendMessage" and "Выложить на Авито" in p.get("text", "")][-1]
+        self.assertIn("<code>iPhone 13 128 ГБ</code>", kit["text"])
+        self.assertIn("<code>35000</code>", kit["text"])
+        self.assertEqual(kit["reply_markup"]["inline_keyboard"][0][0]["url"], avito.ADD_URL)
+        self.assertTrue(self.texts()[-1].startswith("Отличный телефон."))  # описание — отдельным сообщением
+        self.cb("live")
+        self.assertEqual(d["status"], "live")
+        avito.on_message(self.msg(text="вот https://www.avito.ru/moskva/telefony/iphone_13_4012345678."))
+        self.assertEqual(d["url"], "https://www.avito.ru/moskva/telefony/iphone_13_4012345678")
+        self.assertIn("iPhone 13 128 ГБ", d["title"])  # ссылка — не правка описания
+        avito.on_message(self.msg(text="продал за 33к"))
+        self.assertEqual((d["status"], d["sold_price"]), ("sold", 33000))
+        text, rows = avito.ads_view()
+        self.assertIn("✅ iPhone 13 128 ГБ", text)
+        self.assertIn("продано на", text)
+
+    def test_ads_switch(self):
+        first = self.make_ad()
+        avito.on_message(self.msg(text="/new"))
+        avito.on_message(self.msg(text="велосипед stels"))
+        text, rows = avito.ads_view()
+        self.assertIn("сейчас", text)
+        self.cb(rows[0][0]["callback_data"])
+        self.assertEqual(avito.draft()["id"], first["id"])
+        self.assertEqual(len(avito.st["ads"]), 1)
+
+    def test_buyer_and_floor(self):
+        d = self.make_ad()
+        self.cb("floor")
+        avito.on_message(self.msg(text="30000"))
+        self.assertEqual(d["floor"], 30000)
+        self.assertEqual(d["price"], 35000)  # минимальная цена — не цена объявления
+        calls = []
+
+        def fake(ad, buyer, image=None, history=(), floor=None, notes=""):
+            calls.append((buyer, image, list(history), floor))
+            return {"reply": f"Здравствуйте! Могу отдать за 33 000. ({len(calls)})", "note": "торг"}
+        with mock.patch.object(ai, "reply_buyer", fake):
+            self.cb("buy")
+            avito.on_message(self.msg(text="Отдадите за 25?"))
+            self.assertEqual(calls[-1][0], "Отдадите за 25?")
+            self.assertEqual(calls[-1][3], 30000)
+            self.assertEqual(d["price"], 35000)  # «25» от покупателя — не новая цена
+            out = [p for m, p in self.sent if m == "sendMessage"][-1]
+            self.assertIn("Могу отдать за 33 000", out["text"])
+            self.assertEqual(out["reply_markup"]["inline_keyboard"][0][0]["copy_text"]["text"],
+                             "Здравствуйте! Могу отдать за 33 000. (1)")
+            self.cb("buyr")
+            self.assertIn("по-другому", calls[-1][0])
+            self.assertEqual(len(calls[-1][2]), 0)  # прошлый вариант ответа в историю не попал
+            self.assertEqual(len(d["chat"]), 2)
+            # скриншот чата
+            self.cb("buy")
+            with mock.patch.object(avito.media, "photo_path", lambda tok, msg, folder: "/tmp/shot.jpg"):
+                avito.on_message(self.msg(photo=[{"file_id": "s"}]))
+            self.assertEqual(calls[-1][1], "/tmp/shot.jpg")
+            self.assertEqual(len(d["photos"]), 1)  # скрин не попал в фото объявления
+            self.assertEqual(len(calls[-1][2]), 2)  # и знает прошлую переписку
+            # голосовое
+            self.cb("buy")
+            with mock.patch.object(avito.media, "voice_text", lambda tok, msg: "а торг уместен"):
+                avito.on_message(self.msg(voice={"file_id": "v"}))
+            self.assertEqual(calls[-1][0], "а торг уместен")
+            # без режима «покупатель» текст — снова правка объявления
+            avito.on_message(self.msg(text="добавь про чехол"))
+            self.assertEqual(len(calls), 4)
+
+    def test_wait_expires(self):
+        self.make_ad()
+        self.cb("buy")
+        avito.st["wait"]["ts"] -= avito.WAIT_TTL + 1
+        with mock.patch.object(ai, "reply_buyer", mock.Mock(side_effect=AssertionError)):
+            avito.on_message(self.msg(text="32000"))
+        self.assertEqual(avito.draft()["price"], 32000)
 
     def test_app_api(self):
         avito.on_message(self.msg(photo=[{"file_id": "a"}], caption="айфон 13"))
