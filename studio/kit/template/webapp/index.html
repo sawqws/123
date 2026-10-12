@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>{{NAME}}</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <link rel="stylesheet" href="kit.css?v={{v}}">
+  <link rel="stylesheet" href="app.css?v={{v}}">
+</head>
+<body>
+  <main id="app">
+    <header class="top"><h1 class="title">📝 Заметки</h1><span id="count" class="badge"></span></header>
+    <p class="subtitle">Пиши боту в чат или здесь — всё сохранится.</p>
+
+    <div class="card">
+      <textarea id="text" rows="3" placeholder="Новая заметка…"></textarea>
+      <button id="add" class="btn primary">Сохранить</button>
+    </div>
+
+    <h3 class="section">Все заметки</h3>
+    <div id="list"><div class="skeleton"></div><div class="skeleton"></div></div>
+  </main>
+  <script src="kit.js?v={{v}}"></script>
+  <script src="app.js?v={{v}}"></script>
+</body>
+</html>

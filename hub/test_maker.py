@@ -166,5 +166,19 @@ class Update(Base):
         self.assertFalse(os.path.exists(os.path.join(root, "b.txt")))
 
 
+class StudioBots(Base):
+    def test_studio_registry_merged(self):
+        os.makedirs(self.bots, exist_ok=True)
+        with open(os.path.join(self.bots, "registry.json"), "w") as f:
+            json.dump({"voda": {"name": "Вода", "pm2": "bot-voda", "dir": os.path.join(self.bots, "voda"),
+                                "summary": "вода", "username": "voda_bot", "slug": "voda"}}, f)
+        self.assertIn("voda", maker.made())
+        self.assertEqual(maker.label("bot-voda"), "🧩 Вода")
+        self.assertIn(("bot-voda", "🧩 Вода"), maker.targets())
+        maker.set_made("voda", None)  # удаление из Главного — из списка Студии
+        with open(os.path.join(self.bots, "registry.json")) as f:
+            self.assertEqual(json.load(f), {})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

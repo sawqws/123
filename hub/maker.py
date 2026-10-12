@@ -38,17 +38,39 @@ CATALOG = {
                 "Claude в очках Ray-Ban Meta: фото и разговор голосом"),
     "tg-agent": ("🤖 Секретарь", ["tgbot"], "/etc/tg-agent.env", "TG_AGENT_TOKEN", "tgbot",
                  "твой Telegram: чаты, ответы, расписания"),
+    "studio-bot": ("🏗 Студия", ["studio"], "/etc/studio-bot.env", "STUDIO_TOKEN", "studio",
+                   "делает новых ботов по идее: вопросы, план, код, мини-приложение"),
     "hub-bot": ("👑 Главный", ["hub"], "/etc/hub-bot.env", "HUB_TOKEN", None, "следит за ботами, делает новых"),
 }
 
 
+def studio_made():
+    """Боты, которых сделала «Студия» (studio/): /root/bots/registry.json."""
+    try:
+        with open(os.path.join(BOTS, "registry.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def made():
-    return ui.setting("made") or {}
+    return {**studio_made(), **(ui.setting("made") or {})}
 
 
 def set_made(slug, info=None):
     with ui.lock:
-        m = made()
+        if slug in studio_made() and slug not in (ui.setting("made") or {}):  # бот Студии — пишем в её список
+            r = studio_made()
+            if info is None:
+                r.pop(slug, None)
+            else:
+                r[slug] = info
+            tmp = os.path.join(BOTS, "registry.json.tmp")
+            with open(tmp, "w") as f:
+                json.dump(r, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, os.path.join(BOTS, "registry.json"))
+            return
+        m = ui.setting("made") or {}
         if info is None:
             m.pop(slug, None)
         else:
@@ -291,9 +313,18 @@ CODE = """Ты пишешь Telegram-бота для Глеба с нуля в �
 В конце ответь 2–4 строками по-русски: что умеет бот. Ничего не запускай надолго (сам бот не запускай)."""
 
 
+def studio_link():
+    """@username Студии, если она поставлена: там делать ботов удобнее (вопросы, план, мини-приложение)."""
+    return username(env_value("/etc/studio-bot.env", "STUDIO_TOKEN"))
+
+
 def ask_make(chat, mid=None):
     ui.setting("wait", "make")
-    ui.show(chat, mid, MAKE_ASK, [[ui.b("Отмена", "home")]])
+    who = studio_link()
+    rows = [[{"text": "🏗 Сделать в Студии", "url": f"https://t.me/{who}", "style": "success"}]] if who else []
+    text = MAKE_ASK + ("\n<i>Удобнее — в Студии: уточнит детали, покажет план, сделает мини-приложение и аватар.</i>"
+                       if who else "")
+    ui.show(chat, mid, text, rows + [[ui.b("Отмена", "home")]])
 
 
 def make(chat, tz):
