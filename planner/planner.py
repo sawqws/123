@@ -57,6 +57,7 @@ EYE_PORT = 8791  # eye/eye.py
 KPP_PORT = 8792  # kpp/kpp.py
 AVITO_PORT = 8793  # avito/avito.py
 AGENT_PORT = 8794  # tgbot/agent.py
+STUDIO_PORT = 8795  # studio/studio.py: приложение Студии и мини-приложения сделанных ею ботов
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
 REPO = os.path.dirname(HERE)
@@ -1087,6 +1088,10 @@ def caddyfile(ip):
         "}\n"
         f"https://agent.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{AGENT_PORT}\n"
+        "}\n"
+        # «Студия» (studio/): её приложение и мини-приложения ботов, которых она сделала (/b/<slug>/)
+        f"https://apps.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{STUDIO_PORT}\n"
         "}\n"
     )
     return conf, [f"https://{host}", f"https://{ip}"]
