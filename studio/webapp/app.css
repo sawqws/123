@@ -1,0 +1,27 @@
+/* Студия: своё поверх kit.css */
+.hero { text-align: center; padding: 24px 16px; }
+.hero .emoji { font-size: 56px; line-height: 1; display: block; margin-bottom: 8px; }
+.hero h2 { margin: 0 0 4px; font-size: 22px; }
+.step-no { color: var(--hint); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+.question { font-size: 19px; font-weight: 600; margin: 6px 0 16px; line-height: 1.3; }
+.qa { font-size: 14px; color: var(--hint); }
+.qa b { color: var(--text); font-weight: 500; }
+.plan h3 { margin: 16px 0 6px; font-size: 15px; }
+.plan h3:first-of-type { margin-top: 12px; }
+.plan ul { margin: 0; padding-left: 20px; }
+.plan li + li { margin-top: 4px; }
+.plan .summary { color: var(--hint); font-style: italic; }
+.steps { list-style: none; margin: 12px 0 0; padding: 0; }
+.steps li { display: flex; gap: 10px; align-items: center; padding: 6px 0; color: var(--hint); font-size: 15px; }
+.steps li::before { content: "✓"; color: var(--ok); font-weight: 700; width: 18px; text-align: center; flex: none; }
+.steps li.now { color: var(--text); font-weight: 600; }
+.steps li.now::before { content: ""; width: 14px; height: 14px; margin: 0 2px; border-radius: 50%; border: 2px solid var(--accent);
+  border-right-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.thinking { display: flex; align-items: center; gap: 12px; font-weight: 600; }
+.thinking::before { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--accent);
+  border-right-color: transparent; animation: spin .8s linear infinite; flex: none; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--hint); flex: none; }
+.dot.on { background: var(--ok); } .dot.off { background: var(--danger); }
+.err { color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.sheet h2 { margin: 4px 0 4px; font-size: 22px; }

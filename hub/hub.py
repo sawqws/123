@@ -75,6 +75,7 @@ APPS = {  # имя в pm2 -> подпись
     "avito-bot": "🛍 Авито",
     SECRETARY: "🤖 Секретарь",
     "eye-bot": "👁 Глаз",
+    "studio-bot": "🏗 Студия",
     SELF: "👑 Главный",
 }
 INSTALL = {  # что умеем ставить по одному токену: папка, переменная с токеном, подпись, что дальше
@@ -84,6 +85,8 @@ INSTALL = {  # что умеем ставить по одному токену: 
     "avito": ("AVITO_TOKEN", "🛍 Авито", "Открой @{name}, нажми /start и пришли фото вещи."),
     "eye": ("EYE_TOKEN", "👁 Глаз (очки)", "Открой @{name} и нажми /start — через минуту появится кнопка «Глаз»: "
             "там «🎙 Говорить» и «📷 Фото»."),
+    "studio": ("STUDIO_TOKEN", "🏗 Студия", "Открой @{name}, нажми /start и напиши, какой бот нужен — "
+                                         "Студия уточнит детали, покажет план и сделает бота сама."),
 }
 BOTFATHER = {  # имя и желаемый username, если бота создаёт Секретарь (без «bot» на конце)
     "coach": ("Форма", "forma_coach"),
@@ -91,6 +94,7 @@ BOTFATHER = {  # имя и желаемый username, если бота созд
     "kpp": ("КПП пропуск", "kpp_pass"),
     "avito": ("Авито помощник", "avito_helper"),
     "eye": ("Глаз", "glaz_eye"),
+    "studio": ("Студия ботов", "bot_studio"),
 }
 TZ = datetime.timezone(datetime.timedelta(hours=3))  # Москва
 
@@ -685,6 +689,7 @@ def install(chat, kind, token, msg_id=None):
     code, out = sh("bash", os.path.join(REPO, kind, "install.sh"), timeout=1200, env=env)
     if code != 0:
         return send(chat, f"❌ <b>Не получилось</b>\n<pre>{esc(out.strip()[-1200:])}</pre>")
+    maker.to_folder(name)  # сразу в папку «Bot» (если Секретарь вошёл в аккаунт)
     send(chat, card(f"✅ <b>{esc(short(label))} запущен</b>", [esc(after.format(name=name))]),
          [[{"text": "▶️ Открыть бота", "url": f"https://t.me/{name}", "style": "success"}], [b("‹ К ботам", "bots")]])
 

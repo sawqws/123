@@ -13,3 +13,7 @@ common/.venv/
 eye/data/
 eye/.venv/
 .claude/worktrees/
+studio/data/
+studio/webapp/kit.css
+studio/webapp/kit.js
+studio/kit/template/data/
