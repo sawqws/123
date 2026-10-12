@@ -355,7 +355,7 @@ class BotTest(unittest.TestCase):
              mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
             self.say(photo=[{"file_id": "p"}])  # фото без черновика — подсказка
             self.voice("Что <это> & то")        # эхо голосового
-            for t in ("/start", bot.BTN_HELP, bot.BTN_DIGEST, bot.BTN_DIGEST, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
+            for t in ("/start", bot.BTN_HELP, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
                       "что-то непонятное", bot.BTN_MORE, bot.BTN_APP, "/kpp", "/emoji", bot.BTN_HAND):
                 self.say(t)
             self.say(photo=[{"file_id": "a"}])
@@ -497,20 +497,22 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.nodes[-1], ("horo/status.js", "--late", "--html"))
 
     def test_more_menu_edits_in_place(self):
-        """«⚙️ Ещё»: просрочки, сводка, почерк, проверка, помощь; сводка и помощь правят то же сообщение."""
+        """«⚙️ Ещё»: просрочки, почерк, проверка, помощь; помощь правит то же сообщение. Сводки нет."""
         calls = []
         real = self.fake_tg
         with mock.patch.object(bot, "tg", lambda m, **p: calls.append((m, p)) or real(m, **p)):
             self.say(bot.BTN_MORE)
             menu = self.last()[1]
-            for data in ("m:late", "m:digest", "m:help", "m:check", "m:hand"):
+            for data in ("m:late", "m:help", "m:check", "m:hand"):
                 self.assertIn(data, menu)
+            self.assertNotIn("m:digest", menu)  # сводки больше нет: бот сам не пишет
+            self.assertFalse(hasattr(bot, "digest_loop"))
             cb = lambda data: bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": 8}})
-            cb("m:digest")
-            self.assertTrue(bot.load_settings().get("digest"))
+            cb("m:digest")  # старая кнопка в истории чата — просто показывает меню
+            self.assertFalse(bot.load_settings().get("digest"))
             edits = [p for m, p in calls if m == "editMessageText"]
             self.assertEqual(edits[-1]["message_id"], 8)
-            self.assertIn("Сводка: вкл", edits[-1]["reply_markup"])
+            self.assertNotIn("Сводка", edits[-1]["reply_markup"])
             cb("m:help")
             self.assertIn("Что я умею", [p for m, p in calls if m == "editMessageText"][-1]["text"])
             cb("m:late")
