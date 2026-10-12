@@ -316,8 +316,6 @@ function settingsSheet() {
   const me = S.me || {};
   openSheet(`<h2>Настройки</h2>
     <div class="list">
-      <button class="row" data-a="digest"><span class="ic">🔔</span><span class="main"><div class="title">Сводка каждый день</div>
-        <div class="meta">в ${me.hour || 15}:00 мск — что надо сделать</div></span><span class="switch ${me.digest ? 'on' : ''}" id="digest-sw"></span></button>
       <button class="row" data-a="check"><span class="ic">🩺</span><span class="main"><div class="title">Проверка</div>
         <div class="meta">сайт, Claude, почерк — ответ в чат</div></span><span class="chev"></span></button>
       <button class="row" data-a="alphabet"><span class="ic">✍️</span><span class="main"><div class="title">Мой почерк</div>
@@ -402,13 +400,6 @@ const ACT = {
   'draft-drop': () => confirmDo('Не отправлять этот черновик?', async () => {
     try { S.state = await api('/api/draft/drop', {}); closeSheet(); renderStatus(); toast('Не отправляю'); } catch (e) { toast(e.message, 'err'); }
   }),
-  digest: async () => {
-    try {
-      S.me = await api('/api/digest', { on: !(S.me && S.me.digest) });
-      const sw = q('#digest-sw'); if (sw) sw.classList.toggle('on', !!S.me.digest);
-      haptic('select');
-    } catch (e) { toast(e.message, 'err'); }
-  },
   check: async () => { try { await api('/api/check', {}); closeSheet(); toast('Проверяю — ответ придёт в чат', 'ok'); } catch (e) { toast(e.message, 'err'); } },
   alphabet: async () => { try { await api('/api/alphabet', {}); closeSheet(); toast('Листы алфавита — в чате', 'ok'); } catch (e) { toast(e.message, 'err'); } },
   chat: () => { if (tg) tg.close(); },

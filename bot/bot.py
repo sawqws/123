@@ -54,7 +54,6 @@ API = f"https://api.telegram.org/bot{TOKEN}/"
 LINK = re.compile(r"https://horodigital\.ru/student/topic/[0-9a-f-]{36}/task/[0-9a-f-]{36}\S*")
 TIMEOUT = 15 * 60  # секунд на одно задание
 MSK = ZoneInfo("Europe/Moscow")
-DIGEST_HOUR = 15  # во сколько присылать ежедневную сводку (по Москве)
 
 lock = threading.Lock()
 offset = 0    # следующий update_id из Telegram
@@ -68,23 +67,22 @@ BTN_LATE = "❗ Просрочки"
 BTN_ALL = "⚡ Автотесты"
 BTN_COMM = "💬 Учителя"
 BTN_GRADES = "📊 Оценки"
-BTN_DIGEST = "🔔 Сводка"
 BTN_HAND = "✍️ Почерк"
 BTN_CHECK = "🩺 Проверка"
 BTN_HELP = "❓ Помощь"
 BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
-ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением) и «выключенная» сводка
+ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением)
     "📋 Что надо сделать": BTN_LIST, "⚡ Сдать все автотесты": BTN_ALL, "💬 Комментарии учителя": BTN_COMM,
-    "📊 Мои оценки": BTN_GRADES, "🔔 Сводка каждый день": BTN_DIGEST, "✍️ Мой почерк": BTN_HAND, "🔕 Сводка": BTN_DIGEST,
+    "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
-BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_DIGEST, BTN_HAND, BTN_CHECK, BTN_HELP,
+BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
            BTN_APP, BTN_MORE}
 
 
 def menu_kb():
-    """Клавиатура у поля ввода: главное действие первым, редкое — в «Ещё» (там же просрочки, сводка, почерк,
-    проверка и помощь). Старые кнопки (❗ Просрочки, 🔔 Сводка…) по-прежнему понимаются текстом."""
+    """Клавиатура у поля ввода: главное действие первым, редкое — в «Ещё» (там же просрочки, почерк,
+    проверка и помощь). Старые кнопки (❗ Просрочки…) по-прежнему понимаются текстом. Сам бот не пишет (сводку убрали)."""
     b = lambda text, style=None: {"text": text, **({"style": style} if style else {})}
     return json.dumps({
         "keyboard": [
@@ -108,7 +106,7 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Голосовое</b> — как текст\n"
     "<b>Фото, скриншот</b> — найду задание и решу; при черновике — фото в него\n"
     "<b>Видео</b> — кадры как фото, речь как текст\n"
-    f"<b>Ещё</b> — просрочки, сводка в {DIGEST_HOUR}:00, почерк, проверка\n"
+    "<b>Ещё</b> — просрочки, почерк, проверка\n"
     "/style — почерк · /update — обновиться · /emoji — премиум-эмодзи</blockquote>\n"
     "<i>Всё то же — в приложении: кнопка «HDP» слева от поля ввода</i>"
 )
@@ -934,14 +932,12 @@ def on_callback(cq):
 # ---------- Меню «Ещё»: редкие действия, правится на месте ----------
 
 def more_text():
-    on = load_settings().get("digest")
-    return card("Ещё", note=f"Сводка в {DIGEST_HOUR}:00 мск {'включена' if on else 'выключена'}", icon="⚙️")
+    return card("Ещё", note="Сам я не пишу — только отвечаю", icon="⚙️")
 
 
 def more_kb():
-    on = load_settings().get("digest")
     rows = [
-        [("❗ Просрочки", "m:late"), ("🔔 Сводка: вкл" if on else "🔕 Сводка: выкл", "m:digest")],
+        [("❗ Просрочки", "m:late")],
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
         [("❓ Помощь", "m:help")] + ([("✨ Приложение", {"web_app": {"url": APP_URL + "/"}})] if APP_URL else []),
     ]
@@ -949,14 +945,8 @@ def more_kb():
 
 
 def on_more(chat, mid, cq_id, key):
-    tip = ""
-    if key == "digest":
-        s = load_settings()
-        s["digest"] = not s.get("digest")
-        save_settings(s)
-        tip = f"Сводка включена: каждый день в {DIGEST_HOUR}:00" if s["digest"] else "Сводка выключена"
-    quiet("answerCallbackQuery", callback_query_id=cq_id, **({"text": tip} if tip else {}))
-    if key in ("more", "digest"):
+    quiet("answerCallbackQuery", callback_query_id=cq_id)
+    if key in ("more", "digest"):  # digest — старая кнопка сводки (сводки больше нет)
         edit(chat, mid, more_text(), more_kb())
     elif key == "help":
         edit(chat, mid, HELP, kb([("‹ Назад", "m:more")]))
@@ -1394,22 +1384,6 @@ WEEKDAYS = ["понедельник", "вторник", "среда", "четв�
 MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
 
 
-def digest_loop():
-    sent_day = None
-    while True:
-        now = datetime.datetime.now(MSK)
-        s = load_settings()
-        if s.get("digest") and now.hour == DIGEST_HOUR and sent_day != now.date():
-            sent_day = now.date()
-            ok, out = node("horo/status.js", "--html")
-            day = f"{WEEKDAYS[now.weekday()]}, {now.day} {MONTHS[now.month - 1]}"
-            try:
-                send(owner(), f"🔔 <b>Сводка · {day}</b>\n\n" + (out if ok else err(out)), menu=True, raw_html=True)
-            except Exception as e:
-                print("digest:", e)
-        time.sleep(60)
-
-
 def spoken_button(text):
     """«Оценки.» голосом -> «📊 Оценки»: кнопку не произнести с эмодзи, поэтому сравниваем только слова."""
     words = lambda s: " ".join(re.findall(r"[a-zа-яё]+", s.lower().replace("ё", "е")))
@@ -1782,14 +1756,6 @@ def handle(msg):
     if text == BTN_ALL:
         threading.Thread(target=find_auto_tests, args=(chat,), daemon=True).start()
         return
-    if text == BTN_DIGEST:
-        s = load_settings()
-        s["digest"] = not s.get("digest")
-        save_settings(s)
-        send(chat, card("Сводка включена", note=f"Каждый день в {DIGEST_HOUR}:00 по Москве пришлю, что надо сделать",
-                        icon="🔔") if s["digest"] else
-             card("Сводка выключена", note="Включить снова — «Ещё» → «Сводка»", icon="🔕"), menu=True, raw_html=True)
-        return
 
     m = LINK.search(text)
     if not m:
@@ -1877,7 +1843,7 @@ def app_overview(b):
 
 def app_me(_):
     git = lambda *a: subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
-    return {"digest": bool(load_settings().get("digest")), "hour": DIGEST_HOUR, "alphabet": os.path.exists(GLEB_EXTRA),
+    return {"alphabet": os.path.exists(GLEB_EXTRA),
             "version": git("rev-parse", "--short", "HEAD")}
 
 
@@ -1927,13 +1893,6 @@ def app_draft(action):
     return fn
 
 
-def app_digest(b):
-    s = load_settings()
-    s["digest"] = bool(b.get("on"))
-    save_settings(s)
-    return app_me(b)
-
-
 def app_chat(fn):
     """Действие, результат которого приходит в чат (проверка, алфавит)."""
     def run(_):
@@ -1947,7 +1906,7 @@ ROUTES = {
     "/api/state": app_state, "/api/overview": app_overview, "/api/me": app_me,
     "/api/solve": app_solve, "/api/auto": app_auto,
     "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),
-    "/api/digest": app_digest, "/api/check": app_chat(check), "/api/alphabet": app_chat(send_alphabet),
+    "/api/check": app_chat(check), "/api/alphabet": app_chat(send_alphabet),
 }
 
 
@@ -1985,7 +1944,6 @@ def setup_profile():
 
 def main():
     global offset
-    threading.Thread(target=digest_loop, daemon=True).start()
     threading.Thread(target=setup_profile, daemon=True).start()
     web.start(TOKEN, owner, ROUTES, on_app_url)
     print("Бот запущен")
