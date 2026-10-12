@@ -95,6 +95,7 @@ settings_lock = threading.RLock()  # настройки правят парал�
 offset = 0    # следующий update_id из Telegram
 mode = {}     # chat -> "show" | "confirm_all" | "emoji" | "alphabet" | "hand_tune"
 pending = {}  # chat -> список ссылок для «Сдать все автотесты»
+SUP = None    # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется приложение
 
 BTN_DO = "📝 Решить и сдать"
 BTN_SHOW = "👀 Только ответы"
@@ -1024,7 +1025,7 @@ def more_text():
 
 def more_kb():
     rows = [
-        [("❗ Просрочки", "m:late")],
+        [("❗ Просрочки", "m:late"), ("🛠 Поддержка", "sup|ask")],  # sup|… ловит support.Support
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
         [("❓ Помощь", "m:help")] + ([("✨ Приложение", {"web_app": {"url": APP_URL + "/"}})] if APP_URL else []),
     ]
@@ -2000,7 +2001,15 @@ def app_chat(fn):
     return run
 
 
+def app_support(body):
+    """🛠 Поддержка из приложения — та же, что /fix в чате (web.py уже проверил, что это владелец)."""
+    if not SUP:
+        raise ValueError("Поддержка ещё запускается — попробуй через минуту")
+    return SUP.web(owner(), body)
+
+
 ROUTES = {
+    "/api/support": app_support,
     "/api/state": app_state, "/api/overview": app_overview, "/api/me": app_me,
     "/api/solve": app_solve, "/api/auto": app_auto,
     "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),
@@ -2320,8 +2329,9 @@ def main():
             send(owner(), card("Обновился", note=esc(head), icon="✨"), menu=True, raw_html=True)
         except Exception as e:
             print("startup:", e)
-    sup = support.Support(TOKEN, "HDP", folders=["bot", "horo"], pm2="horo-bot", allowed=lambda uid: uid == owner(),
-                          tests=["python3 bot/test_bot.py"])
+    global SUP
+    SUP = sup = support.Support(TOKEN, "HDP", folders=["bot", "horo"], pm2="horo-bot",
+                                allowed=lambda uid: uid == owner(), tests=["python3 bot/test_bot.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=60)

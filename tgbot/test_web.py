@@ -198,6 +198,54 @@ class Api(unittest.TestCase):
             self.assertEqual((await self.req("/api/nope"))[0], 404)
         self.go(a, scenario)
 
+    def test_support_own_and_via_hub(self):
+        """🛠 Поддержка: отдельным ботом — своя (Support.web, start — заглушка); в Главном — его «Доработать»."""
+        import http.server
+        import threading
+        import support
+        a = self.make()
+        sup = support.Support.__new__(support.Support)
+        sup.allowed, sup.media_dir, calls = (lambda u: u == OWNER), tempfile.mkdtemp(), []
+        sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+        got = []
+
+        class Hub(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *x):
+                pass
+
+            def do_POST(self):
+                got.append((self.path, self.headers.get("X-Init-Data"),
+                            json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+        hub = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hub)
+        threading.Thread(target=hub.serve_forever, daemon=True).start()
+        self.addCleanup(hub.server_close)
+        self.addCleanup(hub.shutdown)
+        shot = __import__("base64").b64encode(b"\x89PNG" + bytes(300_000)).decode()  # больше предела тела в 256 КБ
+
+        async def scenario():
+            self.assertEqual((await self.req("/api/support", {"text": "x"}))[0], 400)  # ещё не запущена
+            a.support = sup
+            self.assertEqual(await self.req("/api/support", {"text": "сводка пустая", "photo": shot}), (200, {"ok": True}))
+            self.assertEqual((calls[-1][0], os.path.exists(calls[-1][2][0])), (OWNER, True))
+            self.assertEqual((await self.req("/api/support", {"text": " "}))[0], 400)
+            self.assertEqual((await self.req("/api/support", {"text": "x"}, user=12345))[0], 403)
+            a.support, a.via_hub = None, True  # в Главном — к нему, с той же подписью и ботом tg-agent
+            with mock.patch.object(web, "HUB_PORT", hub.server_address[1]):
+                self.assertEqual(await self.req("/api/support", {"text": "память не сохраняется"}), (200, {"ok": True}))
+            self.assertEqual(got[-1][0], "/app/api/support")
+            self.assertEqual(got[-1][2], {"text": "память не сохраняется", "bot": "tg-agent"})
+            self.assertTrue(got[-1][1])
+        self.go(a, scenario)
+        self.assertEqual(len(calls), 1)
+        a.via_hub = False
+        self.assertEqual(a.support_button()["callback_data"], "sup|ask")
+        a.via_hub = True
+        self.assertEqual(a.support_button()["callback_data"], "fix|tg-agent")  # кнопка Главного, без префикса
+
     def test_no_owner_yet(self):
         a = self.make()
         a.allowed = 0

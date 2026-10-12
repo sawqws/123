@@ -11,6 +11,7 @@
         continue
 
 Кнопка для своих меню — SUP.button(). Команду /fix модуль сам добавляет в меню команд бота.
+Из мини-приложения (Kit.support в common/webapp/kit.js): POST /api/support -> SUP.web(uid, body).
 Голосовые и скриншоты к просьбе понимает (common/media.py). Одна задача Claude за раз на весь сервер (файловая
 блокировка): если другой бот уже чинится, просьба ждёт очереди. Только стандартная библиотека.
 """
@@ -183,9 +184,9 @@ class Support:
 
     def ask(self, chat, mid=None):
         self.waiting[chat] = {"at": time.time(), "shots": []}
-        text = (f"🛠 <b>Поддержка «{esc(self.name)}»</b>\n<blockquote>Напиши, что не так или что улучшить — "
-                "текстом или голосом, можно со скриншотами. Я сам поправлю код, проверю тестами и перезапущу бота."
-                "</blockquote>\n<i>Например: «кнопка Неделя ничего не показывает» или «добавь итог за месяц».</i>")
+        text = (f"🛠 <b>Поддержка «{esc(self.name)}»</b>\n<blockquote>Напиши, что сломалось или чего не хватает — "
+                "починю/добавлю. Можно текстом или голосом, со скриншотами: сам поправлю код, проверю тестами "
+                "и перезапущу бота.</blockquote>\n<i>Например: «кнопка Неделя ничего не показывает» или «добавь итог за месяц».</i>")
         rows = [[{"text": "Отмена", "callback_data": "sup|no"}]]
         (self.edit(chat, mid, text, rows) if mid else self.send(chat, text, rows))
 
@@ -226,6 +227,41 @@ class Support:
             self.edit(chat, mid, "🛠 Поддержка — отменено.")
         elif data[1:2] == ["undo"] and len(data) > 2:
             threading.Thread(target=self.undo, args=(chat, data[2]), daemon=True).start()
+
+    def web(self, uid, body):
+        """Просьба из мини-приложения (Kit.support): {"text", "photo": base64 картинки?} -> {"ok": True}.
+        Чат владельца — его id (личка). PermissionError — не владелец, ValueError — пустой текст или битое фото."""
+        if not self.allowed(uid):
+            raise PermissionError("Поддержка — только для владельца")
+        text = str((body or {}).get("text") or "").strip()[:4000]
+        if not text:
+            raise ValueError("Напиши, что поправить")
+        shots = []
+        photo = (body or {}).get("photo")
+        if photo:
+            shots.append(self.save_photo(photo))
+        self.start(uid, text + "\n\n(написано в мини-приложении)", shots)
+        return {"ok": True}
+
+    def save_photo(self, b64):
+        """base64 (можно data:URL) -> путь к файлу в media_dir. Не больше 10 МБ."""
+        import base64
+        import binascii
+        b64 = str(b64)
+        if b64.startswith("data:"):
+            b64 = b64.split(",", 1)[-1]
+        try:
+            raw = base64.b64decode(b64, validate=False)
+        except (binascii.Error, ValueError):
+            raise ValueError("Скриншот не разобрался")
+        if not raw or len(raw) > 10 * 1024 * 1024:
+            raise ValueError("Скриншот пустой или больше 10 МБ")
+        ext = ".png" if raw[:4] == b"\x89PNG" else ".jpg"
+        os.makedirs(self.media_dir, exist_ok=True)
+        path = os.path.join(self.media_dir, f"web-{int(time.time() * 1000)}{ext}")
+        with open(path, "wb") as f:
+            f.write(raw)
+        return path
 
     # ---------- работа ----------
 

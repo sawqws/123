@@ -215,6 +215,7 @@ class Agent:
     web = None
     via_hub = False        # один бот с Главным (см. resolve)
     old_token = ""
+    support = None         # 🛠 своя поддержка (common/support.py) — только отдельным ботом; в Главном — его «Доработать»
 
     def __init__(self, token, api_id=0, api_hash="", allowed=0, via_hub=False, old_token=""):
         os.makedirs(TMP, exist_ok=True)
@@ -430,6 +431,10 @@ class Agent:
         body = esc(text) if text else "Пока пусто. Скажите, например: «запомните, что тренировки по вторникам в 18:00»."
         return card("📝 Память", body, "править — словами в чате или в приложении")
 
+    def support_button(self):
+        """🛠 Поддержка: своя (sup|ask, ловит support.Support) или «Доработать» Главного для Секретаря (без префикса)."""
+        return {"text": "🛠 Поддержка", "callback_data": "fix|tg-agent" if self.via_hub else "sup|ask"}
+
     def home_button(self):
         """Внутри Главного — назад на его главный экран (кнопка Главного, без префикса Секретаря)."""
         return {"text": "‹ Главная", "callback_data": "home"}
@@ -437,7 +442,7 @@ class Agent:
     async def dashboard(self):
         if not await self.authorized():
             rows = [[Button.inline("🔑 Войти в аккаунт", "login:", style="primary")],
-                    [self.app_button(), Button.inline("❓ Что я умею", "m:help")]]
+                    [self.app_button(), Button.inline("❓ Что я умею", "m:help"), self.support_button()]]
             if self.via_hub:
                 rows.append([self.home_button()])
             return card("👤 Аккаунт", "Аккаунт не подключён — на вопросы отвечаю и без него.\n"
@@ -456,7 +461,7 @@ class Agent:
         buttons = [[self.app_button()],
                    [Button.inline("🆕 Новый разговор", "m:new"), Button.inline("🩺 Проверка", "m:check")],
                    [Button.inline("⏰ Расписание", "m:jobs"), Button.inline("📝 Память", "m:memory")],
-                   [Button.inline("❓ Что я умею", "m:help")] +
+                   [Button.inline("❓ Что я умею", "m:help"), self.support_button()] +
                    ([] if self.via_hub else [Button.inline("🔄 Обновить бота", "m:update")]),
                    [Button.inline("Выйти из аккаунта", "m:logout", style="danger")]]
         if self.via_hub:
@@ -1386,9 +1391,10 @@ class Agent:
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
             await self.say(card("✦ Обновился", esc(head)), buttons=MENU)
         if not self.via_hub:
-            self.bot.intercept = support.Support(
+            self.support = support.Support(
                 self.bot.token, "Секретарь", folders=["tgbot"], pm2="tg-agent", allowed=lambda uid: uid == self.owner(),
-                tests=["tgbot/.venv/bin/python tgbot/test_tgbot.py", "python3 tgbot/test_get_api.py"]).intercept
+                tests=["tgbot/.venv/bin/python tgbot/test_tgbot.py", "python3 tgbot/test_get_api.py"])
+            self.bot.intercept = self.support.intercept
             await self.bot.run(self.on_message, self.on_callback)
             return
         print("Режим «через Главного»: Telegram опрашивает hub-bot, обновления приходят в сокет", flush=True)

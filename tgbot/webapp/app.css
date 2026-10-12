@@ -292,3 +292,12 @@ body.typing .tabs { transform: translateY(110%); }
 .toast.show { opacity: 1; transform: none; }
 .toast.err { background: #3a1520; }
 .gate { min-height: 70vh; display: grid; place-items: center; text-align: center; }
+
+/* 🛠 поддержка и пожелания */
+.sheet .sup-text { width: 100%; min-height: 110px; border: 0; outline: 0; resize: none; border-radius: 12px; background: var(--card-2);
+  padding: 12px; font-size: 16px; line-height: 1.45; display: block; }
+.sup-shot { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; min-height: 36px; }
+.sup-prev { position: relative; display: inline-flex; }
+.sup-prev img { height: 52px; max-width: 120px; border-radius: 10px; object-fit: cover; }
+.sup-x { position: absolute; top: -7px; right: -7px; width: 22px; height: 22px; border-radius: 50%; background: var(--card-2);
+  color: var(--text); font-size: 11px; display: grid; place-items: center; }

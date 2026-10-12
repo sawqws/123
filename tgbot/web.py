@@ -15,6 +15,7 @@ import mimetypes
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -26,8 +27,10 @@ WEB = os.path.join(HERE, "webapp")
 FILES = ("index.html", "app.css", "app.js", "kit.css", "kit.js")
 MAX_AGE = 24 * 3600          # initData старше суток не принимаем
 MAX_BODY = 256 * 1024
+MAX_SUPPORT = 16 * 1024 * 1024  # 🛠 поддержка — со скриншотом
 MEMORY_LIMIT = 20000
 HUB_ENV = "/etc/hub-bot.env"
+HUB_PORT = int(os.environ.get("HUB_PORT") or 8790)  # сервер Главного: в его режиме поддержка идёт через «Доработать»
 
 
 # ---------- подпись Telegram ----------
@@ -231,7 +234,7 @@ class Web:
                 if k:
                     headers[k.strip().lower()] = v.strip()
             n = int(headers.get("content-length") or 0)
-            if n < 0 or n > MAX_BODY:
+            if n < 0 or n > (MAX_SUPPORT if target.split("?")[0] == "/api/support" else MAX_BODY):
                 return method, target, headers, None
             body = await asyncio.wait_for(reader.readexactly(n), 15) if n else b""
             return method, target, headers, body
@@ -253,7 +256,7 @@ class Web:
             print("web:", repr(e), flush=True)
             code, ctype, data, extra = 500, "application/json; charset=utf-8", self.dump({"error": "ошибка сервера"}), {}
         reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
-                  409: "Conflict", 413: "Payload Too Large", 500: "Internal Server Error"}.get(code, "OK")
+                  409: "Conflict", 413: "Payload Too Large", 500: "Internal Server Error", 502: "Bad Gateway"}.get(code, "OK")
         hdrs = {"Content-Type": ctype, "Content-Length": str(len(data)), "Connection": "close",
                 "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
                 "Cache-Control": "no-store", **extra}
@@ -288,6 +291,8 @@ class Web:
                 raise ApiError(400, "плохой JSON")
             if not isinstance(req, dict):
                 raise ApiError(400, "плохой JSON")
+            if path == "/api/support":
+                return 200, "application/json; charset=utf-8", self.dump(await self.support(req, user, headers)), {}
             return 200, "application/json; charset=utf-8", self.dump(await self.api(path, req, user)), {}
         if method != "GET":
             raise ApiError(400, "нужен GET")
@@ -305,6 +310,40 @@ class Web:
         return 200, ctype + "; charset=utf-8", data, {"Cache-Control": "public, max-age=31536000, immutable"}
 
     # ---------- API ----------
+
+    async def support(self, b, user, headers):
+        """🛠 Поддержка из приложения: отдельным ботом — своя (common/support.py), в Главном — его «Доработать»
+        для Секретаря (тот же бот, та же подпись Telegram)."""
+        a = self.agent
+        if a.support:
+            try:
+                return await asyncio.to_thread(a.support.web, user["id"], b)
+            except PermissionError as e:
+                raise ApiError(403, str(e))
+            except ValueError as e:
+                raise ApiError(400, str(e))
+        if not a.via_hub:
+            raise ApiError(400, "Поддержка ещё запускается — попробуйте через минуту")
+        body = json.dumps({**b, "bot": "tg-agent"}).encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{HUB_PORT}/app/api/support", data=body, method="POST",
+                                     headers={"X-Init-Data": headers.get("x-init-data", ""),
+                                              "Content-Type": "application/json"})
+
+        def call():
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return 200, json.load(r)
+            except urllib.error.HTTPError as e:
+                try:
+                    return e.code, json.load(e)
+                except ValueError:
+                    return e.code, {}
+            except OSError:
+                return 502, {"error": "Главный не отвечает"}
+        code, res = await asyncio.to_thread(call)
+        if code != 200:
+            raise ApiError(code, res.get("error") or "Главный не принял просьбу")
+        return res
 
     async def api(self, path, b, user):
         a = self.agent

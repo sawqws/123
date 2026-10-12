@@ -328,6 +328,9 @@
         <button class="btn primary" data-act="update" ${upd ? 'disabled' : ''}>${upd ? 'Обновляю…' : '⬆️ Обновить всех'}</button></section>
       <div class="label">Боты<span class="more tnum">${run.length} из ${bots.length}</span></div>
       <div class="list">${bots.map(botRow).join('')}</div>
+      <div class="list sup-list"><button class="row tap" data-act="support"><span class="ic">🛠</span><div class="main">
+        <div class="title">Поддержка и пожелания</div><div class="meta">Любому боту: ошибка или идея — починю/добавлю</div></div>
+        <span class="end chev"></span></button></div>
       ${serverCard(d)}`;
   }
   function botRow(b) {
@@ -375,6 +378,15 @@
     return `<div class="label">Сервер</div><section class="card">${rows.join('') || '<div class="hint">Нет данных о сервере</div>'}${pay}</section>`;
   }
 
+  // 🛠 Поддержка и пожелания: выбор бота + текст → та же доработка, что «✏️ Доработать» в чате
+  const canFix = (name) => !!(S.hub && (S.hub.support || []).some((t) => t.id === name));
+  function support(name) {
+    const targets = (S.hub && S.hub.support) || [];
+    if (!targets.length) return toast('Нет запущенных ботов', 'err');
+    Kit.support('/app/api/support', { targets, target: name || targets[0].id,
+      hint: 'Выбери бота и напиши, что сломалось или чего не хватает — починю/добавлю.' });
+  }
+
   function botSheet(name) {
     const b = S.hub && S.hub.bots.find((x) => x.name === name);
     if (!b) return;
@@ -390,7 +402,8 @@
       <div class="stack sheet-actions">
         ${b.status ? '<button class="btn primary" data-a="restart">Перезапустить</button>' : b.part ? '<button class="btn primary" data-a="revive">Поднять Секретаря</button>' : ''}
         <div class="btns">${b.status ? '<button class="btn tonal" data-a="logs">Логи</button>' : ''}
-          ${b.username && !b.part ? '<button class="btn tonal" data-a="open">Открыть</button>' : ''}</div></div>
+          ${b.username && !b.part ? '<button class="btn tonal" data-a="open">Открыть</button>' : ''}
+          ${canFix(b.name) ? '<button class="btn tonal" data-a="support">🛠 Поддержка</button>' : ''}</div></div>
       <div id="logbox"></div>`;
     const el = sheet(html());
     el.addEventListener('click', async (e) => {
@@ -398,6 +411,7 @@
       if (!a) return;
       if (a.dataset.a === 'open') { haptic('tap'); const url = `https://t.me/${b.username}`; try { tg.openTelegramLink(url); } catch (er) { window.open(url, '_blank'); } return; }
       if (a.dataset.a === 'revive') { el.close(); return revive(); }
+      if (a.dataset.a === 'support') { el.close(); return support(b.name); }
       if (a.dataset.a === 'logs') {
         const box = el.querySelector('#logbox');
         box.innerHTML = '<div class="sk" style="height:120px;margin-top:12px"></div>';
@@ -549,6 +563,7 @@
     if (act === 'allchats') { S.open.allChats = true; return paintLive(); }
     if (act === 'revive') return revive(a);
     if (act === 'update') return updateAll(a);
+    if (act === 'support') return support();
     if (act === 'memory') return memorySheet();
     if (act === 'jobexample') { S.draft = 'Каждый будний день в 7:00 пишите маме «доброе утро»'; bar.set('sec'); return go('sec'); }
   });

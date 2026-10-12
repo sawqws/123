@@ -123,5 +123,100 @@
     return { set: draw };
   }
 
-  window.Kit = { tg, $, esc, api, toast, haptic, sheet, busy, tabbar, scheme };
+  // Картинка -> base64 JPEG (без «data:»), длинная сторона ≤ max: скриншот влезает в запрос к серверу бота
+  function shrink(file, max) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const rd = new FileReader();  // data:, а не blob: — так пускает CSP приложения Секретаря (img-src data:)
+      rd.onload = () => { img.src = rd.result; };
+      rd.onerror = () => reject(new Error('Картинка не открылась'));
+      img.onload = () => {
+        const k = Math.min(1, (max || 1600) / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.naturalWidth * k));
+        c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.82).split(',')[1]);
+      };
+      img.onerror = () => reject(new Error('Картинка не открылась'));
+      rd.readAsDataURL(file);
+    });
+  }
+
+  // 🛠 Поддержка и пожелания: Kit.support('/api/support') — лист с полем и скриншотом,
+  // «Отправить» -> POST {text, photo?: base64} (+ bot, если даны цели: opts.targets = [{id, name}]);
+  // opts.api(путь, тело) — свой запрос вместо Kit.api (общий для страницы — Kit.supportOpts = {api}).
+  // Строка для своих экранов — Kit.supportRow(путь[, подпись]): клик по [data-support] открывает лист сам.
+  const SUP_TEXT = 'Напиши, что сломалось или чего не хватает — починю/добавлю.';
+  function support(apiPath, opts) {
+    opts = Object.assign({}, window.Kit && window.Kit.supportOpts, opts);  // supportOpts: {api} — своя авторизация
+    const targets = opts.targets || [];
+    let photo = null;
+    let bot = opts.target || (targets[0] && targets[0].id) || '';
+    const el = sheet(`<h2>🛠 Поддержка и пожелания</h2>
+      <p class="hint sup-lead">${esc(opts.hint || SUP_TEXT)}</p>
+      ${targets.length ? `<div class="chips sup-targets">${targets.map((t) =>
+        `<button class="chip${t.id === bot ? ' on' : ''}" data-bot="${esc(t.id)}">${esc(t.name)}</button>`).join('')}</div>` : ''}
+      <textarea class="sup-text" rows="5" maxlength="4000"
+        placeholder="${esc(opts.placeholder || 'Например: «кнопка Неделя ничего не показывает» или «добавь итог за месяц»')}"></textarea>
+      <div class="sup-shot">
+        <label class="btn sm sup-pick">📎 Скриншот<input type="file" accept="image/*" hidden></label>
+        <span class="sup-prev"></span>
+      </div>
+      <button class="btn primary sup-send">Отправить</button>`);
+    const q = (s) => el.querySelector(s);
+    const prev = q('.sup-prev');
+    const drawPrev = () => {
+      prev.innerHTML = photo ? `<img alt="" src="data:image/jpeg;base64,${photo}"><button class="sup-x" aria-label="Убрать">✕</button>` : '';
+    };
+    el.addEventListener('click', (ev) => {
+      const chip = ev.target.closest('[data-bot]');
+      if (chip) {
+        bot = chip.dataset.bot;
+        el.querySelectorAll('[data-bot]').forEach((b) => b.classList.toggle('on', b === chip));
+        haptic('select');
+      }
+      if (ev.target.closest('.sup-x')) { photo = null; drawPrev(); }
+    });
+    q('input[type=file]').addEventListener('change', async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      ev.target.value = '';
+      if (!f) return;
+      try { photo = await shrink(f, 1600); drawPrev(); } catch (e) { toast(e.message, true); }
+    });
+    const send = q('.sup-send');
+    send.addEventListener('click', () => busy(send, async () => {
+      const text = q('.sup-text').value.trim();
+      if (!text) { toast('Напиши, что поправить', true); q('.sup-text').focus(); return; }
+      const body = { text };
+      if (photo) body.photo = photo;
+      if (targets.length) body.bot = bot;
+      try {
+        await (opts.api || api)(apiPath, body);
+        haptic('success');
+        el.close();
+        toast('Принял — работаю, ответ придёт в чат', 'ok');
+      } catch (e) {
+        haptic('error');
+        toast(e.message, true);
+      }
+    }));
+    setTimeout(() => { try { q('.sup-text').focus(); } catch (e) { /* нет фокуса */ } }, 350);
+    return el;
+  }
+  function supportRow(apiPath, sub) {
+    return `<div class="list sup-list"><button class="row tap" data-support="${esc(apiPath)}">` +
+      '<span class="ic">🛠</span><span class="main"><div class="title">Поддержка и пожелания</div>' +
+      `<div class="meta">${esc(sub || 'Ошибка или идея — починю/добавлю')}</div></span><span class="end chev"></span></button></div>`;
+  }
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest && ev.target.closest('[data-support]');
+    if (!b || !b.dataset.support) return;
+    ev.preventDefault();
+    haptic('tap');
+    document.querySelectorAll('.sheet').forEach((x) => { if (x.close) x.close(); });  // лист настроек и т. п. — закрыть
+    support(b.dataset.support);
+  });
+
+  window.Kit = { tg, $, esc, api, toast, haptic, sheet, busy, tabbar, scheme, support, supportRow, shrink };
 })();

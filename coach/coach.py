@@ -65,6 +65,7 @@ SYNC_MORNING = 5 * 60  # утром, пока ждём сон для разбо�
 
 db = store.Store(os.environ.get("COACH_DB") or os.path.join(DATA, "coach.db"))
 public_url = os.environ.get("COACH_URL", "").rstrip("/")
+SUP = None  # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется приложение
 offset = 0
 https_note = "запускается"
 busy = set()  # пользователи, для которых сейчас думает Claude
@@ -763,7 +764,7 @@ def welcome(chat, uid, name):
                    "Я <b>Форма</b> — тренер по данным WHOOP: как сегодня тренироваться, есть и спать.",
                    note="Всё главное — в приложении." if connected else "Сначала подключим WHOOP — 3 минуты."),
          kb([btn("🔌 Подключить WHOOP", "c|", "success")] if not connected else [],
-            [app_button("📱 Открыть", style="primary" if connected else None)]))
+            [app_button("📱 Открыть", style="primary" if connected else None)], [support.Support.button()]))
 
 
 def meal_card(m, comment="", total=""):
@@ -961,7 +962,7 @@ def on_message(msg):
         if arg == "connect":
             connect(chat, uid)
     elif cmd == "/help":
-        send(chat, HELP, with_app([]))
+        send(chat, HELP, with_app([[support.Support.button()]]))
     elif cmd == "/app":
         if public_url:
             send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."), with_app([], style="primary"))
@@ -1356,6 +1357,8 @@ class Web(BaseHTTPRequestHandler):
         db.user(uid, user.get("first_name"))
         try:
             self.reply(200, route(uid, path, body))
+        except PermissionError as e:
+            self.reply(403, {"error": str(e)})
         except ai.AIError as e:
             self.reply(503, {"error": str(e)})
         except (ValueError, KeyError) as e:
@@ -1416,6 +1419,10 @@ def photo_api(uid, b):
 
 
 def route(uid, path, b):
+    if path == "/api/support":  # 🛠 из приложения — та же поддержка, что /fix в чате
+        if not SUP:
+            raise ValueError("Поддержка ещё запускается — попробуй через минуту")
+        return SUP.web(uid, b)
     u = db.user(uid)
     today = user_now(u).date()
     if path == "/api/all":
@@ -1688,8 +1695,9 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     print(f"{NAME} запущен")
-    sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
-                          tests=["python3 coach/test_coach.py"])
+    global SUP
+    SUP = sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
+                                tests=["python3 coach/test_coach.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

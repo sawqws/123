@@ -18,7 +18,8 @@ def home(c):
     c.show(kit.card(f"📝 <b>Заметки</b> · {kit.plural(len(items), 'штука', 'штуки', 'штук')}", lines),
            [[bot.app_button("📱 Все заметки")],
             [kit.b("➕ Новая", "new", "primary"), kit.b("🗑 Очистить", "clear?")] if items else
-            [kit.b("➕ Новая", "new", "primary")]])
+            [kit.b("➕ Новая", "new", "primary")],
+            [kit.support_button()]])  # 🛠 Поддержка — у каждого бота на главном экране
 
 
 @bot.command("help")

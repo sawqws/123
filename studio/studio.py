@@ -375,7 +375,7 @@ def home(c):
                  "аватар, @BotFather, запуск."],
                 "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>" + tip),
            [[bot.app_button("📱 Открыть Студию")],
-            [b(f"🧩 Мои боты · {n}", "bots")] if n else None])
+            ([b(f"🧩 Мои боты · {n}", "bots")] if n else []) + [kit.support_button()]])  # 🛠 Поддержка Студии
 
 
 _one_tap = {"at": 0, "ok": False}

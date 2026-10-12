@@ -34,6 +34,11 @@ async function api(path, opts) {
   return data;
 }
 
+// 🛠 поддержка (Kit.support) — с той же авторизацией, что у страницы (в Safari — ключ из /link)
+Kit.supportOpts = { api: (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body) }) };
+$('tab-seen').insertAdjacentHTML('beforeend', Kit.supportRow('/api/support'));
+
 function haptic(kind) { Kit.haptic(kind); }
 function toast(text, kind) {
   Kit.toast(text, kind === 'error' ? 'err' : kind === 'success' ? 'ok' : '');

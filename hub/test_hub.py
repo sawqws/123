@@ -330,6 +330,30 @@ class AppTest(Base):
         except urllib.error.HTTPError as e:
             return e.code, e.read()
 
+    def test_support_from_app(self):
+        """🛠 Поддержка в приложении: бот из списка + текст (+ скриншот) → та же доработка, что «Доработать»."""
+        import base64
+        st = json.loads(self.call("/app/api/state")[1])
+        self.assertIn({"id": "coach-bot", "name": hub.short(hub.maker.CATALOG["coach-bot"][0])}, st["support"])
+        fixes = []
+        with mock.patch.object(hub.maker, "fix", lambda chat, pm2, tz: fixes.append((chat, pm2, tz))), \
+                mock.patch.object(hub.threading, "Thread", lambda target, args=(), daemon=None: mock.Mock(
+                    start=lambda: target(*args))):
+            shot = base64.b64encode(b"\x89PNG" + bytes(200_000)).decode()  # больше лимита /app/api/action
+            code, body = self.call("/app/api/support", {"bot": "coach-bot", "text": "кольца пустые", "photo": shot})
+            self.assertEqual((code, json.loads(body)), (200, {"ok": True}))
+            self.assertEqual(fixes[-1][:2], (U, "coach-bot"))
+            self.assertIn("кольца пустые", fixes[-1][2])
+            shots = hub.setting("shots")
+            self.assertTrue(shots[-1].endswith(".png") and os.path.exists(shots[-1]))  # maker.fix заберёт
+            self.assertEqual(self.call("/app/api/support", {"bot": "nope-bot", "text": "x"})[0], 400)
+            self.assertEqual(self.call("/app/api/support", {"bot": "coach-bot", "text": " "})[0], 400)
+            self.assertEqual(self.call("/app/api/support", {"bot": "coach-bot", "text": "x"}, init=init_data(uid=99))[0],
+                             403)
+            with hub.maker.job:  # Claude занят другой правкой
+                self.assertEqual(self.call("/app/api/support", {"bot": "coach-bot", "text": "x"})[0], 400)
+        self.assertEqual(len(fixes), 1)
+
     def test_init_data(self):
         self.assertEqual(hub.check_init_data(init_data())["id"], U)
         self.assertIsNone(hub.check_init_data(init_data(bad=True)))  # битая подпись
@@ -541,7 +565,7 @@ class SecretaryTest(Base):
         text, btns = self.last()
         self.assertIn("👤 Глеб Смирнов · @gleb_s", text)
         self.assertIn('"s:m:home"', btns)  # «Аккаунт» — экран Секретаря
-        for label in ("Боты", "Аккаунт", "Сделать бота", "Обновить всех"):
+        for label in ("Боты", "Аккаунт", "Сделать бота", "Обновить всех", "🛠 Поддержка"):
             self.assertIn(label, btns)
         self.assertEqual(self.sec.updates(), [])
 

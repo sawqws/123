@@ -277,6 +277,17 @@ body.has-tabbar { padding-bottom: calc(100px + var(--bottom)); }
 .sheet-backdrop.open { opacity: 1; }
 .sheet h2 { margin: 4px 2px 14px; font: 700 21px/1.2 var(--font-d); letter-spacing: -.3px; }
 
+/* ---------- 🛠 поддержка (Kit.support, Kit.supportRow) ---------- */
+.sup-list { margin-top: 16px; }
+.sheet .sup-lead { margin: -6px 2px 12px; }
+.sheet .sup-targets { margin-bottom: 10px; }
+.sup-shot { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; min-height: 36px; }
+.sup-pick { margin: 0; }
+.sup-prev { position: relative; display: inline-flex; }
+.sup-prev img { height: 52px; max-width: 120px; border-radius: 10px; object-fit: cover; border: 1px solid var(--line); }
+.sup-x { position: absolute; top: -7px; right: -7px; width: 22px; height: 22px; border-radius: 50%; border: 0;
+  background: var(--card-2); color: var(--text); font-size: 11px; cursor: pointer; display: grid; place-items: center; }
+
 /* ---------- уведомление ---------- */
 .toast {
   position: fixed; z-index: 60; left: 50%; top: calc(12px + var(--top)); transform: translate(-50%, -140%);

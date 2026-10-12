@@ -66,6 +66,7 @@ NAME = "Ритм"
 
 db = store.Store(os.environ.get("PLANNER_DB") or os.path.join(DATA, "planner.db"))
 public_url = os.environ.get("PLANNER_URL", "").rstrip("/")
+SUP = None  # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется приложение
 offset = 0
 
 WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
@@ -273,6 +274,16 @@ def claim(uid):
     if not PUBLIC and not ALLOWED and not owner():
         db.meta("owner", uid)
         print("Владелец:", uid)
+
+
+def can_support(uid):
+    """🛠 Поддержка (правка кода бота) — только владельцу, даже в PUBLIC."""
+    return bool(uid) and (uid == owner() or uid in ALLOWED)
+
+
+def sup_row(uid):
+    """Ряд с кнопкой «🛠 Поддержка» для главных меню — только тем, кому она доступна."""
+    return [support.Support.button()] if can_support(uid) else []
 
 
 def check_init_data(init_data, token=None, max_age=7 * 86400):
@@ -523,6 +534,9 @@ HELP = (
 )
 
 
+SUP_NOTE = "\n\n🛠 <b>Поддержка</b> — напиши, что сломалось или чего не хватает — починю/добавлю."
+
+
 def welcome(chat, name, today=None):
     body = ["Пиши задачи как есть: <i>завтра в 18:00 тренировка</i>", "Можно голосом, фото или видео."]
     if public_url:
@@ -531,6 +545,7 @@ def welcome(chat, name, today=None):
     else:
         note = "Приложение запускается — пришлю кнопку, как только будет готово"
         rows = [[btn("📅 План на сегодня", f"d|{(today or datetime.date.today()).isoformat()}")]]
+    rows = rows + [r for r in [sup_row(chat)] if r]
     send(chat, card("👋", f"Привет{', ' + esc(name) if name else ''}! Я {NAME}", body, note), rows)
 
 
@@ -805,7 +820,7 @@ def on_message(msg):
     if cmd == "/start":
         welcome(chat, frm.get("first_name"), today)
     elif cmd == "/help":
-        send(chat, HELP, with_app([]))
+        send(chat, HELP + SUP_NOTE * can_support(uid), with_app([r for r in [sup_row(uid)] if r]))
     elif cmd == "/today":
         send(chat, *day_view(uid, today))
     elif cmd == "/tomorrow":
@@ -1152,6 +1167,8 @@ class Web(BaseHTTPRequestHandler):
         db.user(uid, user.get("first_name"))
         try:
             self.reply(200, route(uid, path, body))
+        except PermissionError as e:
+            self.reply(403, {"error": str(e)})
         except (ValueError, KeyError) as e:
             self.reply(400, {"error": str(e).strip("'")})
         except Exception as e:
@@ -1184,6 +1201,10 @@ def route(uid, path, b):
         return {"ok": db.delete_note(uid, int(b["id"]))}
     if path == "/api/settings":
         return {"user": db.update_settings(uid, b)}
+    if path == "/api/support":  # 🛠 из приложения — та же поддержка, что /fix в чате
+        if not SUP:
+            raise ValueError("Поддержка ещё запускается — попробуй через минуту")
+        return SUP.web(uid, b)
     raise KeyError("нет такого метода")
 
 
@@ -1439,8 +1460,9 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     print(f"{NAME} запущен")
-    sup = support.Support(TOKEN, "Планер «Ритм»", folders=["planner"], pm2="planner-bot",  # только владелец, даже в PUBLIC
-                          allowed=lambda uid: uid == owner() or uid in ALLOWED, tests=["python3 planner/test_planner.py"])
+    global SUP
+    SUP = sup = support.Support(TOKEN, "Планер «Ритм»", folders=["planner"], pm2="planner-bot",  # только владелец
+                                allowed=can_support, tests=["python3 planner/test_planner.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

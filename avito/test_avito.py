@@ -402,6 +402,30 @@ class Flow(unittest.TestCase):
                                          headers=dict(h, **{"Content-Type": "image/jpeg"}))
             with urllib.request.urlopen(req) as r:
                 self.assertEqual(len(json.load(r)["ad"]["photos"]), 2)
+            # 🛠 поддержка из приложения: скриншот больше 64 КБ проходит, Support.start — заглушка
+            import base64
+            import support
+            sup = support.Support.__new__(support.Support)
+            sup.allowed, sup.media_dir, calls = avito.allowed, tempfile.mkdtemp(), []
+            sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+
+            def post(body):
+                req = urllib.request.Request(base + "/api/support", data=json.dumps(body).encode(),
+                                             headers=dict(h, **{"Content-Type": "application/json"}))
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.load(r)
+                except urllib.error.HTTPError as e:
+                    return e.code, json.load(e)
+            self.assertEqual(post({"text": "x"})[0], 503)  # ещё не запущена
+            with mock.patch.object(avito, "SUP", sup):
+                shot = base64.b64encode(b"\xff\xd8" + bytes(80 * 1024)).decode()
+                self.assertEqual(post({"text": "цена не считается", "photo": shot}), (200, {"ok": True}))
+                self.assertEqual(calls[-1][0], 7)
+                self.assertTrue(calls[-1][2][0].endswith(".jpg"))
+                self.assertEqual(post({"text": " "})[0], 400)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("sup|ask", json.dumps(avito.help_buttons()))
         finally:
             srv.shutdown()
             srv.server_close()

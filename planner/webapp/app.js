@@ -852,7 +852,9 @@ function settingsSheet() {
     <div class="label">Часовой пояс</div>
     <select id="s-tz">${tzs.map(([v, l]) => `<option value="${v}"${v === f.tz ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
     <div class="note tip-note"><span>💬</span><span>Задачи можно добавлять сообщением боту — текстом, голосом, фото или видео: <i>завтра в 18:00 тренировка</i>, <i>по пн и ср английский в 19:00</i>. «Заметка: …» — сохранит заметку.</span></div>
-    <div class="actions"><button class="btn primary" id="s-save">Сохранить</button></div>`, sh => {
+    <div class="actions"><button class="btn primary" id="s-save">Сохранить</button></div>
+    ${Kit.supportRow('api/support')}`, sh => {
+    $('[data-support]', sh).addEventListener('click', () => closeSheet());  // лист поддержки откроет kit.js
     for (const k of ['morning', 'evening']) {
       $(`#s-${k}`, sh).addEventListener('click', e => {
         const on = !e.currentTarget.classList.contains('on');

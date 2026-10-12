@@ -465,9 +465,9 @@ FIX = """Ты дорабатываешь Telegram-бота «{label}» Глеб�
 В конце ответь 2–5 строками по-русски для Глеба: что сделано и как проверить (без кода)."""
 
 
-def targets():
-    """Кого можно дорабатывать: запущенные боты из репозитория и все сделанные здесь."""
-    running = {a["name"] for a in ui.apps() or []}
+def targets(rows=None):
+    """Кого можно дорабатывать: запущенные боты из репозитория и все сделанные здесь. rows — готовый pm2 jlist."""
+    running = {a["name"] for a in (ui.apps() if rows is None else rows) or []}
     res = [(pm2, v[0]) for pm2, v in CATALOG.items() if pm2 in running]
     res += [(info["pm2"], "🧩 " + info["name"]) for info in made().values()]
     return res
@@ -476,12 +476,13 @@ def targets():
 def ask_fix(chat, mid=None, pm2=None):
     if pm2:
         ui.setting("wait", f"fix|{pm2}")
-        return ui.show(chat, mid, ui.card(f"✏️ <b>{ui.esc(ui.short(label(pm2) or pm2))}</b>",
-                                          ["Что поменять? Пиши как ТЗ: что не так и как должно быть. "
+        return ui.show(chat, mid, ui.card(f"🛠 <b>{ui.esc(ui.short(label(pm2) or pm2))}</b>",
+                                          ["Напиши, что сломалось или чего не хватает — починю/добавлю. "
                                            "Можно несколько пунктов, голосом или со скриншотами."]),
                        [[ui.b("Отмена", "home")]])
     rows = ui.pairs([ui.b(ui.clip(lbl), f"fix|{pm2}") for pm2, lbl in targets()])
-    ui.show(chat, mid, "✏️ <b>Какого бота доработать?</b>", rows + [[ui.b("‹ Назад", "home")]])
+    ui.show(chat, mid, "🛠 <b>Поддержка и пожелания</b>\n<i>Какой бот? Дальше напиши, что сломалось или чего не хватает "
+                       "— починю/добавлю.</i>", rows + [[ui.b("‹ Назад", "home")]])
 
 
 def fix(chat, pm2, tz):

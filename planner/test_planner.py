@@ -19,6 +19,7 @@ TMP = tempfile.mkdtemp()
 os.environ.update(PLANNER_TOKEN="123:TEST", PLANNER_DB=os.path.join(TMP, "boot.db"))
 import parse  # noqa: E402
 import planner  # noqa: E402
+import support  # noqa: E402
 import store  # noqa: E402
 
 FRI = datetime.date(2026, 10, 9)
@@ -466,6 +467,18 @@ class BotTest(unittest.TestCase):
         self.msg("/start")
         self.assertIn("кнопка «Планер»", self.texts()[-1])
 
+    def test_support_button_in_menus(self):
+        with mock.patch.object(planner, "owner", lambda: U):
+            self.msg("/start")
+            self.msg("/help")
+        for m, p in self.sent[-2:]:
+            datas = [b.get("callback_data") for row in p["reply_markup"]["inline_keyboard"] for b in row]
+            self.assertIn("sup|ask", datas)
+        self.sent.clear()
+        with mock.patch.object(planner, "owner", lambda: 999):  # чужим в PUBLIC кнопку не показываем
+            self.msg("/help")
+        self.assertNotIn("sup|ask", json.dumps(self.sent))
+
     def test_api_routes(self):
         r = planner.route(U, "/api/task", {"title": "Шаг", "date": "2026-10-09"})
         tid = r["task"]["id"]
@@ -528,6 +541,24 @@ class WebTest(unittest.TestCase):
             self.assertEqual(code, 400)
         with mock.patch.object(planner, "PUBLIC", False), mock.patch.object(planner, "ALLOWED", {1}):
             self.assertEqual(self.get("/api/all", {"X-Init-Data": signed({"id": 42})})[0], 403)
+
+    def test_support_from_app(self):
+        sup = support.Support.__new__(support.Support)  # без потоков и Telegram; start — заглушка
+        sup.allowed, sup.media_dir, calls = planner.can_support, tempfile.mkdtemp(), []
+        sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+        post = lambda uid, body: self.get("/api/support", {"X-Init-Data": signed({"id": uid}),
+                                                          "Content-Type": "application/json"}, json.dumps(body).encode())
+        with mock.patch.object(planner, "PUBLIC", True), mock.patch.object(planner, "owner", lambda: 42):
+            self.assertEqual(post(42, {"text": "x"})[0], 400)  # поддержка ещё не запущена
+            with mock.patch.object(planner, "SUP", sup):
+                code, body = post(42, {"text": "неделя пустая", "photo": "iVBORw0KGgo="})
+                self.assertEqual((code, json.loads(body)), (200, {"ok": True}))
+                self.assertEqual(calls[-1][0], 42)
+                self.assertIn("неделя пустая", calls[-1][1])
+                self.assertTrue(os.path.exists(calls[-1][2][0]))
+                self.assertEqual(post(43, {"text": "чужой"})[0], 403)  # в PUBLIC — не владелец
+                self.assertEqual(post(42, {"text": " "})[0], 400)
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":
