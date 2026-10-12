@@ -334,8 +334,13 @@ class Flow(unittest.TestCase):
         text = [p for k, p in self.sent if k == "editMessageText"][-1]["text"]
         self.assertIn("Примерно — по поиску в интернете", text)
         self.assertIn("Цен найдено: <b>6</b>", text)
+        new = {"prices": [], "new": [10000, 12000, 11000], "sources": [], "note": "магазины"}
+        with mock.patch.object(market, "collect", blocked), mock.patch.object(ai, "web_prices", return_value=new):
+            self.cb("mk|f")
+        self.assertEqual((d["market"]["source"], d["market"]["stats"]["median"]), ("new", 6000))  # медиана 6050 → красиво 6000
+        self.assertIn("Предположение", [p for k, p in self.sent if k == "editMessageText"][-1]["text"])
         with mock.patch.object(market, "collect", blocked), \
-                mock.patch.object(ai, "web_prices", return_value={"prices": [], "sources": [], "note": ""}):
+                mock.patch.object(ai, "web_prices", return_value={"prices": [], "new": [], "sources": [], "note": ""}):
             self.cb("mk|f")
         self.assertIn("Цены не нашёл", [p for k, p in self.sent if k == "editMessageText"][-1]["text"])
 
