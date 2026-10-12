@@ -152,6 +152,40 @@ class AgentOverBotApi(unittest.TestCase):
                 mock.patch.object(get_api, "Site", side_effect=AssertionError("my.telegram.org не нужен")):
             self.run_agent(tg, scenario)
 
+    def test_broken_session_is_reset(self):
+        """Сохранённые ключи есть, но сессия испорчена (AUTH_KEY_*) — /login даёт выбор, сессия сбрасывается, код уходит."""
+        from telethon import errors
+        tg = FakeTelegram()
+        with open(agent.SETTINGS, "w") as f:
+            json.dump({"api_id": "555", "api_hash": "h" * 32}, f)
+        open(os.path.join(self.tmp, "account.session"), "w").close()
+        broken, fresh, made = mock.Mock(), mock.Mock(), []
+        for c in (broken, fresh):
+            c.is_connected.return_value = True
+            c.connect, c.disconnect = mock.AsyncMock(), mock.AsyncMock()
+            c.is_user_authorized = mock.AsyncMock(return_value=False)
+            c.api_id, c.api_hash = 555, "h" * 32
+        broken.send_code_request = mock.AsyncMock(side_effect=errors.AuthKeyUnregisteredError(request=None))
+        fresh.send_code_request = mock.AsyncMock(return_value=pytypes.SimpleNamespace(
+            phone_code_hash="h", type=pytypes.SimpleNamespace(length=5)))
+
+        def fake_make(i, h):
+            made.append(int(i))
+            return broken if len(made) == 1 else fresh
+
+        async def scenario(a):
+            tg.push_text("/login")
+            await self.choose(tg, "login:own")
+            tg.push_text("", contact="79138434865")
+            await self.until(lambda: fresh.send_code_request.await_count)
+            self.assertFalse(os.path.exists(os.path.join(self.tmp, "account.session")))
+            broken.session.delete.assert_called_once()
+            await self.until(lambda: any("Наберите его кнопками" in p["text"] for p in tg.sent("sendMessage")))
+
+        with mock.patch.object(agent.Agent, "make_client", staticmethod(fake_make)):
+            self.run_agent(tg, scenario)
+        self.assertEqual(made, [555, 555])
+
     def test_desktop_client_looks_like_desktop(self):
         c = agent.Agent.make_client(2040, "b18441a1ff607e10a989891a5462e627")
         r = c._init_request
