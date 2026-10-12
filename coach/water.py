@@ -115,11 +115,14 @@ def assess(drank, target, hour, trained=False):
                  + (" После тренировки вода особенно важна." if trained else ""))
 
 
-def card(added, drank, target, why, hour, trained=False):
+def card(added, drank, target, why, hour, trained=False, title=None, extra="", note=None):
+    """Сообщение о воде в общем стиле бота: заголовок, цитата (выпито, полоска, оценка), примечание курсивом."""
     mark, text = assess(drank, target, hour, trained)
-    head = f"💧 <b>+{liters(added)}</b> · " if added else "💧 "
-    return (f"{head}за день <b>{liters(drank)}</b> из {liters(target)} ({round(drank / target * 100) if target else 0}%)\n"
-            f"{bar(drank / target if target else 0)}\n\n{mark} {text}\n<i>Норма: {why}.</i>")
+    pct = round(drank / target * 100) if target else 0
+    head = title or (f"💧 <b>+{liters(added)} воды</b>" if added else "💧 <b>Вода сегодня</b>")
+    body = (f"За день <b>{liters(drank)}</b> из {liters(target)} · {pct}%\n{bar(drank / target if target else 0)}\n"
+            f"{mark} {text}" + (f"\n{extra}" if extra else ""))
+    return f"{head}\n<blockquote>{body}</blockquote>\n<i>{note or f'Норма: {why}.'}</i>"
 
 
 def day_line(drank, target):

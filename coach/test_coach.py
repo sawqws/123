@@ -520,7 +520,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(kind, "brief")
         m = self.mornings()
         self.assertEqual(len(m), 1)
-        for w in ("Восстановление <b>82%</b>", "ВСР", "пульс покоя", "Сон <b>", "выполнение", "эффективность",
+        for w in ("Восстановление <b>82%</b>", "ВСР", "пульс покоя", "Сон <b>", "Выполнение", "эффективность",
                   "Нагрузка вчера"):
             self.assertIn(w, m[0])
         self.assertIn("ОТБОЙ СЕГОДНЯ", c.call_args[0][0])
@@ -725,7 +725,7 @@ class BotTest(unittest.TestCase):
         coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "выпил 2 стакана воды"})
         t = self.texts()[-1]
         self.assertIn("+500 мл", t)
-        self.assertIn("за день <b>500 мл</b>", t)
+        self.assertIn("За день <b>500 мл</b>", t)
         self.assertEqual(self.db.water_total(U, "2026-10-11"), 500)
         rows = self.db.water(U, "2026-10-11")
         coach.on_callback({"id": "1", "from": {"id": U}, "data": "wa|add|250", "message": {"chat": {"id": U}, "message_id": 3}})
@@ -755,6 +755,72 @@ class BotTest(unittest.TestCase):
         self.assertTrue(w["note"])
         r = call("/api/water/delete", {"id": w["log"][0]["id"]})
         self.assertEqual(r.json["day"]["water"]["drank"], 0)
+
+    def test_style_and_buttons(self):
+        """Единый стиль: жирный заголовок с одним эмодзи, цитата; кнопки — до 3 в ряд, короткие подписи."""
+        msg = lambda t: {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": t}  # noqa: E731
+        self.db.add_goal(U, "очень длинная цель " * 10)
+        self.db.add_goal(U, "ложиться до 23:00")
+        with mock.patch.object(ai, "claude", return_value="**Зелёный день.**\n- бокс в полную"):
+            coach.morning_brief(U)
+        for t in ("/help", "/goals", "/water", "/food", "/morning", "/start", "выпил 300 мл"):
+            coach.on_message(msg(t))
+        for m, kw in self.sent:
+            if m not in ("sendMessage", "editMessageText"):
+                continue
+            first = kw["text"].split("\n")[0]
+            self.assertRegex(first, r"^\S+ <b>.+</b>$", first)  # «эмодзи <b>Заголовок</b>»
+            self.assertIn("<blockquote", kw["text"])
+            for row in (kw.get("reply_markup") or {}).get("inline_keyboard", []):
+                self.assertLessEqual(len(row), 3)
+                for b in row:
+                    self.assertLessEqual(len(b["text"]), 24, b["text"])
+        # длинный ответ тренера — частями до 4096
+        self.sent.clear()
+        with mock.patch.object(ai, "claude", return_value="\n\n".join("- " + "слово " * 150 for _ in range(10))):
+            coach.answer(U, U, "план?")
+        self.assertGreater(len(self.texts()), 1)
+        self.assertTrue(all(len(t) <= 4096 for t in self.texts()))
+
+    def test_button_style_fallback(self):
+        """Telegram не принял цвет кнопок — те же кнопки без style, дальше сразу без цвета."""
+        calls = []
+
+        def tg(method, **kw):
+            calls.append(kw.get("reply_markup"))
+            if any("style" in b for r in (kw.get("reply_markup") or {}).get("inline_keyboard", []) for b in r):
+                e = coach.urllib.error.HTTPError("u", 400, "Bad Request", {}, None)
+                e.detail = '{"ok":false,"description":"Bad Request: can\'t parse inline keyboard button: style"}'
+                raise e
+            return {"ok": True, "result": {"message_id": 1}}
+        coach.STYLES["ok"] = True
+        try:
+            with mock.patch.object(coach, "tg", side_effect=tg):
+                coach.send(U, "x", [[coach.btn("A", "a", "success")]])
+                coach.send(U, "y", [[coach.btn("B", "b", "primary")]])
+        finally:
+            coach.STYLES["ok"] = True
+        self.assertEqual(calls[0]["inline_keyboard"][0][0]["style"], "success")
+        self.assertEqual(calls[1], {"inline_keyboard": [[{"text": "A", "callback_data": "a"}]]})
+        self.assertEqual(calls[2], {"inline_keyboard": [[{"text": "B", "callback_data": "b"}]]})  # без второй попытки
+        self.assertEqual(len(calls), 3)
+
+        def down(method, **kw):  # другие ошибки — не глотаем и цвет не отключаем
+            e = coach.urllib.error.HTTPError("u", 400, "Bad Request", {}, None)
+            e.detail = '{"description":"Bad Request: chat not found"}'
+            raise e
+        with mock.patch.object(coach, "tg", side_effect=down):
+            with self.assertRaises(coach.urllib.error.HTTPError):
+                coach.send(U, "x", [[coach.btn("A", "a", "success")]])
+        self.assertTrue(coach.STYLES["ok"])
+
+    def test_edit_in_place(self):
+        """Кнопка воды правит ту же карточку, а не шлёт новую."""
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "wa|add|250", "message": {"chat": {"id": U}, "message_id": 3}})
+        edits = [kw for m, kw in self.sent if m == "editMessageText"]
+        self.assertEqual(edits[-1]["message_id"], 3)
+        self.assertIn("+250 мл", edits[-1]["text"])
+        self.assertEqual(self.texts(), [])
 
     def test_static(self):
         r = call("/", method="GET", init="")

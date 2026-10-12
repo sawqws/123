@@ -72,6 +72,39 @@ def esc(x):
     return html.escape(str(x), quote=False)
 
 
+# ---------- оформление сообщений ----------
+# Один стиль на все сообщения: первая строка — короткий жирный заголовок с одним эмодзи, суть — в цитате
+# (длинное — в раскрывающейся), второстепенное — одной строкой курсивом в конце. Ошибки — одна строка «⚠️ …».
+# Колонки пробелами не выравниваем (шрифт в Telegram пропорциональный) — только строки «• …» и « · ».
+
+def quote(body, expand=None):
+    body = (body or "").strip()
+    if not body:
+        return ""
+    if expand is None:
+        expand = len(body) > 700 or body.count("\n") >= 10
+    return f"<blockquote{' expandable' if expand else ''}>{body}</blockquote>"
+
+
+def box(icon, title, body=None, note="", expand=None):
+    """Сообщение в общем стиле. body — строка или список строк (каждая — своя цитата); всё уже в HTML."""
+    parts = [f"{icon} <b>{title}</b>" if icon else f"<b>{title}</b>"]
+    for b in [body] if isinstance(body, str) else body or []:
+        q = quote(b, expand)
+        if q:
+            parts.append(q)
+    if note:
+        parts.append(f"<i>{note}</i>")
+    return "\n".join(parts)
+
+
+def err(text):
+    return f"⚠️ {text}"
+
+
+BUSY = "⏳ Ещё думаю над прошлым сообщением — секунду."
+
+
 # ---------- Telegram ----------
 
 def tg(method, **params):
@@ -85,20 +118,59 @@ def tg(method, **params):
         if "message is not modified" in detail:
             return {"ok": True}
         print(method, e.code, detail[:300])
+        e.detail = detail
         raise
 
 
+STYLES = {"ok": True}  # Telegram принимает цветные кнопки; False — после первого отказа шлём без цвета
+
+
+def plain(buttons):
+    return [[{k: v for k, v in b.items() if k != "style"} for b in row] for row in buttons]
+
+
+def tg_kb(method, buttons, **params):
+    """Запрос с кнопками. Цвет кнопки (style: success | danger | primary) — новинка Bot API: если Telegram
+    ответит 400 про кнопки или разметку — те же кнопки без цвета."""
+    if buttons is None:
+        return tg(method, **params)
+    styled = any("style" in b for row in buttons for b in row)
+    if styled and not STYLES["ok"]:
+        buttons, styled = plain(buttons), False
+    try:
+        return tg(method, reply_markup={"inline_keyboard": buttons}, **params)
+    except urllib.error.HTTPError as e:
+        detail = (getattr(e, "detail", "") or "").lower()
+        if not styled or e.code != 400 or not any(w in detail for w in ("button", "markup", "keyboard", "style")):
+            raise
+        res = tg(method, reply_markup={"inline_keyboard": plain(buttons)}, **params)
+        STYLES["ok"] = False
+        return res
+
+
 def send(chat, text, buttons=None, **extra):
-    if buttons is not None:
-        extra["reply_markup"] = {"inline_keyboard": buttons}
-    return tg("sendMessage", chat_id=chat, text=text, parse_mode="HTML",
-              link_preview_options={"is_disabled": True}, **extra)
+    return tg_kb("sendMessage", buttons, chat_id=chat, text=text, parse_mode="HTML",
+                 link_preview_options={"is_disabled": True}, **extra)
 
 
 def edit(chat, msg_id, text, buttons=None):
-    extra = {"reply_markup": {"inline_keyboard": buttons}} if buttons is not None else {}
-    return tg("editMessageText", chat_id=chat, message_id=msg_id, text=text, parse_mode="HTML",
-              link_preview_options={"is_disabled": True}, **extra)
+    return tg_kb("editMessageText", buttons, chat_id=chat, message_id=msg_id, text=text, parse_mode="HTML",
+                 link_preview_options={"is_disabled": True})
+
+
+def mid_of(res):
+    r = (res or {}).get("result")
+    return r.get("message_id") if isinstance(r, dict) else None
+
+
+def replace(chat, mid, text, buttons=None):
+    """Правка сообщения на месте; нет id или правка не прошла — новое сообщение."""
+    if mid:
+        try:
+            return edit(chat, mid, text, buttons)
+        except Exception as e:
+            print("edit:", e)
+    return send(chat, text, buttons)
 
 
 def typing(chat):
@@ -108,36 +180,48 @@ def typing(chat):
         pass
 
 
-def app_button(text="⚡ Открыть Форму", path=""):
+def btn(text, data, style=None):
+    b = {"text": text, "callback_data": data}
+    if style:
+        b["style"] = style
+    return b
+
+
+def kb(*rows):
+    """Ряды кнопок без пустых мест (кнопки приложения нет, пока нет адреса)."""
+    out = [[b for b in row if b] for row in rows]
+    return [r for r in out if r]
+
+
+def app_button(text="⚡ Открыть Форму", path="", style=None):
     if not public_url:
         return None
-    return {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
+    b = {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
+    if style:
+        b["style"] = style
+    return b
 
 
-def with_app(rows, text="⚡ Открыть Форму", path=""):
-    b = app_button(text, path)
-    return rows + [[b]] if b else rows
+def with_app(rows, text="⚡ Открыть Форму", path="", style=None):
+    return kb(*rows, [app_button(text, path, style)])
 
 
 def setup_bot():
+    # в меню — только частые команды; остальные (/app, /connect, /status, /new) работают, как раньше
     commands = [
         {"command": "today", "description": "Разбор дня"},
-        {"command": "progress", "description": "Разбор прогресса за 2 месяца"},
-        {"command": "app", "description": "Открыть приложение"},
-        {"command": "food", "description": "Питание за сегодня"},
-        {"command": "water", "description": "Вода за сегодня"},
-        {"command": "goals", "description": "Мои цели"},
+        {"command": "water", "description": "Вода"},
+        {"command": "food", "description": "Питание"},
+        {"command": "goals", "description": "Цели"},
+        {"command": "progress", "description": "Прогресс за 2 месяца"},
         {"command": "morning", "description": "Время утреннего разбора"},
-        {"command": "connect", "description": "Подключить WHOOP"},
-        {"command": "sync", "description": "Обновить данные WHOOP"},
-        {"command": "new", "description": "Начать разговор с тренером заново"},
-        {"command": "status", "description": "Проверка"},
-        {"command": "help", "description": "Как пользоваться"},
+        {"command": "sync", "description": "Обновить WHOOP"},
+        {"command": "new", "description": "Новый разговор"},
+        {"command": "help", "description": "Что я умею"},
     ]
     desc = ("Личный тренер по данным WHOOP: восстановление, сон, нагрузка, питание.\n\n"
-            "Утром — разбор и план на день, после тренировки — что съесть и как восстановиться. "
-            "Пришли фото еды — посчитаю ккал и БЖУ.")
-    short = "Тренер, спортивный врач и нутрициолог по данным WHOOP."
+            "Утром — разбор и план на день, после тренировки — что съесть. Фото еды — ккал и БЖУ.")
+    short = "Тренер, врач и нутрициолог по данным WHOOP."
     key = hashlib.sha1(json.dumps([commands, desc, short]).encode()).hexdigest()
     if db.meta("bot_setup") != key:
         try:
@@ -257,32 +341,32 @@ def connect_link(uid):
     return whoop.auth_link(cid, redirect_url(), state)
 
 
+DEV_DASHBOARD = "https://developer-dashboard.whoop.com/apps/create"
+
+
 def setup_text():
     url = redirect_url() or "(адрес приложения ещё не готов — /status)"
-    return ("🔌 <b>Подключение WHOOP</b> — один раз, 3 минуты. Это не новое приложение на телефон, а ключ доступа: "
-            "только так WHOOP разрешает боту читать твои данные.\n\n"
-            "1. Открой <a href=\"https://developer-dashboard.whoop.com/apps/create\">developer-dashboard.whoop.com</a> "
-            "и войди своим аккаунтом WHOOP.\n"
-            "2. Создай команду (Team, любое имя), потом <b>Create App</b>: имя <code>Forma</code>, почта в Contacts.\n"
-            "3. Privacy Policy:\n<code>https://sawqws.github.io/123/privacy.html</code>\n"
-            f"4. Redirect URL (и нажми ADD):\n<code>{esc(url)}</code>\n"
-            "5. Scopes: отметь все 6 <code>read:*</code> (offline бот запросит сам).\n"
-            "6. Нажми Create App и пришли мне сюда одной строкой:\n"
-            "<code>/whoop CLIENT_ID CLIENT_SECRET</code>\n\n"
-            "Секрет храню только на сервере, сообщение с ним сразу удалю.")
+    steps = ("1. Открой developer-dashboard.whoop.com (кнопка ниже) и войди аккаунтом WHOOP.\n"
+             "2. Создай Team (любое имя), затем <b>Create App</b>: имя <code>Forma</code>, почта в Contacts.\n"
+             "3. Privacy Policy:\n<code>https://sawqws.github.io/123/privacy.html</code>\n"
+             f"4. Redirect URL (и нажми ADD):\n<code>{esc(url)}</code>\n"
+             "5. Scopes: отметь все 6 <code>read:*</code>.\n"
+             "6. Create App — и пришли сюда одной строкой:\n<code>/whoop CLIENT_ID CLIENT_SECRET</code>")
+    return box("🔌", "Подключение WHOOP · 3 минуты", steps, expand=False,
+               note="Это ключ доступа, а не новое приложение. Секрет храню на сервере, сообщение с ним удалю.")
 
 
 def connect(chat, uid):
     cid, sec = creds()
     if not (cid and sec):
-        send(chat, setup_text())
+        send(chat, setup_text(), [[{"text": "🌐 WHOOP Developer", "url": DEV_DASHBOARD}]])
         return
     link = connect_link(uid)
     if not link:
-        send(chat, "Адрес приложения ещё не готов. Подожди минуту и повтори /connect (что с адресом — /status).")
+        send(chat, err("Адрес приложения ещё не готов — повтори /connect через минуту (/status)."))
         return
-    send(chat, "🔗 Нажми, войди в WHOOP и разреши доступ — потом вернись сюда.",
-         [[{"text": "Подключить WHOOP", "url": link}]])
+    send(chat, box("🔗", "Подключение WHOOP", "Нажми кнопку, войди в WHOOP и разреши доступ — потом вернись сюда."),
+         [[{"text": "Подключить WHOOP", "url": link, "style": "success"}]])
 
 
 def finish_connect(state, code):
@@ -301,7 +385,7 @@ def finish_connect(state, code):
     except Exception as e:
         print("whoop exchange:", e)
         try:  # новая кнопка сразу в чат — писать /connect не нужно
-            send(uid, "⚠️ WHOOP не принял вход. Вот новая кнопка — попробуй ещё раз.")
+            send(uid, err("WHOOP не принял вход — вот новая кнопка, попробуй ещё раз."))
             connect(uid, uid)
         except Exception as e2:
             print("reconnect:", e2)
@@ -312,7 +396,7 @@ def finish_connect(state, code):
 
 def first_sync(uid):
     try:
-        send(uid, "✅ <b>WHOOP подключён.</b> Загружаю данные за 2 месяца…")
+        mid = mid_of(send(uid, box("✅", "WHOOP подключён", "Загружаю данные за 2 месяца — минуту…")))
         sync_user(uid, days=60, quiet=True)
         n = db.record_count(uid)
         b = whoop.body(db, uid)
@@ -324,12 +408,12 @@ def first_sync(uid):
             upd["height"] = round(b["height_meter"] * 100)
         if upd:
             db.save_profile(uid, upd)
-        send(uid, f"📥 Загружено записей: {n}.\n\nДобавь в профиле возраст, спорт и цель — так советы будут точнее. "
-                  "Утром пришлю первый разбор.", with_app([[{"text": "🧠 Разбор прямо сейчас", "callback_data": "b|now"}]],
-                                                         "👤 Заполнить профиль", "/profile"))
+        replace(uid, mid, box("✅", "WHOOP подключён", f"Загружено записей: <b>{n}</b>. Утром пришлю первый разбор.",
+                              note="Добавь в профиле возраст, спорт и цель — советы будут точнее."),
+                kb([btn("🧠 Разбор сейчас", "b|now", "success"), app_button("👤 Профиль", "/profile")]))
     except Exception as e:
         traceback.print_exc()
-        send(uid, f"⚠️ Не получилось загрузить данные WHOOP: {esc(str(e)[:200])}")
+        send(uid, err(f"Не получилось загрузить данные WHOOP: {esc(str(e)[:200])}"))
 
 
 def sync_user(uid, days=3, quiet=False):
@@ -338,7 +422,7 @@ def sync_user(uid, days=3, quiet=False):
         fresh = whoop.sync(db, uid, cid, sec, days=days)
     except whoop.NotConnected:
         db.drop_token(uid)
-        send(uid, "⚠️ WHOOP отключился (вход истёк). Подключи заново: /connect")
+        send(uid, err("WHOOP отключился — вход истёк. Подключи заново: /connect"))
         return []
     if not quiet:
         react(uid, fresh)
@@ -366,27 +450,35 @@ def num(x, n=1):
     return str(round(x, n)).replace(".", ",") if n else str(round(x))
 
 
+def fmt(x, n=1):
+    return "—" if x is None else num(x, n)
+
+
 def headline(t):
-    """Цифры утра: восстановление, ВСР и пульс покоя против нормы, сон, нагрузка вчера."""
+    """Цифры утра: восстановление, ВСР и пульс покоя против нормы, сон, нагрузка вчера (строки для цитаты)."""
     r, s, b, y = t.get("recovery"), t.get("sleep"), t.get("base") or {}, t.get("yesterday") or {}
     lines = []
     if r:
-        parts = [f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>"]
+        lines.append(f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>")
+        parts = []
         if r.get("hrv"):
-            parts.append(f"ВСР {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else ""))
+            parts.append(f"ВСР {round(r['hrv'])} мс" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else ""))
         if r.get("rhr"):
             parts.append(f"пульс покоя {r['rhr']}" + (f" ({round(b['rhr'])})" if b.get("rhr") else ""))
-        lines.append(" · ".join(parts))
+        if parts:
+            lines.append(" · ".join(parts))
     if s:
-        parts = [f"😴 Сон <b>{insights.fmt_h(s['hours'])}</b>" + (f" из {insights.fmt_h(s['need'])}" if s.get("need") else "")]
+        lines.append(f"Сон <b>{insights.fmt_h(s['hours'])}</b>" + (f" из {insights.fmt_h(s['need'])}" if s.get("need") else ""))
+        parts = []
         if s.get("performance") is not None:
             parts.append(f"выполнение {s['performance']}%")
         if s.get("efficiency") is not None:
             parts.append(f"эффективность {s['efficiency']}%")
-        lines.append(" · ".join(parts))
+        if parts:
+            lines.append(" · ".join(parts).capitalize())
     if y.get("strain") is not None:
         ws = ", ".join(f"{w['sport'].lower()} {w['minutes']} мин" for w in y.get("workouts") or [] if w.get("minutes"))
-        lines.append(f"🔥 Нагрузка вчера <b>{num(y['strain'])}</b>" + (f" · {esc(ws)}" if ws else ""))
+        lines.append(f"Нагрузка вчера <b>{num(y['strain'])}</b>" + (f" · {esc(ws)}" if ws else ""))
     return "\n".join(lines)
 
 
@@ -399,16 +491,16 @@ def bed_line(t):
 
 def rule_brief(t):
     """Разбор без Claude: выводы по правилам, ориентир нагрузки, питание."""
-    lines = [f"• {x['text']}" for x in t["tips"][:4]]
+    lines = [f"• {esc(x['text'])}" for x in t["tips"][:4]]
     if t["band"]:
         lines.append(f"• Ориентир нагрузки на сегодня: <b>{t['band'][0]}–{t['band'][1]}</b>.")
     n = t["nutrition"]
     if n:
-        lines.append(f"• Питание: <b>{n['kcal']} ккал</b>, белок {n['protein']} г, вода {n['water'] / 1000:.1f} л.".replace(".", ",", 1))
+        lines.append(f"• Питание: <b>{n['kcal']} ккал</b> · белок {n['protein']} г · вода {water.liters(n['water'])}.")
     wt = t.get("water") or {}
     if wt.get("yesterday"):
         lines.append(f"• Вода вчера: {water.day_line(wt['yesterday'], wt['y_target'])}"
-                     + (" — норма ✅" if wt["yesterday"] >= wt["y_target"] else " — сегодня держи стакан под рукой."))
+                     + (" — норма выполнена." if wt["yesterday"] >= wt["y_target"] else " — сегодня держи стакан под рукой."))
     if bed_line(t):
         lines.append("• " + bed_line(t))
     return "\n".join(lines) or "Данных за сегодня пока нет."
@@ -422,7 +514,7 @@ def rule_early(t):
              + (" Вчера была большая нагрузка — не форсируй." if hard else "")]
     n = t["nutrition"]
     if n:
-        lines.append(f"• Вода {n['water'] / 1000:.1f} л, белок {n['protein']} г, завтрак не пропускай.".replace(".", ",", 1))
+        lines.append(f"• Вода {water.liters(n['water'])}, белок {n['protein']} г, завтрак не пропускай.")
     else:
         lines.append("• Вода 2–2,5 л, белок в каждый приём пищи, завтрак не пропускай.")
     if bed_line(t):
@@ -430,25 +522,39 @@ def rule_early(t):
     return "\n".join(lines)
 
 
-def send_long(chat, text, buttons=None):
-    """Telegram пускает до 4096 символов — длинный разбор режем по абзацам."""
-    parts, cur = [], ""
-    for para in text.split("\n\n"):
-        if cur and len(cur) + len(para) + 2 > 3800:
-            parts.append(cur)
-            cur = para
+def chunks(body, size=3500):
+    """Текст по абзацам на части до size символов (Telegram пускает до 4096 вместе с заголовком)."""
+    paras = []
+    for p in body.split("\n\n"):
+        paras.extend(p.split("\n") if len(p) > size else [p])
+    out, cur = [], ""
+    for p in paras:
+        if cur and len(cur) + len(p) + 2 > size:
+            out.append(cur)
+            cur = p
         else:
-            cur = f"{cur}\n\n{para}" if cur else para
-    parts.append(cur)
-    for i, p in enumerate(parts):
-        send(chat, p, buttons if i == len(parts) - 1 else None)
+            cur = f"{cur}\n\n{p}" if cur else p
+    return out + [cur]
+
+
+def send_long(chat, head, body, buttons=None, note="", mid=None):
+    """Длинный разбор: каждая часть — своя раскрывающаяся цитата; заголовок — в первой, кнопки и примечание —
+    в последней. mid — сообщение «разбираю…», которое станет первой частью."""
+    parts = chunks(body)
+    for i, c in enumerate(parts):
+        last = i == len(parts) - 1
+        text = (head + "\n" if i == 0 else "") + quote(c, True) + (f"\n<i>{note}</i>" if last and note else "")
+        if i == 0 and mid:
+            replace(chat, mid, text, buttons if last else None)
+        else:
+            send(chat, text, buttons if last else None)
 
 
 def progress_report(uid, chat=None, week=False):
     """Разбор прогресса за 60 дней (или итог недели — week=True)."""
     chat = chat or uid
     if uid in busy:
-        send(chat, "Секунду, ещё думаю над прошлым сообщением…")
+        send(chat, BUSY)
         return
     busy.add(uid)
     try:
@@ -456,19 +562,18 @@ def progress_report(uid, chat=None, week=False):
         day = today_of(uid)
         ctx, p = insights.progress_context(db, uid, day, profile(uid), whoop.body(db, uid), 28 if week else 60)
         if not any(w["days"] for w in p["weeks"]):
-            send(chat, "Данных WHOOP пока нет. Подключи браслет: /connect")
+            send(chat, err("Данных WHOOP пока нет — подключи браслет: /connect"))
             return
-        if not week:
-            send(chat, "🧠 Разбираю все твои данные за 2 месяца — это минута-две…")
+        head = "📅 <b>Итог недели</b>" if week else "📈 <b>Разбор прогресса · 2 месяца</b>"
+        mid = None if week else mid_of(send(chat, head + "\n" + quote("Разбираю все твои данные — это минута-две…")))
         try:
             body = ai.to_html(ai.progress(ctx, week=week))
         except ai.AIError as e:
-            send(chat, f"⚠️ Разбор не получился: {esc(e)}. Попробуй ещё раз: /progress")
+            replace(chat, mid, err(f"Разбор не получился: {esc(e)}. Попробуй ещё раз: /progress"))
             return
         db.brief(uid, day.isoformat(), "week" if week else "progress", body)
-        title = "📅 <b>Итог недели</b>" if week else "📈 <b>Разбор прогресса за 2 месяца</b>"
-        send_long(chat, f"{title}\n\n{body}", with_app([[{"text": "💬 Спросить тренера", "callback_data": "q|"}]],
-                                                       "📊 Тренды", "/trends"))
+        send_long(chat, head, body, kb([btn("💬 Спросить тренера", "q|"), app_button("📊 Тренды", "/trends")]),
+                  mid=mid)
     finally:
         busy.discard(uid)
 
@@ -483,15 +588,17 @@ def morning_brief(uid, chat=None, force=False):
         typing(chat)
         text, t = context(uid)
         if not t["has_data"]:
-            send(chat, "Данных WHOOP пока нет. Подключи браслет: /connect")
+            send(chat, err("Данных WHOOP пока нет — подключи браслет: /connect"))
             return True
+        note = ""
         try:
             body = ai.to_html(ai.morning(text))
         except ai.AIError as e:
-            body = rule_brief(t) + f"\n\n<i>Подробный разбор недоступен: {esc(e)}</i>"
+            body = rule_brief(t)
+            note = f"Подробный разбор недоступен: {esc(e)}"
         db.brief(uid, t["day"], "morning", body)
-        send(chat, f"☀️ <b>Доброе утро</b>\n{headline(t)}\n\n{body}",
-             with_app([[{"text": "💬 Спросить тренера", "callback_data": "q|"}]], "⚡ Открыть день"))
+        send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note),
+             kb([app_button("⚡ Открыть день", style="primary"), btn("💬 Спросить", "q|")]))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
         return True
@@ -512,9 +619,9 @@ def morning_early(uid):
             body = rule_early(t)
         db.brief(uid, t["day"], "morning", body)
         y = headline({"yesterday": t.get("yesterday")})
-        send(uid, "☀️ <b>Доброе утро</b>\nWHOOP ещё не посчитал сон — разбор пришлю, как только он появится "
-                  "(если браслет был на руке).\n" + (y + "\n" if y else "") + f"\n{body}",
-             with_app([[{"text": "🔄 Обновить WHOOP", "callback_data": "s|"}]], "⚡ Открыть день"))
+        send(uid, box("☀️", "Доброе утро", [y, body],
+                      note="WHOOP ещё не посчитал сон — полный разбор пришлю, как только он появится."),
+             kb([btn("🔄 Обновить WHOOP", "s|"), app_button("⚡ Открыть день")]))
         return True
     finally:
         busy.discard(uid)
@@ -543,18 +650,20 @@ def morning_at(u):
 def morning_text(u):
     at = morning_at(u)
     if not at:
-        return "☀️ Утренний разбор <b>выключен</b>. Включить: /morning 07:00"
+        return box("☀️", "Утренний разбор выключен", "Включить — выбери время кнопкой ниже.",
+                   note="Или командой: /morning 07:00")
     late = (datetime.datetime.combine(datetime.date.today(), at) + MORNING_WAIT).strftime("%H:%M")
-    return (f"☀️ Утренний разбор — каждый день с <b>{at.strftime('%H:%M')}</b>: как только WHOOP посчитает сон "
-            f"(если проснёшься позже — сразу после этого). Не посчитал к {late} — пришлю короткий план без сна.\n\n"
-            "Другое время: <code>/morning 08:30</code> · выключить: <code>/morning off</code>")
+    return box("☀️", "Утренний разбор",
+               f"Каждый день с <b>{at.strftime('%H:%M')}</b> — как только WHOOP посчитает сон.\n"
+               f"Не посчитал к {late} — пришлю короткий план без сна.",
+               note="Своё время: /morning 08:30 · выключить: /morning off")
 
 
 def morning_buttons(u):
     cur = u["profile"].get("morning") or store.MORNING_DEFAULT
     times = ["06:30", "07:00", "07:30", "08:00", "09:00"]
-    row = [{"text": ("✓ " if cur == x else "") + x, "callback_data": f"mt|{x}"} for x in times]
-    return [row[:3], row[3:] + [{"text": ("✓ " if cur == "off" else "") + "Выкл", "callback_data": "mt|off"}]]
+    row = [btn(("✓ " if cur == x else "") + x, f"mt|{x}") for x in times]
+    return [row[:3], row[3:] + [btn(("✓ " if cur == "off" else "") + "Выкл", "mt|off")]]
 
 
 def night_ready(uid, day):
@@ -612,6 +721,17 @@ def morning_job(uid, kind, key):
         db.unsend(key)
 
 
+def sport_icon(sport):
+    s = (sport or "").lower()
+    if re.search(r"бокс|кик|единобор|мма|борьб|джиу", s):
+        return "🥊"
+    if re.search(r"бег|ходьб|поход", s):
+        return "🏃"
+    if re.search(r"силов|пауэр|функц", s):
+        return "🏋️"
+    return "⚡"
+
+
 def workout_note(uid, w):
     typing(uid)
     text, t = context(uid)
@@ -621,8 +741,10 @@ def workout_note(uid, w):
         body = ("• Выпей 500–700 мл воды в течение часа.\n• Поешь в ближайшие 1–2 часа: белок 25–35 г и углеводы "
                 "(рис, гречка, паста, фрукты).\n• Вечером без экранов за 30 минут до сна — так быстрее восстановишься.")
     db.brief(uid, t["day"], f"workout:{w['id']}", body)
-    send(uid, f"🥊 <b>{esc(w['sport'])}</b> · {w['minutes']} мин · нагрузка <b>{w['strain']}</b> · пульс {w['avg_hr']}/{w['max_hr']}\n\n{body}",
-         with_app([], "⚡ Открыть день"))
+    stats = f"Нагрузка <b>{fmt(w['strain'])}</b> · пульс {w['avg_hr'] or '—'} / {w['max_hr'] or '—'}" \
+        + (f" · {w['kcal']} ккал" if w.get("kcal") else "")
+    title = esc(w["sport"]) + (f" · {w['minutes']} мин" if w.get("minutes") else "")
+    send(uid, box(sport_icon(w["sport"]), title, [stats, body]), with_app([], "⚡ Открыть день"))
 
 
 def evening(uid, now):
@@ -635,28 +757,27 @@ def evening(uid, now):
     lack_p, lack_k = n["protein"] - e["protein"], n["kcal"] - e["kcal"]
     if lack_p < 20 and lack_k < 300:
         return
-    tip = []
+    lines = [f"Съедено <b>{e['kcal']}</b> из {n['kcal']} ккал · белок {e['protein']} из {n['protein']} г"]
     if lack_p >= 20:
-        tip.append(f"белка не хватает {lack_p} г — творог, яйца, курица или кефир перед сном")
+        lines.append(f"• Белка не хватает {lack_p} г — творог, яйца, курица или кефир перед сном.")
     if lack_k >= 300:
-        tip.append(f"до нормы {lack_k} ккал — добавь нормальный ужин, не пропускай")
-    send(uid, "🍽 <b>Итог питания</b>\n" + f"Съедено {e['kcal']} из {n['kcal']} ккал, белок {e['protein']} из {n['protein']} г.\n\n"
-         + "\n".join(f"• {x.capitalize()}." for x in tip), with_app([], "🍽 Открыть питание", "/food"))
+        lines.append(f"• До нормы {lack_k} ккал — добавь нормальный ужин, не пропускай.")
+    send(uid, box("🍽", "Итог питания", "\n".join(lines)), with_app([], "🍽 Открыть питание", "/food"))
 
 
 # ---------- чат ----------
 
-HELP = ("⚡ <b>Форма</b> — твой тренер по данным WHOOP.\n\n"
-        "• Каждое утро (с 07:00, время — /morning) пришлю разбор: восстановление, сон, можно ли в полную, что есть, когда лечь.\n"
-        "• <b>Цели</b> (/goals): «ложиться до 23:00», «соревнования весной» — все советы привязываю к ним.\n"
-        "• После тренировки — что съесть и как восстановиться.\n"
-        "• <b>Спрашивай что угодно</b> текстом: «почему низкое восстановление?», «что съесть перед боксом?».\n"
-        "• <b>Еда</b>: пришли фото тарелки или напиши «съел гречку с курицей» — посчитаю ккал и БЖУ.\n"
-        "• <b>Вода</b>: «выпил 500 мл», «2 стакана воды», «+300» — скажу, сколько из нормы и успеваешь ли. /water\n"
-        "• <b>Голосовые</b> понимаю как текст. <b>Скрин</b> WHOOP или плана тренировок — пришли с вопросом в подписи.\n"
-        "• <b>/progress</b> — большой разбор прогресса за 2 месяца и план; по воскресеньям в 19:00 — итог недели.\n\n"
-        "/today — разбор дня · /goals — цели · /morning — время разбора · /progress — прогресс · /food — питание · /water — вода · "
-        "/sync — обновить · /connect — WHOOP · /new — новый разговор")
+HELP = box("⚡", "Форма — тренер по данным WHOOP", [
+    "☀️ Утром — разбор: готовность, тренировка, еда, отбой\n"
+    "🥊 После тренировки — что съесть и как восстановиться\n"
+    "💬 Вопросы — пиши текстом или голосом\n"
+    "🍽 Еда — фото тарелки или «съел гречку с курицей»\n"
+    "💧 Вода — «выпил 500 мл», «2 стакана», «+300»\n"
+    "🎯 Цели — все советы привязываю к ним",
+    "• /today — разбор дня\n• /progress — прогресс за 2 месяца\n• /food — питание\n• /water — вода\n"
+    "• /goals — цели\n• /morning — время разбора\n• /sync — обновить WHOOP\n• /connect — подключить WHOOP\n"
+    "• /new — новый разговор\n• /status — проверка"],
+    note="Скрин WHOOP или плана — пришли с вопросом в подписи. По воскресеньям в 19:00 — итог недели.")
 
 FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпил[аи]?|завтрак|обед|ужин|перекус|еда)\b[:\s,-]*", re.I)
 
@@ -664,62 +785,62 @@ FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпи
 def welcome(chat, uid, name):
     cid, _ = creds()
     connected = bool(db.token(uid))
-    rows = [] if connected else [[{"text": "🔌 Подключить WHOOP", "callback_data": "c|"}]]
-    send(chat, f"Привет{', ' + esc(name) if name else ''}! Я <b>Форма</b> — тренер, спортивный врач и нутрициолог в одном.\n\n"
-               "Смотрю на твои восстановление, сон, пульс и нагрузку с WHOOP и говорю, как тренироваться, "
-               "есть и спать сегодня.\n\n" + ("Данные WHOOP подключены ✅" if connected else
-                                               "Начнём с подключения WHOOP 👇" if cid else "Сначала подключим WHOOP — это 3 минуты 👇"),
-         with_app(rows, "⚡ Открыть Форму"))
+    note = ("WHOOP подключён — открывай Форму." if connected else
+            "Начнём с подключения WHOOP." if cid else "Сначала подключим WHOOP — это 3 минуты.")
+    send(chat, box("👋", f"Привет{', ' + esc(name) if name else ''}!",
+                   "Я <b>Форма</b> — тренер, спортивный врач и нутрициолог. Смотрю восстановление, сон, пульс и "
+                   "нагрузку с WHOOP и говорю, как сегодня тренироваться, есть и спать.", note=note),
+         kb([btn("🔌 Подключить WHOOP", "c|", "success")] if not connected else [],
+            [app_button("⚡ Открыть Форму", style="primary" if connected else None)]))
 
 
-def meal_card(m, comment=""):
-    s = (f"🍽 <b>{esc(m['title'])}</b>\n{round(m['kcal'])} ккал · Б {round(m['protein'])} · Ж {round(m['fat'])} · У {round(m['carbs'])}")
-    return s + (f"\n\n{esc(comment)}" if comment else "")
+def meal_card(m, comment="", total=""):
+    body = f"<b>{round(m['kcal'])} ккал</b> · Б {round(m['protein'])} · Ж {round(m['fat'])} · У {round(m['carbs'])}"
+    return box("🍽", esc(m["title"]), body + (f"\n{total}" if total else ""), note=esc(comment))
 
 
 def food_text(uid):
     _, t = context(uid)
     n, e = t["nutrition"], t["eaten"]
-    lines = ["🍽 <b>Питание сегодня</b>"]
     if n:
-        lines.append(f"{e['kcal']} / {n['kcal']} ккал · Б {e['protein']}/{n['protein']} · Ж {e['fat']}/{n['fat']} · У {e['carbs']}/{n['carbs']}")
+        top = (f"Калории <b>{e['kcal']}</b> из {n['kcal']}\n"
+               f"Б {e['protein']}/{n['protein']} · Ж {e['fat']}/{n['fat']} · У {e['carbs']}/{n['carbs']} г")
     else:
-        lines.append("Добавь вес в профиле — посчитаю норму.")
+        top = "Добавь вес в профиле — посчитаю норму."
     wt = t["water"]
-    lines.append(f"💧 Вода: {water.day_line(wt['drank'], wt['target'])} — /water")
-    for m in t["meals"]:
-        lines.append(f"• {esc(m['time'])} {esc(m['title'])} — {round(m['kcal'])} ккал")
-    if not t["meals"]:
-        lines.append("\nПока ничего не записано. Пришли фото еды или напиши «съел …».")
-    return "\n".join(lines)
+    top += f"\nВода: {water.day_line(wt['drank'], wt['target'])}"
+    meals = "\n".join(f"• {esc(m['time'])} · {esc(m['title'])} — {round(m['kcal'])} ккал" for m in t["meals"])
+    note = "Ещё еда — фото или «съел …»." if t["meals"] else "Пока ничего не записано. Пришли фото еды или напиши «съел …»."
+    return box("🍽", "Питание сегодня", [top, meals], note=note)
 
 
 def water_buttons(last_id=None):
-    rows = [[{"text": "+250 · стакан", "callback_data": "wa|add|250"},
-             {"text": "+500 · бутылка", "callback_data": "wa|add|500"}]]
-    if last_id:
-        rows.append([{"text": "↩️ Отменить", "callback_data": f"wa|del|{last_id}"}])
-    return with_app(rows, "🍽 Питание", "/food")
+    return kb([btn("+250 · стакан", "wa|add|250"), btn("+500 · бутылка", "wa|add|500")],
+              [btn("↩️ Отменить", f"wa|del|{last_id}") if last_id else None, app_button("🍽 Питание", "/food")])
 
 
-def water_text(uid, added=0):
+def water_text(uid, added=0, title=None):
     u = db.user(uid)
     now = user_now(u)
     _, t = context(uid)
     wt = t["water"]
-    text = water.card(added, wt["drank"], wt["target"], wt["why"], now.hour + now.minute / 60, wt["trained"])
-    if not added and wt["log"]:
-        text += "\n\n" + " · ".join(f"{esc(w['time'])} {water.liters(w['ml'])}" for w in wt["log"][-8:])
-    if not added and not wt["log"]:
-        text += "\n\nПиши, сколько выпил: «500 мл», «стакан воды», «+300» — или жми кнопки."
+    log = "" if added or not wt["log"] else "Записи: " + " · ".join(
+        f"{esc(w['time'])} {water.liters(w['ml'])}" for w in wt["log"][-8:])
+    note = None if added or wt["log"] else f"Норма: {wt['why']}. Пиши «500 мл», «стакан воды», «+300» или жми кнопки."
+    text = water.card(added, wt["drank"], wt["target"], wt["why"], now.hour + now.minute / 60, wt["trained"],
+                      title=title, extra=log, note=note)
     return text, (wt["log"][-1]["id"] if wt["log"] else None)
 
 
-def log_water(chat, uid, ml):
+def log_water(chat, uid, ml, mid=None):
+    """Записать воду. mid — карточка воды, в которой нажали кнопку: обновим её на месте."""
     now = user_now(db.user(uid))
     row = db.add_water(uid, now.date().isoformat(), now.strftime("%H:%M"), ml)
     text, _ = water_text(uid, ml)
-    send(chat, text, water_buttons(row["id"]))
+    if mid:
+        replace(chat, mid, text, water_buttons(row["id"]))
+    else:
+        send(chat, text, water_buttons(row["id"]))
 
 
 PHOTO_ASK = "Что на фото? Разбери с учётом моих данных и целей."
@@ -729,7 +850,7 @@ QUESTION = re.compile(r"^(почему|зачем|что|как|какой|ка�
 
 def log_meal(chat, uid, text="", photo=None):
     if uid in busy:
-        send(chat, "Секунду, ещё думаю над прошлым сообщением…")
+        send(chat, BUSY)
         return
     busy.add(uid)
     try:
@@ -738,29 +859,30 @@ def log_meal(chat, uid, text="", photo=None):
         try:
             est = ai.meal(ctx, text, image=photo)
         except ai.AIError as e:
-            send(chat, f"⚠️ Не смог оценить еду: {esc(e)}. Можно добавить вручную в приложении.", with_app([], "🍽 Питание", "/food"))
+            send(chat, err(f"Не смог оценить еду: {esc(e)}. Добавь вручную в приложении."),
+                 with_app([], "🍽 Питание", "/food"))
             return
         if est.get("food") is False:
             if photo:  # скрин WHOOP, план тренировок и т. п. — это вопрос тренеру с картинкой
                 busy.discard(uid)
                 answer(chat, uid, text or PHOTO_ASK, photo)
             else:
-                send(chat, esc(est.get("comment") or "Не похоже на еду. Если это вопрос — напиши его текстом."))
+                send(chat, "🤔 " + esc(est.get("comment") or "Не похоже на еду. Если это вопрос — напиши его текстом."))
             return
         now = user_now(db.user(uid))
         m = db.save_meal(uid, {**est, "day": now.date().isoformat(), "time": now.strftime("%H:%M")})
         _, t = context(uid)
         n, e = t["nutrition"], t["eaten"]
-        total = f"\n\nЗа день: {e['kcal']}" + (f" / {n['kcal']} ккал, белок {e['protein']}/{n['protein']} г" if n else " ккал")
-        send(chat, meal_card(m, est.get("comment", "")) + total,
-             with_app([[{"text": "🗑 Удалить", "callback_data": f"m|del|{m['id']}"}]], "🍽 Питание", "/food"))
+        total = f"За день {e['kcal']}" + (f" из {n['kcal']} ккал · белок {e['protein']} из {n['protein']} г" if n else " ккал")
+        send(chat, meal_card(m, est.get("comment", ""), total),
+             kb([btn("🗑 Удалить", f"m|del|{m['id']}"), app_button("🍽 Питание", "/food")]))
     finally:
         busy.discard(uid)
 
 
 def answer(chat, uid, question, photo=None):
     if uid in busy:
-        send(chat, "Секунду, ещё думаю над прошлым сообщением…")
+        send(chat, BUSY)
         return
     busy.add(uid)
     try:
@@ -770,38 +892,41 @@ def answer(chat, uid, question, photo=None):
         try:
             out = ai.claude(ai.chat_prompt(ctx, hist, question), image=photo)
         except ai.AIError as e:
-            send(chat, f"⚠️ {esc(e)}.")
+            send(chat, err(f"{esc(e)}."))
             return
         db.say(uid, "user", question)
         db.say(uid, "coach", out)
-        send(chat, ai.to_html(out))
+        body = ai.to_html(out)
+        if len(body) > 3500:  # длинный ответ — частями, иначе Telegram его не примет
+            send_long(chat, "💬 <b>Тренер</b>", body)
+        else:
+            send(chat, box("💬", "Тренер", body))
     finally:
         busy.discard(uid)
 
 
-def goals_view(uid):
+def goals_view(uid, title=None):
     gs = db.goals(uid)
     if gs:
-        lines = ["🎯 <b>Мои цели</b>"] + [f"{i}. {esc(g['text'])}" for i, g in enumerate(gs, 1)]
-        lines.append("\nУчитываю их в каждом совете, утром пишу, как день двигает к цели.")
+        text = box("🎯", title or "Мои цели", "\n".join(f"{i}. {esc(g['text'])}" for i, g in enumerate(gs, 1)),
+                   note="Учитываю их в каждом совете, утром пишу, как день двигает к цели.")
     else:
-        lines = ["🎯 <b>Цели</b> пока не записаны.",
-                 "Напиши, к чему идёшь: «ложиться до 23:00», «бокс — соревнования весной», «вес 60 кг к декабрю». "
-                 "Все советы буду привязывать к ним."]
-    rows = [[{"text": f"🗑 {i}. {g['text'][:28]}", "callback_data": f"g|del|{g['id']}"}] for i, g in enumerate(gs, 1)]
-    if len(gs) < store.MAX_GOALS:
-        rows.append([{"text": "➕ Добавить цель", "callback_data": "g|add"}])
-    return "\n".join(lines), rows
+        text = box("🎯", title or "Цели пока не записаны",
+                   "Напиши, к чему идёшь: «ложиться до 23:00», «бокс — соревнования весной», «вес 60 кг к декабрю».",
+                   note="Все советы буду привязывать к ним.")
+    rows = [[btn("➕ Добавить цель", "g|add", "success")]] if len(gs) < store.MAX_GOALS else []
+    dels = [btn(f"🗑 {i}", f"g|del|{g['id']}") for i, g in enumerate(gs, 1)]  # номера — как в списке выше
+    rows += [dels[i:i + 3] for i in range(0, len(dels), 3)]
+    return text, rows
 
 
 def add_goal(chat, uid, text):
     try:
         db.add_goal(uid, text)
     except ValueError as e:
-        send(chat, f"⚠️ {esc(e)}")
+        send(chat, err(esc(e)))
         return
-    body, rows = goals_view(uid)
-    send(chat, "✅ Цель записана.\n\n" + body, rows)
+    send(chat, *goals_view(uid, "Цель записана"))
 
 
 def awaiting(uid, what=None):
@@ -821,10 +946,15 @@ def set_morning(chat, uid, value):
     try:
         db.save_profile(uid, {"morning": value})
     except ValueError as e:
-        send(chat, f"⚠️ {esc(e)}")
+        send(chat, err(esc(e)))
         return
     u = db.user(uid)
     send(chat, morning_text(u), morning_buttons(u))
+
+
+def sync_now(chat, uid, mid):
+    sync_user(uid, days=7)
+    replace(chat, mid, box("✅", "Данные обновлены"), with_app([], "⚡ Открыть день"))
 
 
 def on_message(msg):
@@ -852,9 +982,10 @@ def on_message(msg):
         send(chat, HELP, with_app([]))
     elif cmd == "/app":
         if public_url:
-            send(chat, "⚡ Твоя Форма:", with_app([]))
+            send(chat, box("⚡", "Форма", note="Сегодня, тренды, питание и тренер — в приложении."),
+                 with_app([], style="primary"))
         else:
-            send(chat, "Приложение ещё запускается — пришлю кнопку, как только будет готово. /status — что с адресом.")
+            send(chat, "⏳ Приложение ещё запускается — пришлю кнопку, как будет готово. Что с адресом — /status")
     elif cmd == "/connect":
         connect(chat, uid)
     elif cmd == "/whoop":
@@ -887,18 +1018,17 @@ def on_message(msg):
         if not db.token(uid):
             connect(chat, uid)
         else:
-            send(chat, "🔄 Обновляю…")
-            threading.Thread(target=lambda: (sync_user(uid, days=7),
-                                             send(chat, "✅ Данные обновлены.", with_app([]))), daemon=True).start()
+            mid = mid_of(send(chat, "🔄 Обновляю данные WHOOP…"))
+            threading.Thread(target=sync_now, args=(chat, uid, mid), daemon=True).start()
     elif cmd == "/new":
         db.clear_history(uid)
-        send(chat, "🧹 Начали разговор заново. Данные и профиль на месте.")
+        send(chat, box("🧹", "Новый разговор", note="Данные, цели и профиль на месте."))
     elif cmd == "/status":
         threading.Thread(target=status, args=(chat, uid), daemon=True).start()
     elif cmd == "/update" and is_admin(uid):
         update(chat)
     elif cmd:
-        send(chat, "Такой команды нет. /help — что я умею.")
+        send(chat, err("Такой команды нет — что я умею: /help"))
     elif msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
         fid = msg["photo"][-1]["file_id"] if msg.get("photo") else msg["document"]["file_id"]
         path = download(fid, os.path.join(DATA, "photos", str(uid)))
@@ -934,13 +1064,13 @@ def on_voice(chat, uid, msg, wait=None):
     try:
         text = media.voice_text(TOKEN, msg).strip()
     except media.MediaError as e:
-        send(chat, f"⚠️ Голосовое: {esc(e)}. Можно написать текстом.")
+        send(chat, err(f"Голосовое: {esc(e)}. Можно написать текстом."))
         if wait:
             awaiting(uid, wait)  # цель всё ещё ждём
         return
     except Exception as e:
         print("voice:", e)
-        send(chat, "⚠️ Не получилось скачать голосовое — попробуй ещё раз или напиши текстом.")
+        send(chat, err("Не получилось скачать голосовое — попробуй ещё раз или напиши текстом."))
         if wait:
             awaiting(uid, wait)
         return
@@ -950,7 +1080,7 @@ def on_voice(chat, uid, msg, wait=None):
 
 def save_creds(chat, uid, msg, text):
     if not is_admin(uid):
-        send(chat, "Это может сделать только владелец бота.")
+        send(chat, err("Это может сделать только владелец бота."))
         return
     parts = text.split()
     try:
@@ -958,11 +1088,11 @@ def save_creds(chat, uid, msg, text):
     except Exception:
         pass
     if len(parts) != 3:
-        send(chat, "Нужно так: <code>/whoop CLIENT_ID CLIENT_SECRET</code>")
+        send(chat, err("Нужно так: <code>/whoop CLIENT_ID CLIENT_SECRET</code>"))
         return
     db.meta("whoop_client_id", parts[1])
     db.meta("whoop_client_secret", parts[2])
-    send(chat, "🔐 Ключи WHOOP сохранены на сервере, сообщение удалил.")
+    send(chat, box("🔐", "Ключи WHOOP сохранены", note="Храню на сервере, сообщение с ними удалил."))
     connect(chat, uid)
 
 
@@ -983,10 +1113,10 @@ def on_callback(cq):
         threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
         note = "Разбираю прогресс…"
     elif data[0] == "q":
-        send(chat, "Напиши вопрос — отвечу с учётом твоих данных. Например: «что съесть перед тренировкой?»")
+        send(chat, "💬 Напиши вопрос — отвечу по твоим данным.\n<i>Например: «что съесть перед тренировкой?»</i>")
     elif data[0] == "g" and data[1] == "add":
         awaiting(uid, "goal")
-        send(chat, "✍️ Напиши цель одним сообщением. Например: «ложиться до 23:00» или «соревнования по боксу в марте».")
+        send(chat, "✍️ Напиши цель одним сообщением.\n<i>Например: «ложиться до 23:00» или «соревнования в марте».</i>")
     elif data[0] == "g" and data[1] == "del":
         if db.delete_goal(uid, int(data[2])):
             note = "Удалено"
@@ -1006,12 +1136,12 @@ def on_callback(cq):
         else:
             connect(chat, uid)
     elif data[0] == "wa" and data[1] == "add":
-        log_water(chat, uid, int(data[2]))
+        log_water(chat, uid, int(data[2]), mid)
         note = f"+{data[2]} мл"
     elif data[0] == "wa" and data[1] == "del":
         if db.delete_water(uid, int(data[2])):
-            text, last = water_text(uid)
-            edit(chat, mid, "↩️ Отменил.\n\n" + text, water_buttons(last))
+            text, last = water_text(uid, title="↩️ <b>Отменил</b>")
+            edit(chat, mid, text, water_buttons(last))
             note = "Отменил"
     elif data[0] == "m" and data[1] == "del":
         if db.delete_meal(uid, int(data[2])):
@@ -1023,19 +1153,18 @@ def on_callback(cq):
 def status(chat, uid):
     cid, sec = creds()
     tok = db.token(uid)
-    lines = ["🩺 <b>Проверка</b>",
-             ("✓" if public_url else "✕") + f" Приложение: {esc(public_url or 'нет адреса')} — {esc(https_note)}",
+    lines = [("✓" if public_url else "✕") + f" Приложение — {esc(https_note)}",
              ("✓" if cid and sec else "✕") + " Ключи WHOOP" + ("" if cid and sec else " — /connect, там инструкция"),
-             ("✓" if tok else "✕") + " WHOOP подключён" + (f", обновлено {esc((tok.get('synced') or '—')[:16].replace('T', ' '))} UTC, "
-                                                          f"записей {db.record_count(uid)}" if tok else "")]
+             ("✓" if tok else "✕") + " WHOOP подключён" + (f" · обновлено {esc((tok.get('synced') or '—')[:16].replace('T', ' '))} UTC"
+                                                          f" · записей {db.record_count(uid)}" if tok else "")]
     try:
         ai.claude("Ответь одним словом: ok", timeout=90)
         lines.append("✓ Claude отвечает")
     except ai.AIError as e:
         lines.append(f"✕ Claude: {esc(e)}")
-    if public_url:
-        lines.append(f"\nRedirect URL для WHOOP:\n<code>{esc(redirect_url())}</code>")
-    send(chat, "\n".join(lines))
+    extra = (f"Адрес: {esc(public_url)}\nRedirect URL для WHOOP:\n<code>{esc(redirect_url())}</code>"
+             if public_url else "")
+    send(chat, box("🩺", "Проверка", ["\n".join(lines), extra]))
 
 
 def update(chat):
@@ -1044,7 +1173,7 @@ def update(chat):
     res = git("pull", "--ff-only", "origin", "main")
     send(chat, esc((res.stdout + res.stderr).strip()[-1500:] or "ok"))
     if res.returncode == 0:
-        send(chat, "Перезапускаюсь…")
+        send(chat, "🔄 Перезапускаюсь…")
         tg("getUpdates", offset=offset, timeout=0)
         os._exit(0)  # pm2 поднимет заново
 
@@ -1103,9 +1232,14 @@ def asset_version():
 
 
 PAGE_DONE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Форма</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#07080a;color:#f2f4f7;
-font:17px/1.4 -apple-system,system-ui,sans-serif;text-align:center}}b{{font-size:44px;display:block;margin-bottom:12px}}
-a{{color:#2ee59d}}</style><div><b>{icon}</b>{text}<br><br><a href="{link}">Вернуться в Telegram</a></div>"""
+<meta name="color-scheme" content="light dark"><title>Форма</title><style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:#f2f2f7;color:#000;
+font:17px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;text-align:center}}
+div{{max-width:340px;background:#fff;border-radius:16px;padding:32px 24px;overflow-wrap:anywhere}}
+b{{font-size:44px;display:block;margin-bottom:16px}}a{{display:block;margin-top:24px;padding:14px;border-radius:12px;
+background:#007aff;color:#fff;text-decoration:none;font-weight:600}}
+@media (prefers-color-scheme:dark){{body{{background:#000;color:#fff}}div{{background:#1c1c1e}}a{{background:#0a84ff}}}}
+</style><div><b>{icon}</b>{text}<a href="{link}">Вернуться в Telegram</a></div>"""
 
 
 class Web(BaseHTTPRequestHandler):
@@ -1326,8 +1460,8 @@ def use_url(url):
         db.meta("app_url", url)
         if owner():
             try:
-                send(owner(), "⚡ <b>Форма готова!</b>\n\nКнопка «Форма» — слева от поля ввода.",
-                     with_app([] if db.token(owner()) else [[{"text": "🔌 Подключить WHOOP", "callback_data": "c|"}]]))
+                send(owner(), box("⚡", "Форма готова", note="Кнопка «Форма» — слева от поля ввода."),
+                     with_app([] if db.token(owner()) else [[btn("🔌 Подключить WHOOP", "c|", "success")]]))
             except Exception as e:
                 print("notify:", e)
     return True

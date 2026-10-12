@@ -3,18 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light dark">
   <title>Форма</title>
   <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
   <link rel="stylesheet" href="app.css?v={{v}}">
+  <script>
+    /* тема до первой отрисовки, чтобы не мигало светлым */
+    (function () { var w = window.Telegram && window.Telegram.WebApp;
+      var dark = w && w.colorScheme ? w.colorScheme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+      if (dark) document.documentElement.classList.add('dark'); })();
+  </script>
 </head>
 <body>
   <div id="app">
-    <main id="view"><div class="boot"><div class="boot-ring"></div></div></main>
+    <main id="view">
+      <div class="boot" aria-busy="true" aria-label="Загрузка">
+        <div class="top"><div class="top-t"><div class="sk" style="width:40%"></div><div class="sk sk-title"></div></div></div>
+        <div class="card" style="padding:24px 16px"><div class="sk sk-ring"></div><div class="sk" style="width:44%;margin:16px auto 0;height:28px;border-radius:14px"></div></div>
+        <div class="grid2"><div class="card"></div><div class="card"></div><div class="card"></div><div class="card"></div></div>
+        <div class="card"><div class="sk sk-h"></div><div class="sk"></div><div class="sk" style="width:80%"></div><div class="sk" style="width:60%"></div></div>
+      </div>
+    </main>
     <nav id="tabs" class="tabs"></nav>
   </div>
   <div id="sheet-root"></div>
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js?v={{v}}"></script>
 </body>
 </html>
