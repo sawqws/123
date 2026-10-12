@@ -46,11 +46,15 @@ class BotTest(unittest.TestCase):
             mock.patch.object(bot, "send_file", lambda chat, path, caption="": self.files.append(path)),
             mock.patch.object(bot, "claude", self.fake_claude),
             mock.patch.object(bot, "node", self.fake_node),
+            mock.patch.object(bot, "INBOX", os.path.join(t, "inbox")),
+            mock.patch.object(bot.media, "photo_path", self.fake_photo),  # без сети: фото и видео из Telegram
+            mock.patch.object(bot.media, "video", self.fake_video),
         ]
         for p in self.patches:
             p.start()
         self.msgs, self.files, self.prompts, self.nodes, self.reads = [], [], [], [], []
         self.ov = {"tasks": [], "grades": [], "comments": [], "at": 1}
+        self.video = {"frames": [], "text": ""}
         os.makedirs(drafts.task_dir(TASK))
         with open(os.path.join(drafts.task_dir(TASK), "task.json"), "w") as f:
             json.dump({"data": {"type": "detailedAnswer", "title": "Конспект §5"}}, f)
@@ -89,6 +93,22 @@ class BotTest(unittest.TestCase):
             return True, json.dumps(self.ov)
         self.nodes.append(args)
         return True, "Статус: checking"
+
+    def fake_photo(self, token, msg, folder=None):
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "photo.jpg")
+        pathlib.Path(path).write_bytes(b"jpg")
+        return path
+
+    def fake_video(self, token, msg, folder=None, frames=4):
+        os.makedirs(folder, exist_ok=True)
+        shots = []
+        for i in range(len(self.video["frames"])):
+            shots.append(os.path.join(folder, f"frame-{i + 1}.jpg"))
+            pathlib.Path(shots[-1]).write_bytes(b"jpg")
+        if self.video.get("error"):
+            raise bot.media.MediaError(self.video["error"])
+        return {"frames": shots, "text": self.video["text"], "seconds": 3}
 
     def say(self, text="", **extra):
         bot.handle({"chat": {"id": CHAT}, "from": {"id": CHAT}, "text": text, **extra})
@@ -193,15 +213,101 @@ class BotTest(unittest.TestCase):
         self.assertNotIn("«", self.last()[0])
 
     def test_voice_kinds(self):
-        self.assertEqual(bot.media.kind({"video_note": {"file_id": "x"}}), "video")  # речь из кружка — как голосовое
+        self.assertEqual(bot.media.kind({"video_note": {"file_id": "x"}}), "video")  # кружок — теперь видео
         self.assertEqual(bot.media.kind({"audio": {"file_id": "x"}}), "voice")
         self.assertEqual(bot.media.kind({"photo": [{"file_id": "x"}]}), "photo")
 
-    def test_photo_without_context(self):
-        """Фото, когда черновика и алфавита нет, — подсказка, что с фото можно сделать (а не «не понял»)."""
-        self.say(photo=[{"file_id": "a"}])
-        self.assertIn("Фото пригодится", self.last()[0])
-        self.assertEqual(self.prompts, [])
+    def looker(self, answer):
+        """claude(), который «смотрит» на фото и отвечает JSON; решение по фото — ответами."""
+        def fake(prompt, tools, timeout=0, on_tool=None):
+            self.prompts.append(prompt)
+            if prompt.startswith("Глеб прислал"):
+                return True, answer
+            if prompt.startswith("На фото задание"):
+                return True, "1) x = 2\n2) 0,5"
+            return self.fake_claude(prompt, tools, timeout, on_tool)
+        return mock.patch.object(bot, "claude", fake)
+
+    def press(self, data):
+        bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": 5}})
+
+    def test_photo_finds_task_from_list(self):
+        """Скриншот задания без ссылки: Claude узнаёт задание по списку несделанных, бот предлагает решить."""
+        pathlib.Path(bot.OVERVIEW).write_text(json.dumps({"at": 1, "tasks": [
+            {"url": URL, "title": "Конспект §5", "subj": "Биология"}], "comments": []}))
+        calls = []
+        with self.looker(json.dumps({"match": URL, "title": "Конспект §5", "task": ""})), \
+             mock.patch.object(bot, "run_task", lambda *a: calls.append(a)):
+            self.say(photo=[{"file_id": "a"}], message_id=3)
+            self.assertIn("Конспект §5 — " + URL, self.prompts[-1])     # список заданий — в подсказке Claude
+            self.assertIn(os.path.join(bot.INBOX), self.prompts[-1])     # и путь к фото
+            text, markup = self.last()
+            self.assertIn("Нашёл задание", text)
+            self.assertIn("ph:do", markup)
+            self.press("ph:do")
+            self.press("ph:show")
+        self.assertEqual(calls, [(CHAT, URL, "", False), (CHAT, URL, "", True)])
+        self.assertEqual(self.nodes, [])
+
+    def test_photo_condition_solved_by_photo(self):
+        with self.looker('```json\n{"link": "", "match": "", "title": "Уравнение", "task": "Реши 2x = 4"}\n```'):
+            self.say(photo=[{"file_id": "a"}], caption="помоги")
+            text, markup = self.last()
+            self.assertIn("Реши 2x = 4", text)
+            self.assertIn("ph:solve", markup)
+            self.assertIn("«помоги»", self.prompts[-1])
+            self.press("ph:solve")
+        self.assertIn("photo.jpg", self.prompts[-1])
+        self.assertIn("На сайт ничего не отправляй", self.prompts[-1])
+        self.assertIn("x = 2", self.last()[0])
+        self.assertIn("на сайт не отправлял", self.last()[0])
+        self.assertEqual(self.nodes, [])
+
+    def test_photo_without_task(self):
+        with self.looker("Это кот"):
+            self.say(photo=[{"file_id": "a"}])
+        self.assertIn("Задания на фото не нашёл", self.last()[0])
+        self.press("ph:do")
+        self.assertIn("неактуально", self.last()[0])
+
+    def test_photo_caption_link_goes_like_text(self):
+        calls = []
+        with mock.patch.object(bot, "run_task", lambda *a: calls.append(a)), \
+             mock.patch.object(bot.media, "photo_path", lambda *a: self.fail("фото не нужно")):
+            self.say(photo=[{"file_id": "a"}], caption="вот " + URL, message_id=4)
+        self.assertEqual(calls, [(CHAT, URL, "вот " + URL, False, 4)])
+
+    def test_video_speech_is_text(self):
+        """Видео со словами — как голосовое: «Оценки» нажимает кнопку, ссылка решается."""
+        self.video = {"frames": ["f"], "text": "Оценки."}
+        self.say(video={"file_id": "v", "duration": 3})
+        self.assertEqual(self.nodes[-1], ("horo/grades.js", "--html"))
+        self.assertIn("🎬 Смотрю видео…", [m for m, _ in self.msgs])
+        self.video = {"frames": [], "text": f"реши {URL}"}
+        calls = []
+        with mock.patch.object(bot, "run_task", lambda *a: calls.append(a)):
+            self.say(video_note={"file_id": "v", "duration": 3})
+        self.assertEqual(calls[0][1], URL)
+
+    def test_video_frames_are_looked_at(self):
+        self.video = {"frames": ["a", "b"], "text": "что тут"}
+        with self.looker(json.dumps({"task": "Найди площадь круга r = 2", "title": "Площадь"})):
+            self.say(video={"file_id": "v", "duration": 5})
+        self.assertIn("кадры из видео", self.prompts[-1])
+        self.assertIn("frame-2.jpg", self.prompts[-1])
+        self.assertIn("«что тут»", self.prompts[-1])
+        self.assertIn("ph:solve", self.last()[1])
+
+    def test_video_error(self):
+        self.video = {"frames": [], "text": "", "error": "видео больше 20 МБ"}
+        self.say(video={"file_id": "v"})
+        self.assertTrue(self.last()[0].startswith("⚠️ видео больше 20 МБ"))
+
+    def test_video_with_draft_edits_it(self):
+        self.say(URL)
+        self.video = {"frames": ["a"], "text": "убери второе"}
+        self.say(video_note={"file_id": "v"})
+        self.assertEqual(drafts.read(TASK), "Клетка делится митозом.")
 
     def test_late_list_sent_as_html(self):
         with mock.patch.object(bot, "node", lambda *a, timeout=0, prog="node": (True, '❗ <b>Просрочено: 1</b>\n🔁 <a href="u">Тест &amp; Ко</a>')):

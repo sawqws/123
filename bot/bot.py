@@ -14,7 +14,9 @@
 (Telegram показывает их, если у владельца бота есть Premium).
 Задания с проверкой учителем: бот присылает черновик, Глеб правит или жмёт «Отправить»;
 правки запоминаются (bot/drafts.py). /alphabet — алфавит его почерком (horo/alphabet.py).
-Голосовые (и аудио, кружки) распознаются (common/media.py) и дальше идут как набранный текст.
+Голосовые распознаются (common/media.py) и дальше идут как набранный текст. Фото: при черновике учителю —
+в черновик, иначе Claude ищет на нём задание (ссылку или название из списка) и предлагает решить.
+Видео и кружки: речь — как голосовое, кадры — как фото.
 """
 import datetime
 import html
@@ -97,27 +99,16 @@ def menu_kb():
 
 HELP = (  # HTML: отправляется с raw_html=True
     "❓ <b>Что я умею</b>\n"
-    "<blockquote>Пришли ссылку на задание — решу и сдам. Ответ учителю сначала покажу черновиком: "
-    "поправь текстом, просьбой или фото и нажми «Отправить учителю».</blockquote>\n"
-    "<blockquote expandable><b>Задания</b>\n"
-    "• «Решить и сдать» — пришли ссылку, решу и сдам\n"
-    "• «Только ответы» — покажу ответы, ничего не отправлю\n"
-    "• «Автотесты» — сдам все новые тесты пачкой\n"
-    "\n<b>Учёба</b>\n"
-    "• «Задания» — всё несделанное по предметам\n"
-    "• «Оценки» — и сколько до следующей\n"
-    "• «Учителя» — комментарии и доработки\n"
-    "• «Ещё» → «Просрочки» — только просроченное\n"
-    f"• «Ещё» → «Сводка» — список дел в {DIGEST_HOUR}:00 мск\n"
-    "\n<b>Голос, фото, почерк</b>\n"
-    "• Голосовое — как обычный текст\n"
-    "• Фото — в черновик учителю или лист алфавита\n"
-    "• «Ещё» → «Почерк» — алфавит для решений от руки\n"
-    "• /style — небрежность, толщина, размер почерка\n"
-    "\n<b>Служебное</b>\n"
-    "• «Ещё» → «Проверка» — всё ли работает\n"
-    "• /update — обновиться, /emoji — премиум-эмодзи\n"
-    "• /planner, /coach, /kpp, /hub, /agent + токен — поставить соседнего бота</blockquote>\n"
+    "<blockquote>Пришли ссылку на задание — решу и сдам. Ответ учителю сначала покажу черновиком.</blockquote>\n"
+    "<blockquote expandable><b>Задания</b> — всё несделанное\n"
+    "<b>Оценки</b> — и сколько до следующей\n"
+    "<b>Учителя</b> — комментарии и доработки\n"
+    "<b>Автотесты</b> — сдам все новые тесты пачкой\n"
+    "<b>Голосовое</b> — как текст\n"
+    "<b>Фото, скриншот</b> — найду задание и решу; при черновике — фото в него\n"
+    "<b>Видео</b> — кадры как фото, речь как текст\n"
+    f"<b>Ещё</b> — просрочки, сводка в {DIGEST_HOUR}:00, почерк, проверка\n"
+    "/style — почерк · /update — обновиться · /emoji — премиум-эмодзи</blockquote>\n"
     "<i>Всё то же — в приложении: кнопка «HDP» слева от поля ввода</i>"
 )
 COMMANDS = [  # меню команд у поля ввода
@@ -927,6 +918,9 @@ def on_callback(cq):
         else:
             edit(chat, mid, card("Автотесты не сдаю", note=f"Передумаешь — кнопка «{BTN_ALL}»", icon="👌"))
         return
+    if data.startswith("ph:"):  # задание, найденное на фото
+        on_photo_button(chat, data[3:])
+        return
     if not draft():
         send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
     elif data == "send":
@@ -1444,14 +1438,184 @@ def hear_voice(msg):
         edit(chat, mid, echo)
     else:
         send(chat, echo, raw_html=True)
-    voice_keys = ("voice", "audio", "video_note", "document", "caption")
-    handle({**{k: v for k, v in msg.items() if k not in voice_keys}, "text": spoken_button(heard)})
+    handle(as_text(msg, spoken_button(heard)))
+
+
+MEDIA_KEYS = ("voice", "audio", "video", "video_note", "animation", "document", "photo", "caption")
+INBOX = os.path.join(REPO, "horo", "tmp", "inbox")  # фото и кадры видео из чата (вне git)
+seen = {}  # chat -> что нашёл на последнем фото: {"url", "title", "task", "images", "note"}
+
+
+def inbox():
+    return os.path.join(INBOX, time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4])
+
+
+def as_text(msg, text):
+    """То же сообщение, но как набранный текст (без вложений)."""
+    return {**{k: v for k, v in msg.items() if k not in MEDIA_KEYS}, "text": text}
+
+
+def look_photo(msg):
+    """Фото или скриншот (черновика нет): Claude ищет на нём задание и предлагает решить."""
+    chat = msg["chat"]["id"]
+    caption = (msg.get("caption") or "").strip()
+    if LINK.search(caption):  # ссылка в подписи — как будто её прислали текстом
+        handle(as_text(msg, caption))
+        return
+    try:
+        path = media.photo_path(TOKEN, msg, inbox())
+    except media.MediaError as e:
+        send(chat, err(str(e)), menu=True, raw_html=True)
+        return
+    except Exception as e:
+        print("photo:", e)
+        send(chat, err("Не получилось скачать фото, пришли ещё раз"), menu=True, raw_html=True)
+        return
+    look_images(chat, [path], caption, msg.get("message_id"))
+
+
+def hear_video(msg):
+    """Видео, кружок, гифка: речь — как голосовое (команда, ссылка, правка черновика), кадры — как фото."""
+    chat = msg["chat"]["id"]
+    mid = send(chat, "🎬 Смотрю видео…")
+    quiet("sendChatAction", chat_id=chat, action="typing")
+    try:
+        v = media.video(TOKEN, msg, inbox())
+    except media.MediaError as e:
+        delete(chat, mid)
+        send(chat, err(str(e)), menu=True, raw_html=True)
+        return
+    except Exception as e:
+        print("video:", e)
+        delete(chat, mid)
+        send(chat, err("Не получилось скачать видео, пришли ещё раз"), menu=True, raw_html=True)
+        return
+    speech = (v.get("text") or "").strip()
+    said = " ".join(x for x in ((msg.get("caption") or "").strip(), speech) if x)
+    if speech:
+        edit(chat, mid, f"🎙 «{esc(speech)}»")
+    else:
+        delete(chat, mid)
+    frames = v.get("frames") or []
+    if said and (LINK.search(said) or draft() or spoken_button(said) in BUTTONS or not frames):
+        handle(as_text(msg, spoken_button(said)))
+    elif frames:
+        look_images(chat, frames, said, msg.get("message_id"), video=True)
+    else:
+        send(chat, err("В видео не разобрал ни кадров, ни слов"), menu=True, raw_html=True)
+
+
+def look_prompt(paths, note, video):
+    ov = overview() or {}
+    rows = list(ov.get("tasks") or [])
+    urls = {r.get("url") for r in rows}
+    rows += [r for r in ov.get("comments") or [] if r.get("url") not in urls]
+    tasks = "\n".join(f"- {r.get('subj', '')}: {r.get('title', '')} — {r.get('url', '')}" for r in rows[:40])
+    return (
+        f"Глеб прислал в бот {'кадры из видео' if video else 'фото или скриншот'}: {', '.join(paths)}. "
+        "Открой инструментом Read.\n"
+        + (f"Он пишет или говорит: «{note}»\n" if note else "")
+        + "Найди на нём школьное задание (сайт horodigital.ru: тест, вопрос, рабочий лист, условие задачи).\n"
+        + (f"Несделанные задания Глеба (предмет: название — ссылка):\n{tasks}\n" if tasks else "")
+        + "Ответь только JSON без пояснений: {\"link\": \"ссылка horodigital.ru, если видна на фото целиком, иначе пусто\", "
+          "\"match\": \"ссылка из списка выше, если на фото именно это задание, иначе пусто\", "
+          "\"title\": \"название задания или что на фото, до 8 слов\", "
+          "\"task\": \"условие задания с фото коротко, до 500 символов; пусто, если задания нет\"}"
+    )
+
+
+def parse_json(out):
+    m = re.search(r"\{.*\}", out or "", re.S)
+    try:
+        data = json.loads(m.group(0)) if m else {}
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def look_images(chat, paths, note="", mid=None, video=False):
+    if not lock.acquire(blocking=False):
+        send(chat, BUSY)
+        return
+    try:
+        react(chat, mid, "👀")
+        live = Live(chat, "Смотрю видео" if video else "Смотрю фото", "ищу задание", progress=False)
+        try:
+            ok, out = claude(look_prompt(paths, note, video), ["Read"], timeout=300)
+        finally:
+            live.done()
+    finally:
+        lock.release()
+    if not ok:
+        send(chat, err(out), menu=True, raw_html=True)
+        return
+    found = parse_json(out)
+    m = LINK.search(str(found.get("link") or "")) or LINK.search(str(found.get("match") or ""))
+    title = str(found.get("title") or "").strip()[:120]
+    task = str(found.get("task") or "").strip()[:600]
+    seen[chat] = {"url": m.group(0) if m else "", "title": title, "task": task, "images": paths, "note": note}
+    if m:
+        send(chat, card("Нашёл задание", esc(title or "Задание с фото"), "Решить?", "📸"),
+             markup=kb([("📝 Решить и сдать", "ph:do", "primary"), ("👀 Только ответы", "ph:show")]), raw_html=True)
+    elif task:
+        send(chat, card(esc(title) or "Задание на фото", esc(task), "Ссылки нет — решу по фото, на сайт ничего не отправлю",
+                        "📸"), markup=kb([("🧠 Решить по фото", "ph:solve", "primary")]), raw_html=True)
+    else:
+        send(chat, card("Задания на фото не нашёл", esc(title) if title else "",
+                        "Пришли скриншот задания или ссылку. Фото к ответу учителю — когда открыт черновик", "📸"),
+             menu=True, raw_html=True)
+
+
+def solve_photo(chat):
+    """Задание с фото без ссылки: Claude решает по картинке и показывает ответ (на сайт ничего не уходит)."""
+    s = seen.get(chat) or {}
+    paths = [p for p in s.get("images") or [] if os.path.exists(p)]
+    if not paths:
+        send(chat, err("Фото уже нет — пришли его ещё раз"), menu=True, raw_html=True)
+        return
+    if not lock.acquire(blocking=False):
+        send(chat, BUSY)
+        return
+    try:
+        t0 = time.time()
+        live = Live(chat, "Решаю по фото", esc(s.get("title") or ""), progress=False)
+        try:
+            ok, out = claude(
+                f"На фото задание Глеба (ученик 8 класса): {', '.join(paths)}. Открой инструментом Read.\n"
+                + (f"Он пишет: «{s['note']}»\n" if s.get("note") else "")
+                + "Реши его и покажи ответы. На сайт ничего не отправляй, скрипты не запускай. "
+                  "Ответ для Telegram, коротко, по пунктам, без markdown-таблиц; десятичные дроби через запятую.",
+                ["Read"], timeout=600)
+        finally:
+            live.done()
+    finally:
+        lock.release()
+    title = s.get("title") or "Задание по фото"
+    remember(title, ok, plain(out), show=True, secs=time.time() - t0)
+    if not ok:
+        send(chat, err(out), menu=True, raw_html=True)
+        return
+    send(chat, result_card(out, title, time.time() - t0, show=True)[0], menu=True, raw_html=True)
+
+
+def on_photo_button(chat, key):
+    s = seen.get(chat) or {}
+    if key == "solve":
+        threading.Thread(target=solve_photo, args=(chat,), daemon=True).start()
+    elif s.get("url"):
+        threading.Thread(target=run_task, args=(chat, s["url"], "", key == "show"), daemon=True).start()
+    else:
+        send(chat, err("Это фото уже неактуально — пришли его ещё раз"), menu=True, raw_html=True)
 
 
 def handle(msg):
     chat = msg["chat"]["id"]
-    if media.kind(msg) in ("voice", "video"):  # распознаём не в цикле опроса Telegram
+    kind = media.kind(msg)
+    if kind == "voice":  # распознаём не в цикле опроса Telegram
         threading.Thread(target=hear_voice, args=(msg,), daemon=True).start()
+        return
+    if kind == "video" and mode.get(chat) != "alphabet":
+        threading.Thread(target=hear_video, args=(msg,), daemon=True).start()
         return
     text = (msg.get("text") or "").strip()
     text = ALIASES.get(text, text)
@@ -1459,11 +1623,8 @@ def handle(msg):
 
     if text.startswith("/start"):
         send(chat, card(f"Привет{', ' + esc(name) if name else ''}!",
-                        "Я твой помощник по HDP.\n"
-                        "• Решаю и сдаю задания по ссылке\n"
-                        "• Пишу ответы учителю — твоим почерком\n"
-                        "• Слежу за дедлайнами, оценками и комментариями",
-                        "Пришли ссылку на задание или выбери действие внизу. Приложение — кнопка «HDP» слева", "👋"),
+                        "Пришли ссылку на задание — решу и сдам. Можно голосом или скриншотом.",
+                        "Всё то же — в приложении: кнопка «HDP» слева", "👋"),
              menu=True, raw_html=True)
         if APP_URL:
             on_app_url(APP_URL)  # кнопка приложения — новому владельцу
@@ -1576,10 +1737,8 @@ def handle(msg):
         else:
             edit_draft(chat, text)
         return
-    if media.kind(msg) == "photo":  # фото сейчас некуда приложить
-        send(chat, card("Фото пригодится позже", "• В черновик учителю — заменит мои картинки\n"
-                        "• В алфавит почерка — «Ещё» → «Почерк»", "Чтобы решить задание, пришли ссылку на него", "📸"),
-             menu=True, raw_html=True)
+    if kind == "photo":  # черновика нет: ищем на фото задание
+        threading.Thread(target=look_photo, args=(msg,), daemon=True).start()
         return
 
     simple = {
