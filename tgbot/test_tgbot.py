@@ -496,6 +496,17 @@ class NewBot(unittest.TestCase):
         self.assertEqual(c.conv.sent, ["/newbot", "Вода", "water_bot", "waterbot"])
         self.assertEqual(c.asked, [])  # Главный создаёт без вопроса
 
+    def test_bottoken(self):
+        c = self.ctx(["Choose a bot to generate a new token.",
+                      "Your token was replaced with a new one: 123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"])
+        out = run(actions.run(c, "bottoken", {"username": "@Taxii111bot", "auto": True}))
+        self.assertEqual(out, "TOKEN 123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA @Taxii111bot")
+        self.assertEqual(c.conv.sent, ["/token", "@Taxii111bot"])
+        bad = self.ctx(["Choose a bot", "Invalid bot selected."])
+        with self.assertRaises(actions.Fail):
+            run(actions.run(bad, "bottoken", {"username": "nope", "auto": True}))
+        self.assertEqual(bad.conv.sent[-1], "/cancel")
+
     def test_confirm_without_auto(self):
         c = self.ctx([], answer=False)
         out = run(actions.run(c, "newbot", {"name": "Вода", "username": "water"}))

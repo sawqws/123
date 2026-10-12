@@ -112,6 +112,9 @@ def parser():
     c.add_argument("username", help="желаемый username, без «bot» на конце — допишу сам")
     c.add_argument("--auto", action="store_true", help="без подтверждения (так зовёт Главный при «Сделать бота»)")
 
+    c = cmd("bottoken", "⚠ новый токен своего бота у @BotFather (старый перестанет работать)")
+    c.add_argument("username")
+    c.add_argument("--auto", action="store_true", help="без подтверждения")
     c = cmd("botsfolder", "⚠ «Начать» во всех ботах Глеба и все боты — в папку (по умолчанию «Bot»)")
     c.add_argument("--name", default="Bot", help="название папки")
     c.add_argument("--bots", nargs="+", help="только эти боты (username); без — все боты с сервера")

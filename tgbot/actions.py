@@ -782,3 +782,24 @@ async def botsfolder(ctx, a):
     # уже подтверждено выше (или auto) — папку второй раз не спрашиваем
     out = await folder(ctx, {"name": name_, "chats": ["@" + u for u in names], "emoji": "🤖", "auto": True})
     return out + (f"\n▶️ Нажал «Начать»: {', '.join(started)}" if started else "")
+
+
+@command("bottoken", write=True)
+async def bottoken(ctx, a):
+    """Новый токен своего бота у @BotFather (/token): старый перестаёт работать. Нужен, когда токен потерян —
+    например, поставить бота на сервер. Возвращает «TOKEN <токен> @<username>» (разбирает Главный/Claude)."""
+    u = a["username"].lstrip("@")
+    if not a.get("auto"):
+        await ctx.confirm(f"🔑 Новый токен для @{u} в @BotFather (старый перестанет работать)")
+    async with ctx.client.conversation("BotFather", timeout=60, exclusive=False) as conv:
+        await conv.send_message("/token")
+        r = await conv.get_response()
+        if "choose" not in (r.raw_text or "").lower() and "выбер" not in (r.raw_text or "").lower():
+            raise Fail("BotFather ответил не так: " + cut(r.raw_text, 200))
+        await conv.send_message("@" + u)
+        r = await conv.get_response()
+        m = BOT_TOKEN.search(r.raw_text or "")
+        if not m:
+            await conv.send_message("/cancel")
+            raise Fail("BotFather не дал токен: " + cut(r.raw_text, 200))
+    return f"TOKEN {m.group(0)} @{u}"
