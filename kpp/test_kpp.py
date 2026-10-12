@@ -185,13 +185,108 @@ class Bot(BotBase):
         self.assertEqual(len(started), 1)
         self.assertEqual(self.sent, [])
 
+    def media_msg(self, **kw):
+        return {"chat": {"id": 1, "type": "private"}, "from": {"id": 1}, **kw}
+
+    def run_inline(self, msg, read="", video=None, spoken=""):
+        """Медиа без потоков: картинки «читает» read, видео — словарь video, продиктованное — spoken."""
+        with mock.patch.object(kpp, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(kpp.media, "photo_path", return_value="/tmp/x/photo.jpg"), \
+                mock.patch.object(kpp.media, "video", return_value=video or {}) as mv, \
+                mock.patch.object(kpp, "read_image", return_value=read) as ri, \
+                mock.patch.object(kpp, "spoken_plate", return_value=spoken) as sp, \
+                mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 4}]}) as cr:
+            kpp.on_message(msg)
+        return ri, cr, sp, mv
+
     def test_photo_screenshot(self):
-        with mock.patch.object(kpp, "read_photo", return_value="М456ОР50") as rp, \
-                mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 4}]}):
-            kpp.on_message({"chat": {"id": 1, "type": "private"}, "from": {"id": 1},
-                            "document": {"file_id": "d", "mime_type": "image/png"}})
-        rp.assert_called_once()
+        ri, cr, _, _ = self.run_inline(self.media_msg(document={"file_id": "d", "mime_type": "image/png"}),
+                                       read="М456ОР50")
+        ri.assert_called_once_with(["/tmp/x/photo.jpg"])
+        self.assertEqual(cr.call_args[0][0], "М456ОР50")
+        self.assertIn("Ищу номер", self.texts()[0])
         self.assertIn("Пропуск заказан", self.texts()[-1])
+
+    def test_photo_caption_plate_no_claude(self):
+        ri, cr, _, _ = self.run_inline(self.media_msg(photo=[{"file_id": "p"}], caption="А123ВС777"))
+        ri.assert_not_called()  # номер уже в подписи
+        self.assertEqual(cr.call_args[0][0], "А123ВС777")
+
+    def test_photo_no_plate_and_no_claude(self):
+        _, cr, _, _ = self.run_inline(self.media_msg(photo=[{"file_id": "p"}]), read="НЕТ")
+        cr.assert_not_called()
+        self.assertIn("Не разглядел", self.texts()[-1])
+        self.sent.clear()
+        self.run_inline(self.media_msg(photo=[{"file_id": "p"}]), read=None)
+        self.assertIn("нет Claude", self.texts()[-1])
+
+    def test_photo_and_video_in_thread(self):
+        for kw in ({"photo": [{"file_id": "p"}]}, {"video": {"file_id": "v"}}):
+            started = []
+            with mock.patch.object(kpp.threading, "Thread", side_effect=lambda **k: started.append(k) or mock.Mock()):
+                kpp.on_message(self.media_msg(**kw))
+            self.assertEqual(len(started), 1)
+        self.assertEqual(self.sent, [])  # поток опроса ничего не ждал
+
+    def test_video_frames(self):
+        v = {"frames": ["/tmp/v/frame-1.jpg", "/tmp/v/frame-2.jpg"], "text": "", "seconds": 8}
+        ri, cr, sp, mv = self.run_inline(self.media_msg(video={"file_id": "v"}), read="Х777ХХ199", video=v)
+        self.assertEqual(mv.call_args.kwargs.get("frames"), 6)
+        ri.assert_called_once_with(v["frames"])
+        sp.assert_not_called()
+        self.assertEqual(cr.call_args[0][0], "Х777ХХ199")
+        self.assertIn("Смотрю видео", self.texts()[0])
+        self.assertIn("Нашёл", self.texts()[1])
+
+    def test_video_speech_first(self):
+        v = {"frames": ["/tmp/v/frame-1.jpg"], "text": "номер е к 123 77", "seconds": 5}
+        ri, cr, _, _ = self.run_inline(self.media_msg(video={"file_id": "v"}), read="", video=v)
+        ri.assert_not_called()  # номер нашёлся в речи — кадры Claude не читает
+        self.assertEqual(cr.call_args[0][0], "ЕК12377")
+        self.assertIn("🎙 <i>«номер е к 123 77»</i>", self.texts()[1])
+
+    def test_video_note_voice(self):
+        """Кружок теперь «video»: голос в нём тоже понимается, продиктованный словами номер — через Claude."""
+        v = {"frames": ["/tmp/v/frame-1.jpg"], "text": "а сто двадцать три вэ эс семьсот семьдесят семь"}
+        ri, cr, sp, _ = self.run_inline(self.media_msg(video_note={"file_id": "n"}), read="НЕТ", video=v,
+                                        spoken="А123ВС777")
+        self.assertEqual(kpp.media.kind(self.media_msg(video_note={"file_id": "n"})), "video")
+        sp.assert_called_once_with(v["text"])
+        self.assertEqual(cr.call_args[0][0], "А123ВС777")
+
+    def test_video_nothing(self):
+        _, cr, _, _ = self.run_inline(self.media_msg(video={"file_id": "v"}), read="НЕТ",
+                                      video={"frames": ["/tmp/f.jpg"], "text": ""})
+        cr.assert_not_called()
+        self.assertIn("Не нашёл номер в видео", self.texts()[-1])
+        self.sent.clear()
+        with mock.patch.object(kpp, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(kpp.media, "video", side_effect=kpp.media.MediaError("видео больше 20 МБ")):
+            kpp.on_message(self.media_msg(video={"file_id": "v"}))
+        self.assertIn("⚠️ Видео не открылось: видео больше 20 МБ", self.texts()[-1])
+
+    def test_repeat_last(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
+            self.msg("М456ОР50")
+            self.assertEqual(kpp.st["last"], "М456ОР50")
+            kpp.st["recent"] = {}  # прошло больше 20 минут
+            self.msg("/start")
+            rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+            rp = [b for r in rows for b in r if b.get("callback_data", "").startswith("rp|")]
+            self.assertEqual(rp[0]["text"], "🔁 М 456 ОР 50")
+            kpp.on_callback({"id": "c", "from": {"id": 1}, "data": rp[0]["callback_data"],
+                             "message": {"chat": {"id": 1}, "message_id": 3}})
+        self.assertEqual(cr.call_count, 2)
+
+    def test_passes_view_compact(self):
+        items = [{"id": 5, "title": "Такси", "status": {"title": "Активен"}, "subtitle": "А 123 ВС 777",
+                  "fields": [{"title": "Дата", "value": "12.10"}], "actions": [{"type": "cancel"}]},
+                 {"id": 4, "title": "Гость", "status": {"title": "Использован"}, "subtitle": "", "fields": []}]
+        with mock.patch.object(dl.Client, "passes", return_value=items):
+            text, rows = kpp.passes_view()
+        self.assertIn("<code>А\u00a0123\u00a0ВС\u00a0777</code> · Активен · 12.10", text)
+        self.assertIn("<b>Гость</b> · Использован", text)
+        self.assertEqual([b["callback_data"] for r in rows for b in r], ["x|5", "m|home"])
 
     def test_needs_login(self):
         kpp.st = {"owner": 1}
@@ -275,6 +370,23 @@ class App(BotBase):
         self.assertEqual((code, res["login"]), (401, True))
         self.assertEqual(kpp.api_post(1, "/api/login", {"text": "не токен"})[0], 400)
 
+    def test_api_photo(self):
+        with mock.patch.object(kpp, "read_image", return_value="А123ВС777\n") as ri:
+            code, res = kpp.api_photo(b"png", "image/png")
+        self.assertEqual((code, res["plates"], res["pretty"]), (200, ["А123ВС777"], ["А 123 ВС 777"]))
+        self.assertTrue(ri.call_args[0][0][0].endswith(".png"))
+        with mock.patch.object(kpp, "read_image", return_value="НЕТ"):
+            self.assertEqual(kpp.api_photo(b"jpg")[0], 422)
+        with mock.patch.object(kpp, "read_image", return_value=None):
+            self.assertEqual(kpp.api_photo(b"jpg")[0], 503)
+        self.assertEqual(kpp.api_photo(b"")[0], 400)
+        self.assertEqual(self.texts(), [])  # пропуск сам не заказывает
+
+    def test_state_last(self):
+        kpp.st["last"] = "ЕК12377"
+        with mock.patch.object(dl.Client, "passes", return_value=[]):
+            self.assertEqual(kpp.app_state()["last"], {"plate": "ЕК12377", "pretty": "ЕК 123 77"})
+
     def test_http(self):
         import threading
         import urllib.error
@@ -287,7 +399,9 @@ class App(BotBase):
             with urllib.request.urlopen(base + "/health") as r:
                 self.assertEqual(r.read(), b"ok")
             with urllib.request.urlopen(base + "/") as r:
-                self.assertIn("Оформить пропуск", r.read().decode())
+                self.assertIn("kit.css?v=", r.read().decode())
+            with urllib.request.urlopen(base + "/kit.css") as r:  # общий набор — ссылка на common/webapp
+                self.assertIn("--accent", r.read().decode())
             with self.assertRaises(urllib.error.HTTPError) as e:
                 urllib.request.urlopen(base + "/api/state")
             self.assertEqual(e.exception.code, 401)
@@ -295,6 +409,11 @@ class App(BotBase):
                 req = urllib.request.Request(base + "/api/state", headers={"X-Init-Data": init_data("1:test")})
                 with urllib.request.urlopen(req) as r:
                     self.assertTrue(json.load(r)["login"])
+                big = b"x" * (70 * 1024)  # картинка больше обычного лимита 64 КБ
+                req = urllib.request.Request(base + "/api/photo", data=big, headers={
+                    "X-Init-Data": init_data("1:test"), "Content-Type": "image/jpeg"})
+                with mock.patch.object(kpp, "read_image", return_value="М456ОР50"), urllib.request.urlopen(req) as r:
+                    self.assertEqual(json.load(r)["plates"], ["М456ОР50"])
         finally:
             srv.shutdown()
             srv.server_close()
