@@ -17,6 +17,7 @@
 Только стандартная библиотека Python.
 """
 import datetime
+import base64
 import hashlib
 import hmac
 import html
@@ -193,7 +194,7 @@ def kb(*rows):
     return [r for r in out if r]
 
 
-def app_button(text="⚡ Открыть Форму", path="", style=None):
+def app_button(text="📱 Открыть", path="", style=None):
     if not public_url:
         return None
     b = {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
@@ -202,13 +203,14 @@ def app_button(text="⚡ Открыть Форму", path="", style=None):
     return b
 
 
-def with_app(rows, text="⚡ Открыть Форму", path="", style=None):
+def with_app(rows, text="📱 Открыть", path="", style=None):
     return kb(*rows, [app_button(text, path, style)])
 
 
 def setup_bot():
     # в меню — только частые команды; остальные (/app, /connect, /status, /new) работают, как раньше
     commands = [
+        {"command": "app", "description": "📱 Приложение"},
         {"command": "today", "description": "Разбор дня"},
         {"command": "water", "description": "Вода"},
         {"command": "food", "description": "Питание"},
@@ -220,7 +222,8 @@ def setup_bot():
         {"command": "help", "description": "Что я умею"},
     ]
     desc = ("Личный тренер по данным WHOOP: восстановление, сон, нагрузка, питание.\n\n"
-            "Утром — разбор и план на день, после тренировки — что съесть. Фото еды — ккал и БЖУ.")
+            "Утром — короткий план на день, после тренировки — что съесть. Фото или видео еды — ккал и БЖУ, "
+            "видео упражнения — разбор техники, голосом — как текстом.")
     short = "Тренер, врач и нутрициолог по данным WHOOP."
     key = hashlib.sha1(json.dumps([commands, desc, short]).encode()).hexdigest()
     if db.meta("bot_setup") != key:
@@ -242,14 +245,6 @@ def set_menu():
     except Exception as e:
         print("menu:", e)
         return False
-
-
-def download(file_id, folder):
-    info = tg("getFile", file_id=file_id)["result"]
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{int(time.time())}{os.path.splitext(info['file_path'])[1] or '.jpg'}")
-    urllib.request.urlretrieve(f"https://api.telegram.org/file/bot{TOKEN}/{info['file_path']}", path)
-    return path
 
 
 # ---------- доступ ----------
@@ -459,48 +454,49 @@ def headline(t):
     r, s, b, y = t.get("recovery"), t.get("sleep"), t.get("base") or {}, t.get("yesterday") or {}
     lines = []
     if r:
-        lines.append(f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>")
-        parts = []
+        line = f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>"
         if r.get("hrv"):
-            parts.append(f"ВСР {round(r['hrv'])} мс" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else ""))
+            line += f" · ВСР {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else "")
         if r.get("rhr"):
-            parts.append(f"пульс покоя {r['rhr']}" + (f" ({round(b['rhr'])})" if b.get("rhr") else ""))
-        if parts:
-            lines.append(" · ".join(parts))
+            line += f" · пульс покоя {r['rhr']}"
+        lines.append(line)
     if s:
-        lines.append(f"Сон <b>{insights.fmt_h(s['hours'])}</b>" + (f" из {insights.fmt_h(s['need'])}" if s.get("need") else ""))
-        parts = []
-        if s.get("performance") is not None:
-            parts.append(f"выполнение {s['performance']}%")
-        if s.get("efficiency") is not None:
-            parts.append(f"эффективность {s['efficiency']}%")
-        if parts:
-            lines.append(" · ".join(parts).capitalize())
+        lines.append(f"😴 Сон <b>{hm(s['hours'])}</b>" + (f" из {hm(s['need'])}" if s.get("need") else "")
+                     + (f" · {s['performance']}%" if s.get("performance") is not None else ""))
     if y.get("strain") is not None:
-        ws = ", ".join(f"{w['sport'].lower()} {w['minutes']} мин" for w in y.get("workouts") or [] if w.get("minutes"))
-        lines.append(f"Нагрузка вчера <b>{num(y['strain'])}</b>" + (f" · {esc(ws)}" if ws else ""))
+        ws = ", ".join(f"{w['sport'].lower()} {w['minutes']} мин" for w in (y.get("workouts") or [])[:2] if w.get("minutes"))
+        lines.append(f"⚡ Нагрузка вчера <b>{num(y['strain'])}</b>" + (f" · {esc(ws)}" if ws else ""))
     return "\n".join(lines)
+
+
+def hm(h):
+    """8.17 -> «8:10» (часы:минуты — короче, чем «8 ч 10 мин»)."""
+    if h is None:
+        return "—"
+    m = round(h * 60)
+    return f"{m // 60}:{m % 60:02d}"
 
 
 def bed_line(t):
     bt = t.get("bedtime")
     if not bt:
         return ""
-    return f"Отбой сегодня — до <b>{bt['bed']}</b>, чтобы поспать {insights.fmt_h(bt['need'])} до подъёма в {bt['wake']}."
+    return f"Отбой до <b>{bt['bed']}</b> — подъём в {bt['wake']}."
+
+
+def first_sentence(text, limit=90):
+    s = re.split(r"(?<=[.!?])\s|\s—\s", text.strip(), maxsplit=1)[0].rstrip(".")
+    return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "…"
 
 
 def rule_brief(t):
-    """Разбор без Claude: выводы по правилам, ориентир нагрузки, питание."""
-    lines = [f"• {esc(x['text'])}" for x in t["tips"][:4]]
+    """Разбор без Claude (3–4 строки): главный сигнал, ориентир нагрузки, еда и вода, отбой."""
+    lines = [f"• {esc(first_sentence(x['text']))}" for x in t["tips"][:1]]
     if t["band"]:
-        lines.append(f"• Ориентир нагрузки на сегодня: <b>{t['band'][0]}–{t['band'][1]}</b>.")
+        lines.append(f"• Ориентир нагрузки: <b>{t['band'][0]}–{t['band'][1]}</b>")
     n = t["nutrition"]
     if n:
-        lines.append(f"• Питание: <b>{n['kcal']} ккал</b> · белок {n['protein']} г · вода {water.liters(n['water'])}.")
-    wt = t.get("water") or {}
-    if wt.get("yesterday"):
-        lines.append(f"• Вода вчера: {water.day_line(wt['yesterday'], wt['y_target'])}"
-                     + (" — норма выполнена." if wt["yesterday"] >= wt["y_target"] else " — сегодня держи стакан под рукой."))
+        lines.append(f"• {n['kcal']} ккал · белок {n['protein']} г · вода {water.liters(n['water'])}")
     if bed_line(t):
         lines.append("• " + bed_line(t))
     return "\n".join(lines) or "Данных за сегодня пока нет."
@@ -510,48 +506,22 @@ def rule_early(t):
     """План без сегодняшнего сна (WHOOP ещё не посчитал) — по вчерашнему дню."""
     y = t.get("yesterday") or {}
     hard = (y.get("strain") or 0) >= 14
-    lines = ["• Тренировка — по самочувствию: разминка 15 мин; тяжело и вялый — техника вместо спарринга."
-             + (" Вчера была большая нагрузка — не форсируй." if hard else "")]
+    lines = ["• Тренировка по самочувствию" + (": вчера было тяжело — не форсируй" if hard else ", разминка 15 мин")]
     n = t["nutrition"]
-    if n:
-        lines.append(f"• Вода {water.liters(n['water'])}, белок {n['protein']} г, завтрак не пропускай.")
-    else:
-        lines.append("• Вода 2–2,5 л, белок в каждый приём пищи, завтрак не пропускай.")
+    lines.append(f"• Вода {water.liters(n['water'])}, белок {n['protein']} г" if n else "• Вода 2–2,5 л, белок в каждый приём")
     if bed_line(t):
         lines.append("• " + bed_line(t))
     return "\n".join(lines)
 
 
-def chunks(body, size=3500):
-    """Текст по абзацам на части до size символов (Telegram пускает до 4096 вместе с заголовком)."""
-    paras = []
-    for p in body.split("\n\n"):
-        paras.extend(p.split("\n") if len(p) > size else [p])
-    out, cur = [], ""
-    for p in paras:
-        if cur and len(cur) + len(p) + 2 > size:
-            out.append(cur)
-            cur = p
-        else:
-            cur = f"{cur}\n\n{p}" if cur else p
-    return out + [cur]
-
-
-def send_long(chat, head, body, buttons=None, note="", mid=None):
-    """Длинный разбор: каждая часть — своя раскрывающаяся цитата; заголовок — в первой, кнопки и примечание —
-    в последней. mid — сообщение «разбираю…», которое станет первой частью."""
-    parts = chunks(body)
-    for i, c in enumerate(parts):
-        last = i == len(parts) - 1
-        text = (head + "\n" if i == 0 else "") + quote(c, True) + (f"\n<i>{note}</i>" if last and note else "")
-        if i == 0 and mid:
-            replace(chat, mid, text, buttons if last else None)
-        else:
-            send(chat, text, buttons if last else None)
+def short(md, lines=5, chars=600):
+    """Ответ Claude для чата: первые строки в HTML и обрезано ли (полный — в приложении)."""
+    text, cut = ai.clip(md, lines, chars)
+    return ai.to_html(text), cut
 
 
 def progress_report(uid, chat=None, week=False):
-    """Разбор прогресса за 60 дней (или итог недели — week=True)."""
+    """Разбор прогресса за 60 дней (или итог недели — week=True). В чат — только итог, весь разбор — в приложении."""
     chat = chat or uid
     if uid in busy:
         send(chat, BUSY)
@@ -564,16 +534,17 @@ def progress_report(uid, chat=None, week=False):
         if not any(w["days"] for w in p["weeks"]):
             send(chat, err("Данных WHOOP пока нет — подключи браслет: /connect"))
             return
-        head = "📅 <b>Итог недели</b>" if week else "📈 <b>Разбор прогресса · 2 месяца</b>"
-        mid = None if week else mid_of(send(chat, head + "\n" + quote("Разбираю все твои данные — это минута-две…")))
+        head = ("📅", "Итог недели") if week else ("📈", "Прогресс · 2 месяца")
+        mid = None if week else mid_of(send(chat, box(*head, "Разбираю все данные — минута-две…")))
         try:
-            body = ai.to_html(ai.progress(ctx, week=week))
+            md = ai.progress(ctx, week=week)
         except ai.AIError as e:
-            replace(chat, mid, err(f"Разбор не получился: {esc(e)}. Попробуй ещё раз: /progress"))
+            replace(chat, mid, err(f"Разбор не получился: {esc(e)}. Ещё раз: /progress"))
             return
-        db.brief(uid, day.isoformat(), "week" if week else "progress", body)
-        send_long(chat, head, body, kb([btn("💬 Спросить тренера", "q|"), app_button("📊 Тренды", "/trends")]),
-                  mid=mid)
+        db.brief(uid, day.isoformat(), "week" if week else "progress", ai.to_html(md))
+        body, _ = short(md, 5, 600)
+        replace(chat, mid, box(*head, body), kb([app_button("📱 Весь разбор", "/trends", "primary"),
+                                                  btn("💬 Спросить", "q|")]))
     finally:
         busy.discard(uid)
 
@@ -592,13 +563,15 @@ def morning_brief(uid, chat=None, force=False):
             return True
         note = ""
         try:
-            body = ai.to_html(ai.morning(text))
+            md = ai.morning(text)
+            full = ai.to_html(md)
+            body, _ = short(md, 4, 420)
         except ai.AIError as e:
-            body = rule_brief(t)
-            note = f"Подробный разбор недоступен: {esc(e)}"
-        db.brief(uid, t["day"], "morning", body)
-        send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note),
-             kb([app_button("⚡ Открыть день", style="primary"), btn("💬 Спросить", "q|")]))
+            full = body = rule_brief(t)
+            note = f"Claude недоступен: {esc(e)}"
+        db.brief(uid, t["day"], "morning", full)
+        send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note, expand=False),
+             kb([app_button("📱 Открыть", style="primary"), btn("💬 Спросить", "q|")]))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
         return True
@@ -614,14 +587,16 @@ def morning_early(uid):
     try:
         text, t = context(uid)
         try:
-            body = ai.to_html(ai.morning_early(text))
+            md = ai.morning_early(text)
+            full = ai.to_html(md)
+            body, _ = short(md, 3, 320)
         except ai.AIError:
-            body = rule_early(t)
-        db.brief(uid, t["day"], "morning", body)
+            full = body = rule_early(t)
+        db.brief(uid, t["day"], "morning", full)
         y = headline({"yesterday": t.get("yesterday")})
-        send(uid, box("☀️", "Доброе утро", [y, body],
-                      note="WHOOP ещё не посчитал сон — полный разбор пришлю, как только он появится."),
-             kb([btn("🔄 Обновить WHOOP", "s|"), app_button("⚡ Открыть день")]))
+        send(uid, box("☀️", "Доброе утро", [y, body], note="WHOOP ещё не посчитал сон — разбор пришлю позже.",
+                      expand=False),
+             kb([btn("🔄 Обновить", "s|"), app_button("📱 Открыть")]))
         return True
     finally:
         busy.discard(uid)
@@ -736,15 +711,17 @@ def workout_note(uid, w):
     typing(uid)
     text, t = context(uid)
     try:
-        body = ai.to_html(ai.after_workout(text, w))
+        md = ai.after_workout(text, w)
+        full = ai.to_html(md)
+        body, _ = short(md, 3, 330)
     except ai.AIError:
-        body = ("• Выпей 500–700 мл воды в течение часа.\n• Поешь в ближайшие 1–2 часа: белок 25–35 г и углеводы "
-                "(рис, гречка, паста, фрукты).\n• Вечером без экранов за 30 минут до сна — так быстрее восстановишься.")
-    db.brief(uid, t["day"], f"workout:{w['id']}", body)
-    stats = f"Нагрузка <b>{fmt(w['strain'])}</b> · пульс {w['avg_hr'] or '—'} / {w['max_hr'] or '—'}" \
+        full = body = ("• Вода 500–700 мл за час\n• Белок 25–35 г и углеводы в ближайшие 1–2 часа\n"
+                       "• Вечером без экранов за 30 мин до сна")
+    db.brief(uid, t["day"], f"workout:{w['id']}", full)
+    stats = f"Нагрузка <b>{fmt(w['strain'])}</b> · пульс {w['avg_hr'] or '—'}/{w['max_hr'] or '—'}" \
         + (f" · {w['kcal']} ккал" if w.get("kcal") else "")
     title = esc(w["sport"]) + (f" · {w['minutes']} мин" if w.get("minutes") else "")
-    send(uid, box(sport_icon(w["sport"]), title, [stats, body]), with_app([], "⚡ Открыть день"))
+    send(uid, box(sport_icon(w["sport"]), title, [stats, body], expand=False), with_app([], "📱 Открыть"))
 
 
 def evening(uid, now):
@@ -757,66 +734,63 @@ def evening(uid, now):
     lack_p, lack_k = n["protein"] - e["protein"], n["kcal"] - e["kcal"]
     if lack_p < 20 and lack_k < 300:
         return
-    lines = [f"Съедено <b>{e['kcal']}</b> из {n['kcal']} ккал · белок {e['protein']} из {n['protein']} г"]
+    lines = [f"Съедено <b>{e['kcal']}</b> из {n['kcal']} ккал · белок {e['protein']}/{n['protein']} г"]
     if lack_p >= 20:
-        lines.append(f"• Белка не хватает {lack_p} г — творог, яйца, курица или кефир перед сном.")
-    if lack_k >= 300:
-        lines.append(f"• До нормы {lack_k} ккал — добавь нормальный ужин, не пропускай.")
-    send(uid, box("🍽", "Итог питания", "\n".join(lines)), with_app([], "🍽 Открыть питание", "/food"))
+        lines.append(f"• +{lack_p} г белка: творог, яйца, курица или кефир")
+    elif lack_k >= 300:
+        lines.append(f"• +{lack_k} ккал — нормальный ужин, не пропускай")
+    send(uid, box("🍽", "Итог питания", "\n".join(lines)), with_app([], "📱 Питание", "/food"))
 
 
 # ---------- чат ----------
 
-HELP = box("⚡", "Форма — тренер по данным WHOOP", [
-    "☀️ Утром — разбор: готовность, тренировка, еда, отбой\n"
-    "🥊 После тренировки — что съесть и как восстановиться\n"
-    "💬 Вопросы — пиши текстом или голосом\n"
-    "🍽 Еда — фото тарелки или «съел гречку с курицей»\n"
-    "💧 Вода — «выпил 500 мл», «2 стакана», «+300»\n"
-    "🎯 Цели — все советы привязываю к ним",
-    "• /today — разбор дня\n• /progress — прогресс за 2 месяца\n• /food — питание\n• /water — вода\n"
-    "• /goals — цели\n• /morning — время разбора\n• /sync — обновить WHOOP\n• /connect — подключить WHOOP\n"
-    "• /new — новый разговор\n• /status — проверка"],
-    note="Скрин WHOOP или плана — пришли с вопросом в подписи. По воскресеньям в 19:00 — итог недели.")
+HELP = box("⚡", "Форма — тренер по WHOOP", [
+    "☀️ Утром — план на день, после тренировки — что съесть\n"
+    "💬 Вопрос — текстом или голосом\n"
+    "🍽 Еда — фото, видео или «съел гречку»\n"
+    "🎥 Видео упражнения — разбор техники\n"
+    "💧 Вода — «выпил 500 мл»",
+    "/today · /food · /water · /goals · /progress · /morning · /sync · /new · /status"],
+    note="Всё подробно — в приложении: кнопка «Форма» слева от поля ввода.")
 
 FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпил[аи]?|завтрак|обед|ужин|перекус|еда)\b[:\s,-]*", re.I)
 
 
 def welcome(chat, uid, name):
-    cid, _ = creds()
     connected = bool(db.token(uid))
-    note = ("WHOOP подключён — открывай Форму." if connected else
-            "Начнём с подключения WHOOP." if cid else "Сначала подключим WHOOP — это 3 минуты.")
     send(chat, box("👋", f"Привет{', ' + esc(name) if name else ''}!",
-                   "Я <b>Форма</b> — тренер, спортивный врач и нутрициолог. Смотрю восстановление, сон, пульс и "
-                   "нагрузку с WHOOP и говорю, как сегодня тренироваться, есть и спать.", note=note),
+                   "Я <b>Форма</b> — тренер по данным WHOOP: как сегодня тренироваться, есть и спать.",
+                   note="Всё главное — в приложении." if connected else "Сначала подключим WHOOP — 3 минуты."),
          kb([btn("🔌 Подключить WHOOP", "c|", "success")] if not connected else [],
-            [app_button("⚡ Открыть Форму", style="primary" if connected else None)]))
+            [app_button("📱 Открыть", style="primary" if connected else None)]))
 
 
 def meal_card(m, comment="", total=""):
     body = f"<b>{round(m['kcal'])} ккал</b> · Б {round(m['protein'])} · Ж {round(m['fat'])} · У {round(m['carbs'])}"
-    return box("🍽", esc(m["title"]), body + (f"\n{total}" if total else ""), note=esc(comment))
+    return box("🍽", esc(m["title"]), body + (f"\n{total}" if total else ""), note=esc(first_sentence(comment, 100)))
 
 
 def food_text(uid):
     _, t = context(uid)
     n, e = t["nutrition"], t["eaten"]
     if n:
-        top = (f"Калории <b>{e['kcal']}</b> из {n['kcal']}\n"
+        top = (f"<b>{e['kcal']}</b> из {n['kcal']} ккал\n"
                f"Б {e['protein']}/{n['protein']} · Ж {e['fat']}/{n['fat']} · У {e['carbs']}/{n['carbs']} г")
     else:
-        top = "Добавь вес в профиле — посчитаю норму."
+        top = f"<b>{e['kcal']}</b> ккал · добавь вес в профиле — посчитаю норму"
     wt = t["water"]
-    top += f"\nВода: {water.day_line(wt['drank'], wt['target'])}"
-    meals = "\n".join(f"• {esc(m['time'])} · {esc(m['title'])} — {round(m['kcal'])} ккал" for m in t["meals"])
-    note = "Ещё еда — фото или «съел …»." if t["meals"] else "Пока ничего не записано. Пришли фото еды или напиши «съел …»."
-    return box("🍽", "Питание сегодня", [top, meals], note=note)
+    top += f"\n💧 {water.day_line(wt['drank'], wt['target'])}"
+    meals = t["meals"]
+    lines = [f"• {esc(m['time'])} {esc(m['title'])} — {round(m['kcal'])}" for m in meals[-5:]]
+    if len(meals) > 5:
+        lines.insert(0, f"<i>…ещё {len(meals) - 5}</i>")
+    note = "" if meals else "Пришли фото еды или напиши «съел …»."
+    return box("🍽", "Питание сегодня", [top, "\n".join(lines)], note=note)
 
 
 def water_buttons(last_id=None):
-    return kb([btn("+250 · стакан", "wa|add|250"), btn("+500 · бутылка", "wa|add|500")],
-              [btn("↩️ Отменить", f"wa|del|{last_id}") if last_id else None, app_button("🍽 Питание", "/food")])
+    return kb([btn("+250 мл", "wa|add|250"), btn("+500 мл", "wa|add|500")],
+              [btn("↩️ Отменить", f"wa|del|{last_id}") if last_id else None, app_button("📱 Питание", "/food")])
 
 
 def water_text(uid, added=0, title=None):
@@ -824,9 +798,9 @@ def water_text(uid, added=0, title=None):
     now = user_now(u)
     _, t = context(uid)
     wt = t["water"]
-    log = "" if added or not wt["log"] else "Записи: " + " · ".join(
-        f"{esc(w['time'])} {water.liters(w['ml'])}" for w in wt["log"][-8:])
-    note = None if added or wt["log"] else f"Норма: {wt['why']}. Пиши «500 мл», «стакан воды», «+300» или жми кнопки."
+    log = "" if added or not wt["log"] else " · ".join(
+        f"{esc(w['time'])} {water.liters(w['ml'])}" for w in wt["log"][-4:])
+    note = None if added or wt["log"] else "Пиши «500 мл», «стакан воды» или жми кнопки."
     text = water.card(added, wt["drank"], wt["target"], wt["why"], now.hour + now.minute / 60, wt["trained"],
                       title=title, extra=log, note=note)
     return text, (wt["log"][-1]["id"] if wt["log"] else None)
@@ -843,9 +817,20 @@ def log_water(chat, uid, ml, mid=None):
         send(chat, text, water_buttons(row["id"]))
 
 
-PHOTO_ASK = "Что на фото? Разбери с учётом моих данных и целей."
+PHOTO_ASK = ai.PHOTO_ASK
 QUESTION = re.compile(r"^(почему|зачем|что|как|какой|какая|какие|сколько|когда|можно|стоит|нормально|разбери|объясни|"
                       r"оцени|посмотри|глянь|проверь|помоги)\b", re.I)
+
+
+def save_meal_and_reply(chat, uid, est):
+    now = user_now(db.user(uid))
+    m = db.save_meal(uid, {**est, "day": now.date().isoformat(), "time": now.strftime("%H:%M")})
+    _, t = context(uid)
+    n, e = t["nutrition"], t["eaten"]
+    total = f"За день {e['kcal']}" + (f" из {n['kcal']} ккал" if n else " ккал")
+    send(chat, meal_card(m, est.get("comment", ""), total),
+         kb([btn("🗑 Удалить", f"m|del|{m['id']}"), app_button("📱 Питание", "/food")]))
+    return m
 
 
 def log_meal(chat, uid, text="", photo=None):
@@ -860,27 +845,23 @@ def log_meal(chat, uid, text="", photo=None):
             est = ai.meal(ctx, text, image=photo)
         except ai.AIError as e:
             send(chat, err(f"Не смог оценить еду: {esc(e)}. Добавь вручную в приложении."),
-                 with_app([], "🍽 Питание", "/food"))
+                 with_app([], "📱 Питание", "/food"))
             return
         if est.get("food") is False:
-            if photo:  # скрин WHOOP, план тренировок и т. п. — это вопрос тренеру с картинкой
+            if photo:  # скрин WHOOP, тренировки, план — это вопрос тренеру с картинкой
                 busy.discard(uid)
                 answer(chat, uid, text or PHOTO_ASK, photo)
             else:
-                send(chat, "🤔 " + esc(est.get("comment") or "Не похоже на еду. Если это вопрос — напиши его текстом."))
+                send(chat, "🤔 " + esc(first_sentence(est.get("comment") or "Не похоже на еду. Если это вопрос — "
+                                                                              "напиши его текстом.", 140)))
             return
-        now = user_now(db.user(uid))
-        m = db.save_meal(uid, {**est, "day": now.date().isoformat(), "time": now.strftime("%H:%M")})
-        _, t = context(uid)
-        n, e = t["nutrition"], t["eaten"]
-        total = f"За день {e['kcal']}" + (f" из {n['kcal']} ккал · белок {e['protein']} из {n['protein']} г" if n else " ккал")
-        send(chat, meal_card(m, est.get("comment", ""), total),
-             kb([btn("🗑 Удалить", f"m|del|{m['id']}"), app_button("🍽 Питание", "/food")]))
+        save_meal_and_reply(chat, uid, est)
     finally:
         busy.discard(uid)
 
 
 def answer(chat, uid, question, photo=None):
+    """Вопрос тренеру. В чат — коротко (до 5 строк); целиком ответ остаётся в приложении, во вкладке «Тренер»."""
     if uid in busy:
         send(chat, BUSY)
         return
@@ -894,13 +875,11 @@ def answer(chat, uid, question, photo=None):
         except ai.AIError as e:
             send(chat, err(f"{esc(e)}."))
             return
-        db.say(uid, "user", question)
+        db.say(uid, "user", question if not photo else f"📷 {question}")
         db.say(uid, "coach", out)
-        body = ai.to_html(out)
-        if len(body) > 3500:  # длинный ответ — частями, иначе Telegram его не примет
-            send_long(chat, "💬 <b>Тренер</b>", body)
-        else:
-            send(chat, box("💬", "Тренер", body))
+        body, cut = short(out, 5, 600)
+        send(chat, box("💬", "Тренер", body, expand=False),
+             with_app([], "📱 Полностью", "/coach") if cut else None)
     finally:
         busy.discard(uid)
 
@@ -954,7 +933,8 @@ def set_morning(chat, uid, value):
 
 def sync_now(chat, uid, mid):
     sync_user(uid, days=7)
-    replace(chat, mid, box("✅", "Данные обновлены"), with_app([], "⚡ Открыть день"))
+    _, t = context(uid)
+    replace(chat, mid, box("✅", "WHOOP обновлён", headline(t)), with_app([], "📱 Открыть"))
 
 
 def on_message(msg):
@@ -973,6 +953,7 @@ def on_message(msg):
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     arg = text.split(None, 1)[1].strip() if cmd and len(text.split(None, 1)) > 1 else ""
     wait = awaiting(uid)
+    kind = media.kind(msg)
     if cmd == "/start":
         arg = text.split()[1] if len(text.split()) > 1 else ""
         welcome(chat, uid, frm.get("first_name"))
@@ -982,8 +963,7 @@ def on_message(msg):
         send(chat, HELP, with_app([]))
     elif cmd == "/app":
         if public_url:
-            send(chat, box("⚡", "Форма", note="Сегодня, тренды, питание и тренер — в приложении."),
-                 with_app([], style="primary"))
+            send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."), with_app([], style="primary"))
         else:
             send(chat, "⏳ Приложение ещё запускается — пришлю кнопку, как будет готово. Что с адресом — /status")
     elif cmd == "/connect":
@@ -995,7 +975,7 @@ def on_message(msg):
     elif cmd == "/progress":
         threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
     elif cmd == "/food":
-        send(chat, food_text(uid), with_app([], "🍽 Открыть питание", "/food"))
+        send(chat, food_text(uid), with_app([], "📱 Питание", "/food"))
     elif cmd == "/water":
         ml = water.parse(arg) or water.parse("вода " + arg) if arg else None
         if ml:
@@ -1018,7 +998,7 @@ def on_message(msg):
         if not db.token(uid):
             connect(chat, uid)
         else:
-            mid = mid_of(send(chat, "🔄 Обновляю данные WHOOP…"))
+            mid = mid_of(send(chat, "🔄 Обновляю WHOOP…"))
             threading.Thread(target=sync_now, args=(chat, uid, mid), daemon=True).start()
     elif cmd == "/new":
         db.clear_history(uid)
@@ -1029,21 +1009,20 @@ def on_message(msg):
         update(chat)
     elif cmd:
         send(chat, err("Такой команды нет — что я умею: /help"))
-    elif msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
-        fid = msg["photo"][-1]["file_id"] if msg.get("photo") else msg["document"]["file_id"]
-        path = download(fid, os.path.join(DATA, "photos", str(uid)))
-        # подпись-вопрос — сразу тренеру с картинкой; иначе Claude решает: еда -> ккал, не еда -> разбор (log_meal)
-        is_question = text.endswith("?") or len(text) > 80 or bool(QUESTION.match(text))
-        target = answer if is_question else log_meal
-        threading.Thread(target=target, args=(chat, uid, text, path), daemon=True).start()
-    elif media.kind(msg) in ("voice", "video"):
+    elif kind == "photo":  # скачивание и Claude — не в главном цикле
+        threading.Thread(target=on_photo, args=(chat, uid, msg, text), daemon=True).start()
+    elif kind == "video":
+        threading.Thread(target=on_video, args=(chat, uid, msg, wait), daemon=True).start()
+    elif kind == "voice":
         threading.Thread(target=on_voice, args=(chat, uid, msg, wait), daemon=True).start()
     elif text:
         on_text(chat, uid, text, wait)
+    else:
+        send(chat, box("🤷", "Это я не разберу", "Пришли текст, голосовое, фото или видео."))
 
 
 def on_text(chat, uid, text, wait=None):
-    """Обычный текст (или распознанное голосовое): цель после кнопки, еда или вопрос тренеру."""
+    """Обычный текст (или распознанное голосовое): цель после кнопки, вода, еда или вопрос тренеру."""
     if wait == "goal":
         add_goal(chat, uid, text)
         return
@@ -1058,24 +1037,87 @@ def on_text(chat, uid, text, wait=None):
         threading.Thread(target=answer, args=(chat, uid, text), daemon=True).start()
 
 
+def media_failed(chat, uid, what, e, wait=None):
+    if isinstance(e, media.MediaError):
+        send(chat, err(f"{what}: {esc(e)}. Можно написать текстом."))
+    else:
+        print(what, e)
+        send(chat, err(f"{what}: не получилось скачать — попробуй ещё раз или напиши текстом."))
+    if wait:
+        awaiting(uid, wait)  # цель всё ещё ждём
+
+
 def on_voice(chat, uid, msg, wait=None):
-    """Голосовое, аудио или кружок: распознать (не в главном цикле), показать текст и разобрать как написанное."""
+    """Голосовое или аудио: распознать (не в главном цикле), показать текст и разобрать как написанное."""
     typing(chat)
     try:
         text = media.voice_text(TOKEN, msg).strip()
-    except media.MediaError as e:
-        send(chat, err(f"Голосовое: {esc(e)}. Можно написать текстом."))
-        if wait:
-            awaiting(uid, wait)  # цель всё ещё ждём
-        return
     except Exception as e:
-        print("voice:", e)
-        send(chat, err("Не получилось скачать голосовое — попробуй ещё раз или напиши текстом."))
-        if wait:
-            awaiting(uid, wait)
+        media_failed(chat, uid, "Голосовое", e, wait)
         return
     send(chat, f"🎙 «{esc(text)}»")
     on_text(chat, uid, text, wait)
+
+
+def on_photo(chat, uid, msg, text=""):
+    """Фото: подпись-вопрос — сразу тренеру с картинкой; иначе Claude решает: еда -> ккал, скрин -> короткий разбор."""
+    typing(chat)
+    try:
+        path = media.photo_path(TOKEN, msg, os.path.join(DATA, "photos", str(uid)))
+    except Exception as e:
+        media_failed(chat, uid, "Фото", e)
+        return
+    is_question = text.endswith("?") or len(text) > 80 or bool(QUESTION.match(text))
+    (answer if is_question else log_meal)(chat, uid, text, path)
+
+
+def on_video(chat, uid, msg, wait=None):
+    """Видео, кружок или гифка: кадры и речь -> Claude. Упражнение — разбор техники, еда — ккал и БЖУ,
+    другое — ответ по смыслу. Ждём цель — сказанное в видео становится целью."""
+    typing(chat)
+    caption = (msg.get("caption") or "").strip()
+    folder = os.path.join(DATA, "video", f"{uid}-{int(time.time() * 1000)}")
+    try:
+        try:
+            v = media.video(TOKEN, msg, folder)
+        except Exception as e:
+            media_failed(chat, uid, "Видео", e, wait)
+            return
+        speech = (v.get("text") or "").strip()
+        if wait and speech:
+            send(chat, f"🎙 «{esc(speech)}»")
+            on_text(chat, uid, speech, wait)
+            return
+        if not v.get("frames"):  # кадров нет, только речь — как голосовое
+            send(chat, f"🎙 «{esc(speech)}»")
+            on_text(chat, uid, speech)
+            return
+        if uid in busy:
+            send(chat, BUSY)
+            return
+        busy.add(uid)
+        try:
+            ctx, _ = context(uid)
+            try:
+                out = ai.video(ctx, v["frames"], speech, caption)
+            except ai.AIError as e:
+                send(chat, err(f"Не смог разобрать видео: {esc(e)}."))
+                return
+            if out["kind"] == "food":
+                save_meal_and_reply(chat, uid, out)
+                return
+            q = caption or speech or "Видео"
+            db.say(uid, "user", f"🎥 {q}")
+            db.say(uid, "coach", out["text"])
+            body, cut = short(out["text"], 4, 450)
+            title = esc(first_sentence(out.get("title") or "", 40)) if out["kind"] == "exercise" else ""
+            send(chat, box("🎥" if out["kind"] == "exercise" else "💬", title or ("Техника" if out["kind"] == "exercise"
+                                                                                  else "Тренер"), body, expand=False),
+                 with_app([], "📱 Полностью", "/coach") if cut else None)
+        finally:
+            busy.discard(uid)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def save_creds(chat, uid, msg, text):
@@ -1113,10 +1155,10 @@ def on_callback(cq):
         threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
         note = "Разбираю прогресс…"
     elif data[0] == "q":
-        send(chat, "💬 Напиши вопрос — отвечу по твоим данным.\n<i>Например: «что съесть перед тренировкой?»</i>")
+        send(chat, "💬 Спроси текстом или голосом.\n<i>Например: «что съесть перед тренировкой?»</i>")
     elif data[0] == "g" and data[1] == "add":
         awaiting(uid, "goal")
-        send(chat, "✍️ Напиши цель одним сообщением.\n<i>Например: «ложиться до 23:00» или «соревнования в марте».</i>")
+        send(chat, "✍️ Напиши цель одним сообщением.\n<i>Например: «ложиться до 23:00».</i>")
     elif data[0] == "g" and data[1] == "del":
         if db.delete_goal(uid, int(data[2])):
             note = "Удалено"
@@ -1295,7 +1337,10 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
+            limit = MAX_PHOTO * 4 // 3 + 4096 if path == "/api/photo" else 1_000_000  # фото — base64
+            if n > limit:
+                return self.reply(413, {"error": "слишком большой файл"})
+            body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})
         self.api(path, body)
@@ -1328,6 +1373,45 @@ def day_payload(uid, day):
         wt = t["water"]
         wt["mark"], wt["note"] = water.assess(wt["drank"], wt["target"], now.hour + now.minute / 60, wt["trained"])
     return t
+
+
+MAX_PHOTO = 8 * 1024 * 1024
+
+
+def photo_api(uid, b):
+    """Фото из приложения (base64 или data:URL). mode="food" — оценить еду и записать;
+    mode="ask" — вопрос тренеру с картинкой (скрин тренировки, показателей)."""
+    data = str(b.get("image") or "")
+    m = re.match(r"data:image/([\w.+-]+);base64,", data)
+    try:
+        raw = base64.b64decode(data[m.end():] if m else data, validate=True)
+    except ValueError:
+        raise ValueError("не получилось прочитать фото") from None
+    if not raw:
+        raise ValueError("нет фото")
+    if len(raw) > MAX_PHOTO:
+        raise ValueError("фото больше 8 МБ")
+    ext = {"png": ".png", "webp": ".webp", "heic": ".heic"}.get((m.group(1) if m else "").lower(), ".jpg")
+    folder = os.path.join(DATA, "photos", str(uid))
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"app-{int(time.time() * 1000)}{ext}")
+    with open(path, "wb") as f:
+        f.write(raw)
+    text = str(b.get("text") or "").strip()[:500]
+    ctx, _ = context(uid)
+    u = db.user(uid)
+    if b.get("mode") == "ask":
+        out = ai.claude(ai.chat_prompt(ctx, db.history(uid), text or PHOTO_ASK), image=path)
+        db.say(uid, "user", f"📷 {text}" if text else "📷 Фото")
+        db.say(uid, "coach", out)
+        return {"answer": out, "history": db.history(uid, 40)}
+    est = ai.meal(ctx, text, image=path)
+    if est.get("food") is False:
+        raise ValueError(first_sentence(est.get("comment") or "не похоже на еду", 140)
+                         + " — такое фото пришли во вкладке «Тренер»")
+    today = user_now(u).date()
+    meal = db.save_meal(uid, {**est, "day": today.isoformat(), "time": user_now(u).strftime("%H:%M")})
+    return {"meal": meal, "comment": est.get("comment", ""), "day": day_payload(uid, today)}
 
 
 def route(uid, path, b):
@@ -1391,6 +1475,8 @@ def route(uid, path, b):
         db.say(uid, "user", q)
         db.say(uid, "coach", out)
         return {"answer": out, "history": db.history(uid, 40)}
+    if path == "/api/photo":
+        return photo_api(uid, b)
     if path == "/api/history":
         return {"history": db.history(uid, 40)}
     if path == "/api/history/clear":
