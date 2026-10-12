@@ -82,11 +82,16 @@ function renderNew(s) {
     h += `<div class="card fade"><div class="step-no">${mins} мин · обычно 3–10 минут</div>` +
       `<h2 style="margin-top:4px">${esc(d.emoji || '')} Создаю «${esc(d.name)}»</h2>` +
       `<ul class="steps">${steps.map((x, i) => `<li class="${i === steps.length - 1 ? 'now' : ''}">${esc(x)}</li>`).join('') || '<li class="now">начинаю</li>'}</ul>` +
-      `<p class="muted" style="font-size:14px;margin:12px 0 0">Можно закрыть — напишу в чат, когда будет готово.</p></div>`;
+      `<p class="muted" style="font-size:14px;margin:12px 0 0">Можно закрыть — напишу в чат, когда будет готово.</p>` +
+      (d.newbot ? `<button class="btn primary" style="margin-top:12px" data-link="${esc(d.newbot)}">⚡ Создать бота в Telegram</button>` : '') + '</div>';
   } else if (st === 'token') {
-    h += `<div class="card fade"><h2>🔑 Последний шаг</h2><p class="muted">Код готов. Создай бота в @BotFather ` +
-      `(имя «${esc(d.name)}») и пришли токен в чат Студии — запущу сам.</p>` +
-      `<button class="btn primary" data-tg="BotFather">Открыть @BotFather</button></div>`;
+    h += d.newbot
+      ? `<div class="card fade"><h2>⚡ Последний шаг</h2><p class="muted">Код готов. Нажми и подтверди окно Telegram — ` +
+        `бот «${esc(d.name)}» создастся, а я сразу его запущу.</p>` +
+        `<button class="btn primary" data-link="${esc(d.newbot)}">⚡ Создать бота</button></div>`
+      : `<div class="card fade"><h2>🔑 Последний шаг</h2><p class="muted">Код готов. Создай бота в @BotFather ` +
+        `(имя «${esc(d.name)}») и пришли токен в чат Студии — запущу сам.</p>` +
+        `<button class="btn primary" data-tg="BotFather">Открыть @BotFather</button></div>`;
   } else if (st === 'failed') {
     h += `<div class="card fade"><h2>😕 Не получилось</h2><div class="err">${esc(d.error || '')}</div>` +
       `<button class="btn primary" id="confirm" style="margin-top:12px">🔁 Собрать ещё раз</button>` +
@@ -190,6 +195,7 @@ document.addEventListener('click', (ev) => {
   if (t.dataset.name !== undefined) return sendName(t.dataset.name);
   if (t.dataset.bot) return openBot(t.dataset.bot);
   if (t.dataset.open) { if (tg) tg.openTelegramLink('https://t.me/' + t.dataset.open); return; }
+  if (t.dataset.link) { if (tg && tg.openTelegramLink) tg.openTelegramLink(t.dataset.link); else window.open(t.dataset.link); return; }
   if (t.dataset.tg) { if (tg) tg.openTelegramLink('https://t.me/' + t.dataset.tg); return; }
   switch (t.id) {
     case 'start': return startIdea();

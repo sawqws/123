@@ -251,7 +251,8 @@ class Bot:
         self.webapp = webapp or os.path.join(self.dir, "webapp")
         self.db = Store(os.path.join(self.data_dir, "db.json"))
         self.handlers = {"command": {}, "button": {}, "reply": {}, "api": {}}
-        self.on_text = self.on_photo = self.home_fn = None
+        self.on_text = self.on_photo = self.home_fn = self.on_managed = None
+        self.me = {}
         self.jobs = []
         self.waits = {}  # chat -> (ключ, data): ждём ответ на c.ask
         self.http_hook = None  # fn(handler, method) -> True, если запрос обработан (для Студии: прокси)
@@ -301,6 +302,28 @@ class Bot:
         self.home_fn = fn
         return fn
 
+    def managed(self, fn):
+        """fn(update): создан бот, которым управляет этот (Managed Bots, Bot API 9.6): update["bot"], update["user"].
+        Токен нового бота — bot.managed_token(update["bot"]["id"])."""
+        self.on_managed = fn
+        return fn
+
+    def newbot_link(self, username, name=""):
+        """Ссылка «создать бота в один тап»: Telegram откроет окно с готовыми именем и @username, пользователь
+        подтверждает — приходит @bot.managed. Работает, если у этого бота включён Bot Management Mode."""
+        q = "?" + urllib.parse.urlencode({"name": name}) if name else ""
+        return f"https://t.me/newbot/{self.username}/{username}{q}"
+
+    def can_manage(self):
+        """Включён ли у бота Bot Management Mode (свежий getMe)."""
+        try:
+            self.me = self.call("getMe").get("result") or self.me
+        except Exception:
+            pass
+        return bool(self.me.get("can_manage_bots"))
+
+    def managed_token(self, bot_id):
+        return self.call("getManagedBotToken", user_id=bot_id).get("result")
     def daily(self, hhmm, fn, days=None):
         """fn() каждый день в ЧЧ:ММ по Москве; days — «пн-пт», «сб,вс» или список номеров 0..6."""
         h, m = (int(x) for x in hhmm.split(":"))
@@ -428,7 +451,10 @@ class Bot:
 
     def handle(self, upd):
         try:
-            if upd.get("message"):
+            if upd.get("managed_bot"):
+                if self.on_managed:
+                    self.on_managed(upd["managed_bot"])
+            elif upd.get("message"):
                 self._message(upd["message"])
             elif upd.get("callback_query"):
                 self._callback(upd["callback_query"])
@@ -444,8 +470,8 @@ class Bot:
 
     def _message(self, msg):
         chat, user = msg["chat"]["id"], msg.get("from") or {}
-        if msg["chat"].get("type") != "private":
-            return
+        if msg["chat"].get("type") != "private" or msg.get("managed_bot_created"):
+            return  # о новом боте приходит и отдельный апдейт managed_bot
         text = (msg.get("text") or msg.get("caption") or "").strip()
         uid = user.get("id")
         if not self.owner and text.startswith("/start"):
@@ -656,7 +682,8 @@ class Bot:
             try:
                 r = self.call(method, **params)
                 if method == "getMe":
-                    self.username = (r.get("result") or {}).get("username")
+                    self.me = r.get("result") or {}
+                    self.username = self.me.get("username")
             except Exception as e:
                 print(method, e, flush=True)
         self._menu()
@@ -703,7 +730,7 @@ class Bot:
         while True:
             try:
                 r = self.call("getUpdates", offset=self.offset, timeout=50,
-                              allowed_updates=["message", "callback_query"])
+                              allowed_updates=["message", "callback_query", "managed_bot"])
                 for upd in r.get("result", []):
                     self.offset = upd["update_id"] + 1
                     threading.Thread(target=self.handle, args=(upd,), daemon=True).start()
