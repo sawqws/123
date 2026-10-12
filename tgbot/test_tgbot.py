@@ -483,8 +483,36 @@ class NewBot(unittest.TestCase):
     def ctx(self, replies, answer=True):
         c = Ctx(answer)
         c.conv = FakeConv(replies)
-        c.client.conversation = lambda *a, **k: c.conv
+        p = mock.patch.object(actions, "father", lambda ctx: c.conv)
+        p.start()
+        self.addCleanup(p.stop)
         return c
+
+    def test_father_chat_polls_history(self):
+        """Без обновлений: ответ BotFather берётся из истории — первый новый входящий после нашего сообщения."""
+        c = Ctx()
+        hist = []
+
+        async def send_message(peer, text, **kw):
+            hist.append(types.Message(id=len(hist) + 10, peer_id=types.PeerUser(93372553), message=text, out=True))
+            hist.append(types.Message(id=len(hist) + 10, peer_id=types.PeerUser(93372553), message="ok: " + text))
+            return hist[-2]
+
+        async def get_messages(peer, limit=10, min_id=0):
+            return [m for m in reversed(hist) if m.id > min_id][:limit]
+        c.client.send_message, c.client.get_messages = send_message, get_messages
+        c.client.get_input_entity = mock.AsyncMock(return_value="bf")
+
+        async def go():
+            async with actions.FatherChat(c, timeout=2) as conv:
+                await conv.send_message("/token")
+                r1 = await conv.get_response()
+                await conv.send_message("@x")
+                r2 = await conv.get_response()
+                with self.assertRaises(actions.Fail):
+                    await conv.get_response()
+                return r1.message, r2.message
+        self.assertEqual(run(go()), ("ok: /token", "ok: @x"))
 
     def test_taken_then_token_auto(self):
         c = self.ctx(["Alright, a new bot. How are we going to call it? Please choose a name for your bot.",
