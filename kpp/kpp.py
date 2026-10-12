@@ -60,6 +60,7 @@ PHOTO_MAX = 12 * 1024 * 1024  # скриншот из приложения
 PORT = int(os.environ.get("KPP_PORT") or 8792)
 WEB = os.path.join(HERE, "webapp")
 public_url = (os.environ.get("KPP_URL") or "").rstrip("/")
+SUP = None  # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется приложение
 https_note = "ищу адрес"
 
 offset = 0
@@ -289,7 +290,7 @@ def menu_buttons():
     last = st.get("last")
     if last and st.get("jwt"):
         rows.append([btn(f"🔁 {dl.pretty(last)}", f"rp|{last}")])
-    return rows + [[btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place")]]
+    return rows + [[btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place"), support.Support.button()]]
 
 
 def app_buttons():
@@ -940,7 +941,7 @@ class Web(BaseHTTPRequestHandler):
                 traceback.print_exc()
                 code, res = 500, {"error": str(e)[:200]}
             return self.reply(code, res)
-        if n > 64 * 1024:
+        if n > (PHOTO_MAX * 4 // 3 + 4096 if path == "/api/support" else 64 * 1024):  # в поддержке — скриншот
             return self.reply(413, {"error": "Слишком большой запрос"})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -948,6 +949,15 @@ class Web(BaseHTTPRequestHandler):
                 raise ValueError
         except ValueError:
             return self.reply(400, {"error": "Плохой запрос"})
+        if path == "/api/support":  # 🛠 из приложения — та же поддержка, что /fix в чате
+            if not SUP:
+                return self.reply(503, {"error": "Поддержка ещё запускается — попробуй через минуту"})
+            try:
+                return self.reply(200, SUP.web(user["id"], body))
+            except PermissionError as e:
+                return self.reply(403, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
         try:
             with LOCK:
                 code, res = api_post(user["id"], path, body)
@@ -1045,8 +1055,9 @@ def main():
     else:
         threading.Thread(target=https, daemon=True).start()
     print("КПП запущен")
-    sup = support.Support(TOKEN, "КПП", folders=["kpp"], pm2="kpp-bot", allowed=allowed,
-                          tests=["python3 kpp/test_kpp.py"])
+    global SUP
+    SUP = sup = support.Support(TOKEN, "КПП", folders=["kpp"], pm2="kpp-bot", allowed=allowed,
+                                tests=["python3 kpp/test_kpp.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

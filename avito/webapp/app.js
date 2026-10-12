@@ -246,11 +246,11 @@ function renderAd() {
   const a = current();
   const box = $('tab-ad');
   if (!a || (!a.photos.length && !a.title && !a.info && !a.job)) {
-    box.innerHTML = steps(null) + startCard();
+    box.innerHTML = steps(null) + startCard() + Kit.supportRow('/api/support');
     return;
   }
   box.innerHTML = steps(a) + photosCard(a) + descCard(a) + priceCard(a) +
-    '<button class="btn ghost new" data-act="new">🆕 Новое объявление</button>';
+    '<button class="btn ghost new" data-act="new">🆕 Новое объявление</button>' + Kit.supportRow('/api/support');
   loadImages(box);
 }
 
@@ -480,6 +480,8 @@ const tabs = Kit.tabbar($('tabs'), [
   { id: 'price', icon: '📊', label: 'Цены' },
   { id: 'hist', icon: '🗂', label: 'Все' },
 ], tab, (t) => switchTab(t, true));
+
+$('tab-hist').insertAdjacentHTML('beforeend', Kit.supportRow('/api/support'));  // 🛠 и во вкладке «Все»
 
 function switchTab(t, fromBar) {
   tab = t;

@@ -320,6 +320,8 @@ function settingsSheet() {
         <div class="meta">сайт, Claude, почерк — ответ в чат</div></span><span class="chev"></span></button>
       <button class="row" data-a="alphabet"><span class="ic">✍️</span><span class="main"><div class="title">Мой почерк</div>
         <div class="meta">${me.alphabet ? 'алфавит заполнен · прислать заново' : 'не заполнен — листы придут в чат'}</div></span><span class="chev"></span></button>
+      <button class="row" data-support="/api/support"><span class="ic">🛠</span><span class="main"><div class="title">Поддержка и пожелания</div>
+        <div class="meta">ошибка или идея — починю/добавлю</div></span><span class="chev"></span></button>
       <button class="row" data-a="chat"><span class="ic">💬</span><span class="main"><div class="title">Вернуться в чат</div>
         <div class="meta">кнопки бота там тоже работают</div></span><span class="chev"></span></button>
     </div>

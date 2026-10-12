@@ -11,6 +11,7 @@ class BotTest(unittest.TestCase):
     def test_start(self):
         self.t.send("/start")
         self.assertIn("Заметки", self.t.last)
+        self.assertIn("🛠 Поддержка", self.t.buttons)  # поддержка — на главном экране
 
     def test_note_from_text_and_app(self):
         self.t.send("купить молоко")

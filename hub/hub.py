@@ -24,6 +24,7 @@ tgbot/tmp/agent.sock. Секретарь отвечает тем же токен
 
 Только стандартная библиотека Python.
 """
+import base64
 import datetime
 import hashlib
 import hmac
@@ -452,7 +453,8 @@ def home(chat, mid=None):
     if web:
         btns.append([web])
     btns += [[b("🤖 Боты", "bots", "danger" if rows and any(a["status"] != "online" for a in rows) else None),
-              b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary")],
+              b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary"),
+              b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
              [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")]]
     return show(chat, mid, card("👑 <b>Главный</b>", lines,
                                 "<i>💬 Пиши или говори что угодно — отвечу. Фото и видео тоже.</i>"), btns)
@@ -902,6 +904,7 @@ def app_state():
             "reminders": [{"id": r["id"], "time": r["time"], "when": digest.describe(r), "text": r["text"]} for r in rs],
             "digest": st.get("digest_time") or digest.DEFAULT_TIME,
             "secretary": {"running": (run_all.get(SECRETARY) or {}).get("status") == "online"},
+            "support": [{"id": pm2, "name": short(lbl)} for pm2, lbl in maker.targets(rows or [])],
             "live": dict(live), "boot": BOOT, "now": time.time()}
 
 
@@ -937,6 +940,32 @@ def app_action(action, arg):
             save(st)
         return {"ok": note == "🗑 Удалено", "text": "Удалено" if note == "🗑 Удалено" else "Уже удалено"}
     raise KeyError("нет такого действия")
+
+
+def app_support(body):
+    """🛠 Поддержка из приложения: бот + что поправить (+ скриншот) — та же доработка, что «✏️ Доработать» в чате."""
+    pm2, text = str(body.get("bot") or ""), str(body.get("text") or "").strip()[:4000]
+    if pm2 not in {p for p, _ in maker.targets()}:
+        raise ValueError("Выбери бота")
+    if not text:
+        raise ValueError("Напиши, что поправить")
+    if maker.job.locked():
+        raise ValueError("Claude ещё занят прошлой задачей — пришли, когда закончит")
+    if body.get("photo"):
+        try:
+            raw = base64.b64decode(str(body["photo"]).split(",", 1)[-1])
+        except ValueError:
+            raise ValueError("Скриншот не разобрался") from None
+        if not raw or len(raw) > 10 * 1024 * 1024:
+            raise ValueError("Скриншот пустой или больше 10 МБ")
+        os.makedirs(os.path.join(DATA, "shots"), exist_ok=True)
+        path = os.path.join(DATA, "shots", f"web-{int(time.time() * 1000)}" + (".png" if raw[:4] == b"\x89PNG" else ".jpg"))
+        with open(path, "wb") as f:
+            f.write(raw)
+        add_shots([path])  # maker.fix заберёт их, как фото из чата
+    threading.Thread(target=maker.fix, args=(owner(), pm2, text + "\n\n(написано в мини-приложении)"),
+                     daemon=True).start()
+    return {"ok": True}
 
 
 def remote_on():
@@ -1117,6 +1146,15 @@ class Web(BaseHTTPRequestHandler):
             if n > 300_000:
                 return self.reply(413, {"error": "слишком большой запрос"})
             return self.proxy(path[len("/app/agent"):], self.rfile.read(n) if n else b"")
+        if path == "/app/api/support":  # 🛠 из приложения, со скриншотом
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > 16_000_000:
+                    return self.reply(413, {"error": "слишком большой скриншот"})
+                body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            except ValueError:
+                return self.reply(400, {"error": "bad json"})
+            return self.app_api(app_support, body if isinstance(body, dict) else {})
         if path == "/app/api/action":  # мини-приложение: вход по подписи Telegram
             try:
                 n = int(self.headers.get("Content-Length") or 0)

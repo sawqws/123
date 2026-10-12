@@ -503,7 +503,7 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot, "tg", lambda m, **p: calls.append((m, p)) or real(m, **p)):
             self.say(bot.BTN_MORE)
             menu = self.last()[1]
-            for data in ("m:late", "m:help", "m:check", "m:hand"):
+            for data in ("m:late", "m:help", "m:check", "m:hand", "sup|ask"):  # sup|ask — 🛠 Поддержка
                 self.assertIn(data, menu)
             self.assertNotIn("m:digest", menu)  # сводки больше нет: бот сам не пишет
             self.assertFalse(hasattr(bot, "digest_loop"))
@@ -674,6 +674,28 @@ class AppTest(BotTest):
             self.assertEqual(get("/app.js")[0], 200)
             self.assertEqual(get("/../bot.py")[0], 404)
             self.assertEqual(get("/%2e%2e%2fbot.py")[0], 404)
+
+            def post(path, body, uid=CHAT):
+                c = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=10)
+                c.request("POST", path, json.dumps(body), {"X-Init-Data": self.init_data(uid=uid),
+                                                           "Content-Type": "application/json"})
+                r = c.getresponse()
+                return r.status, json.loads(r.read() or b"{}")
+            # 🛠 поддержка из приложения: тот же Support, start — заглушка; скриншот больше 1 МБ проходит
+            import base64
+            import support
+            sup = support.Support.__new__(support.Support)
+            sup.allowed, sup.media_dir, calls = (lambda u: u == bot.owner()), tempfile.mkdtemp(), []
+            sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+            self.assertEqual(post("/api/support", {"text": "x"})[0], 400)  # ещё не запущена
+            with mock.patch.object(bot, "SUP", sup):
+                shot = base64.b64encode(b"\xff\xd8" + bytes(1_100_000)).decode()
+                self.assertEqual(post("/api/support", {"text": "черновик не открывается", "photo": shot}),
+                                 (200, {"ok": True}))
+                self.assertEqual((calls[-1][0], os.path.exists(calls[-1][2][0])), (CHAT, True))
+                self.assertEqual(post("/api/support", {"text": "x"}, uid=7)[0], 403)
+                self.assertEqual(post("/api/support", {"text": ""})[0], 400)
+            self.assertEqual(len(calls), 1)
         finally:
             srv.shutdown()
 

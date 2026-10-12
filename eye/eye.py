@@ -65,6 +65,7 @@ KEEP_PHOTOS = 200
 lock = threading.RLock()
 think = threading.BoundedSemaphore(2)  # не больше двух Claude одновременно: на сервере 2 ГБ
 public_url = os.environ.get("EYE_URL", "").rstrip("/")
+SUP = None  # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется страница
 https_note = "задан вручную" if public_url else "ещё не настроен"
 offset = 0
 
@@ -241,6 +242,7 @@ def menu_buttons():
     rows = app_buttons()[:1]
     rows.append(([{"text": "🧭 В Safari", "url": safari_link()}] if public_url else []) +
                 [{"text": "🧹 Заново", "callback_data": "new"}])
+    rows.append([support.Support.button()])
     return rows
 
 
@@ -861,6 +863,13 @@ class Web(BaseHTTPRequestHandler):
                 return self.reply(200, {"ok": True})
             if path == "/api/where":
                 return self.reply(200, {"place": place_now()})
+            if path == "/api/support":  # 🛠 со страницы — та же поддержка, что /fix в чате
+                if not SUP:
+                    return self.reply(503, {"error": "Поддержка ещё запускается — попробуй через минуту"})
+                user = check_init_data(self.headers.get("X-Init-Data") or "")
+                return self.reply(200, SUP.web(user["id"] if user else owner(), json.loads(raw or b"{}")))
+        except PermissionError as e:
+            return self.reply(403, {"error": str(e)})
         except (ai.AIError, speech.SpeechError) as e:
             return self.reply(503, {"error": str(e)})
         except ValueError:
@@ -1025,8 +1034,9 @@ def main():
     else:
         threading.Thread(target=https, daemon=True).start()
     print(f"{NAME} запущен")
-    sup = support.Support(TOKEN, "Глаз", folders=["eye"], pm2="eye-bot", allowed=allowed,
-                          tests=["python3 eye/test_eye.py"])
+    global SUP
+    SUP = sup = support.Support(TOKEN, "Глаз", folders=["eye"], pm2="eye-bot", allowed=allowed,
+                                tests=["python3 eye/test_eye.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

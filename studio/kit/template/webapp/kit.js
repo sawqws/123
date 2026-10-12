@@ -4,6 +4,8 @@
 // tabs(элемент, fn(имя)) — переключатель .tabs > button[data-tab] · mainButton(текст, fn) / mainButton(null) — синяя
 // кнопка Telegram внизу · back(fn) / back(null) — кнопка «Назад» Telegram · sheet(html) → элемент, закрыть: .remove()
 // fmt(число) — «1 234,5» · poll(fn, сек) — обновлять, пока приложение видно.
+// 🛠 support() — лист «Поддержка и пожелания» (текст + скриншот → api('support') → Claude правит бота, ответ в чат);
+// строка с ним сама встаёт внизу main (не нужна — <body data-no-support>), своя кнопка — data-support.
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
   tg.ready(); tg.expand();
@@ -89,3 +91,64 @@ function poll(fn, sec = 30) {
   setInterval(() => { if (!document.hidden) fn(); }, sec * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) fn(); });
 }
+
+// ---------- 🛠 поддержка и пожелания (сервер — встроенный api('support') в botkit) ----------
+function shrinkImage(file, max = 1600) {  // -> base64 JPEG (без «data:»), длинная сторона ≤ max
+  return new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    const img = new Image();
+    rd.onload = () => { img.src = rd.result; };
+    rd.onerror = img.onerror = () => reject(new Error('Картинка не открылась'));
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k));
+      c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.82).split(',')[1]);
+    };
+    rd.readAsDataURL(file);
+  });
+}
+
+function support() {
+  let photo = null;
+  const s = sheet(`<h2>🛠 Поддержка и пожелания</h2>
+    <p class="muted">Напиши, что сломалось или чего не хватает — починю/добавлю.</p>
+    <textarea class="sup-text" rows="5" maxlength="4000" placeholder="Например: «кнопка не жмётся» или «добавь итог за неделю»"></textarea>
+    <div class="sup-shot"><label class="btn small">📎 Скриншот<input type="file" accept="image/*" hidden></label><span class="sup-prev"></span></div>
+    <button class="btn primary sup-send">Отправить</button>`);
+  const q = (sel) => s.querySelector(sel);
+  q('input[type=file]').addEventListener('change', async (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!f) return;
+    try {
+      photo = await shrinkImage(f);
+      q('.sup-prev').innerHTML = `<img alt="" src="data:image/jpeg;base64,${photo}">`;
+    } catch (e) { toast(e.message, true); }
+  });
+  q('.sup-send').addEventListener('click', async (ev) => {
+    const text = q('.sup-text').value.trim();
+    if (!text) { toast('Напиши, что поправить', true); return; }
+    ev.target.disabled = true;
+    try {
+      await api('support', photo ? { text, photo } : { text });
+      haptic('success');
+      s.remove();
+      toast('Принял — работаю, ответ придёт в чат');
+    } catch (e) { toast(e.message, true); ev.target.disabled = false; }
+  });
+  return s;
+}
+
+document.addEventListener('click', (ev) => {
+  if (ev.target.closest && ev.target.closest('[data-support]')) { haptic('tap'); support(); }
+});
+if (!document.body.hasAttribute('data-no-support')) {
+  (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',
+    '<div class="list sup-list"><button class="row" data-support><span class="icon">🛠</span><span class="main">' +
+    '<span class="name">Поддержка и пожелания</span><span class="meta">Ошибка или идея — починю/добавлю</span></span>' +
+    '<span class="end">›</span></button></div>');
+}
+

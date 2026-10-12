@@ -372,7 +372,7 @@ def home(c):
                  "аватар, @BotFather, запуск."],
                 "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>"),
            [[bot.app_button("📱 Открыть Студию")],
-            [b(f"🧩 Мои боты · {n}", "bots")] if n else None])
+            ([b(f"🧩 Мои боты · {n}", "bots")] if n else []) + [kit.support_button()]])  # 🛠 Поддержка Студии
 
 
 @bot.command("cancel")

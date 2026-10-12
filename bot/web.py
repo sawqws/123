@@ -110,7 +110,8 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
+            limit = 16_000_000 if path == "/api/support" else 1_000_000  # в поддержке — скриншот
+            body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})
         self.api(path, body if isinstance(body, dict) else {})
@@ -128,6 +129,8 @@ class Web(BaseHTTPRequestHandler):
             self.reply(200, fn(body))
         except ValueError as e:  # понятная ошибка для человека
             self.reply(400, {"error": str(e)})
+        except PermissionError as e:
+            self.reply(403, {"error": str(e)})
         except Exception as e:
             traceback.print_exc()
             self.reply(500, {"error": f"Ошибка сервера: {e}"})
