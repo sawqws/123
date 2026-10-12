@@ -115,6 +115,50 @@ class AgentOverBotApi(unittest.TestCase):
             await asyncio.sleep(0.05)
         self.fail("не дождался")
 
+    async def choose(self, tg, data):
+        """Без ключей /login сначала спрашивает способ входа."""
+        await self.until(lambda: any("Как подключиться" in p["text"] for p in tg.sent("sendMessage")))
+        tg.push_button(data, tg.mid)
+        await self.until(lambda: any("request_contact" in json.dumps(p) for p in tg.sent("sendMessage")))
+
+    def test_login_as_desktop(self):
+        tg = FakeTelegram()
+        made = []
+        client = mock.Mock()
+        client.is_connected.return_value = True
+        client.is_user_authorized = mock.AsyncMock(return_value=False)
+        client.send_code_request = mock.AsyncMock(return_value=pytypes.SimpleNamespace(
+            phone_code_hash="h", type=pytypes.SimpleNamespace(length=5)))
+
+        async def scenario(a):
+            tg.push_text("/login")
+            await self.until(lambda: any("Как подключиться" in p["text"] for p in tg.sent("sendMessage")))
+            tg.push_button("login:desktop", tg.mid)
+            await self.until(lambda: any("против правил" in p["text"] for p in tg.sent("editMessageText")))
+            self.assertEqual(made, [])  # до «Да, войти» ничего не меняем
+            tg.push_button("login:desktop!", tg.mid)
+            await self.until(lambda: any("request_contact" in json.dumps(p) for p in tg.sent("sendMessage")))
+            self.assertEqual(made, [(2040, "b18441a1ff607e10a989891a5462e627")])
+            with open(agent.SETTINGS) as f:
+                self.assertEqual(json.load(f)["api_id"], "2040")
+            tg.push_text("", contact="79138434865")
+            await self.until(lambda: client.send_code_request.await_count)
+            client.send_code_request.assert_awaited_with("+79138434865")  # my.telegram.org не трогаем
+
+        def fake_make(i, h):
+            made.append((i, h))
+            return client
+        with mock.patch.object(agent.Agent, "make_client", staticmethod(fake_make)), \
+                mock.patch.object(get_api, "Site", side_effect=AssertionError("my.telegram.org не нужен")):
+            self.run_agent(tg, scenario)
+
+    def test_desktop_client_looks_like_desktop(self):
+        c = agent.Agent.make_client(2040, "b18441a1ff607e10a989891a5462e627")
+        r = c._init_request
+        self.assertEqual((r.api_id, r.device_model, r.lang_pack), (2040, "Desktop", "tdesktop"))
+        own = agent.Agent.make_client(123, "x" * 32)
+        self.assertEqual(own._init_request.device_model, "HDP Agent")
+
     def test_start_menu_and_buttons(self):
         tg = FakeTelegram()
 
@@ -177,7 +221,7 @@ class AgentOverBotApi(unittest.TestCase):
 
         async def scenario(a):
             tg.push_text("/login")
-            await self.until(lambda: any("request_contact" in json.dumps(p) for p in tg.sent("sendMessage")))
+            await self.choose(tg, "login:own")
             tg.push_text("", contact="79138434865")
             await self.until(lambda: any("Ключи Telegram" in p["text"] for p in tg.sent("sendMessage")))
             site.send_code.assert_called_with("+79138434865")
@@ -205,7 +249,7 @@ class AgentOverBotApi(unittest.TestCase):
 
         async def scenario(a):
             tg.push_text("/login")
-            await self.until(lambda: tg.sent("sendMessage"))
+            await self.choose(tg, "login:own")
             tg.push_text("+79138434865")
             await self.until(lambda: any("временно ограничил" in p["text"] for p in tg.sent("sendMessage")))
             await self.until(lambda: any("Ключи вручную" in p["text"] for p in tg.sent("sendMessage")))
@@ -231,7 +275,7 @@ class AgentOverBotApi(unittest.TestCase):
 
         async def scenario(a):
             tg.push_text("/login")
-            await self.until(lambda: tg.sent("sendMessage"))
+            await self.choose(tg, "login:own")
             tg.push_text("", contact="79138434865")
             await self.until(lambda: any("Ключи Telegram" in p["text"] for p in tg.sent("sendMessage")))
             tg.push_text("e W - S G 3")
