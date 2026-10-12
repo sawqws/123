@@ -54,6 +54,9 @@ PORT = int(os.environ.get("PLANNER_PORT") or 8787)
 COACH_PORT = 8789  # coach/coach.py
 HUB_PORT = 8790  # hub/hub.py
 EYE_PORT = 8791  # eye/eye.py
+KPP_PORT = 8792  # kpp/kpp.py
+AVITO_PORT = 8793  # avito/avito.py
+AGENT_PORT = 8794  # tgbot/agent.py
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
 REPO = os.path.dirname(HERE)
@@ -109,6 +112,14 @@ def repeat_text(rep):
 
 # ---------- Telegram ----------
 
+class TgError(Exception):
+    """Ответ Telegram с ошибкой: код и текст (по тексту видно, что именно не понравилось)."""
+
+    def __init__(self, method, code, detail):
+        super().__init__(f"{method} {code}: {detail[:300]}")
+        self.code, self.detail = code, detail
+
+
 def tg(method, **params):
     body = json.dumps(params).encode()
     req = urllib.request.Request(API + method, data=body, headers={"Content-Type": "application/json"})
@@ -120,32 +131,86 @@ def tg(method, **params):
         if "message is not modified" in detail:
             return {"ok": True}
         print(method, e.code, detail[:300])
-        raise
+        raise TgError(method, e.code, detail) from None
+
+
+# Цветные кнопки ("style": primary | success | danger) — новинка Telegram. Если сервер их не примет,
+# шлём те же кнопки без цвета и дальше уже не пробуем.
+STYLE_OK = True
+
+
+def btn(text, data, style=None):
+    b = {"text": text, "callback_data": data}
+    if style:
+        b["style"] = style
+    return b
+
+
+def _plain(rows):
+    return [[{k: v for k, v in b.items() if k != "style"} for b in row] for row in rows]
+
+
+def with_markup(method, buttons, **params):
+    global STYLE_OK
+    if buttons is not None:
+        params["reply_markup"] = {"inline_keyboard": buttons if STYLE_OK else _plain(buttons)}
+    try:
+        return tg(method, **params)
+    except TgError as e:
+        styled = STYLE_OK and any("style" in b for row in buttons or [] for b in row)
+        words = ("button", "markup", "keyboard", "style")
+        if not (styled and e.code == 400 and any(w in e.detail.lower() for w in words)):
+            raise
+        params["reply_markup"] = {"inline_keyboard": _plain(buttons)}
+        res = tg(method, **params)
+        STYLE_OK = False
+        return res
 
 
 def send(chat, text, buttons=None, **extra):
-    if buttons is not None:
-        extra["reply_markup"] = {"inline_keyboard": buttons}
-    return tg("sendMessage", chat_id=chat, text=text, parse_mode="HTML",
-              link_preview_options={"is_disabled": True}, **extra)
+    return with_markup("sendMessage", buttons, chat_id=chat, text=text, parse_mode="HTML",
+                       link_preview_options={"is_disabled": True}, **extra)
 
 
 def edit(chat, msg_id, text, buttons=None):
-    extra = {"reply_markup": {"inline_keyboard": buttons}} if buttons is not None else {}
-    return tg("editMessageText", chat_id=chat, message_id=msg_id, text=text, parse_mode="HTML",
-              link_preview_options={"is_disabled": True}, **extra)
+    return with_markup("editMessageText", buttons, chat_id=chat, message_id=msg_id, text=text, parse_mode="HTML",
+                       link_preview_options={"is_disabled": True})
 
 
-def app_button(text="🗓 Открыть планер", path=""):
+def app_button(text="🗓 Открыть планер", path="", style=None):
     if not public_url:
         return None
     # экран передаём в ?p=, а не в #: в # Telegram дописывает свои параметры запуска
-    return {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
+    b = {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
+    if style:
+        b["style"] = style
+    return b
 
 
-def with_app(rows, text="🗓 Открыть планер", path=""):
-    b = app_button(text, path)
+def with_app(rows, text="🗓 Открыть планер", path="", style=None):
+    b = app_button(text, path, style)
     return rows + [[b]] if b else rows
+
+
+def card(emoji, title, body=None, note=None, expand=None):
+    """Единый вид сообщения: «эмодзи + жирный заголовок», содержимое в цитате, второстепенное курсивом в конце.
+    body — строка или список строк (уже в HTML); длинная цитата сворачивается (expandable)."""
+    parts = [f"{emoji} <b>{title}</b>"]
+    if isinstance(body, (list, tuple)):
+        body = "\n".join(body)
+    if body:
+        if expand is None:
+            expand = body.count("\n") >= 12 or len(body) > 700
+        parts.append(f"<blockquote{' expandable' if expand else ''}>{body.strip()}</blockquote>")
+    if note:
+        parts.append(f"<i>{note}</i>")
+    return "\n".join(parts)
+
+
+def short(text, n=24):
+    """Подпись кнопки: не длиннее n символов."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
 def setup_bot():
@@ -158,15 +223,15 @@ def setup_bot():
         {"command": "app", "description": "Открыть планер"},
         {"command": "help", "description": "Как пользоваться"},
     ]
-    desc = ("Планер дня, недели и месяца. Цели с прогрессом и заметками, напоминания, "
-            "утренний план и итоги дня.\n\nНапиши «завтра в 18:00 тренировка» — и задача уже в плане.")
-    short = "Планер дня, недели и месяца: цели, заметки, напоминания."
-    key = hashlib.sha1(json.dumps([commands, desc, short, NAME]).encode()).hexdigest()
+    desc = ("Планер на день, неделю и месяц: цели, заметки, напоминания.\n\n"
+            "Напиши «завтра в 18:00 тренировка» — и задача уже в плане.")
+    about = "Планер: день, неделя, месяц и цели."
+    key = hashlib.sha1(json.dumps([commands, desc, about, NAME]).encode()).hexdigest()
     if db.meta("bot_setup") != key:
         try:
             tg("setMyCommands", commands=commands)
             tg("setMyDescription", description=desc)
-            tg("setMyShortDescription", short_description=short)
+            tg("setMyShortDescription", short_description=about)
             db.meta("bot_setup", key)
         except Exception as e:
             print("setup:", e)
@@ -246,19 +311,33 @@ def today_of(uid):
 
 
 # ---------- сообщения ----------
+# Шрифт в Telegram пропорциональный: колонки пробелами не выравниваем, списки — «• …».
 
 def task_line(t, show_done=True):
-    mark = ("✅" if t["done"] else "◻️") if show_done else "•"
-    time_ = f"<b>{t['time']}</b>  " if t.get("time") else ""
-    imp = "  ❗" if t["important"] else ""
-    rep = "  🔁" if t["repeat"] else ""
-    title = f"<s>{esc(t['title'])}</s>" if t["done"] and show_done else esc(t["title"])
-    return f"{mark} {time_}{title}{imp}{rep}"
+    """Строка задачи: «• 18:00 Бокс», сделанная — «✓ 18:00 Бокс» зачёркнутой."""
+    time_ = f"{t['time']} " if t.get("time") else ""
+    extra = (" <b>!</b>" if t["important"] else "") + (" ↻" if t["repeat"] else "")
+    if show_done and t["done"]:
+        return f"✓ <s>{time_}{esc(t['title'])}</s>{extra}"
+    return f"• {f'<b>{time_.strip()}</b> ' if time_ else ''}{esc(t['title'])}{extra}"
 
 
 def goal_line(uid, g):
+    """Цель одной строкой (для плана дня, утра, недели)."""
+    return f"{g['emoji']} {esc(g['title'])} — {db.progress(uid, g)}%"
+
+
+def goal_block(uid, g, notes=0):
+    """Цель с полоской прогресса (для /goals)."""
     p = db.progress(uid, g)
-    return f"{g['emoji']} {esc(g['title'])}\n      <code>{bar(p, 10)}</code> {p}%"
+    extra = f" · {notes} {plural(notes, 'заметка', 'заметки', 'заметок')}" if notes else ""
+    return f"{g['emoji']} <b>{esc(g['title'])}</b>\n<code>{bar(p, 10)}</code> {p}%{extra}"
+
+
+def day_label(d, today):
+    """Подпись кнопки листания: «Вчера», «Завтра» или «пт, 9»."""
+    word = {0: "Сегодня", 1: "Завтра", -1: "Вчера"}.get((d - today).days)
+    return word or f"{WD_SHORT[d.weekday()]}, {d.day}"
 
 
 def day_view(uid, day):
@@ -266,33 +345,33 @@ def day_view(uid, day):
     today = today_of(uid)
     tasks = db.day(uid, day)
     done = sum(t["done"] for t in tasks)
-    lines = [f"📅 <b>{human_date(day, today)}</b>"]
-    if tasks:
-        pct = round(100 * done / len(tasks))
-        lines.append(f"<code>{bar(pct, 12)}</code>  {done} из {len(tasks)}")
-        if done == len(tasks):
-            lines.append("\n🎉 <b>Всё сделано!</b> Красота.")
-        else:
-            lines.append("\n<i>Нажми на задачу, чтобы отметить.</i>")
+    if not tasks:
+        body = ["Пока пусто. Напиши задачу, например:", "<i>завтра в 18:00 тренировка</i>"]
+    elif done == len(tasks):
+        body = [f"✨ <b>Всё сделано!</b> {done} из {len(tasks)}"]
     else:
-        lines.append("\nНа этот день пока пусто.\nНапиши, например: <i>«завтра в 18:00 тренировка»</i>")
-    if day == today:
-        late = db.overdue(uid, today)
-        if late:
-            lines.append(f"\n⏳ Просрочено: {len(late)} — в приложении можно перенести на сегодня.")
+        body = [f"<code>{bar(round(100 * done / len(tasks)), 10)}</code> {done} из {len(tasks)}"]
     goals = db.current_goals(uid, day)
     if goals:
-        lines.append("\n🎯 <b>Цели</b>")
-        lines += [goal_line(uid, g) for g in goals[:5]]
+        body += [""] + [goal_line(uid, g) for g in goals[:5]]
+    note = []
+    if tasks and done < len(tasks):
+        note.append("Нажми на задачу, чтобы отметить")
+    late = db.overdue(uid, today) if day == today else []
+    if late:
+        note.append(f"просрочено: {len(late)}" if note else f"Просрочено: {len(late)}")
+    text = card("📅", human_date(day, today), body, " · ".join(note))
     rows = []
     for t in tasks[:40]:
-        label = ("✅ " if t["done"] else "◻️ ") + (f"{t['time']} · " if t["time"] else "") + t["title"]
-        rows.append([{"text": label[:60], "callback_data": f"t|{t['id']}|{day.isoformat()}"}])
+        label = ("✅ " if t["done"] else "◻️ ") + (f"{t['time']} " if t["time"] else "") + t["title"]
+        rows.append([btn(short(label, 28), f"t|{t['id']}|{day.isoformat()}")])
     prev, nxt = day - datetime.timedelta(days=1), day + datetime.timedelta(days=1)
-    rows.append([{"text": "‹", "callback_data": f"d|{prev.isoformat()}"},
-                 {"text": "Сегодня" if day != today else "· Сегодня ·", "callback_data": f"d|{today.isoformat()}"},
-                 {"text": "›", "callback_data": f"d|{nxt.isoformat()}"}])
-    return "\n".join(lines), with_app(rows, path=f"/day/{day.isoformat()}")
+    nav = [btn("‹ " + day_label(prev, today), f"d|{prev.isoformat()}")]
+    if today not in (prev, day, nxt):
+        nav.append(btn("Сегодня", f"d|{today.isoformat()}"))
+    nav.append(btn(day_label(nxt, today) + " ›", f"d|{nxt.isoformat()}"))
+    rows.append(nav)
+    return text, with_app(rows, "🗓 Открыть в планере", f"/day/{day.isoformat()}")
 
 
 def week_text(uid, day):
@@ -301,83 +380,78 @@ def week_text(uid, day):
     sun = mon + datetime.timedelta(days=6)
     span = (f"{mon.day}–{sun.day} {MONTHS_GEN[sun.month - 1]}" if mon.month == sun.month
             else f"{mon.day} {MONTHS_GEN[mon.month - 1]} – {sun.day} {MONTHS_GEN[sun.month - 1]}")
-    lines = [f"🗓 <b>Неделя · {span}</b>"]
+    days = []
     total = done = 0
     for i in range(7):
         d = mon + datetime.timedelta(days=i)
         tasks = db.day(uid, d)
+        dn = sum(t["done"] for t in tasks)
         total += len(tasks)
-        done += sum(t["done"] for t in tasks)
-        mark = "  ← сегодня" if d == today else ""
-        head = f"\n<b>{WEEKDAYS[i]}, {d.day}</b>{mark}"
-        if tasks:
-            lines.append(head + f"  <i>{sum(t['done'] for t in tasks)}/{len(tasks)}</i>")
-            lines += ["  " + task_line(t) for t in tasks[:8]]
-            if len(tasks) > 8:
-                lines.append(f"  … и ещё {len(tasks) - 8}")
-        else:
-            lines.append(head + "  <i>свободно</i>")
-    if total:
-        pct = round(100 * done / total)
-        lines.insert(1, f"<code>{bar(pct, 12)}</code>  {done} из {total}")
-    goals = db.current_goals(uid, day)
-    goals = [g for g in goals if g["horizon"] == "week"]
+        done += dn
+        head = f"<b>{WEEKDAYS[i]}, {d.day}</b>" + (" · сегодня" if d == today else "")
+        if not tasks:
+            days.append(head + " · <i>свободно</i>")
+            continue
+        lines = [f"{head} · {dn}/{len(tasks)}"] + [task_line(t) for t in tasks[:8]]
+        if len(tasks) > 8:
+            lines.append(f"<i>… и ещё {len(tasks) - 8}</i>")
+        days.append("\n".join(lines))
+    body = ([f"<code>{bar(round(100 * done / total), 10)}</code> {done} из {total}", ""] if total else []) + ["\n\n".join(days)]
+    goals = [g for g in db.current_goals(uid, day) if g["horizon"] == "week"]
+    parts = [card("🗓", f"Неделя · {span}", body)]
     if goals:
-        lines.append("\n🎯 <b>Цели недели</b>")
-        lines += [goal_line(uid, g) for g in goals]
-    return "\n".join(lines)
+        parts += ["<b>Цели недели</b>", "<blockquote>" + "\n".join(goal_line(uid, g) for g in goals) + "</blockquote>"]
+    parts.append("<i>Галочки — в /today и в планере</i>")
+    return "\n".join(parts)
 
 
 def goals_text(uid):
     goals = [g for g in db.goals(uid) if g["status"] == "active"]
     if not goals:
-        return ("🎯 <b>Цели</b>\n\nЦелей пока нет. Открой планер → «Цели» → «+» — "
-                "поставь цель на неделю, месяц или год, разбей на шаги и веди заметки.")
-    lines = ["🎯 <b>Мои цели</b>"]
+        return card("🎯", "Целей пока нет", "Поставь цель на неделю, месяц или год в планере, вкладка «Цели».",
+                    "Там же — шаги и заметки к цели")
     notes = {}
     for n in db.notes(uid):
         notes[n["goal"]] = notes.get(n["goal"], 0) + 1
+    parts = ["🎯 <b>Мои цели</b>"]
     for hz in ("week", "month", "year", "none"):
         part = [g for g in goals if g["horizon"] == hz]
-        if not part:
-            continue
-        lines.append(f"\n<b>{HORIZON[hz]}</b>")
-        for g in part:
-            extra = f"  · 📝 {notes[g['id']]}" if notes.get(g["id"]) else ""
-            lines.append(goal_line(uid, g) + extra)
-    return "\n".join(lines)
+        if part:
+            parts.append(f"<b>{HORIZON[hz]}</b>")
+            parts.append("<blockquote>" + "\n\n".join(goal_block(uid, g, notes.get(g["id"], 0)) for g in part)
+                         + "</blockquote>")
+    parts.append("<i>Шаги и заметки — в планере</i>")
+    return "\n".join(parts)
 
 
 HELP = (
-    "✨ <b>Как пользоваться</b>\n\n"
-    "<b>Планер</b> — кнопка «Планер» слева от поля ввода. Там день, неделя, месяц и цели.\n\n"
-    "<b>Быстро добавить</b> — просто напиши задачу:\n"
+    "✨ <b>Как пользоваться</b>\n"
+    "<blockquote><b>Добавить задачу</b> — просто напиши её:\n"
     "• <i>завтра в 18:00 тренировка</i>\n"
     "• <i>в пятницу кино</i>\n"
-    "• <i>12.10 контрольная!</i>  (! — важное)\n"
+    "• <i>12.10 контрольная!</i> — «!» значит важное\n"
     "• <i>по пн, ср и пт английский в 7 вечера</i>\n"
     "• <i>каждый день зарядка в 7:30</i>\n\n"
-    "🎙 <b>Голосом</b> — скажи задачу так же, как написал бы.\n"
-    "📷 <b>Фото</b> — скриншот расписания или список дел от руки: я выпишу задачи сам.\n\n"
+    "Можно голосом или фото списка дел — задачи выпишу сам.</blockquote>\n"
     "<b>Команды</b>\n"
-    "/today — план на сегодня с галочками\n"
+    "<blockquote>/today — план на сегодня с галочками\n"
     "/tomorrow — на завтра\n"
-    "/week — неделя целиком\n"
-    "/goals — цели и прогресс\n\n"
-    "Утром пришлю план на день, вечером — итоги. Время меняется в планере → ⚙️."
+    "/week — неделя\n"
+    "/goals — цели и прогресс</blockquote>\n"
+    "<i>Утром пришлю план, вечером — итоги. Время меняется в настройках планера.</i>"
 )
 
 
-def welcome(chat, name):
-    text = (f"👋 <b>Привет{', ' + esc(name) if name else ''}! Я {NAME}</b> — твой планер.\n\n"
-            "🗓 <b>День, неделя, месяц</b> — всё в одном месте\n"
-            "🎯 <b>Цели</b> — с шагами, прогрессом и заметками\n"
-            "⏰ <b>Напоминания</b>, утренний план и итоги дня\n\n"
-            "Чтобы добавить задачу, просто напиши её, например:\n"
-            "<i>завтра в 18:00 тренировка</i>\n\n"
-            + ("А удобнее всего — в приложении-планере: кнопка «Планер» слева от поля ввода или здесь 👇" if public_url else
-               "Приложение-планер (день, неделя, месяц, цели) сейчас запускается — пришлю кнопку, как только будет готово."))
-    send(chat, text, with_app([], "✨ Открыть планер"))
+def welcome(chat, name, today=None):
+    body = ["Твой планер: день, неделя, месяц и цели.", "",
+            "Чтобы добавить задачу, просто напиши её:", "<i>завтра в 18:00 тренировка</i>"]
+    if public_url:
+        note = "Планер всегда под рукой — кнопка «Планер» слева от поля ввода"
+        rows = with_app([], "🗓 Открыть планер", style="primary")
+    else:
+        note = "Приложение запускается — пришлю кнопку, как только будет готово"
+        rows = [[btn("📅 План на сегодня", f"d|{(today or datetime.date.today()).isoformat()}")]]
+    send(chat, card("👋", f"Привет{', ' + esc(name) if name else ''}! Я {NAME}", body, note), rows)
 
 
 def add_task(uid, text, today):
@@ -390,36 +464,46 @@ def add_task(uid, text, today):
                               "remind": db.user(uid)["remind"] if p["time"] else -1})
 
 
-def quick_add(chat, uid, text):
+def quick_add(chat, uid, text, mid=None, heard=None):
+    """Добавить задачу из текста; mid — сообщение-статус, которое заменится результатом (голосовые)."""
     today = today_of(uid)
     t = add_task(uid, text, today)
     if not t:
-        send(chat, "🤔 Не понял, что добавить. Напиши, например: <i>завтра в 18:00 тренировка</i>")
+        tail = f" в «{esc(heard)}»" if heard else ""
+        replace(chat, mid, f"⚠️ Не понял, что добавить{tail}. Например: <i>завтра в 18:00 тренировка</i>")
         return
-    send(chat, added_text(t, today), added_buttons(t, today))
+    replace(chat, mid, added_text(t, today, heard), added_buttons(t, today))
 
 
-def added_text(t, today):
+def added_text(t, today, heard=None):
     when = human_date(datetime.date.fromisoformat(t["date"]), today) if t["date"] else "Без даты"
     if t["repeat"]:
         when = repeat_text(t["repeat"]).capitalize()
-    parts = [f"✅ <b>{esc(t['title'])}</b>", f"📅 {when}" + (f" · {t['time']}" if t["time"] else "")]
+    body = [f"<b>{esc(t['title'])}</b>", when + (f" · {t['time']}" if t["time"] else "")]
+    extra = []
     if t["important"]:
-        parts.append("❗ Важное")
+        extra.append("важное")
     if t["time"] and t["remind"] >= 0:
-        parts.append("⏰ Напомню " + ("в это время" if t["remind"] == 0 else f"за {t['remind']} мин"))
-    return "\n".join(parts)
+        extra.append("напомню " + ("в это время" if t["remind"] == 0 else f"за {t['remind']} мин"))
+    if extra:
+        body.append(", ".join(extra).capitalize())
+    return card("✅", "Добавлено", body, f"🎙 «{esc(heard)}»" if heard else None)
 
 
 def added_buttons(t, today):
     rows = []
     if not t["repeat"]:
-        opts = [("Сегодня", today), ("Завтра", today + datetime.timedelta(days=1))]
-        rows.append([{"text": label, "callback_data": f"m|{t['id']}|{d.isoformat()}"}
-                     for label, d in opts if t["date"] != d.isoformat()]
-                    + [{"text": "Без даты", "callback_data": f"m|{t['id']}|-"}] * bool(t["date"]))
-    rows.append([{"text": "↩️ Отменить", "callback_data": f"u|{t['id']}"}])
-    return with_app([r for r in rows if r], "Открыть в планере", f"/day/{t['date']}" if t["date"] else "/week")
+        opts = [("На сегодня", today), ("На завтра", today + datetime.timedelta(days=1))]
+        moves = [btn(label, f"m|{t['id']}|{d.isoformat()}") for label, d in opts if t["date"] != d.isoformat()]
+        if t["date"]:
+            moves.append(btn("Без даты", f"m|{t['id']}|-"))
+        rows.append(moves)
+    last = [btn("↩️ Отменить", f"u|{t['id']}")]
+    app = app_button("🗓 В планере", f"/day/{t['date']}" if t["date"] else "/week")
+    if app:
+        last.append(app)
+    rows.append(last)
+    return [r for r in rows if r]
 
 
 # ---------- голосовые и фото ----------
@@ -457,14 +541,13 @@ def replace(chat, mid, text, buttons=None):
 
 
 def on_voice(chat, uid, msg):
-    mid = status(chat, "🎙 Слушаю…")
+    mid = status(chat, "🎙 <i>Слушаю…</i>")
     try:
         text = media.voice_text(TOKEN, msg)
     except media.MediaError as e:
-        replace(chat, mid, f"🎙 Не получилось: {esc(e)}")
+        replace(chat, mid, f"⚠️ Не расслышал: {esc(e)}")
         return
-    replace(chat, mid, f"🎙 «{esc(text)}»")
-    quick_add(chat, uid, text)  # дальше — как будто это написали
+    quick_add(chat, uid, text, mid, heard=text)  # дальше — как будто это написали; статус заменится карточкой
 
 
 def claude(prompt, cwd, timeout=240):
@@ -517,29 +600,31 @@ def task_lines(answer):
 
 
 def on_photo(chat, uid, msg):
-    mid = status(chat, "📷 Читаю фото…")
+    mid = status(chat, "📷 <i>Читаю фото…</i>")
     today = today_of(uid)
     work = tempfile.mkdtemp(prefix="planner-ai-")
     try:
         path = media.photo_path(TOKEN, msg, work)
         answer = claude(photo_prompt(path, (msg.get("caption") or "").strip(), today), work)
     except (media.MediaError, AIError) as e:
-        replace(chat, mid, f"📷 Не получилось: {esc(e)}")
+        replace(chat, mid, f"⚠️ Не получилось: {esc(e)}")
         return
     finally:
         shutil.rmtree(work, ignore_errors=True)
     tasks = [t for t in (add_task(uid, line, today) for line in task_lines(answer)) if t]
     if not tasks:
-        replace(chat, mid, "📷 Не нашёл на фото задач. Напиши их текстом или скажи голосом.")
+        replace(chat, mid, card("📷", "Не нашёл на фото задач", note="Напиши их текстом или скажи голосом"))
         return
-    lines = [f"📷 <b>Добавил {len(tasks)} {plural(len(tasks), 'задачу', 'задачи', 'задач')}</b>", ""]
+    lines = []
     for t in tasks:
         when = (repeat_text(t["repeat"]) if t["repeat"]
-                else human_date(datetime.date.fromisoformat(t["date"]), today) if t["date"] else "без даты")
+                else human_date(datetime.date.fromisoformat(t["date"]), today).lower() if t["date"] else "без даты")
         lines.append(f"• {esc(t['title'])} — {when}" + (f" · {t['time']}" if t["time"] else "")
-                     + (" ❗" if t["important"] else ""))
+                     + (" <b>!</b>" if t["important"] else ""))
     first = tasks[0]["date"]
-    replace(chat, mid, "\n".join(lines), with_app([], "Открыть в планере", f"/day/{first}" if first else "/week"))
+    replace(chat, mid, card("📷", f"Добавил {len(tasks)} {plural(len(tasks), 'задачу', 'задачи', 'задач')}", lines,
+                            "Поправить можно в планере"),
+            with_app([], "🗓 Открыть в планере", f"/day/{first}" if first else "/week"))
 
 
 # ---------- обработка ----------
@@ -554,13 +639,13 @@ def on_message(msg):
     if text.startswith("/start"):
         claim(uid)
     if not allowed(uid):
-        send(chat, "🔒 Это личный планер. Попроси владельца добавить тебя.")
+        send(chat, card("🔒", "Это личный планер", note="Попроси владельца добавить тебя"))
         return
     db.user(uid, frm.get("first_name"))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     today = today_of(uid)
     if cmd == "/start":
-        welcome(chat, frm.get("first_name"))
+        welcome(chat, frm.get("first_name"), today)
     elif cmd == "/help":
         send(chat, HELP, with_app([]))
     elif cmd == "/today":
@@ -568,22 +653,24 @@ def on_message(msg):
     elif cmd == "/tomorrow":
         send(chat, *day_view(uid, today + datetime.timedelta(days=1)))
     elif cmd == "/week":
-        send(chat, week_text(uid, today), with_app([], path="/week"))
+        send(chat, week_text(uid, today), with_app([[btn("📅 Сегодня с галочками", f"d|{today.isoformat()}")]],
+                                                   "🗓 Неделя в планере", "/week"))
     elif cmd == "/goals":
         send(chat, goals_text(uid), with_app([], "🎯 Открыть цели", "/goals"))
     elif cmd == "/app":
         if public_url:
-            send(chat, "🗓 Твой планер:", with_app([]))
+            send(chat, card("🗓", "Твой планер", note="Он же — кнопка «Планер» слева от поля ввода"),
+                 with_app([], "🗓 Открыть планер", style="primary"))
         else:
-            send(chat, "Приложение ещё запускается — пришлю кнопку, как только будет готово.")
+            send(chat, card("⏳", "Приложение запускается", note="Пришлю кнопку, как только будет готово"))
     elif cmd == "/status":
-        send(chat, f"🩺 Приложение: {esc(public_url or 'нет адреса')}\nСостояние: {esc(https_note)}")
+        send(chat, card("🩺", "Состояние", [f"Адрес: {esc(public_url or 'нет адреса')}", f"https: {esc(https_note)}"]))
     elif cmd == "/export":
         export(chat, uid)
     elif cmd == "/update" and uid == (owner() or min(ALLOWED or {0})):
         update(chat)
     elif cmd:
-        send(chat, "Такой команды нет. /help — что я умею.")
+        send(chat, "⚠️ Такой команды нет — /help подскажет, что я умею")
     elif media.kind(msg) == "voice":
         spawn(on_voice, chat, uid, msg)
     elif media.kind(msg) == "photo":
@@ -613,7 +700,7 @@ def on_callback(cq):
         elif kind == "u":  # отменить быстрое добавление
             t = db.task(uid, int(data[1]))
             db.delete_task(uid, int(data[1]))
-            edit(chat, mid, f"↩️ Отменил: <s>{esc(t['title'])}</s>" if t else "↩️ Отменил")
+            edit(chat, mid, card("↩️", "Отменено", f"<s>{esc(t['title'])}</s>" if t else None))
         elif kind == "m":  # перенести
             t = db.save_task(uid, {"id": int(data[1]), "date": None if data[2] == "-" else data[2]})
             edit(chat, mid, added_text(t, today), added_buttons(t, today))
@@ -621,22 +708,23 @@ def on_callback(cq):
         elif kind == "r":  # «сделано» из напоминания
             t = db.task(uid, int(data[1]))
             db.toggle(uid, int(data[1]), data[2], done=True)
-            edit(chat, mid, f"✅ <s>{esc(t['title'])}</s>\nОтлично!" if t else "✅")
+            edit(chat, mid, card("✅", "Сделано", f"<s>{esc(t['title'])}</s>" if t else None, "Отлично!"))
         elif kind == "c":  # перенести несделанное на завтра (из вечерних итогов)
             day = datetime.date.fromisoformat(data[1])
             nxt = (day + datetime.timedelta(days=1)).isoformat()
+            tasks = db.day(uid, day)  # как было в итогах — до переноса
             moved = 0
-            for t in db.day(uid, day):
+            for t in tasks:
                 if not t["done"] and not t["repeat"]:
                     db.move(uid, t["id"], nxt)
                     moved += 1
             note = f"Перенёс {moved} на завтра" if moved else "Нечего переносить"
-            edit(chat, mid, (msg.get("text") and esc(msg["text"]) or "") + f"\n\n➡️ <b>Перенёс на завтра: {moved}</b>",
-                 with_app([], path=f"/day/{nxt}"))
+            text = evening_text(uid, day, tasks, moved) if tasks else card("➡️", f"Перенёс на завтра: {moved}")
+            edit(chat, mid, text, with_app([], "🗓 План на завтра", f"/day/{nxt}"))
     except Exception as e:
         print("callback:", e)
         traceback.print_exc()
-        note = "Не получилось 😕"
+        note = "⚠️ Не получилось"
     tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
 
 
@@ -646,7 +734,7 @@ def export(chat, uid):
     b = uuid.uuid4().hex
     name = f"planner-{today_of(uid).isoformat()}.json"
     body = (f'--{b}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
-            f'--{b}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n💾 Копия всех твоих задач, целей и заметок\r\n'
+            f'--{b}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n💾 Копия задач, целей и заметок\r\n'
             f'--{b}\r\nContent-Disposition: form-data; name="document"; filename="{name}"\r\n'
             "Content-Type: application/json\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
     req = urllib.request.Request(API + "sendDocument", data=body, headers={"Content-Type": f"multipart/form-data; boundary={b}"})
@@ -657,9 +745,10 @@ def update(chat):
     def git(*a):
         return subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True)
     res = git("pull", "--ff-only", "origin", "main")
-    send(chat, esc((res.stdout + res.stderr).strip()[-1500:] or "ok"))
-    if res.returncode == 0:
-        send(chat, "Перезапускаюсь…")
+    ok = res.returncode == 0
+    send(chat, card("🔄", "Обновление" if ok else "Не обновилось", esc((res.stdout + res.stderr).strip()[-1500:] or "ok"),
+                    "Перезапускаюсь…" if ok else None))
+    if ok:
         tg("getUpdates", offset=offset, timeout=0)
         os._exit(0)  # pm2 поднимет заново
 
@@ -671,21 +760,46 @@ def morning(uid, chat, now):
     tasks = db.day(uid, day)
     u = db.user(uid)
     hello = "Доброе утро" + (f", {esc(u['name'])}" if u["name"] else "")
-    lines = [f"☀️ <b>{hello}!</b>", f"{human_date(day, day)} · {WEEKDAYS[day.weekday()].lower()}"]
     if tasks:
-        lines.append(f"\n📋 <b>План на день</b> — {len(tasks)} {plural(len(tasks), 'задача', 'задачи', 'задач')}")
-        lines += [task_line(t, show_done=False) for t in tasks[:15]]
+        body = [f"<b>План на день</b> · {len(tasks)} {plural(len(tasks), 'задача', 'задачи', 'задач')}"]
+        body += [task_line(t, show_done=False) for t in tasks[:15]]
+        if len(tasks) > 15:
+            body.append(f"<i>… и ещё {len(tasks) - 15}</i>")
     else:
-        lines.append("\nНа сегодня планов нет — можно добавить прямо сюда сообщением.")
-    late = db.overdue(uid, day)
-    if late:
-        lines.append(f"\n⏳ Висит с прошлых дней: {len(late)}")
+        body = ["На сегодня планов нет — напиши задачу прямо сюда."]
     goals = db.current_goals(uid, day)
     if goals:
-        lines.append("\n🎯 <b>Держим в фокусе</b>")
-        lines += [goal_line(uid, g) for g in goals[:5]]
-    send(chat, "\n".join(lines), with_app([[{"text": "✅ Отмечать в чате", "callback_data": f"d|{day.isoformat()}"}]],
-                                          path=f"/day/{day.isoformat()}"))
+        body += ["", "<b>В фокусе</b>"] + [goal_line(uid, g) for g in goals[:5]]
+    note = f"{WEEKDAYS[day.weekday()]}, {day.day} {MONTHS_GEN[day.month - 1]}"
+    late = db.overdue(uid, day)
+    if late:
+        note += f" · с прошлых дней висит {len(late)}"
+    rows = [[btn("✅ Отметить в чате", f"d|{day.isoformat()}")]]
+    app = app_button("🗓 Планер", f"/day/{day.isoformat()}")
+    if app:
+        rows[0].append(app)
+    send(chat, card("☀️", hello + "!", body, note), rows)
+
+
+def evening_text(uid, day, tasks, moved=None):
+    """Итоги дня по списку задач; moved — сколько уже перенесли на завтра (после кнопки)."""
+    done = [t for t in tasks if t["done"]]
+    left = [t for t in tasks if not t["done"]]
+    pct = round(100 * len(done) / len(tasks))
+    mood = "🔥 Идеальный день!" if not left else ("💪 Хороший день" if pct >= 60 else "🌱 Завтра будет лучше")
+    body = [f"<code>{bar(pct, 10)}</code> {len(done)} из {len(tasks)}", mood]
+    if left:
+        body += ["", "<b>Не успел</b>"] + [task_line(t, show_done=False) for t in left[:10]]
+    notes = []
+    if moved is not None:
+        notes.append(f"Перенёс на завтра: {moved}")
+    if day.weekday() == 6:  # воскресенье — ещё и неделя
+        mon = day - datetime.timedelta(days=6)
+        wt = [t for i in range(7) for t in db.day(uid, mon + datetime.timedelta(days=i))]
+        if wt:
+            wd = sum(t["done"] for t in wt)
+            notes.append(f"Неделя: {wd} из {len(wt)} ({round(100 * wd / len(wt))}%) — спланируй следующую")
+    return card("🌙", "Итоги дня", body, " · ".join(notes))
 
 
 def evening(uid, chat, now):
@@ -693,24 +807,11 @@ def evening(uid, chat, now):
     tasks = db.day(uid, day)
     if not tasks:
         return
-    done = [t for t in tasks if t["done"]]
-    left = [t for t in tasks if not t["done"]]
-    pct = round(100 * len(done) / len(tasks))
-    mood = "🔥 Идеальный день!" if not left else ("💪 Хороший день." if pct >= 60 else "🌱 Завтра будет лучше.")
-    lines = ["🌙 <b>Итоги дня</b>", f"<code>{bar(pct, 12)}</code>  {len(done)} из {len(tasks)}", "", mood]
-    if left:
-        lines.append("\n<b>Не успел:</b>")
-        lines += [task_line(t, show_done=False) for t in left[:10]]
-    if day.weekday() == 6:  # воскресенье — ещё и неделя
-        mon = day - datetime.timedelta(days=6)
-        wt = [t for i in range(7) for t in db.day(uid, mon + datetime.timedelta(days=i))]
-        if wt:
-            wd = sum(t["done"] for t in wt)
-            lines.append(f"\n📊 <b>Неделя:</b> {wd} из {len(wt)} ({round(100 * wd / len(wt))}%). Спланируй следующую 👇")
     rows = []
-    if any(not t["repeat"] for t in left):
-        rows.append([{"text": "➡️ Перенести несделанное на завтра", "callback_data": f"c|{day.isoformat()}"}])
-    send(chat, "\n".join(lines), with_app(rows, path=f"/day/{(day + datetime.timedelta(days=1)).isoformat()}"))
+    if any(not t["done"] and not t["repeat"] for t in tasks):
+        rows.append([btn("➡️ Перенести на завтра", f"c|{day.isoformat()}", "primary")])
+    nxt = (day + datetime.timedelta(days=1)).isoformat()
+    send(chat, evening_text(uid, day, tasks), with_app(rows, "🗓 План на завтра", f"/day/{nxt}"))
 
 
 def in_window(now, hhmm, minutes):
@@ -739,9 +840,9 @@ def tick():
                 fire = at - datetime.timedelta(minutes=t["remind"])
                 if fire <= now < fire + datetime.timedelta(minutes=10) and db.mark_sent(f"r:{t['id']}:{d}:{t['time']}:{t['remind']}"):
                     when = "Сейчас" if t["remind"] == 0 else f"Через {t['remind']} мин"
-                    note = f"\n\n<i>{esc(t['note'][:300])}</i>" if t["note"] else ""
-                    send(uid, f"⏰ <b>{when}</b> · {t['time']}\n{esc(t['title'])}{note}",
-                         [[{"text": "✅ Сделано", "callback_data": f"r|{t['id']}|{d.isoformat()}"}]])
+                    note = esc(" ".join(t["note"].split())[:200]) if t["note"] else None
+                    send(uid, card("⏰", f"{when} · {t['time']}", esc(t["title"]), note),
+                         [[btn("✅ Сделано", f"r|{t['id']}|{d.isoformat()}", "success")]])
         if in_window(now, u["morning"], 180) and db.mark_sent(f"m:{uid}:{iso}"):
             morning(uid, uid, now)
         if in_window(now, u["evening"], 120) and db.mark_sent(f"e:{uid}:{iso}"):
@@ -909,8 +1010,8 @@ def use_url(url):
         db.meta("app_url", url)
         if owner():
             try:
-                send(owner(), "✨ <b>Планер готов!</b>\n\nКнопка «Планер» теперь слева от поля ввода. "
-                              "Или открой прямо отсюда 👇", with_app([], "✨ Открыть планер"))
+                send(owner(), card("✨", "Планер готов", "Кнопка «Планер» теперь слева от поля ввода."),
+                     with_app([], "🗓 Открыть планер", style="primary"))
             except Exception as e:
                 print("notify:", e)
     return True
@@ -976,6 +1077,16 @@ def caddyfile(ip):
         # «Глаз» (eye/): страница разговора через очки
         f"https://eye.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{EYE_PORT}\n"
+        "}\n"
+        # мини-приложения других ботов: КПП (kpp/), Авито (avito/), Секретарь (tgbot/)
+        f"https://kpp.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{KPP_PORT}\n"
+        "}\n"
+        f"https://avito.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{AVITO_PORT}\n"
+        "}\n"
+        f"https://agent.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{AGENT_PORT}\n"
         "}\n"
     )
     return conf, [f"https://{host}", f"https://{ip}"]

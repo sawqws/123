@@ -12,3 +12,4 @@ avito/.venv/
 common/.venv/
 eye/data/
 eye/.venv/
+.claude/worktrees/

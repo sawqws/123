@@ -69,6 +69,32 @@ def esc(x):
     return html.escape(str(x), quote=False)
 
 
+# ---------- оформление сообщений ----------
+# Один стиль: жирный заголовок с одним эмодзи, суть — в цитате (длинная — свёрнутая),
+# второстепенное — одной строкой курсивом, ошибка — одна строка «⚠️ …».
+
+def quote(body):
+    """body — уже готовый HTML."""
+    body = str(body).strip()
+    tag = "blockquote expandable" if len(body) > 350 or body.count("\n") > 5 else "blockquote"
+    return f"<{tag}>{body}</blockquote>"
+
+
+def card(icon, title, body="", note=""):
+    """Сообщение: «icon <b>title</b>», цитата body (HTML), строка note курсивом (простой текст)."""
+    parts = [f"{icon} <b>{esc(title)}</b>"]
+    if body:
+        parts.append(quote(body))
+    if note:
+        parts.append(f"<i>{esc(note)}</i>")
+    return "\n".join(parts)
+
+
+def err(text):
+    text = " ".join(str(text).split()) or "что-то пошло не так"
+    return "⚠️ " + esc(text[:1].upper() + text[1:])
+
+
 # ---------- состояние ----------
 
 def load():
@@ -126,7 +152,8 @@ def tg(method, **params):
         with urllib.request.urlopen(req, timeout=70) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
-        print(method, e.code, e.read().decode(errors="replace")[:300])
+        e.body = e.read().decode(errors="replace")
+        print(method, e.code, e.body[:300])
         raise
 
 
@@ -145,11 +172,46 @@ def tg_file(method, field, name, data, ctype, **params):
         return json.load(r)
 
 
-def send(chat, text, buttons=None, **extra):
+def plain(buttons):
+    return [[{k: v for k, v in b.items() if k != "style"} for b in row] for row in buttons]
+
+
+def tg_markup(method, buttons, **params):
+    """Цветные кнопки ("style") — новинка Telegram; если сервер их не примет, шлём те же кнопки без цвета."""
     if buttons is not None:
-        extra["reply_markup"] = {"inline_keyboard": buttons}
-    return tg("sendMessage", chat_id=chat, text=text, parse_mode="HTML",
-              link_preview_options={"is_disabled": True}, **extra)
+        params["reply_markup"] = {"inline_keyboard": buttons}
+    try:
+        return tg(method, **params)
+    except urllib.error.HTTPError as e:
+        why = (getattr(e, "body", "") or "").lower()
+        if e.code != 400 or not buttons or not any(w in why for w in ("button", "markup", "keyboard", "style")):
+            raise
+        params["reply_markup"] = {"inline_keyboard": plain(buttons)}
+        return tg(method, **params)
+
+
+def send(chat, text, buttons=None, **extra):
+    return tg_markup("sendMessage", buttons, chat_id=chat, text=text, parse_mode="HTML",
+                     link_preview_options={"is_disabled": True}, **extra)
+
+
+def msg_id(res):
+    return ((res or {}).get("result") or {}).get("message_id")
+
+
+def put(chat, text, mid=None, buttons=None):
+    """Правка на месте: заглушка («Смотрю…», «вопрос») превращается в ответ; не вышло — новое сообщение."""
+    if mid:
+        try:
+            return tg_markup("editMessageText", buttons, chat_id=chat, message_id=mid, text=text,
+                             parse_mode="HTML", link_preview_options={"is_disabled": True})
+        except urllib.error.HTTPError as e:
+            if "not modified" in (getattr(e, "body", "") or ""):
+                return None  # «Обновить», а ничего не поменялось
+            print("edit:", e)
+        except Exception as e:
+            print("edit:", e)
+    return send(chat, text, buttons)
 
 
 def typing(chat, action="typing"):
@@ -166,8 +228,20 @@ def safari_link():
 def app_buttons():
     if not public_url:
         return []
-    return [[{"text": "👁 Открыть «Глаз»", "web_app": {"url": public_url + "/"}}],
+    return [[{"text": "👁 Открыть «Глаз»", "web_app": {"url": public_url + "/"}, "style": "primary"}],
             [{"text": "🧭 Открыть в Safari", "url": safari_link()}]]
+
+
+def menu_buttons():
+    """Под /start и /help: главное — открыть страницу; ниже — Safari и «Заново»."""
+    rows = app_buttons()[:1]
+    rows.append(([{"text": "🧭 В Safari", "url": safari_link()}] if public_url else []) +
+                [{"text": "🧹 Заново", "callback_data": "new"}])
+    return rows
+
+
+def status_buttons():
+    return [[{"text": "🔄 Обновить", "callback_data": "status"}]]
 
 
 def setup_bot():
@@ -203,19 +277,18 @@ def set_menu():
         return False
 
 
-HELP = (
-    "👁 <b>Глаз</b> — Claude смотрит через очки и отвечает голосом.\n\n"
-    "<b>Фото.</b> Сфоткал очками → в приложении Meta AI фото импортируется в «Фото» на iPhone → "
-    "отправь его сюда (можно несколько, можно с вопросом в подписи) или нажми «📷» на странице «Глаз». "
+HELP = card("👁", "Глаз", (
+    "Claude смотрит через твои очки и отвечает голосом в их динамики.\n\n"
+    "<b>Фото.</b> Снимки с очков Meta AI сохраняет в «Фото» iPhone — пришли их сюда, "
+    "можно несколько и с вопросом в подписи. "
     "Скажу, что это за здание, вещь или надпись.\n\n"
-    "<b>Разговор.</b> Кнопка «Глаз» слева от поля ввода → «🎙 Говорить». Дальше без рук: говоришь — "
-    "я слушаю, замолчал — отвечаю голосом. Очки подключены к iPhone по Bluetooth, поэтому слышно "
-    "в их динамиках, а микрофон — их. Экран не гаснет, пока открыта страница.\n"
-    "Если в Telegram микрофон не включается — открой ту же страницу в Safari (/link).\n\n"
-    "<b>Где ты.</b> Страница берёт GPS телефона — так я точнее узнаю здания. В чате можно прислать "
-    "геопозицию (📎 → Геопозиция).\n\n"
-    "/new — начать разговор заново · /status — проверка"
-)
+    "<b>Разговор.</b> Кнопка «Глаз» слева от поля ввода → «Говорить». Дальше без рук: "
+    "говоришь — слушаю, замолчал — отвечаю. Очки подключены к iPhone по Bluetooth, "
+    "поэтому микрофон и звук — их.\n\n"
+    "<b>Место.</b> Страница берёт GPS телефона — так точнее узнаю здания. "
+    "В чате: 📎 → Геопозиция.\n\n"
+    "<b>Нет микрофона в Telegram?</b> Открой ту же страницу в Safari: /link"
+), "/new — разговор заново · /status — проверка")
 
 
 # ---------- память разговора и фото ----------
@@ -348,8 +421,8 @@ def update_photo(pid, **fields):
         save(st)
 
 
-def analyze(rec, question="", chat=None):
-    """Разбор фото: в разговор, на страницу (вслух) и в чат."""
+def analyze(rec, question="", chat=None, wait=None):
+    """Разбор фото: в разговор, на страницу (вслух) и в чат. wait — заглушка «Смотрю…», её правим на месте."""
     pid = rec["id"]
     spot = rec.get("where")
     try:
@@ -359,13 +432,13 @@ def analyze(rec, question="", chat=None):
     except ai.AIError as e:
         push_event("error", text=str(e))
         if chat:
-            send(chat, f"😕 {esc(e)}")
+            put(chat, err(e), wait)
         return
     except Exception as e:
         traceback.print_exc()
         push_event("error", text="не получилось разобрать фото")
         if chat:
-            send(chat, f"😕 Не получилось разобрать фото: {esc(e)}")
+            put(chat, err(f"Не получилось разобрать фото: {e}"), wait)
         return
     update_photo(pid, text=res["text"], say=res["say"], title=res["title"], place=place)
     remember("user", f"[фото {res['title'] or ''}]" + (f" {question}" if question else ""))
@@ -374,8 +447,8 @@ def analyze(rec, question="", chat=None):
     push_event("photo", photo=pid, say=res["say"], text=res["text"], title=res["title"], audio=keep_audio(mp3))
     chat = chat or chat_id()
     if chat:
-        head = f"👁 <b>{esc(res['title'])}</b>\n\n" if res["title"] else "👁 "
-        send(chat, head + esc(res["text"]) + (f"\n\n📍 <i>{esc(place)}</i>" if place else ""))
+        put(chat, card("👁", res["title"] or "Что на фото", esc(res["text"]),
+                       f"📍 {place}" if place else ""), wait)
         if mp3 and not page_open():
             voice_reply(chat, mp3)
 
@@ -420,11 +493,10 @@ def on_photo(msg):
     try:
         data, _ = download(fid)
     except Exception as e:
-        return send(chat, f"😕 Не скачал фото: {esc(e)}")
+        return send(chat, err(f"Не скачал фото: {e}"))
     rec = add_photo(data, source="chat")
-    if not msg.get("media_group_id"):
-        send(chat, "👀 Смотрю…")
-    analyze(rec, (msg.get("caption") or "").strip(), chat)
+    wait = None if msg.get("media_group_id") else msg_id(send(chat, "👀 <b>Смотрю…</b>"))
+    analyze(rec, (msg.get("caption") or "").strip(), chat, wait)
 
 
 def on_voice(msg):
@@ -435,23 +507,27 @@ def on_voice(msg):
         data, ext = download(obj["file_id"])
         text = speech.hear(data, ext)
     except speech.SpeechError as e:
-        return send(chat, f"🎙 {esc(e)}")
+        return send(chat, err(e))
     except Exception as e:
-        return send(chat, f"🎙 Не получилось: {esc(e)}")
+        return send(chat, err(f"Не получилось: {e}"))
     if not text:
-        return send(chat, "🎙 Не слышно слов — скажи ещё раз.")
-    send(chat, f"🎙 <i>«{esc(text)}»</i>")
-    reply_in_chat(chat, text, voice=True)
+        return send(chat, err("Не слышно слов — скажи ещё раз."))
+    wait = msg_id(send(chat, f"🎙 <i>«{esc(text)}»</i>"))
+    reply_in_chat(chat, text, voice=True, wait=wait)
 
 
-def reply_in_chat(chat, text, voice=False):
+def reply_in_chat(chat, text, voice=False, wait=None):
+    """Ответ в чат. На голосовое сообщение с услышанным правится на месте в ответ."""
     typing(chat)
     try:
         say, mp3 = answer(text)
     except ai.AIError as e:
-        return send(chat, f"😕 {esc(e)}")
+        return send(chat, err(e))
     push_event("talk", heard=text, say=say)
-    send(chat, esc(say))
+    if voice:
+        put(chat, card("🎙", "Ответ", esc(say), f"«{text}»"), wait)
+    else:
+        send(chat, card("💬", "Ответ", esc(say)))
     if voice and mp3:
         voice_reply(chat, mp3)
 
@@ -467,7 +543,7 @@ def status_text():
         ("Фото в памяти", str(len(st.get("photos") or []))),
         ("Место", place_now() or "неизвестно (открой страницу или пришли геопозицию)"),
     ]
-    return "🩺 <b>Проверка</b>\n\n" + "\n".join(f"• {k}: {esc(v)}" for k, v in rows)
+    return card("🩺", "Проверка", "\n".join(f"• {esc(k)} — {esc(v)}" for k, v in rows))
 
 
 def _has(module):
@@ -476,6 +552,11 @@ def _has(module):
         return True
     except ImportError:
         return False
+
+
+def not_ready():
+    note = https_note[:1].upper() + https_note[1:]
+    return card("⏳", "Страница ещё настраивается", note=f"{note}. Загляни через пару минут.")
 
 
 def on_message(msg):
@@ -498,31 +579,50 @@ def on_message(msg):
     if msg.get("location"):
         loc = msg["location"]
         save_where(loc["latitude"], loc["longitude"])
-        return send(chat, "📍 Запомнил, где ты: " + esc(place_now() or "координаты получил") +
-                    "\n<i>Верю этому месту 20 минут — для прогулки лучше трансляция геопозиции.</i>")
+        return send(chat, card("📍", "Запомнил, где ты", esc(place_now() or "координаты получил"),
+                               "Верю месту 20 минут — на прогулке лучше трансляция геопозиции."))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     if cmd in ("/start", "/help"):
-        send(chat, HELP, app_buttons() or None)
+        send(chat, HELP, menu_buttons())
     elif cmd == "/app":
         if public_url:
-            send(chat, "👁 Открой «Глаз» и нажми «🎙 Говорить».", app_buttons())
+            send(chat, card("👁", "Глаз", note="Открой и нажми «Говорить» — дальше без рук."), app_buttons())
         else:
-            send(chat, "⏳ Страница ещё настраивается (" + esc(https_note) + "). Загляни через пару минут.")
+            send(chat, not_ready())
     elif cmd == "/link":
         if public_url:
-            send(chat, "🧭 Ссылка для Safari — личная, никому не пересылай:\n" + esc(safari_link()) +
-                 "\n\nВ Safari: «Поделиться» → «На экран „Домой“» — будет как приложение.")
+            send(chat, card("🧭", "Ссылка для Safari", f"<code>{esc(safari_link())}</code>",
+                            "Личная — не пересылай. «Поделиться» → «На экран „Домой“» — будет как приложение."))
         else:
-            send(chat, "⏳ Страница ещё настраивается (" + esc(https_note) + ").")
+            send(chat, not_ready())
     elif cmd == "/new":
         setting("history", [])
-        send(chat, "🧹 Начали разговор заново. Фото помню.")
+        send(chat, card("🧹", "Начали разговор заново", note="Фото помню."))
     elif cmd == "/status":
-        send(chat, status_text())
+        send(chat, status_text(), status_buttons())
     elif text and not cmd:
         threading.Thread(target=reply_in_chat, args=(chat, text), daemon=True).start()
     else:
-        send(chat, HELP, app_buttons() or None)
+        send(chat, HELP, menu_buttons())
+
+
+def on_callback(cb):
+    """Кнопки под сообщениями: «🧹 Заново» — всплывашка без нового сообщения, «🔄 Обновить» — правка на месте."""
+    msg = cb.get("message") or {}
+    chat = (msg.get("chat") or {}).get("id")
+    note = ""
+    if not allowed((cb.get("from") or {}).get("id")):
+        note = "🔒 Это личный бот."
+    elif cb.get("data") == "new":
+        setting("history", [])
+        note = "🧹 Начали заново. Фото помню."
+    elif cb.get("data") == "status" and chat:
+        put(chat, status_text(), msg.get("message_id"), status_buttons())
+        note = "Обновлено"
+    try:
+        tg("answerCallbackQuery", callback_query_id=cb["id"], text=note)
+    except Exception as e:
+        print("callback:", e)
 
 
 # ---------- веб: страница разговора ----------
@@ -726,8 +826,8 @@ def use_url(url):
         setting("app_url", url)
         if chat_id():
             try:
-                send(chat_id(), "👁 <b>«Глаз» готов!</b>\n\nКнопка «Глаз» — слева от поля ввода. "
-                                "Открой и нажми «🎙 Говорить».", app_buttons())
+                send(chat_id(), card("👁", "«Глаз» готов", note="Кнопка «Глаз» — слева от поля ввода. "
+                                                                 "Открой и нажми «Говорить»."), app_buttons())
             except Exception as e:
                 print("notify:", e)
     return True
@@ -836,7 +936,7 @@ def main():
     print(f"{NAME} запущен")
     while True:
         try:
-            upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message"])
+            upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
         except Exception as e:
             print("getUpdates:", e)
             time.sleep(5)
@@ -846,6 +946,8 @@ def main():
             try:
                 if u.get("message"):
                     on_message(u["message"])
+                elif u.get("callback_query"):
+                    on_callback(u["callback_query"])
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()

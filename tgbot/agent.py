@@ -11,7 +11,10 @@ tgbot/tg.py -> этот агент -> Telethon. Всё, что меняет Tele
   TG_API_ID, TG_API_HASH  ключи приложения с my.telegram.org; если их нет, бот сам получит их при входе
                        в аккаунт (tgbot/get_api.py) и сохранит в tgbot/tmp/settings.json
   TG_ALLOWED_ID        Telegram ID Глеба; если пусто — владелец тот, кто первым нажмёт /start
+  TG_AGENT_PORT        порт мини-приложения на 127.0.0.1 (по умолчанию 8794), см. tgbot/web.py
+  TG_AGENT_URL         свой https-адрес приложения; если пусто — https://agent.<ip-через-дефисы>.sslip.io
 Вход в аккаунт — в самом боте (/login), сессия лежит в tgbot/tmp/ и в репозиторий не попадает.
+Два равноправных интерфейса: чат с кнопками и мини-приложение (tgbot/webapp/, кнопка слева от поля ввода, /app).
 """
 import asyncio
 import datetime
@@ -29,6 +32,7 @@ import actions
 import get_api
 import jobs
 import ui
+import web
 from botapi import Bot, BotError, Button
 from ui import card, esc
 
@@ -48,6 +52,8 @@ BANNER = os.path.join(HERE, "art", "banner.jpg")
 AVATAR = os.path.join(HERE, "art", "avatar.jpg")
 CLAUDE_TIMEOUT = 20 * 60
 CONFIRM_TIMEOUT = 10 * 60
+PORT = int(os.environ.get("TG_AGENT_PORT") or 8794)
+HISTORY_KEEP = 30
 
 BTN_MISSED = "📬 Что я пропустил"
 BTN_PSY = "🧠 Разбор чата"
@@ -63,12 +69,13 @@ ASK_MISSED = ("Посмотри непрочитанные чаты (chats --unr
 ASK_SORT = "Разложи мои чаты по папкам, как в твоих правилах."
 ASK_PSY = "Сделай психологический разбор: {}. Как в твоих правилах, с цитатами и советами."
 
-EXAMPLES = ("«Что мне писали сегодня?»\n"
-            "«Ответьте Пете, что буду в 6»\n"
-            "«Объясните, как решать квадратные уравнения»\n"
-            "«Найдите, во сколько завтра закрывается Декатлон»\n"
-            "«Разберите как психолог мою переписку с Сашей»\n"
-            "«Каждый будний день в 7:00 пишите маме „доброе утро“»")
+EXAMPLE_LIST = ["Что мне писали сегодня?",
+                "Ответьте Пете, что буду в 6",
+                "Объясните, как решать квадратные уравнения",
+                "Найдите, во сколько завтра закрывается Декатлон",
+                "Разберите как психолог мою переписку с Сашей",
+                "Каждый будний день в 7:00 пишите маме „доброе утро“"]
+EXAMPLES = "\n".join(f"«{e}»" for e in EXAMPLE_LIST)
 HELP = (
     "<b>✦ Чем я могу помочь</b>\n\n"
     "Пишите или говорите голосовым — как секретарю.\n"
@@ -79,7 +86,8 @@ HELP = (
     "<b>🧠 Разбор переписок</b> — роли, тон, скрытые конфликты, советы\n"
     "<b>👥 Группы и порядок</b> — участники, админы, папки, архив\n"
     "<b>⏰ Поручения по времени</b> — сообщения по расписанию\n"
-    "<b>📝 Память</b> — скажите «запомните…», и я учту это дальше\n\n"
+    "<b>📝 Память</b> — скажите «запомните…», и я учту это дальше\n"
+    "<b>📱 Приложение</b> — то же самое на одном экране: /app\n\n"
     "<i>Всё, что меняет что-то в Telegram, сначала покажу и спрошу.</i>"
 )
 ABOUT = "Личный секретарь: вопросы, голосовые, ваш Telegram, поручения по времени."
@@ -87,8 +95,9 @@ DESCRIPTION = ("✦ Личный секретарь.\n\n"
                "Отвечаю на вопросы, ищу в интернете, понимаю голосовые. Веду ваш Telegram: "
                "пересказываю чаты, отвечаю, навожу порядок и отправляю сообщения по расписанию.\n\n"
                "Ничего не меняю без вашего «да».")
-COMMANDS = [("start", "главная"), ("menu", "меню и статус"), ("jobs", "расписание"), ("new", "новый разговор"),
-            ("stop", "остановить"), ("check", "проверка"), ("login", "войти в аккаунт"), ("help", "что я умею")]
+COMMANDS = [("start", "главная"), ("menu", "меню и статус"), ("app", "приложение"), ("jobs", "расписание"),
+            ("new", "новый разговор"), ("stop", "остановить"), ("check", "проверка"), ("login", "войти в аккаунт"),
+            ("help", "что я умею")]
 
 
 # Ключи официального Telegram Desktop — открыты в его исходном коде. Запасной путь, когда my.telegram.org
@@ -144,6 +153,15 @@ def dots(code, n):
 
 
 class Agent:
+    # для мини-приложения (tgbot/web.py): те же поручения, что у кнопок чата
+    ASK_MISSED, ASK_SORT, ASK_PSY = ASK_MISSED, ASK_SORT, ASK_PSY
+    BTN_MISSED, BTN_SORT = BTN_MISSED, BTN_SORT
+    EXAMPLE_LIST = EXAMPLE_LIST
+    run = None             # текущее или последнее поручение: шаги, состояние, ответ
+    confirm_text = ""      # о чём сейчас спрашиваем «Да/Нет» в чате
+    app_url = None         # https-адрес мини-приложения, когда он отвечает
+    web = None
+
     def __init__(self, token, api_id=0, api_hash="", allowed=0):
         os.makedirs(TMP, exist_ok=True)
         os.makedirs(WORK, exist_ok=True)
@@ -162,6 +180,7 @@ class Agent:
         self.login = None      # шаги входа: {"step": "phone"|"code"|"password", ...}
         self.psy = False       # ждём, какой чат разобрать
         self.jobs = jobs.Store(os.path.join(TMP, "jobs.json"))
+        self.history = self.load_history()
 
     # ---------- основа ----------
 
@@ -169,14 +188,65 @@ class Agent:
         return self.allowed or int(load_settings().get("owner") or 0)
 
     async def say(self, text, **kw):
-        """HTML-сообщение владельцу; длинное режется на части (кнопки — у последней)."""
+        """HTML-сообщение владельцу; длинное режется на части (кнопки — у последней).
+        Если Telegram не принял разметку — та же часть простым текстом, чтобы ответ не потерялся."""
         buttons = kw.pop("buttons", None)
         parts = ui.split_html(text) or ["…"]
         msg = None
         for i, part in enumerate(parts):
-            msg = await self.bot.send_message(self.owner(), part, parse_mode="html", link_preview=False,
-                                              buttons=buttons if i == len(parts) - 1 else None, **kw)
+            btn = buttons if i == len(parts) - 1 else None
+            try:
+                msg = await self.bot.send_message(self.owner(), part, parse_mode="html", link_preview=False,
+                                                  buttons=btn, **kw)
+            except BotError as e:
+                if "parse" not in str(e).lower() and "entit" not in str(e).lower():
+                    raise
+                print("say: разметка не принята —", e, flush=True)
+                msg = await self.bot.send_message(self.owner(), ui.plain(part)[:4096], parse_mode=None,
+                                                  link_preview=False, buttons=btn, **kw)
         return msg
+
+    # ---------- история, память — общие для чата и приложения ----------
+
+    @staticmethod
+    def history_path():
+        return os.path.join(TMP, "history.json")
+
+    def load_history(self):
+        try:
+            with open(self.history_path()) as f:
+                h = json.load(f)
+            return h if isinstance(h, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def remember(self, run):
+        self.history.append({k: run.get(k) for k in ("id", "q", "state", "html", "secs", "source")}
+                            | {"steps": len(run.get("steps") or []),
+                               "at": datetime.datetime.now(actions.MSK).strftime("%d.%m %H:%M")})
+        self.history = self.history[-HISTORY_KEEP:]
+        try:
+            tmp = self.history_path() + ".new"
+            with open(tmp, "w") as f:
+                json.dump(self.history, f, ensure_ascii=False)
+            os.replace(tmp, self.history_path())
+        except OSError as e:
+            print("history:", repr(e), flush=True)
+
+    @staticmethod
+    def memory_path():
+        return MEMORY
+
+    def save_memory(self, text):
+        text = text.replace("\r\n", "\n").strip()
+        tmp = MEMORY + ".new"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text + ("\n" if text else ""))
+        os.replace(tmp, MEMORY)
+
+    @staticmethod
+    def session_active():
+        return bool(load_settings().get("session"))
 
     @staticmethod
     def make_client(api_id, api_hash):
@@ -210,9 +280,11 @@ class Agent:
         cid = uuid.uuid4().hex[:10]
         fut = asyncio.get_running_loop().create_future()
         self.waiting[cid] = fut
+        self.confirm_text = text  # мини-приложение покажет «ждёт подтверждения в чате»
         buttons = [[Button.inline("Да", f"ok:{cid}", style="success"), Button.inline("Нет", f"no:{cid}", style="danger")],
-                   [Button.inline("⚡ Да на всё в этом запросе", f"all:{cid}")]]
-        msg = await self.bot.send_message(self.owner(), self.confirm_card(text), buttons=buttons)
+                   [Button.inline("⚡ Да на всё", f"all:{cid}")]]
+        msg = await self.bot.send_message(self.owner(), self.confirm_card(text, "«Да на всё» — до конца этого поручения"),
+                                          buttons=buttons)
         try:
             ans = await asyncio.wait_for(fut, CONFIRM_TIMEOUT)
         except asyncio.TimeoutError:
@@ -220,6 +292,8 @@ class Agent:
             await msg.edit(self.confirm_card(text, "⌛ не дождался ответа — не делаю"), buttons=None, parse_mode="html")
         finally:
             self.waiting.pop(cid, None)
+            if not self.waiting:
+                self.confirm_text = ""
         if ans == "all":
             self.trust = True
         if ans == "no":
@@ -271,10 +345,33 @@ class Agent:
 
     # ---------- меню-панель ----------
 
+    def app_button(self):
+        """«📱 Приложение»: открывает мини-приложение, а пока https-адреса нет — объясняет, почему."""
+        if self.app_url:
+            return Button.web_app("📱 Приложение", self.app_url + "/")
+        return Button.inline("📱 Приложение", "m:app")
+
+    def app_card(self):
+        if self.app_url:
+            return (card("📱 Приложение", "Главная, поручения, расписание и память — на одном экране.\n"
+                         "Подтверждения «Да/Нет» по-прежнему приходят сюда, в чат."),
+                    [[Button.web_app("📱 Открыть приложение", self.app_url + "/")]])
+        return card("📱 Приложение", "Пока не открывается: ещё не готов https-адрес сервера. "
+                    "Как только он заработает, я напишу, а кнопка появится слева от поля ввода.\n\n"
+                    "Всё то же самое доступно здесь, в чате.", "/check — проверка"), None
+
+    def memory_card(self):
+        text = web.read_memory(MEMORY).strip()
+        if len(text) > 3000:
+            text = text[:3000].rsplit("\n", 1)[0] + "\n…"
+        body = esc(text) if text else "Пока пусто. Скажите, например: «запомните, что тренировки по вторникам в 18:00»."
+        return card("📝 Память", body, "править — словами в чате или в приложении")
+
     async def dashboard(self):
         if not await self.authorized():
-            return card("✦ Агент", "👤 Аккаунт не подключён"), [[Button.inline("🔑 Войти в аккаунт", "login:", style="primary")],
-                                                                  [Button.inline("❓ Что я умею", "m:help")]]
+            return card("✦ Секретарь", "👤 Аккаунт не подключён\nНа вопросы отвечаю и без него."), [
+                [Button.inline("🔑 Войти в аккаунт", "login:", style="primary")],
+                [self.app_button(), Button.inline("❓ Что я умею", "m:help")]]
         me = await self.client.get_me()
         ds = await actions.dialogs(self, fresh=True)
         unread = [d for d in ds if d.unread_count and not d.archived]
@@ -285,15 +382,22 @@ class Agent:
                  f"💬 Непрочитано: {ui.plural(len(unread), 'чат', 'чата', 'чатов')}"
                  + (f" · {ui.plural(mentions, 'упоминание', 'упоминания', 'упоминаний')}" if mentions else ""),
                  f"⏰ Расписаний: {len(js)}" + (f" · ближайшее {datetime.datetime.fromisoformat(nxt).astimezone(actions.MSK):%d.%m %H:%M}" if nxt else ""),
-                 "🧠 Разговор: " + ("продолжается" if load_settings().get("session") else "новый")]
-        buttons = [[Button.inline("🆕 Новый разговор", "m:new"), Button.inline("🩺 Проверка", "m:check")],
-                   [Button.inline("⏰ Расписание", "m:jobs"), Button.inline("❓ Что я умею", "m:help")],
-                   [Button.inline("🔄 Обновить бота", "m:update"), Button.inline("Выйти", "m:logout", style="danger")]]
-        return card("✦ Агент", "\n".join(lines), datetime.datetime.now(actions.MSK).strftime("обновлено в %H:%M")), buttons
+                 "🧠 Разговор: " + ("продолжается" if self.session_active() else "новый")]
+        buttons = [[self.app_button()],
+                   [Button.inline("🆕 Новый разговор", "m:new"), Button.inline("🩺 Проверка", "m:check")],
+                   [Button.inline("⏰ Расписание", "m:jobs"), Button.inline("📝 Память", "m:memory")],
+                   [Button.inline("❓ Что я умею", "m:help"), Button.inline("🔄 Обновить бота", "m:update")],
+                   [Button.inline("Выйти из аккаунта", "m:logout", style="danger")]]
+        return card("✦ Секретарь", "\n".join(lines), datetime.datetime.now(actions.MSK).strftime("обновлено в %H:%M")), buttons
 
     async def on_menu(self, ev, arg):
         back = [[Button.inline("← Назад", "m:home")]]
-        if arg == "home":
+        if arg == "app":
+            text, buttons = self.app_card()
+            await ev.edit(text, buttons=(buttons or []) + back, parse_mode="html")
+        elif arg == "memory":
+            await ev.edit(self.memory_card(), buttons=back, parse_mode="html")
+        elif arg == "home":
             text, buttons = await self.dashboard()
             await ev.edit(text, buttons=buttons, parse_mode="html")
         elif arg == "new":
@@ -329,10 +433,15 @@ class Agent:
         if not js:
             return card("⏰ Расписание", "Пока пусто. Напишите, например:\n«каждый будний день в 7:00 пиши маме доброе утро»"), []
         lines = []
-        for i, j in enumerate(js, 1):
+        shown = js[:12]  # карточку правим на месте — она должна влезть в одно сообщение
+        for i, j in enumerate(shown, 1):
             nxt = datetime.datetime.fromisoformat(j["next"]).astimezone(actions.MSK)
-            lines.append(f"<b>{i}.</b> {esc(jobs.describe(j))}\n    <i>дальше {nxt:%d.%m %H:%M} · отправлено {j.get('sent', 0)}</i>")
-        dels = [Button.inline(f"🗑 {i}", f"j:ask:{j['id']}") for i, j in enumerate(js, 1)]
+            d = jobs.describe(j)
+            d = d if len(d) <= 220 else d[:220].rstrip() + "…"
+            lines.append(f"<b>{i}.</b> {esc(d)}\n<i>дальше {nxt:%d.%m %H:%M} · отправлено {j.get('sent', 0)}</i>")
+        if len(js) > len(shown):
+            lines.append(f"<i>…и ещё {len(js) - len(shown)} — полный список в приложении</i>")
+        dels = [Button.inline(f"🗑 {i}", f"j:ask:{j['id']}") for i, j in enumerate(shown, 1)]
         return card("⏰ Расписание", "\n\n".join(lines), "чтобы добавить — просто напишите мне"), [dels[i:i + 4] for i in range(0, len(dels), 4)]
 
     async def on_jobs(self, ev, arg):
@@ -383,50 +492,76 @@ class Agent:
 
     # ---------- Claude ----------
 
-    async def ask(self, text):
+    def begin(self, text, title=None, source="chat"):
+        """Занять секретаря поручением. None — уже занят. Чат и приложение идут одним путём: begin -> work."""
         if self.busy:
+            return None
+        self.busy, self.trust = True, False
+        self.run = {"id": uuid.uuid4().hex[:8], "q": (title or text).strip()[:300], "text": text, "state": "work",
+                    "steps": [], "started": time.time(), "source": source}
+        return self.run
+
+    async def ask(self, text, title=None, source="chat"):
+        run = self.begin(text, title, source)
+        if run is None:
             await self.say(card("⏳ Ещё занимаюсь прошлым поручением", "Дождитесь ответа или нажмите «Остановить» под статусом."))
             return
-        self.busy, self.trust = True, False
-        started, steps = time.monotonic(), []
-        stop_btn = [[Button.inline("Остановить", "stop:", style="danger")]]
-        status = await self.say(ui.status(steps, 0), buttons=stop_btn)
-        shown = ""
+        await self.work(run)
 
-        async def ticker():
-            nonlocal shown
-            while True:
-                await asyncio.sleep(3)
-                text_ = ui.status(steps, int(time.monotonic() - started))
-                if text_ != shown:
-                    try:
-                        await status.edit(text_, buttons=stop_btn, parse_mode="html")
-                        shown = text_
-                    except BotError:
-                        pass
+    async def work(self, run):
+        """Живой статус в чате (его же видит приложение через self.run), потом ответ — в чат и в историю."""
+        started, steps, status, tick = time.monotonic(), run["steps"], None, None
+        stop_btn = [[Button.inline("Остановить", "stop:", style="danger")]]
+        ok, out = False, "Не получилось. Попробуйте ещё раз."
 
         def on_step(s):
             if not steps or steps[-1] != s:
                 steps.append(s)
 
-        tick = asyncio.create_task(ticker())
         try:
+            status = await self.say(ui.status(steps, 0), buttons=stop_btn)
+            shown = ""
+
+            async def ticker():
+                nonlocal shown
+                while True:
+                    await asyncio.sleep(3)
+                    text_ = ui.status(steps, int(time.monotonic() - started))
+                    if text_ != shown:
+                        try:
+                            await status.edit(text_, buttons=stop_btn, parse_mode="html")
+                            shown = text_
+                        except BotError:
+                            pass
+
+            tick = asyncio.create_task(ticker())
             async with self.bot.action(self.owner(), "typing"):
-                ok, out = await self.run_claude(text, on_step=on_step)
+                ok, out = await self.run_claude(run["text"], on_step=on_step)
+        except Exception as e:  # не оставляем секретаря «занятым» навсегда
+            print("ask:", repr(e), flush=True)
         finally:
-            tick.cancel()
+            if tick:
+                tick.cancel()
             self.busy, self.trust, self.proc = False, False, None
             self.cancel_waiting()
-            try:
-                await status.delete()
-            except BotError:
-                pass
+            if status:
+                try:
+                    await status.delete()
+                except BotError:
+                    pass
         secs = int(time.monotonic() - started)
+        run["secs"], run["ended"] = secs, time.time()
         if ok:
+            body = ui.md(out)
+            run.update(state="done", html=body)
             foot = f"✦ {secs // 60}:{secs % 60:02d}" + (f" · {ui.plural(len(steps), 'шаг', 'шага', 'шагов')}" if steps else "")
-            await self.say(ui.md(out) + f"\n\n<i>{foot}</i>")
+            self.remember(run)
+            await self.say(body + f"\n\n<i>{foot}</i>")
         else:
-            await self.say(out if out.startswith("<b>") else oops(out))
+            msg = out if out.startswith("<b>") else oops(out)
+            run.update(state="stopped" if run.get("stop") else "error", html=msg)
+            self.remember(run)
+            await self.say(msg)
 
     async def run_claude(self, text, resume=True, on_step=None):
         now = datetime.datetime.now(actions.MSK).strftime("%d.%m.%Y %H:%M, %A")
@@ -492,6 +627,8 @@ class Agent:
 
     async def stop(self, quiet=False):
         self.cancel_waiting()
+        if self.run and self.run["state"] == "work":
+            self.run["stop"] = True
         if self.proc and self.proc.returncode is None:
             self.stopped = True
             self.proc.kill()
@@ -572,8 +709,8 @@ class Agent:
                             "<b>🖥 Как Telegram Desktop</b> — сразу, без my.telegram.org.\n"
                             "<b>🔑 Свои ключи</b> — через my.telegram.org; с серверов и VPN сайт часто отвечает «ERROR».",
                             "/cancel — отмена"),
-                       buttons=[[Button.inline("🖥 Войти как Telegram Desktop", "login:desktop", style="primary")],
-                                [Button.inline("🔑 Свои ключи (my.telegram.org)", "login:own")]])
+                       buttons=[[Button.inline("🖥 Как Telegram Desktop", "login:desktop", style="primary")],
+                                [Button.inline("🔑 Свои ключи", "login:own")]])
 
     async def on_login_choice(self, ev, arg):
         if arg == "desktop":
@@ -885,6 +1022,8 @@ class Agent:
             p.kill()
             lines.append("✕ Claude — не ответил за 2 минуты")
         lines.append(f"✓ Расписаний — {len(self.jobs.load())}")
+        lines.append("✓ Приложение — " + esc(self.app_url) if self.app_url
+                     else "◌ Приложение — ждёт https-адрес" + (f" (порт {self.web.port} слушает)" if self.web else ""))
         head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
         return card("🩺 Проверка", "\n".join(lines), f"версия {head}")
 
@@ -976,6 +1115,11 @@ class Agent:
         elif text in (BTN_JOBS, "/jobs"):
             body, buttons = self.jobs_card()
             await self.say(body, buttons=buttons or None)
+        elif text == "/app":
+            body, buttons = self.app_card()
+            await self.say(body, buttons=buttons)
+        elif text == "/memory":
+            await self.say(self.memory_card())
         elif text == "/login":
             await self.start_login()
         elif text == "/logout":
@@ -993,18 +1137,50 @@ class Agent:
             await self.say(card("🔄 Обновляюсь…"))
             await self.update()
         elif text == BTN_MISSED:
-            asyncio.create_task(self.ask(ASK_MISSED))
+            asyncio.create_task(self.ask(ASK_MISSED, BTN_MISSED))
         elif text == BTN_SORT:
-            asyncio.create_task(self.ask(ASK_SORT))
+            asyncio.create_task(self.ask(ASK_SORT, BTN_SORT))
         elif text == BTN_PSY:
             self.psy = True
             await self.say(card("🧠 Разбор чата", "Какой чат или кого разобрать? Можно с уточнением:\n"
                                 "«группа 8Б за месяц, как ко мне относятся»", "/cancel — отмена"))
         elif self.psy and text:
             self.psy = False
-            asyncio.create_task(self.ask(ASK_PSY.format(text)))
+            asyncio.create_task(self.ask(ASK_PSY.format(text), f"🧠 Разбор: {text}"))
         elif text:
             asyncio.create_task(self.ask(text))  # не блокируем: пока Claude думает, нужны кнопки «Да/Нет»
+
+    # ---------- мини-приложение: кнопка слева от поля ввода ----------
+
+    async def set_menu_button(self, url):
+        button = {"type": "web_app", "text": "Секретарь", "web_app": {"url": url + "/"}} if url else {"type": "commands"}
+        await self.bot.call("setChatMenuButton", chat_id=self.owner(), menu_button=button)
+
+    async def app_link(self):
+        """Как только https-адрес отвечает (Caddy проксирует его на PORT) — ставим кнопку приложения владельцу.
+        Адрес пропал надолго (3 проверки подряд) — возвращаем обычное меню команд."""
+        url, fails = None, 0
+        while True:
+            try:
+                url = url or await asyncio.to_thread(web.public_url)
+                ok = bool(url) and await asyncio.to_thread(web.healthy, url)
+                fails = 0 if ok else fails + 1
+                if ok and self.owner() and self.app_url != url:
+                    await self.set_menu_button(url)
+                    self.app_url = url
+                    s = load_settings()
+                    if s.get("app_url") != url:  # первый раз — рассказать
+                        s["app_url"] = url
+                        save_settings(s)
+                        await self.say(card("📱 Приложение готово", "Кнопка «Секретарь» — слева от поля ввода, или /app.\n"
+                                            "Чат с кнопками работает как прежде."),
+                                       buttons=[[Button.web_app("📱 Открыть", url + "/")]])
+                elif not ok and self.app_url and fails >= 3:
+                    self.app_url = None
+                    await self.set_menu_button(None)
+            except Exception as e:
+                print("app link:", repr(e), flush=True)
+            await asyncio.sleep(600 if self.app_url else 120)
 
     async def main(self):
         await self.bot.get_me()  # неверный токен — падаем сразу, pm2 покажет ошибку
@@ -1012,6 +1188,14 @@ class Agent:
             await self.client.connect()
         await self.serve()
         asyncio.create_task(self.scheduler())
+        try:
+            self.web = web.Web(self)
+            await self.web.start("127.0.0.1", PORT)
+            print(f"Приложение: http://127.0.0.1:{self.web.port}", flush=True)
+        except OSError as e:  # порт занят — бот в чате работает и без приложения
+            self.web = None
+            print("web:", repr(e), flush=True)
+        asyncio.create_task(self.app_link())
         await self.set_profile()
         if await self.authorized():
             await self.set_avatar()

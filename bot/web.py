@@ -175,7 +175,6 @@ def healthy():
 def tunnel():
     """cloudflared даёт адрес https://….trycloudflare.com. Он меняется при перезапуске — тогда бот
     обновляет кнопку приложения. Если адрес перестал открываться, туннель перезапускается."""
-    global url
     exe = cloudflared()
     if not exe:
         print("Нет cloudflared — приложение недоступно, работают кнопки в чате")

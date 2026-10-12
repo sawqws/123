@@ -35,22 +35,37 @@ INLINE = [
     (re.compile(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])"), r"<i>\1</i>"),
     (re.compile(r"~~(.+?)~~"), r"<s>\1</s>"),
     (re.compile(r"\|\|(.+?)\|\|"), r"<tg-spoiler>\1</tg-spoiler>"),
-    (re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)"), r'<a href="\2">\1</a>'),
 ]
+# [текст](ссылка) — одна пара скобок внутри адреса (вики); кавычки и <> в адрес не берём
+LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s()<>\"]+(?:\([^\s()<>\"]*\)[^\s()<>\"]*)*)\)")
+URL = re.compile(r"https?://[^\s<>\"]*[^\s<>\".,;:!?)»]")
+
+
+def fmt(text):
+    p = esc(text)
+    for rx, rep in INLINE:
+        p = rx.sub(rep, p)
+    return p
 
 
 def inline(text):
-    """Строка без кода: экранировать и разметить."""
-    parts = re.split(r"(`[^`\n]+`)", text)
+    """Строка без кода: экранировать и разметить. Ссылки и адреса прячем от разметки:
+    «_» и «*» внутри адреса не должны превращаться в курсив (Telegram не примет такой HTML)."""
+    parts = re.split(r"(`[^`\n]+`)", text.replace("\x00", ""))
     out = []
     for p in parts:
         if len(p) > 1 and p.startswith("`") and p.endswith("`"):
             out.append(f"<code>{esc(p[1:-1])}</code>")
             continue
-        p = esc(p)
-        for rx, rep in INLINE:
-            p = rx.sub(rep, p)
-        out.append(p)
+        keep = []
+
+        def stash(h):
+            keep.append(h)
+            return f"\x00{len(keep) - 1}\x00"
+        p = LINK.sub(lambda m: stash(f'<a href="{html.escape(m.group(2))}">{fmt(m.group(1))}</a>'), p)
+        p = URL.sub(lambda m: stash(esc(m.group(0))), p)
+        p = fmt(p)
+        out.append(re.sub(r"\x00(\d+)\x00", lambda m: keep[int(m.group(1))], p))
     return "".join(out)
 
 
@@ -114,24 +129,51 @@ def md(text):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def safe_cut(s, limit):
+    """Где резать строку длиннее limit: по переводу строки, иначе по пробелу; не внутри тега и не внутри &сущности;."""
+    cut = limit
+    for sep in ("\n", " "):
+        i = s.rfind(sep, 0, limit)
+        if i > limit // 3:
+            cut = i + 1
+            break
+    lt, gt = s.rfind("<", 0, cut), s.rfind(">", 0, cut)
+    if lt > gt:
+        cut = lt
+    amp, semi = s.rfind("&", 0, cut), s.rfind(";", 0, cut)
+    if amp > semi and cut - amp < 10:
+        cut = amp
+    return cut if cut > 0 else limit
+
+
 def split_html(text, size=3900):
-    """Резать длинный HTML по пустым строкам, не разрывая теги-блоки."""
+    """Резать длинный HTML на сообщения: по пустым строкам (абзацы сохраняются), длинные куски — по строкам
+    и пробелам. Каждая часть — целый HTML: открытые теги закрываются в конце и открываются заново в следующей."""
     if len(text) <= size:
         return [text]
-    parts, cur = [], ""
-    for block in re.split(r"(?<=\n)\n", text):
-        if len(cur) + len(block) > size and cur:
-            parts.append(cur.strip())
-            cur = ""
-        while len(block) > size:  # один огромный блок — режем по строкам и закрываем теги
-            cut = block.rfind("\n", 0, size)
-            cut = cut if cut > 0 else size
-            parts.append(close_tags(block[:cut]))
-            block = reopen_tags(block[:cut]) + block[cut:].lstrip("\n")
-        cur += block
+    pieces = []
+    for block in re.split(r"(?<=\n\n)", text):  # абзац вместе со своей пустой строкой
+        while len(block) > size - 300:
+            cut = safe_cut(block, size - 300)
+            pieces.append(block[:cut])
+            block = block[cut:]
+        pieces.append(block)
+    parts, cur, prefix = [], "", ""
+    for piece in pieces:
+        if cur and len(close_tags(prefix + cur + piece)) > size:
+            body = prefix + cur
+            parts.append(close_tags(body.rstrip()))
+            prefix, cur = reopen_tags(body), piece.lstrip("\n")
+        else:
+            cur += piece
     if cur.strip():
-        parts.append(cur.strip())
-    return parts
+        parts.append(close_tags((prefix + cur).rstrip()))
+    return [p.strip() for p in parts if plain(p).strip()]
+
+
+def plain(text_html):
+    """HTML -> обычный текст (если Telegram не принял разметку)."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text_html))
 
 
 TAG = re.compile(r"<(/?)(b|i|u|s|code|pre|blockquote|tg-spoiler|a)(\s[^>]*)?>")

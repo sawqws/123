@@ -88,7 +88,7 @@ class Request(unittest.TestCase):
         self.assertEqual(dl.created_id(resp), 42)
 
 
-class Bot(unittest.TestCase):
+class BotBase(unittest.TestCase):
     def setUp(self):
         self.sent = []
         kpp.st = {"owner": 1, "jwt": "j", "yandex_token": "y", "place_id": 5, "building_id": 6, "address": "ЖК"}
@@ -110,6 +110,8 @@ class Bot(unittest.TestCase):
     def texts(self):
         return [p.get("text", "") for m, p in self.sent if m in ("sendMessage", "editMessageText")]
 
+
+class Bot(BotBase):
     def test_order_and_repeat(self):
         with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
             self.msg("водитель на белом Kia, а 123 вс 777")
@@ -157,7 +159,7 @@ class Bot(unittest.TestCase):
         self.assertEqual(cr.call_args[0][0], "А123ВС777")
         texts = self.texts()
         self.assertIn("Слушаю", texts[0])
-        self.assertIn("🎙 «Номер А, 123, ВС, 777 &lt;b&gt;»", texts)
+        self.assertIn("🎙 <i>«Номер А, 123, ВС, 777 &lt;b&gt;»</i>", texts)
         self.assertIn("Пропуск заказан", texts[-1])
 
     def test_voice_spoken_words(self):
@@ -195,6 +197,135 @@ class Bot(unittest.TestCase):
         kpp.st = {"owner": 1}
         self.msg("А123ВС777")
         self.assertIn("войди", self.texts()[0])
+
+
+def init_data(token, uid=1, age=0, **extra):
+    """initData, подписанный как в Telegram (ключ HMAC("WebAppData", токен))."""
+    import hashlib
+    import hmac
+    import time
+    import urllib.parse
+    pairs = {"auth_date": str(int(time.time()) - age), "query_id": "q",
+             "user": json.dumps({"id": uid, "first_name": "Глеб"}), **extra}
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urllib.parse.urlencode(pairs)
+
+
+class InitData(unittest.TestCase):
+    def setUp(self):
+        self.p = mock.patch.object(kpp, "TOKEN", "1:test")
+        self.p.start()
+        kpp.st = {"owner": 1}
+
+    def tearDown(self):
+        self.p.stop()
+
+    def test_valid(self):
+        self.assertEqual(kpp.check_init_data(init_data("1:test"))["id"], 1)
+        self.assertEqual(kpp.web_user({"X-Init-Data": init_data("1:test")})["id"], 1)
+
+    def test_rejected(self):
+        self.assertIsNone(kpp.check_init_data(init_data("2:other")))         # чужой бот
+        self.assertIsNone(kpp.check_init_data(init_data("1:test", age=90000)))  # старше суток
+        self.assertIsNone(kpp.check_init_data(init_data("1:test") + "x"))    # подделана подпись
+        self.assertIsNone(kpp.check_init_data(""))
+        self.assertIsNone(kpp.web_user({"X-Init-Data": init_data("1:test", uid=2)}))  # не владелец
+
+
+class App(BotBase):
+    """API мини-приложения: те же действия, что в чате."""
+
+    def test_state(self):
+        items = [{"id": 5, "title": "Такси", "status": {"title": "Активен"}, "subtitle": "А 123 ВС 777",
+                  "fields": [{"title": "Дата", "value": "сегодня"}], "actions": [{"type": "cancel"}]}]
+        with mock.patch.object(dl.Client, "passes", return_value=items):
+            s = kpp.app_state()
+        self.assertTrue(s["login"])
+        self.assertEqual(s["address"], "ЖК")
+        self.assertEqual(s["passes"][0]["status"], "Активен")
+        self.assertTrue(s["passes"][0]["cancel"])
+        kpp.st = {"owner": 1}
+        self.assertFalse(kpp.app_state()["login"])
+
+    def test_order_repeat_cancel(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
+            code, res = kpp.api_post(1, "/api/order", {"text": "а 123 вс 777"})
+            self.assertEqual((code, res["ok"], res["plate"], res["id"]), (200, True, "А123ВС777", 9))
+            code, res = kpp.api_post(1, "/api/order", {"text": "А123ВС777"})
+            self.assertTrue(res["repeat"])
+            self.assertEqual(cr.call_count, 1)  # не дублирует
+            kpp.api_post(1, "/api/order", {"text": "А123ВС777", "force": True})
+            self.assertEqual(cr.call_count, 2)
+        self.assertIn("Пропуск заказан", self.texts()[0])  # карточка ушла и в чат
+        with mock.patch.object(dl.Client, "cancel") as cancel:
+            code, _ = kpp.api_post(1, "/api/cancel", {"id": 9})
+        cancel.assert_called_once_with("9")
+        self.assertNotIn("А123ВС777", kpp.st["recent"])
+
+    def test_order_errors(self):
+        self.assertEqual(kpp.api_post(1, "/api/order", {"text": "привет"})[0], 400)
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.Error("занято")):
+            code, res = kpp.api_post(1, "/api/order", {"text": "М456ОР50"})
+        self.assertEqual(code, 502)
+        self.assertIn("занято", res["error"])
+        kpp.st = {"owner": 1}
+        code, res = kpp.api_post(1, "/api/order", {"text": "М456ОР50"})
+        self.assertEqual((code, res["login"]), (401, True))
+        self.assertEqual(kpp.api_post(1, "/api/login", {"text": "не токен"})[0], 400)
+
+    def test_http(self):
+        import threading
+        import urllib.error
+        import urllib.request
+        from http.server import ThreadingHTTPServer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), kpp.Web)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        try:
+            with urllib.request.urlopen(base + "/health") as r:
+                self.assertEqual(r.read(), b"ok")
+            with urllib.request.urlopen(base + "/") as r:
+                self.assertIn("Оформить пропуск", r.read().decode())
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(base + "/api/state")
+            self.assertEqual(e.exception.code, 401)
+            with mock.patch.object(kpp, "TOKEN", "1:test"), mock.patch.object(dl.Client, "passes", return_value=[]):
+                req = urllib.request.Request(base + "/api/state", headers={"X-Init-Data": init_data("1:test")})
+                with urllib.request.urlopen(req) as r:
+                    self.assertTrue(json.load(r)["login"])
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+class Style(unittest.TestCase):
+    def test_style_fallback(self):
+        """Цветные кнопки: если Telegram их не знает (400 про кнопки) — те же кнопки без цвета."""
+        import io
+        import urllib.error
+        bodies = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake(req, timeout=0):
+            body = json.loads(req.data)
+            bodies.append(body)
+            if "style" in json.dumps(body):
+                raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
+                                             io.BytesIO(b'{"description":"Bad Request: invalid button style"}'))
+            return Resp(b'{"ok": true, "result": {"message_id": 1}}')
+        with mock.patch("urllib.request.urlopen", fake):
+            res = kpp.send(1, "x", [[kpp.btn("✖️ Отменить", "x|1", "danger")]])
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(bodies), 2)
+        self.assertEqual(bodies[1]["reply_markup"]["inline_keyboard"][0][0], {"text": "✖️ Отменить", "callback_data": "x|1"})
 
 
 if __name__ == "__main__":

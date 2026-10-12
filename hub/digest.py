@@ -140,14 +140,14 @@ def _on_day(r, d):
 def reminders_view(st):
     rs = sorted(st.get("reminders") or [], key=lambda r: (r.get("date") or "", r["time"]))
     if not rs:
-        return "⏰ Напоминаний нет.\n\n" + USAGE, None
-    lines = ["⏰ <b>Напоминания</b>"]
+        return f"⏰ <b>Напоминаний нет</b>\n<blockquote>{USAGE}</blockquote>", None
+    lines = []
     rows = []
     for i, r in enumerate(rs, 1):
         lines.append(f"{i}. {describe(r)} — {esc(r['text'])}")
-        rows.append([b(f"🗑 {i}. {r['text'][:30]}", f"rmd|{r['id']}")])
-    lines.append("\nНажми, чтобы удалить.")
-    return "\n".join(lines), rows
+        short = r["text"] if len(r["text"]) <= 18 else r["text"][:17].rstrip() + "…"
+        rows.append([b(f"🗑 {i}. {short}", f"rmd|{r['id']}")])
+    return "⏰ <b>Напоминания</b>\n<blockquote>" + "\n".join(lines) + "</blockquote>\n<i>Нажми, чтобы удалить.</i>", rows
 
 
 def command(st, text, now_ts):
@@ -208,7 +208,7 @@ def callback(st, data):
 
 def digest_text(st, now, apps, srv, paid_iso):
     today = now.date()
-    lines = [f"📋 <b>Отбивка · {DAYS[today.weekday()]} {_fmt_d(today)}</b>"]
+    lines = []
     if apps is None:
         lines.append("⚠️ pm2 не ответил — состояние ботов неизвестно")
     else:
@@ -228,21 +228,22 @@ def digest_text(st, now, apps, srv, paid_iso):
         warn = "⚠️ " if srv["disk_free"] / srv["disk_total"] < 0.1 else ""
         parts.append(f"{warn}диск {srv['disk_free']}/{srv['disk_total']} ГБ")
     if parts:
-        lines.append("🖥 Свободно: " + " · ".join(parts))
+        lines.append("• Свободно: " + " · ".join(parts))
     if paid_iso:
         paid = datetime.date.fromisoformat(paid_iso)
         left = (paid - today).days
-        lines.append(f"💳 Оплата до {_fmt_d(paid)}: " + (
+        lines.append(f"• Оплата до {_fmt_d(paid)}: " + (
             f"осталось {left} дн." if left > 0 else "срок сегодня!" if left == 0 else "срок прошёл! Продли."))
     else:
-        lines.append("💳 Срок оплаты не указан — /paid ДД.ММ")
+        lines.append("• Срок оплаты не указан — /paid ДД.ММ")
     rs = st.get("reminders") or []
     for label, d in (("Сегодня", today), ("Завтра", today + datetime.timedelta(days=1))):
         day = sorted((r for r in rs if _on_day(r, d)), key=lambda r: r["time"])
         if day:
-            lines.append(f"⏰ {label}: " + "; ".join(f"{r['time']} {esc(r['text'])}" for r in day))
-    lines.append("\nЧто доработать? Нажми ✏️ Доработать")
-    return "\n".join(lines), [[b("✏️ Доработать", "fix")]]
+            lines.append(f"• {label}: " + "; ".join(f"{r['time']} {esc(r['text'])}" for r in day))
+    text = (f"📋 <b>Отбивка · {DAYS[today.weekday()]} {_fmt_d(today)}</b>\n<blockquote>" + "\n".join(lines)
+            + "</blockquote>\n<i>Что доработать? Нажми ✏️ Доработать</i>")
+    return text, [[b("✏️ Доработать", "fix")]]
 
 
 def due(st, now_ts, apps, server_info, paid_iso):

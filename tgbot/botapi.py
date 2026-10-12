@@ -43,6 +43,11 @@ class Button:
         return {"text": text, "url": link}
 
     @staticmethod
+    def web_app(text, link):
+        """Кнопка, открывающая мини-приложение (только https)."""
+        return {"text": text, "web_app": {"url": link}}
+
+    @staticmethod
     def text(text, resize=None, persistent=None, placeholder=None, style=None, single_use=None):
         b = {"text": text, "_kb": {k: v for k, v in (("resize_keyboard", resize), ("is_persistent", persistent),
                                                     ("input_field_placeholder", placeholder),
@@ -66,7 +71,7 @@ def markup(buttons, plain=False):
     if not rows:
         return {"inline_keyboard": []}
     clean = lambda b: {k: v for k, v in b.items() if k != "_kb" and not (plain and k == "style")}
-    if any("callback_data" in b or "url" in b for r in rows for b in r):
+    if any("callback_data" in b or "url" in b or "web_app" in b for r in rows for b in r):
         return {"inline_keyboard": [[clean(b) for b in r] for r in rows]}
     opts = {}
     for r in rows:
