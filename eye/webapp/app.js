@@ -1,9 +1,9 @@
-// «Глаз»: разговор без рук через очки (Bluetooth-гарнитура iPhone) и фото с очков.
+// «Глаз»: разговор без рук через очки (Bluetooth-гарнитура iPhone) и фото/видео с очков.
 // Микрофон -> свой детектор речи (громкость) -> WAV 16 кГц -> /api/talk -> ответ голосом через AudioContext.
+// Общий вид и помощники — kit.css/kit.js (Kit.*), здесь только своё.
 'use strict';
 
-const tg = window.Telegram && Telegram.WebApp;
-const $ = (id) => document.getElementById(id);
+const { tg, $, esc } = Kit;
 
 // ---------- доступ: подпись Telegram или ключ из ссылки /link (для Safari) ----------
 let key = '';
@@ -34,26 +34,25 @@ async function api(path, opts) {
   return data;
 }
 
-// отклик вибрацией (только в Telegram)
-function haptic(kind) {
-  try {
-    const h = tg && tg.HapticFeedback;
-    if (!h) return;
-    if (kind === 'error' || kind === 'success' || kind === 'warning') h.notificationOccurred(kind);
-    else if (kind === 'select') h.selectionChanged();
-    else h.impactOccurred(kind || 'light');
-  } catch (e) {}
+function haptic(kind) { Kit.haptic(kind); }
+function toast(text, kind) {
+  Kit.toast(text, kind === 'error' ? 'err' : kind === 'success' ? 'ok' : '');
+  if (kind) haptic(kind === 'light' ? 'tap' : kind);
 }
 
-let toastTimer;
-function toast(text, kind) {
-  const t = $('toast');
-  t.textContent = text;
-  t.classList.add('on');
-  if (kind) haptic(kind);
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('on'), 3500);
+// ---------- вкладки ----------
+const TABS = [{ id: 'talk', icon: '🎙', label: 'Разговор' }, { id: 'seen', icon: '👁', label: 'Что видел' }];
+let tab = 'talk';
+try { tab = localStorage.getItem('eye-tab') === 'seen' ? 'seen' : 'talk'; } catch (e) { /* нет памяти */ }
+function showTab(id) {
+  tab = id;
+  $('tab-talk').hidden = id !== 'talk';
+  $('tab-seen').hidden = id !== 'seen';
+  try { localStorage.setItem('eye-tab', id); } catch (e) { /* нет памяти */ }
+  window.scrollTo(0, 0);
 }
+const tabs = Kit.tabbar($('tabs'), TABS, tab, showTab);
+showTab(tab);
 
 // ---------- состояние разговора ----------
 // off — выключен; listen — слушаю; think — Claude думает; speak — говорю
@@ -70,21 +69,24 @@ let talking = false; // разговор включён (после ответа
 function setMode(m) {
   const was = mode;
   mode = m;
-  document.body.className = m + (talking ? ' talking' : '');
+  document.body.dataset.mode = m;
+  document.body.classList.toggle('talking', talking);
+  document.body.classList.remove('mic-err');
   $('state').textContent = LABELS[m];
   $('hint').textContent = HINTS[m];
   $('talk-label').textContent = talking ? '■ Закончить' : '🎙 Говорить';
-  $('talk-sub').textContent = talking ? 'удерживай' : '';
-  if (m !== 'listen') $('ring').style.transform = '';
+  $('talk-sub').textContent = talking ? 'удерживай кнопку' : '';
+  if (m !== 'listen') $('lvl').style.transform = '';
   if (was !== m && (m === 'think' || m === 'speak')) haptic('select');
 }
 
 // ---------- лента разговора: пузыри ----------
 const MAX_BUBBLES = 8;
+const CHAT_EMPTY = '<div class="empty"><span class="e">💬</span><b>Пока тихо</b>' +
+  'Нажми «Говорить» — отвечу в динамики очков</div>';
 function bubble(role, text) {
   const chat = $('chat');
-  const empty = chat.querySelector('.empty');
-  if (empty) empty.remove();
+  chat.querySelectorAll('.empty, .sk').forEach((x) => x.remove());
   const b = document.createElement('div');
   b.className = 'bubble ' + (role === 'user' ? 'me' : 'ai');
   b.textContent = text;
@@ -93,18 +95,17 @@ function bubble(role, text) {
 }
 function renderChat(items) {
   const chat = $('chat');
-  if (!items || !items.length) return;
+  if (!items || !items.length) { if (!chat.querySelector('.bubble')) chat.innerHTML = CHAT_EMPTY; return; }
   chat.innerHTML = '';
   items.slice(-MAX_BUBBLES).forEach((h) => {
-    // «[фото Зимний дворец] что это?» -> «📷 Зимний дворец — что это?»
-    const m = h.role === 'user' && /^\[фото ?([^\]]*)\]\s*(.*)$/s.exec(h.text || '');
-    const text = m ? '📷 ' + (m[1] || 'Фото') + (m[2] ? ' — ' + m[2] : '') : h.text;
+    // «[фото Зимний дворец] что это?» -> «📷 Зимний дворец — что это?»; видео — 🎬
+    const m = h.role === 'user' && /^\[(фото|видео) ?([^\]]*)\]\s*(.*)$/s.exec(h.text || '');
+    const text = m ? (m[1] === 'видео' ? '🎬 ' : '📷 ') + (m[2] || (m[1] === 'видео' ? 'Видео' : 'Фото'))
+      + (m[3] ? ' — ' + m[3] : '') : h.text;
     bubble(h.role, text);
   });
 }
-function clearChat() {
-  $('chat').innerHTML = '<div class="empty">Скажи что-нибудь — отвечу в динамики очков.</div>';
-}
+function clearChat() { $('chat').innerHTML = CHAT_EMPTY; }
 
 // ---------- звук: AudioContext (на iPhone играет в любой момент после первого нажатия) ----------
 let ctx = null;
@@ -214,7 +215,7 @@ function onChunk(data) {
   for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
   const rms = Math.sqrt(sum / chunk.length);
   const thr = Math.max(0.012, floor * 3.2);
-  $('ring').style.transform = 'scale(' + (1 + Math.min(rms * 6, 0.25)) + ')';
+  $('lvl').style.transform = 'scale(' + (1 + Math.min(rms * 6, 0.25)) + ')';
   if (!inSpeech) {
     floor = Math.max(0.002, floor * 0.95 + rms * 0.05);
     pre.push(chunk);
@@ -303,10 +304,10 @@ $('talk').addEventListener('click', async () => {
   audioCtx();
   unlockSpeech();
   if (talking && Date.now() - downAt < 800) {
-    toast('Чтобы закончить разговор — удерживай кнопку', 'warning');
+    toast('Чтобы закончить — удерживай кнопку', 'warning');
     return;
   }
-  haptic('medium');
+  haptic('tap');
   if (talking) {
     talking = false;
     stopSpeaking();
@@ -320,6 +321,7 @@ $('talk').addEventListener('click', async () => {
     showMicHelp(e);
     return;
   }
+  $('notice').hidden = true;
   talking = true;
   keepAwake();
   locate();
@@ -329,28 +331,28 @@ $('talk').addEventListener('click', async () => {
 
 function showMicHelp(e) {
   const n = $('notice');
-  n.hidden = false;
   const inTg = tg && tg.initData;
-  n.innerHTML = '';
-  const p = document.createElement('div');
-  p.textContent = inTg
+  n.hidden = false;
+  n.innerHTML = '<div>' + (inTg
     ? 'Микрофон в Telegram не включился. Открой «Глаз» в Safari — там он работает.'
-    : 'Нет доступа к микрофону: разреши его для этого сайта (аА → Настройки веб-сайта → Микрофон).';
-  n.appendChild(p);
-  haptic('error');
+    : 'Нет доступа к микрофону: разреши его для этого сайта (аА → Настройки веб-сайта → Микрофон).') + '</div>';
   if (inTg && safari) {
     const b = document.createElement('button');
-    b.className = 'btn';
+    b.className = 'btn primary';
     b.textContent = '🧭 Открыть в Safari';
     b.onclick = () => tg.openLink(safari);
     n.appendChild(b);
   }
-  console.warn(e);
+  document.body.classList.add('mic-err');
+  $('state').textContent = 'Нет микрофона';
+  $('hint').textContent = 'Без него слушать не могу';
+  haptic('error');
+  if (e) console.warn(e);
 }
 
-$('stop').addEventListener('click', () => { haptic('light'); stopSpeaking(); queue.length = 0; });
+$('stop').addEventListener('click', () => { haptic('tap'); stopSpeaking(); queue.length = 0; });
 $('new').addEventListener('click', async () => {
-  haptic('light');
+  haptic('tap');
   try {
     await api('/api/new', { method: 'POST' });
     $('heard').textContent = ''; $('say').textContent = ''; clearChat();
@@ -364,9 +366,11 @@ $('pick').addEventListener('change', async (ev) => {
   const files = Array.from(ev.target.files || []);
   ev.target.value = '';
   for (const f of files) {
+    const video = (f.type || '').startsWith('video/');
     try {
+      toast(video ? '🎬 Загружаю видео…' : '👀 Смотрю на фото…');
       await api('/api/upload', { method: 'POST', headers: { 'Content-Type': f.type || 'image/jpeg' }, body: f });
-      toast('👀 Смотрю на фото…', 'light');
+      if (video) toast('🎬 Смотрю видео…');
     } catch (e) { toast('⚠️ ' + e.message, 'error'); }
   }
 });
@@ -376,7 +380,7 @@ const thumbs = {};
 async function thumb(id) {
   if (thumbs[id]) return thumbs[id];
   const r = await fetch('/api/photo/' + id, { headers: auth() });
-  if (!r.ok) return '';
+  if (!r.ok || !(r.headers.get('Content-Type') || '').startsWith('image/')) return '';
   thumbs[id] = URL.createObjectURL(await r.blob());
   return thumbs[id];
 }
@@ -386,36 +390,54 @@ function time(t) {
   return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
-async function renderFeed(photos) {
+let photos = [];
+function renderFeed(list) {
+  photos = list || [];
   const feed = $('feed');
-  if (!photos.length) return;
-  feed.innerHTML = '';
-  for (const p of photos) {
-    const el = document.createElement('div');
-    el.className = 'item';
-    const img = document.createElement('img');
-    img.alt = '';
-    el.appendChild(img);
-    const body = document.createElement('div');
-    body.className = 'body';
-    const t = document.createElement('div');
-    t.className = 't';
-    t.textContent = p.title || (p.text ? 'Фото' : '👀 Смотрю…');
-    const d = document.createElement('div');
-    d.className = 'd';
-    d.textContent = p.text || '';
-    const m = document.createElement('div');
-    m.className = 'm';
-    m.textContent = time(p.t) + (p.place ? ' · ' + p.place : '');
-    body.append(t, d, m);
-    el.appendChild(body);
-    if (p.say) el.onclick = () => { haptic('light'); audioCtx(); say(p.say); };
-    feed.appendChild(el);
-    thumb(p.id).then((u) => { if (u) img.src = u; });
+  $('seen-n').textContent = photos.length ? String(photos.length) : '';
+  if (!photos.length) {
+    feed.innerHTML = '<div class="empty"><span class="e">🕶</span><b>Ещё ничего</b>' +
+      'Пришли фото или видео с очков в чат или нажми «Выбрать»</div>';
+    return;
   }
+  feed.innerHTML = photos.map((p, i) => {
+    const wait = !p.text && !p.title;
+    return `<button class="row tap" data-i="${i}">` +
+      `<span class="thumb"><img alt="" data-id="${esc(p.id)}">${p.video ? '<span class="vid">▶</span>' : ''}</span>` +
+      '<span class="main">' +
+      (wait ? '<span class="title"><span class="pill accent dot live">Смотрю…</span></span>'
+        : `<span class="title">${esc(p.title || (p.video ? 'Видео' : 'Фото'))}</span>` +
+          `<span class="meta two">${esc(p.text)}</span>`) +
+      (p.place ? `<span class="where">📍 ${esc(p.place)}</span>` : '') +
+      `</span><span class="end">${time(p.t)}</span></button>`;
+  }).join('');
+  feed.querySelectorAll('img[data-id]').forEach((img) => {
+    thumb(img.dataset.id).then((u) => { if (u) img.src = u; });
+  });
 }
 
-// ---------- новые события: фото из чата разбираются и звучат здесь ----------
+$('feed').addEventListener('click', (ev) => {
+  const row = ev.target.closest('[data-i]');
+  if (!row) return;
+  const p = photos[+row.dataset.i];
+  if (!p) return;
+  haptic('tap');
+  const sh = Kit.sheet(
+    (thumbs[p.id] ? `<img class="shot" alt="" src="${esc(thumbs[p.id])}">` : '') +
+    `<h2>${esc(p.title || (p.text ? (p.video ? 'Видео' : 'Фото') : 'Смотрю…'))}</h2>` +
+    (p.text ? `<div class="txt">${esc(p.text)}</div>` : '<div class="txt hint">Разбор ещё идёт — скажу вслух, как только узнаю.</div>') +
+    `<div class="where">${time(p.t)}${p.place ? ' · 📍 ' + esc(p.place) : ''}</div>` +
+    (p.say ? '<button class="btn primary" data-act="say">🔊 Сказать вслух</button>' : '') +
+    '<button class="btn" data-act="close">Закрыть</button>');
+  sh.addEventListener('click', (e) => {
+    const act = (e.target.closest('[data-act]') || {}).dataset;
+    if (!act || !act.act) return;
+    if (act.act === 'say') { audioCtx(); unlockSpeech(); say(p.say); showTab('talk'); tabs.set('talk'); }
+    sh.close();
+  });
+});
+
+// ---------- новые события: фото и видео из чата разбираются и звучат здесь ----------
 let last = 0;
 let polling = false;
 async function poll() {
@@ -426,8 +448,12 @@ async function poll() {
     let refresh = false;
     for (const e of r.events) {
       last = Math.max(last, e.id);
-      if (e.kind === 'photo_new') { refresh = true; toast('👀 Смотрю на фото…', 'light'); }
-      if (e.kind === 'photo') { refresh = true; if (ctx) say(e.say, e.audio); else $('say').textContent = e.say; }
+      if (e.kind === 'photo_new') { refresh = true; toast(e.video ? '🎬 Смотрю видео…' : '👀 Смотрю на фото…'); }
+      if (e.kind === 'photo') {
+        refresh = true;
+        if (ctx) say(e.say, e.audio); else $('say').textContent = e.say;
+      }
+      if (e.kind === 'talk') refresh = true;
       if (e.kind === 'error') toast('⚠️ ' + e.text, 'error');
     }
     if (refresh) load();
@@ -442,11 +468,18 @@ async function load() {
     safari = s.safari || '';
     if (s.place) $('place').textContent = '📍 ' + s.place;
     renderChat(s.history);
-    renderFeed(s.photos);
+    renderFeed(s.photos || []);
   } catch (e) {
-    $('state').textContent = 'Нет связи';
-    $('hint').textContent = e.message;
+    noLink(e.message);
   }
+}
+
+function noLink(why) {
+  $('state').textContent = 'Нет связи';
+  $('hint').textContent = why;
+  document.body.classList.add('mic-err');
+  $('chat').innerHTML = '<div class="empty"><span class="e">📡</span><b>Нет связи с сервером</b>' + esc(why) + '</div>';
+  $('feed').innerHTML = '<div class="empty"><span class="e">📡</span><b>Нет связи с сервером</b>' + esc(why) + '</div>';
 }
 
 // ---------- где я: GPS телефона ----------
@@ -463,19 +496,10 @@ function locate() {
 }
 
 // ---------- старт ----------
-if (tg) {
-  tg.ready();
-  tg.expand();
-  try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
-  // шапка и фон Telegram — в цвет страницы (тема Telegram, светлая или тёмная)
-  const page = (tg.themeParams && tg.themeParams.secondary_bg_color) || '#0b0c10';
-  try { tg.setHeaderColor(page); tg.setBackgroundColor(page); } catch (e) {}
-  try { if (tg.setBottomBarColor) tg.setBottomBarColor(page); } catch (e) {}
-}
 try { document.querySelector('meta[name=theme-color]').content = getComputedStyle(document.body).backgroundColor; } catch (e) {}
 if (!(tg && tg.initData) && !key) {
+  noLink('Открой «Глаз» из Telegram или по ссылке из /link');
   $('state').textContent = 'Нет доступа';
-  $('hint').textContent = 'Открой «Глаз» из Telegram или по ссылке из /link';
 } else {
   load();
   locate();

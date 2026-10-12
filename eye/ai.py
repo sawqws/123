@@ -87,16 +87,26 @@ def context(photos=(), place="", history=()):
     return "\n\n".join(parts)
 
 
-def look(path, place="", history=(), question=""):
-    """Разбор нового фото: {"say": что сказать вслух, "text": подробнее для чата}."""
+def look(path, place="", history=(), question="", heard=""):
+    """Разбор нового фото или видео: {"say": что сказать вслух, "text": подробнее для чата, "title"}.
+    path — путь к фото или список кадров видео по порядку; heard — что говорят в видео."""
+    paths = [path] if isinstance(path, str) else list(path)
+    if len(paths) > 1:
+        what = ("Глеб только что снял видео очками. Кадры по порядку:\n" + "\n".join(paths)
+                + "\nОткрой каждый кадр инструментом Read.\n")
+    else:
+        what = f"Глеб только что сфотографировал очками: {paths[0]}\nОткрой фото инструментом Read.\n"
+    if heard:
+        what += (f"В видео слышно (распознано автоматически, могут быть ошибки): «{heard}». "
+                 "Если там вопрос к тебе — ответь на него.\n")
     prompt = (context(place=place, history=history) + "\n\n" if place or history else "") + (
-        f"Глеб только что сфотографировал очками: {path}\nОткрой фото инструментом Read.\n"
+        what
         + (f"Он спрашивает: {question}\n" if question else
            "Он хочет знать, что перед ним. Если это здание, памятник или место — что это и чем интересно; "
            "если вещь, еда, текст, вывеска — что это и главное о ней.\n")
         + "Ответ — только JSON без пояснений: {\"say\": \"1–3 предложения вслух\", "
           "\"text\": \"то же подробнее, 2–5 предложений, для чата\", \"title\": \"что это, 2–5 слов\"}")
-    out = run(prompt, ("Read", "WebSearch", "WebFetch"), LOOK_MODEL, turns=8, timeout=240)
+    out = run(prompt, ("Read", "WebSearch", "WebFetch"), LOOK_MODEL, turns=7 + len(paths), timeout=240)
     data = json_from(out) or {}
     say = str(data.get("say") or "").strip() or clean(out)
     return {"say": say, "text": str(data.get("text") or say).strip(), "title": str(data.get("title") or "").strip()}
