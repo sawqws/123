@@ -37,7 +37,7 @@ class Fake:
     """Подменяет Claude, pm2, @BotFather и getMe."""
 
     def __init__(self):
-        self.prompts, self.pm2 = [], []
+        self.prompts, self.pm2, self.pm2_all = [], [], []
         self.interview = {"questions": [{"q": "Сколько стаканов в день?", "options": ["8", "10"]},
                                         {"q": "Когда напоминать?", "options": ["Каждый час", "Утром"]}],
                           "names": ["Вода", "Глоток", "Аква"], "emoji": "💧"}
@@ -57,6 +57,9 @@ class Fake:
         return True, "Считает воду и напоминает."
 
     def sh(self, *cmd, timeout=60, cwd=None, env=None):
+        self.pm2_all.append(cmd)
+        if cmd[1:2] and "tg.py" in cmd[1]:
+            return 0, "ok"
         if cmd[0] == "pm2":
             self.pm2.append(cmd)
             if cmd[1] == "jlist":
@@ -204,6 +207,25 @@ class StudioFlow(unittest.TestCase):
             self.assertEqual(studio.draft()["stage"], "token")
             self.t.bot.handle({"update_id": 4, "managed_bot": {"user": {"id": OWNER}, "bot": {"id": 1}}})
         self.assertEqual(studio.draft()["stage"], "done")
+        access = [p for m, p in self.t.calls if m == "setManagedBotAccessSettings"]
+        self.assertEqual(access, [{"user_id": 1, "is_access_restricted": True}])  # чужие бота не откроют
+
+    def test_home_tip_and_folder(self):
+        with mock.patch.object(studio.bot, "can_manage", lambda: False), \
+                mock.patch.object(studio, "secretary_ready", lambda: False):
+            studio._one_tap["at"] = 0
+            self.t.send("/start")
+        self.assertIn("Bot Management Mode", self.t.last)
+        with mock.patch.object(studio.bot, "can_manage", lambda: True):
+            studio._one_tap["at"] = 0
+            self.t.send("/start")
+        self.assertNotIn("Bot Management Mode", self.t.last)
+        with mock.patch.object(studio, "secretary_ready", lambda: True):
+            self.t.api("idea", {"text": "вода"})
+            self.t.api("enough")
+            self.t.api("name", {"text": "Вода"})
+            self.t.api("confirm")
+        self.assertTrue(any(c[0] == "python3" and "botsfolder" in c and "voda_test_bot" in c for c in self.f.pm2_all))
 
     def test_text_during_build_is_queued_and_free_text_asks(self):
         self.t.api("idea", {"text": "трекер"})
