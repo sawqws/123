@@ -690,6 +690,41 @@ async def unjob(ctx, a):
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 
 
+class FatherChat:
+    """Разговор с @BotFather. Клиент Секретаря не получает обновлений (receive_updates=False), поэтому
+    conversation() Telethon ответов не видит — отправляем сообщение и ждём первый новый ответ в истории чата."""
+
+    def __init__(self, ctx, timeout=45):
+        self.ctx, self.timeout, self.peer, self.last = ctx, timeout, None, 0
+
+    async def __aenter__(self):
+        self.peer = await self.ctx.client.get_input_entity("BotFather")
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send_message(self, text):
+        m = await self.ctx.client.send_message(self.peer, text)
+        self.last = max(self.last, m.id)
+
+    async def get_response(self):
+        import asyncio
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            msgs = await self.ctx.client.get_messages(self.peer, limit=10, min_id=self.last)
+            replies = sorted((m for m in msgs if not m.out and m.id > self.last), key=lambda m: m.id)
+            if replies:
+                self.last = replies[0].id
+                return replies[0]
+            await asyncio.sleep(1.5)
+        raise Fail(f"@BotFather не ответил за {self.timeout} с")
+
+
+def father(ctx):
+    return FatherChat(ctx)
+
+
 @command("newbot", write=True)
 async def newbot(ctx, a):
     """Новый бот в @BotFather: имя и username (на «bot»). Если username занят — пробует с цифрами.
@@ -700,7 +735,7 @@ async def newbot(ctx, a):
     if not a.get("auto"):  # Главный создаёт ботов по ТЗ сам (так просил Глеб): новый бот ничего не меняет в чатах
         await ctx.confirm(f"🤖 Создать бота «{title}» @{base}_bot в @BotFather")
     tries = [f"{base}_bot", f"{base}bot"] + [f"{base}{n}_bot" for n in (1, 2, 7, 24, 77, 2026)]
-    async with ctx.client.conversation("BotFather", timeout=60, exclusive=False) as conv:
+    async with father(ctx) as conv:
         await conv.send_message("/newbot")
         r = await conv.get_response()
         if "name" not in (r.raw_text or "").lower():
@@ -791,7 +826,7 @@ async def bottoken(ctx, a):
     u = a["username"].lstrip("@")
     if not a.get("auto"):
         await ctx.confirm(f"🔑 Новый токен для @{u} в @BotFather (старый перестанет работать)")
-    async with ctx.client.conversation("BotFather", timeout=60, exclusive=False) as conv:
+    async with father(ctx) as conv:
         await conv.send_message("/token")
         r = await conv.get_response()
         if "choose" not in (r.raw_text or "").lower() and "выбер" not in (r.raw_text or "").lower():
