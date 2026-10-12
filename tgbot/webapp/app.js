@@ -222,6 +222,57 @@
     );
   }
 
+  // 🛠 Поддержка и пожелания (как Kit.support у остальных ботов): текст + скриншот -> /api/support -> правка Claude
+  function shrink(file) {  // -> base64 JPEG ≤ 1600 px (через data:, его пускает CSP страницы)
+    return new Promise((resolve, reject) => {
+      const rd = new FileReader();
+      const img = new Image();
+      rd.onload = () => { img.src = rd.result; };
+      rd.onerror = img.onerror = () => reject(new Error('Картинка не открылась'));
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = h('canvas', { width: Math.max(1, Math.round(img.naturalWidth * k)), height: Math.max(1, Math.round(img.naturalHeight * k)) });
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.82).split(',')[1]);
+      };
+      rd.readAsDataURL(file);
+    });
+  }
+  function supportSheet() {
+    let photo = null;
+    const ta = h('textarea', { class: 'field sup-text', rows: '5', maxlength: '4000',
+      placeholder: 'Например: «сводка пустая» или «добавьте ответы голосом»' });
+    const prev = h('span', { class: 'sup-prev' });
+    const file = h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: async () => {
+      const f = file.files && file.files[0];
+      file.value = '';
+      if (!f) return;
+      try {
+        photo = await shrink(f);
+        prev.replaceChildren(h('img', { alt: '', src: 'data:image/jpeg;base64,' + photo }),
+          h('button', { class: 'sup-x', 'aria-label': 'Убрать', text: '✕', onclick: () => { photo = null; prev.replaceChildren(); } }));
+      } catch (e) { toast(e.message, true); }
+    } });
+    const send = h('button', { class: 'btn primary wide', onclick: async () => {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); haptic('warning'); return; }
+      send.disabled = true;
+      try {
+        await api('/api/support', photo ? { text, photo } : { text });
+        haptic('success');
+        closeSheet();
+        toast('Принял — работаю, ответ придёт в чат');
+      } catch (e) { toast(e.message, true); haptic('error'); send.disabled = false; }
+    } }, 'Отправить');
+    openSheet(
+      h('h3', { text: '🛠 Поддержка и пожелания' }),
+      h('div', { class: 'sub', text: 'Напишите, что сломалось или чего не хватает — починю/добавлю.' }),
+      ta,
+      h('div', { class: 'sup-shot' }, h('button', { class: 'btn soft sm', onclick: () => file.click() }, '📎 Скриншот'), prev, file),
+      send,
+    );
+  }
+
   function chatSheet(c) {
     openSheet(
       h('h3', { class: 'ell', text: c.name }),
@@ -352,6 +403,11 @@
           h('p', { text: 'Новых сообщений нет. Загляну снова, когда напишут.' })));
       }
     }
+    out.push(h('div', { class: 'section' }, h('h2', { text: 'Поддержка' })),
+      h('div', { class: 'list' }, h('button', { class: 'row', onclick: supportSheet },
+        h('span', { class: 'ava', style: gradFor(4), text: '🛠' }),
+        h('div', { class: 'main' }, h('div', { class: 'l1' }, h('span', { class: 'name ell', text: 'Поддержка и пожелания' })),
+          h('div', { class: 'l2' }, h('span', { class: 'prev ell', text: 'Ошибка или идея — починю/добавлю' }))))));
     return out;
   }
 

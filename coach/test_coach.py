@@ -483,6 +483,25 @@ class BotTest(unittest.TestCase):
         self.assertEqual(asked, ["week"])
         self.assertEqual(call("/api/summary", {"period": "year"}).code, 400)
 
+    def test_support_from_app_and_menu(self):
+        import support
+        sup = support.Support.__new__(support.Support)  # без потоков и Telegram; start — заглушка
+        sup.allowed, sup.media_dir, calls = coach.allowed, tempfile.mkdtemp(), []
+        sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+        self.assertEqual(call("/api/support", {"text": "x"}).code, 400)  # поддержка ещё не запущена
+        with mock.patch.object(coach, "SUP", sup):
+            r = call("/api/support", {"text": "кольцо сна пустое", "photo": "iVBORw0KGgo="})
+            self.assertEqual((r.code, r.json), (200, {"ok": True}))
+            self.assertEqual(calls[-1][0], U)
+            self.assertTrue(os.path.exists(calls[-1][2][0]))
+            self.assertEqual(call("/api/support", {"text": ""}).code, 400)
+            self.assertEqual(call("/api/support", {"text": "чужой"}, user={"id": 99}).code, 403)
+        self.assertEqual(len(calls), 1)
+        for t in ("/start", "/help"):
+            coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": t})
+        menus = [json.dumps(kw.get("reply_markup")) for m, kw in self.sent if m == "sendMessage"]
+        self.assertTrue(all("sup|ask" in m for m in menus[-2:]), menus)
+
     def test_profile_and_meals(self):
         self.assertEqual(call("/api/profile", {"age": "14", "weight": "60,5", "goal": "mass", "sport": "бокс"}).json["profile"],
                          {"age": 14, "weight": 60.5, "goal": "mass", "sport": "бокс"})

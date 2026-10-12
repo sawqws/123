@@ -237,6 +237,7 @@ class ChatTest(Base):
         self.assertEqual(kb[0][0]["style"], "primary")
         self.assertTrue(all(len(row) <= 3 for row in kb))
         self.assertTrue(all(len(b["text"]) <= 24 for row in kb for b in row))
+        self.assertEqual(kb[-1][0]["callback_data"], "sup|ask")  # 🛠 Поддержка
         eye.remember("user", "привет")
         n = len(self.texts())
         eye.on_callback({"id": "1", "from": {"id": U}, "data": "new", "message": {"chat": {"id": U}, "message_id": 5}})
@@ -303,6 +304,22 @@ class WebTest(Base):
         self.assertEqual(code, 200)
         self.assertIn("#k=", st["safari"] or "#k=")
         self.assertEqual(self.call("/health")[1], b"ok")
+
+    def test_support_from_page(self):
+        import support
+        sup = support.Support.__new__(support.Support)  # без потоков и Telegram; start — заглушка
+        sup.allowed, sup.media_dir, calls = eye.allowed, tempfile.mkdtemp(), []
+        sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+        body = lambda d: json.dumps(d).encode()
+        self.assertEqual(self.call("/api/support", body({"text": "x"}))[0], 503)  # ещё не запущена
+        with mock.patch.object(eye, "SUP", sup):
+            self.assertEqual(self.call("/api/support", body({"text": "x"}), key=False)[0], 401)
+            code, r = self.call("/api/support", body({"text": "не слышу ответ", "photo": "iVBORw0KGgo="}))
+            self.assertEqual((code, r), (200, {"ok": True}))
+            self.assertEqual(calls[-1][0], U)  # по ключу Safari — чат владельца
+            self.assertTrue(os.path.exists(calls[-1][2][0]))
+            self.assertEqual(self.call("/api/support", body({"text": " "}))[0], 400)
+        self.assertEqual(len(calls), 1)
 
     def test_init_data(self):
         import hashlib

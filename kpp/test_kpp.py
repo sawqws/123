@@ -1,4 +1,5 @@
 """Тесты бота «КПП» без сети: python3 kpp/test_kpp.py"""
+import base64
 import json
 import os
 import sys
@@ -112,6 +113,12 @@ class BotBase(unittest.TestCase):
 
 
 class Bot(BotBase):
+    def test_support_in_menu(self):
+        self.msg("/help")
+        rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+        self.assertIn("sup|ask", [b.get("callback_data") for row in rows for b in row])
+        self.assertTrue(all(len(row) <= 3 for row in rows))
+
     def test_order_and_repeat(self):
         with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
             self.msg("водитель на белом Kia, а 123 вс 777")
@@ -425,6 +432,28 @@ class App(BotBase):
                     "X-Init-Data": init_data("1:test"), "Content-Type": "image/jpeg"})
                 with mock.patch.object(kpp, "read_image", return_value="М456ОР50"), urllib.request.urlopen(req) as r:
                     self.assertEqual(json.load(r)["plates"], ["М456ОР50"])
+                # 🛠 поддержка из приложения: скриншот больше 64 КБ проходит, Support.start — заглушка
+                import support
+                sup = support.Support.__new__(support.Support)
+                sup.allowed, sup.media_dir, calls = kpp.allowed, tempfile.mkdtemp(), []
+                sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+
+                def post(body):
+                    req = urllib.request.Request(base + "/api/support", data=json.dumps(body).encode(), headers={
+                        "X-Init-Data": init_data("1:test"), "Content-Type": "application/json"})
+                    try:
+                        with urllib.request.urlopen(req) as r:
+                            return r.status, json.load(r)
+                    except urllib.error.HTTPError as e:
+                        return e.code, json.load(e)
+                self.assertEqual(post({"text": "x"})[0], 503)  # ещё не запущена
+                with mock.patch.object(kpp, "SUP", sup):
+                    shot = base64.b64encode(b"\x89PNG" + bytes(80 * 1024)).decode()
+                    self.assertEqual(post({"text": "пропуск не заказывается", "photo": shot}), (200, {"ok": True}))
+                    self.assertEqual(calls[-1][0], 1)
+                    self.assertTrue(calls[-1][2][0].endswith(".png"))
+                    self.assertEqual(post({"text": ""})[0], 400)
+                self.assertEqual(len(calls), 1)
         finally:
             srv.shutdown()
             srv.server_close()

@@ -220,7 +220,7 @@
     const synced = d.connected && d.synced ? `WHOOP ${clock(d.synced)}` : d.connected ? 'WHOOP' : 'WHOOP не подключён';
     let h = hero(dateWord(t.day), `${dateLine(t.day)} · ${synced}`);
     if (!d.connected && !d.today.has_data) {
-      return h + connectCard() + waterCard(d.today.water) + foodMini(d.today) + features();
+      return h + connectCard() + waterCard(d.today.water) + foodMini(d.today) + features() + Kit.supportRow('/api/support');
     }
     const z = r ? r.zone : null;
     const recC = z ? C[z] : 'var(--hint)';
@@ -255,6 +255,7 @@
     if (isToday) h += waterCard(t.water) + foodMini(t);
     if ((t.workouts || []).length) h += `<div class="label">Тренировки</div><div class="list rise">${t.workouts.map(workoutRow).join('')}</div>`;
     if (isToday && d.connected) h += `<p class="foot">Данные WHOOP — ${d.synced ? clock(d.synced) : 'ещё не загружены'} · <button class="link" data-a="sync">Обновить</button></p>`;
+    if (isToday) h += Kit.supportRow('/api/support');
     return h;
   }
   const workoutRow = w => `<button class="row" data-a="detail" data-v="strain"><span class="ic">${sportIcon(w.sport)}</span><div class="main"><div class="title">${esc(w.sport)}</div>
@@ -602,7 +603,7 @@
       <div class="label">Тренер</div>
       <label class="field"><span>Утренний разбор: время или «выкл»</span><input name="morning" type="text" placeholder="07:00" value="${esc(d.morning === 'off' ? 'выкл' : d.morning || '07:00')}"></label>
       <label class="field"><span>Важно знать тренеру</span><textarea name="notes" rows="2" placeholder="травмы, соревнования, самочувствие…">${esc(p.notes || '')}</textarea></label>
-      <button class="btn primary" type="submit">Сохранить</button></form>`);
+      <button class="btn primary" type="submit">Сохранить</button></form>${Kit.supportRow('/api/support')}`);
     el.addEventListener('click', ev => {
       const s = ev.target.closest('[data-group] button');
       if (s) { const was = s.classList.contains('on'); s.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('on')); if (!was || s.parentElement.dataset.group === 'goal') s.classList.add('on'); haptic('select'); }

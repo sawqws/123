@@ -69,6 +69,7 @@ KEEP_ADS = 15          # папки (и карточки в приложении
 PORT = int(os.environ.get("AVITO_PORT") or 8793)
 WEB = os.path.join(HERE, "webapp")
 public_url = (os.environ.get("AVITO_URL") or "").rstrip("/")
+SUP = None  # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется приложение
 https_note = "ищу адрес"
 
 offset = 0
@@ -766,7 +767,7 @@ def help_text(name=""):
 
 def help_buttons():
     rows = app_buttons()
-    rows.append([b("💬 Чаты Авито", "avl")])
+    rows.append([b("💬 Чаты Авито", "avl"), support.Support.button()])
     if draft():
         rows.append([b("📝 Текущее объявление", "card")])
     return rows
@@ -1541,7 +1542,7 @@ class Web(BaseHTTPRequestHandler):
             if n > MAX_UPLOAD:
                 return self.reply(413, {"error": "Фото больше 15 МБ"})
             return self.reply(*save_upload(self.rfile.read(n), self.headers.get("Content-Type") or ""))
-        if n > 64 * 1024:
+        if n > (MAX_UPLOAD * 4 // 3 + 4096 if path == "/api/support" else 64 * 1024):  # в поддержке — скриншот
             return self.reply(413, {"error": "Слишком большой запрос"})
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -1549,6 +1550,15 @@ class Web(BaseHTTPRequestHandler):
                 raise ValueError
         except ValueError:
             return self.reply(400, {"error": "Плохой запрос"})
+        if path == "/api/support":  # 🛠 из приложения — та же поддержка, что /fix в чате
+            if not SUP:
+                return self.reply(503, {"error": "Поддержка ещё запускается — попробуй через минуту"})
+            try:
+                return self.reply(200, SUP.web(web_user(self.headers)["id"], body))
+            except PermissionError as e:
+                return self.reply(403, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
         try:
             code, res = api_post(path, body, web_user(self.headers))
         except Exception as e:
@@ -1645,8 +1655,9 @@ def main():
     else:
         threading.Thread(target=https, daemon=True).start()
     print("Авито-бот запущен")
-    sup = support.Support(TOKEN, "Авито", folders=["avito"], pm2="avito-bot", allowed=allowed,
-                          tests=["python3 avito/test_avito.py"])
+    global SUP
+    SUP = sup = support.Support(TOKEN, "Авито", folders=["avito"], pm2="avito-bot", allowed=allowed,
+                                tests=["python3 avito/test_avito.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

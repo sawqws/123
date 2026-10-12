@@ -269,6 +269,10 @@ class StudioFlow(unittest.TestCase):
         self.assertEqual(s["bots"], [])
         self.assertFalse(os.path.exists(path))
 
+    def test_support_button_on_home(self):
+        self.t.send("/start")
+        self.assertIn("🛠 Поддержка", self.t.buttons)
+
     def test_stranger(self):
         self.t.send("/start", uid=7)
         self.assertIn("личный", self.t.last)
@@ -330,6 +334,24 @@ class Kit(unittest.TestCase):
         req = urllib.request.Request(base + "/api/ping", data=b'{"x": 1}', headers={
             "X-Init-Data": signed("1:abc", {"id": OWNER}), "Content-Type": "application/json"})
         self.assertEqual(json.load(urllib.request.urlopen(req)), {"pong": 1})
+        # 🛠 встроенный api("support"): просьба со скриншотом → Support.web → start (заглушка), только владельцу
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
+        import support
+        sup = support.Support.__new__(support.Support)
+        sup.allowed, sup.media_dir, calls = (lambda u: u == OWNER), tempfile.mkdtemp(), []
+        sup.start = lambda chat, text, shots=None: calls.append((chat, text, shots))
+        self.assertEqual(b.call_api("support", {"id": OWNER}, {"text": "x"})[0], 400)  # поддержка не запущена
+        b.support = sup
+        shot = __import__("base64").b64encode(b"\x89PNG" + bytes(2_000_000)).decode()  # больше 1 МБ
+        req = urllib.request.Request(base + "/api/support", data=json.dumps({"text": "кнопка не жмётся", "photo": shot})
+                                     .encode(), headers={"X-Init-Data": signed("1:abc", {"id": OWNER}),
+                                                         "Content-Type": "application/json"})
+        self.assertEqual(json.load(urllib.request.urlopen(req)), {"ok": True})
+        self.assertEqual((calls[-1][0], os.path.exists(calls[-1][2][0])), (OWNER, True))
+        self.assertEqual(b.call_api("support", {"id": 999}, {"text": "x"})[0], 403)
+        self.assertEqual(b.call_api("support", {"id": OWNER}, {"text": ""})[0], 400)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("data-support", urllib.request.urlopen(base + "/kit.js").read().decode())  # строка в приложении
         bad = urllib.request.Request(base + "/api/ping", headers={"X-Init-Data": signed("1:other", {"id": OWNER})})
         with self.assertRaises(urllib.error.HTTPError) as e:
             urllib.request.urlopen(bad)

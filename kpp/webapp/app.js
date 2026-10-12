@@ -103,7 +103,8 @@ function loginView() {
             <button id="do-login" class="btn primary">Войти</button></div></div></li>
       </ol>
     </section>
-    <p class="hint center">Лучше с iPad или компьютера: телефон может открыть приложение Домиленд вместо страницы.</p>`;
+    <p class="hint center">Лучше с iPad или компьютера: телефон может открыть приложение Домиленд вместо страницы.</p>
+    ${Kit.supportRow('/api/support', 'Не входит или что-то не так — напиши')}`;
   $('open-yandex').onclick = () => {
     haptic('tap');
     if (tg && tg.openLink) tg.openLink(S.login_url); else window.open(S.login_url, '_blank');
@@ -241,7 +242,8 @@ function passesHtml() {
 }
 
 function mainView() {
-  $('view').innerHTML = orderCard() + '<div class="label">Последние пропуска</div><div id="passes">' + passesHtml() + '</div>';
+  $('view').innerHTML = orderCard() + '<div class="label">Последние пропуска</div><div id="passes">' + passesHtml() + '</div>' +
+    Kit.supportRow('/api/support');
   bindOrder();
 }
 

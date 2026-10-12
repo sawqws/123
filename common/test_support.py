@@ -122,6 +122,28 @@ class SupportTest(unittest.TestCase):
         self.sup.waiting[OWNER] = {"at": time.time() - 3600, "shots": []}
         self.assertFalse(self.sup.intercept(self.msg("старое ожидание протухло")))
 
+    def test_web_request_with_photo(self):
+        started = []
+        with mock.patch.object(support.Support, "start", lambda s, chat, text, shots=None: started.append(
+                (chat, text, shots))):
+            self.sup.media_dir = tempfile.mkdtemp()
+            png = __import__("base64").b64encode(b"\x89PNG\r\n\x1a\nxx").decode()
+            self.assertEqual(self.sup.web(OWNER, {"text": " кнопка не жмётся ", "photo": "data:image/png;base64," + png}),
+                             {"ok": True})
+            chat, text, shots = started[-1]
+            self.assertEqual(chat, OWNER)
+            self.assertTrue(text.startswith("кнопка не жмётся"))
+            self.assertTrue(shots[0].endswith(".png") and os.path.exists(shots[0]))
+            self.sup.web(OWNER, {"text": "без фото"})
+            self.assertEqual(started[-1][2], [])
+            with self.assertRaises(PermissionError):
+                self.sup.web(99, {"text": "чужой"})
+            with self.assertRaises(ValueError):
+                self.sup.web(OWNER, {"text": "  "})
+            with self.assertRaises(ValueError):
+                self.sup.web(OWNER, {"text": "x", "photo": "@@@"})
+        self.assertEqual(len(started), 2)
+
     def test_cancel_button(self):
         self.sup.intercept(self.msg("/fix"))
         self.sup.intercept({"update_id": 4, "callback_query": {"id": "1", "data": "sup|no", "from": {"id": OWNER},

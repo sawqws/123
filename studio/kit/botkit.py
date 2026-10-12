@@ -40,7 +40,8 @@
 владельца), BOTKIT_COMMON (папка common/ репозитория: голосовые и фото). Данные — data/ рядом с ботом.
 Тесты без сети: t = bot.testing(); t.send("/start"); t.press("add|250"); t.last, t.buttons, t.api("state").
 🛠 Поддержка встроена: /fix (и кнопка kit.support_button()) — владелец пишет, что сломалось или что улучшить,
-Claude на сервере правит код бота, гоняет test_bot.py и перезапускает его (common/support.py).
+Claude на сервере правит код бота, гоняет test_bot.py и перезапускает его (common/support.py). В мини-приложении —
+строка «🛠 Поддержка и пожелания» (kit.js, сама внизу) → встроенный api("support") → то же самое.
 """
 import datetime
 import hashlib
@@ -552,7 +553,8 @@ class Bot:
 
     def _default_home(self, c):
         c.show(card(f"{self.emoji} <b>{esc(self.name)}</b>", [esc(self.about)] if self.about else []),
-               [[self.app_button()]] if self.app_url else None)
+               ([[self.app_button()]] if self.app_url else []) + ([[support_button()]] if self.support_cfg is not False
+                                                                  else []) or None)
 
     # --- мини-приложение ---
 
@@ -582,6 +584,8 @@ class Bot:
     def call_api(self, name, user, body):
         """(код, dict) — то, что отдаст сервер мини-приложения. Отдельно, чтобы проверять в тестах."""
         fn = self.handlers["api"].get(name)
+        if not fn and name == "support":  # 🛠 встроено: лист «Поддержка и пожелания» в kit.js
+            return self._support_api(user, body)
         if not fn:
             return 404, {"error": "нет такого действия"}
         if not user or not self.allowed(user.get("id")):
@@ -597,6 +601,17 @@ class Bot:
         except Exception as e:
             traceback.print_exc()
             return 500, {"error": f"Ошибка: {e}"}
+
+    def _support_api(self, user, body):
+        """Просьба из мини-приложения → та же поддержка, что /fix в чате (common/support.py). Только владельцу."""
+        if not self.support:
+            return 400, {"error": "Поддержка выключена или ещё запускается"}
+        try:
+            return 200, self.support.web((user or {}).get("id"), body if isinstance(body, dict) else {})
+        except PermissionError as e:
+            return 403, {"error": str(e)}
+        except ValueError as e:
+            return 400, {"error": str(e)}
 
     def serve(self):
         bot = self
