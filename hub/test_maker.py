@@ -82,9 +82,10 @@ class AllBots(Base):
     def test_list_and_install_buttons(self):
         hub.on_message(self.msg("/all"))
         text = self.texts()[-1]
-        self.assertIn("🟢 📚 HDP", text)
-        self.assertIn("🚧 КПП", text)
-        self.assertIn("не поставлен", text)
+        self.assertIn("🟢 <b>HDP</b>", text)
+        self.assertIn("⚪️ <b>КПП</b> · не поставлен", text)
+        self.assertNotIn("      ", text)  # без выравнивания пробелами
+        self.assertIn("<blockquote>", text)
         self.assertIn("Боты", text)
         kb = json.dumps([kw for m, kw in self.sent][-1]["reply_markup"], ensure_ascii=False)
         self.assertIn("add|kpp", kb)

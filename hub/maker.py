@@ -96,9 +96,10 @@ def username(token):
     return name
 
 
-def all_bots():
-    """[{pm2, label, about, status, username, install}] — все боты: из репозитория и сделанные здесь."""
-    running = {a["name"]: a["status"] for a in ui.apps() or []}
+def all_bots(rows=None):
+    """[{pm2, label, about, status, username, install}] — все боты: из репозитория и сделанные здесь.
+    rows — уже полученный ui.apps() (чтобы не спрашивать pm2 второй раз)."""
+    running = {a["name"]: a["status"] for a in (ui.apps() if rows is None else rows) or []}
     res = []
     for pm2, (lbl, _, env, var, kind, about) in CATALOG.items():
         tok = ui.TOKEN if pm2 == ui.SELF else env_value(env, var)
@@ -111,36 +112,36 @@ def all_bots():
     return res
 
 
-FOLDER_HELP = ("📂 <b>Папка «Боты»</b> — один раз, 30 секунд:\n"
+FOLDER_HELP = ("<blockquote expandable>📂 <b>Папка «Боты»</b> — один раз, 30 секунд:\n"
                "Настройки → Папки с чатами → Создать папку → название «Боты» → «Добавить чаты» → "
                "в «Типах чатов» отметь <b>Боты</b> → Сохранить.\n"
-               "Туда сами попадут все боты, в том числе новые. Только сначала открой каждого и нажми «Начать».")
+               "Туда сами попадут все боты, в том числе новые. Только сначала открой каждого и нажми «Начать»."
+               "</blockquote>")
 
 
 def bots_text(rows, intro=False):
-    lines = ["👋 <b>Начнём!</b> Вот все твои боты — открой каждого и нажми «Начать».\n" if intro
-             else "📂 <b>Все мои боты</b>\n"]
+    """Две строки на бота: «🟢 HDP · @user» и что он делает курсивом. Без отступов пробелами — шрифт пропорциональный."""
+    lines = []
     for r in rows:
         mark = "🟢" if r["status"] == "online" else "🔴" if r["status"] else "⚪️"
-        who = f" — @{ui.esc(r['username'])}" if r["username"] else ""
-        state = "" if r["status"] == "online" else " · <b>не работает</b>" if r["status"] else " · <b>не поставлен</b>"
-        lines.append(f"{mark} {ui.esc(r['label'])}{who}{state}\n      <i>{ui.esc(r['about'])}</i>")
-    lines += ["", FOLDER_HELP]
-    return "\n".join(lines)
+        who = f" · @{ui.esc(r['username'])}" if r["username"] else ""
+        state = "" if r["status"] == "online" else " · не работает" if r["status"] else " · не поставлен"
+        lines.append(f"{mark} <b>{ui.esc(ui.short(r['label']))}</b>{who}{state}")
+        if r["about"]:
+            lines.append(f"<i>{ui.esc(r['about'])}</i>")
+    title = ("👋 <b>Начнём!</b> Вот все твои боты — открой каждого и нажми «Начать»" if intro
+             else "📂 <b>Все мои боты</b>")
+    return ui.card(title, lines) + "\n" + FOLDER_HELP
 
 
 def bots_buttons(rows):
-    btns, row = [], []
+    btns = []
     for r in rows:
         if r["username"] and r["status"] == "online" and r["pm2"] != ui.SELF:
-            row.append({"text": f"▶️ {r['label']}", "url": f"https://t.me/{r['username']}?start=hub"})
+            btns.append({"text": ui.clip(f"▶️ {ui.short(r['label'])}"), "url": f"https://t.me/{r['username']}?start=hub"})
         elif not r["status"] and r["install"]:
-            row.append(ui.b(f"➕ Поставить {r['label']}", f"add|{r['install']}"))
-        if len(row) == 2:
-            btns.append(row)
-            row = []
-    if row:
-        btns.append(row)
+            btns.append(ui.b(ui.clip(f"➕ {ui.short(r['label'])}"), f"add|{r['install']}", "success"))
+    btns = ui.pairs(btns)
     btns.append([ui.b("🛠 Сделать бота", "mk"), ui.b("✏️ Доработать", "fix")])
     btns.append([ui.b("‹ К ботам", "home")])
     return btns
@@ -220,9 +221,9 @@ class Status:
         if force or time.time() - self.last > 8:
             self.last = time.time()
             mins = int(time.time() - self.start) // 60
-            body = "\n".join(f"{'▸' if i == len(self.steps) - 1 else '·'} {ui.esc(s)}" for i, s in enumerate(self.steps))
+            body = "\n".join(f"{'▸' if i == len(self.steps) - 1 else '•'} {ui.esc(s)}" for i, s in enumerate(self.steps))
             try:
-                ui.edit(self.chat, self.mid, f"⏳ <b>{ui.esc(self.title)}</b> · {mins} мин\n\n{body}")
+                ui.edit(self.chat, self.mid, f"⏳ <b>{ui.esc(self.title)}</b> · {mins} мин\n<blockquote>{body}</blockquote>")
             except Exception:
                 pass
 
@@ -254,9 +255,9 @@ def commit(cwd, message):
 
 # ---------- 🛠 сделать бота ----------
 
-MAKE_ASK = ("🛠 <b>Новый бот</b>\n\nОпиши, что он должен делать — как ТЗ, своими словами: для чего, какие "
-            "кнопки и команды, что присылает сам и когда. Чем подробнее, тем лучше с первого раза.\n\n"
-            "Дальше я сам: придумаю имя, напишу код, создам бота в @BotFather и запущу. Потом пишешь правки.")
+MAKE_ASK = ("🛠 <b>Новый бот</b>\n<blockquote>Опиши, что он должен делать — как ТЗ, своими словами: для чего, какие "
+            "кнопки и команды, что присылает сам и когда. Чем подробнее, тем лучше с первого раза.</blockquote>\n"
+            "<i>Дальше я сам: придумаю имя, напишу код, создам бота в @BotFather и запущу. Потом пишешь правки.</i>")
 
 SPEC = """Глеб хочет Telegram-бота. ТЗ:
 {tz}
@@ -310,8 +311,8 @@ def _make(chat, tz):
     ok, out = claude(SPEC.format(tz=tz), BOTS if os.path.isdir(BOTS) else "/tmp", tools=False, timeout=300)
     spec = json_from(out) if ok else None
     if not spec:
-        return st.done(f"😕 Не получилось начать: {ui.esc(out if not ok else 'Claude ответил не по формату')}",
-                       [[ui.b("🔁 Ещё раз", "mk")]])
+        return st.done(ui.card("😕 <b>Не получилось начать</b>",
+                               [ui.esc(out if not ok else "Claude ответил не по формату")]), [[ui.b("🔁 Ещё раз", "mk")]])
     slug = re.sub(r"[^a-z0-9-]", "", str(spec.get("slug") or "bot").lower())[:20].strip("-") or "bot"
     while slug in made() or os.path.exists(os.path.join(BOTS, slug)):
         slug = f"{slug}-{secrets.randbelow(90) + 10}"
@@ -330,7 +331,7 @@ def _make(chat, tz):
     ok, out = claude(CODE.format(dir=d, tz=tz, name=info["name"], common=os.path.join(ui.REPO, "common")) + shots,
                      d, on_step=st.step)
     if not ok or not os.path.exists(os.path.join(d, "bot.py")):
-        return st.done(f"😕 Код не получился: {ui.esc(out[-500:])}",
+        return st.done(ui.card("😕 <b>Код не получился</b>", [ui.esc(out[-500:])]),
                        [[ui.b("🔁 Ещё раз", f"mkr|{slug}"), ui.b("🗑 Удалить", f"del?|{slug}")]])
     commit(d, "Первая версия: " + tz[:200])
     info["about"] = out[-600:]
@@ -340,11 +341,11 @@ def _make(chat, tz):
     if not token:
         ui.setting("wait", f"mtoken|{slug}")
         return st.done(
-            f"✅ Код готов: <b>{ui.esc(info['name'])}</b>\n{ui.esc(out[-600:])}\n\n"
-            f"Осталось создать бота в Telegram ({ui.esc(why)}):\n"
-            f"1. Открой @BotFather → /newbot\n2. Имя: <code>{ui.esc(info['name'])}</code>\n"
-            f"3. Username: <code>{ui.esc(info['want'])}_bot</code> (занят — допиши цифры)\n"
-            "4. Пришли сюда токен — сам запущу.",
+            ui.card(f"✅ <b>Код готов: {ui.esc(info['name'])}</b>", [ui.esc(out[-600:])],
+                    f"Осталось создать бота в Telegram ({ui.esc(why)}):\n"
+                    f"1. Открой @BotFather → /newbot\n2. Имя: <code>{ui.esc(info['name'])}</code>\n"
+                    f"3. Username: <code>{ui.esc(info['want'])}_bot</code> (занят — допиши цифры)\n"
+                    "4. Пришли сюда токен — сам запущу."),
             [[{"text": "Открыть @BotFather", "url": "https://t.me/BotFather"}], [ui.b("Отмена", "home")]])
     deploy(chat, slug, token, st)
 
@@ -396,12 +397,12 @@ def deploy(chat, slug, token, st=None):
     time.sleep(5)
     a = next((x for x in ui.apps() or [] if x["name"] == info["pm2"]), {})
     if code != 0 or a.get("status") != "online":
-        return st.done(f"⚠️ «{ui.esc(info['name'])}» не запустился:\n<pre>{ui.esc(out[-600:])}</pre>",
-                       [[ui.b("📜 Логи", f"lg|{info['pm2']}"), ui.b("✏️ Исправить", f"fix|{info['pm2']}")]])
+        return st.done(f"⚠️ <b>«{ui.esc(info['name'])}» не запустился</b>\n<pre>{ui.esc(out[-600:])}</pre>",
+                       [[ui.b("📜 Логи", f"lg|{info['pm2']}"), ui.b("✏️ Исправить", f"fix|{info['pm2']}", "primary")]])
     who = f"@{info['username']}" if info["username"] else info["name"]
-    st.done(f"✅ <b>{ui.esc(info['name'])}</b> работает — {ui.esc(who)}\n\n{ui.esc(info.get('about', ''))}\n\n"
-            "Открой, нажми «Начать» и проверь. Что не так — «✏️ Правки», опиши словами.",
-            ([[{"text": f"▶️ Открыть {who}", "url": f"https://t.me/{info['username']}?start=hub"}]]
+    st.done(ui.card(f"✅ <b>{ui.esc(info['name'])}</b> работает — {ui.esc(who)}", [ui.esc(info.get("about", ""))],
+                    "<i>Открой, нажми «Начать» и проверь. Что не так — «✏️ Правки», опиши словами.</i>"),
+            ([[{"text": "▶️ Открыть бота", "url": f"https://t.me/{info['username']}?start=hub", "style": "success"}]]
              if info["username"] else []) +
             [[ui.b("✏️ Правки", f"fix|{info['pm2']}"), ui.b("📜 Логи", f"lg|{info['pm2']}")],
              [ui.b("🗑 Удалить", f"del?|{slug}")]])
@@ -433,9 +434,11 @@ def targets():
 def ask_fix(chat, mid=None, pm2=None):
     if pm2:
         ui.setting("wait", f"fix|{pm2}")
-        return ui.show(chat, mid, f"✏️ <b>{ui.esc(label(pm2) or pm2)}</b>\n\nЧто поменять? Пиши как ТЗ: что не так "
-                                  "и как должно быть. Можно несколько пунктов.", [[ui.b("Отмена", "home")]])
-    rows = [[ui.b(lbl, f"fix|{pm2}")] for pm2, lbl in targets()]
+        return ui.show(chat, mid, ui.card(f"✏️ <b>{ui.esc(ui.short(label(pm2) or pm2))}</b>",
+                                          ["Что поменять? Пиши как ТЗ: что не так и как должно быть. "
+                                           "Можно несколько пунктов, голосом или со скриншотами."]),
+                       [[ui.b("Отмена", "home")]])
+    rows = ui.pairs([ui.b(ui.clip(lbl), f"fix|{pm2}") for pm2, lbl in targets()])
     ui.show(chat, mid, "✏️ <b>Какого бота доработать?</b>", rows + [[ui.b("‹ Назад", "home")]])
 
 
@@ -464,13 +467,14 @@ def _fix(chat, pm2, tz):
     shots = shots_note(take_shots(os.path.join(ui.DATA, "shots", "task")))
     ok, out = claude(FIX.format(label=lbl, where=where, tz=tz) + shots, cwd, on_step=st.step)
     if not ok:
-        return st.done(f"😕 {ui.esc(out)}", [[ui.b("🔁 Ещё раз", f"fix|{pm2}")]])
+        return st.done(ui.card("😕 <b>Не получилось</b>", [ui.esc(out)]), [[ui.b("🔁 Ещё раз", f"fix|{pm2}")]])
     sha = commit(cwd, f"Главный ({lbl}): {tz[:200]}")
     if not sha:
-        return st.done(f"ℹ️ {ui.esc(out[-1500:])}\n\n<i>Код не менялся.</i>", [[ui.b("✏️ Ещё правка", f"fix|{pm2}")]])
+        return st.done(ui.card("ℹ️ <b>Код не менялся</b>", [ui.esc(out[-1500:])]),
+                       [[ui.b("✏️ Ещё правка", f"fix|{pm2}")]])
     btns = [[ui.b("✏️ Ещё правка", f"fix|{pm2}"), ui.b("📜 Логи", f"lg|{pm2}")],
-            [ui.b("↩️ Откатить", f"rb|{pm2}|{sha}")]]
-    st.done(f"✅ <b>{ui.esc(lbl)}</b> — готово, перезапускаю\n\n{ui.esc(out[-1500:])}", btns)
+            [ui.b("↩️ Откатить", f"rb|{pm2}|{sha}", "danger")]]
+    st.done(ui.card(f"✅ <b>{ui.esc(ui.short(lbl))} — готово</b>", [ui.esc(out[-1500:])], "<i>Перезапускаю…</i>"), btns)
     restart_after(chat, pm2)
 
 
@@ -483,8 +487,9 @@ def restart_after(chat, pm2):
     time.sleep(5)
     a = next((x for x in ui.apps() or [] if x["name"] == pm2), {})
     if code != 0 or a.get("status") != "online":
-        ui.send(chat, f"⚠️ {ui.esc(label(pm2) or pm2)} после правки не поднялся — смотри логи или откати.",
-                [[ui.b("📜 Логи", f"lg|{pm2}")]])
+        ui.send(chat, ui.card(f"⚠️ <b>{ui.esc(ui.short(label(pm2) or pm2))} не поднялся</b>",
+                              ["После правки бот не запустился — смотри логи или откати."]),
+                [[ui.b("📜 Логи", f"lg|{pm2}", "primary")]])
 
 
 def rollback(chat, pm2, sha):
@@ -493,8 +498,8 @@ def rollback(chat, pm2, sha):
     code, out = git(cwd, "-c", "user.name=Главный", "-c", "user.email=hub@localhost", "revert", "--no-edit", sha)
     if code != 0:
         git(cwd, "revert", "--abort")
-        return ui.send(chat, f"⚠️ Не откатилось:\n<pre>{ui.esc(out[-500:])}</pre>")
-    ui.send(chat, f"↩️ Откатил правку у {ui.esc(label(pm2) or pm2)}, перезапускаю.")
+        return ui.send(chat, f"⚠️ <b>Не откатилось</b>\n<pre>{ui.esc(out[-500:])}</pre>")
+    ui.send(chat, ui.card("↩️ <b>Откатил правку</b>", [f"{ui.esc(ui.short(label(pm2) or pm2))} — перезапускаю."]))
     restart_after(chat, pm2)
 
 
@@ -506,8 +511,9 @@ def delete(chat, slug):
     ui.sh("pm2", "save", timeout=30)
     shutil.rmtree(info["dir"], ignore_errors=True)
     set_made(slug, None)
-    ui.send(chat, f"🗑 «{ui.esc(info['name'])}» остановлен и удалён. В @BotFather его можно удалить командой "
-                  "/deletebot.", [[ui.b("‹ К ботам", "home")]])
+    ui.send(chat, ui.card(f"🗑 <b>«{ui.esc(info['name'])}» удалён</b>",
+                          ["Остановлен, код и данные стёрты. В @BotFather его можно удалить командой /deletebot."]),
+            [[ui.b("‹ К ботам", "home")]])
 
 
 # ---------- скриншоты к ТЗ и «что сделать?» ----------
@@ -533,9 +539,10 @@ def shots_note(paths):
 def ask_what(chat, text):
     """Свободный текст или голосовое без команды: новый бот или правка какого-то из ботов?"""
     ui.setting("heard", text)
-    rows = [[ui.b("🛠 Сделать нового бота", "mkh")]]
-    rows += [[ui.b(f"✏️ {lbl}", f"fixh|{pm2}")] for pm2, lbl in targets()]
-    ui.send(chat, f"📝 <i>{ui.esc(text[:600])}</i>\n\nЧто с этим сделать? Сделать нового бота или доработать одного из этих:",
+    rows = [[ui.b("🛠 Сделать нового бота", "mkh", "primary")]]
+    rows += ui.pairs([ui.b(ui.clip(f"✏️ {ui.short(lbl)}"), f"fixh|{pm2}") for pm2, lbl in targets()])
+    ui.send(chat, ui.card("📝 <b>Что с этим сделать?</b>", [f"<i>{ui.esc(text[:600])}</i>"],
+                          "Сделать нового бота или доработать одного из этих:"),
             rows + [[ui.b("Ничего", "home")]])
 
 
@@ -595,8 +602,8 @@ def on_callback(chat, mid, data):
         return "Откатываю…"
     elif data[0] == "del?":
         info = made().get(data[1]) or {}
-        ui.show(chat, mid, f"🗑 Точно удалить «{ui.esc(info.get('name', data[1]))}»? Код и данные сотрутся.",
-                [[ui.b("Да, удалить", f"del|{data[1]}"), ui.b("Нет", "home")]])
+        ui.show(chat, mid, ui.card(f"🗑 <b>Удалить «{ui.esc(info.get('name', data[1]))}»?</b>", ["Код и данные сотрутся."]),
+                [[ui.b("Да, удалить", f"del|{data[1]}", "danger"), ui.b("Нет", "home")]])
     elif data[0] == "del":
         delete(chat, data[1])
     else:
