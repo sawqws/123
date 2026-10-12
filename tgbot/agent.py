@@ -91,6 +91,13 @@ COMMANDS = [("start", "главная"), ("menu", "меню и статус"), (
             ("stop", "остановить"), ("check", "проверка"), ("login", "войти в аккаунт"), ("help", "что я умею")]
 
 
+# Ключи официального Telegram Desktop — открыты в его исходном коде. Запасной путь, когда my.telegram.org
+# не создаёт приложение (с серверных IP и через VPN отвечает «ERROR»). Против правил Telegram, есть риск для
+# аккаунта — включается только кнопкой Глеба после предупреждения. Представляемся как настоящий Desktop.
+DESKTOP = {"api_id": 2040, "api_hash": "b18441a1ff607e10a989891a5462e627", "device_model": "Desktop",
+           "system_version": "Windows 10", "app_version": "5.12.3 x64", "lang_code": "ru", "system_lang_code": "ru-RU"}
+
+
 def manual_keys(text):
     """(api_id, api_hash) из сообщения со страницы my.telegram.org или None."""
     h = re.search(r"\b([0-9a-f]{32})\b", text or "", re.I)
@@ -173,6 +180,13 @@ class Agent:
 
     @staticmethod
     def make_client(api_id, api_hash):
+        if int(api_id) == DESKTOP["api_id"]:
+            c = TelegramClient(os.path.join(TMP, "account"), DESKTOP["api_id"], DESKTOP["api_hash"], receive_updates=False,
+                               **{k: DESKTOP[k] for k in ("device_model", "system_version", "app_version",
+                                                          "lang_code", "system_lang_code")})
+            if getattr(c, "_init_request", None) is not None:
+                c._init_request.lang_pack = "tdesktop"  # как у настоящего Telegram Desktop
+            return c
         return TelegramClient(os.path.join(TMP, "account"), int(api_id), api_hash, receive_updates=False,
                               device_model="HDP Agent", system_version="server", app_version="1.0")
 
@@ -237,7 +251,7 @@ class Agent:
                 await self.on_jobs(ev, arg)
             elif kind == "login":
                 await ev.answer()
-                await self.start_login()
+                await self.on_login_choice(ev, arg)
         except BotError as e:
             if not e.not_modified:
                 raise
@@ -553,6 +567,42 @@ class Agent:
             me = await self.client.get_me()
             await self.say(card("✓ Уже вошёл", esc(actions.who(me))))
             return
+        if self.client is None:  # ключей нет — выбор способа
+            await self.say(card("🔑 Вход в аккаунт", "Как подключиться?\n\n"
+                                "<b>🖥 Как Telegram Desktop</b> — сразу, без my.telegram.org.\n"
+                                "<b>🔑 Свои ключи</b> — через my.telegram.org; с серверов и VPN сайт часто отвечает «ERROR».",
+                                "/cancel — отмена"),
+                           buttons=[[Button.inline("🖥 Войти как Telegram Desktop", "login:desktop", style="primary")],
+                                    [Button.inline("🔑 Свои ключи (my.telegram.org)", "login:own")]])
+            return
+        await self.ask_phone()
+
+    async def on_login_choice(self, ev, arg):
+        if arg == "desktop":
+            await ev.edit(card("🖥 Вход как Telegram Desktop",
+                               "Секретарь войдёт с ключами официального Telegram Desktop и будет выглядеть как он.\n\n"
+                               "⚠️ Это против правил Telegram: возможен сброс сеанса, ограничения или блокировка аккаунта. "
+                               "Насколько это вероятно — точных данных нет.\n\n"
+                               "Отключить можно в любой момент: Настройки → Устройства → завершить сеанс, или «Выйти» в меню.",
+                               "решать вам"),
+                          buttons=[[Button.inline("Да, войти", "login:desktop!", style="danger"),
+                                    Button.inline("Нет", "login:back")]])
+        elif arg == "desktop!":
+            s = load_settings()
+            s["api_id"], s["api_hash"] = str(DESKTOP["api_id"]), DESKTOP["api_hash"]
+            save_settings(s)
+            self.client = self.make_client(DESKTOP["api_id"], DESKTOP["api_hash"])
+            await ev.edit(card("🖥 Вход как Telegram Desktop", "✓ выбрано"), buttons=None)
+            await self.ask_phone()
+        elif arg == "own":
+            await ev.edit(card("🔑 Свои ключи", "✓ выбрано"), buttons=None)
+            await self.ask_phone()
+        elif arg == "back":
+            await ev.edit(card("Вход отменён"), buttons=None)
+        else:
+            await self.start_login()
+
+    async def ask_phone(self):
         self.login = {"step": "phone"}
         await self.say(card("🔑 Вход в аккаунт",
                             "Нажмите кнопку ниже — Telegram сам передаст номер.\nИли напишите его: +79991234567",
