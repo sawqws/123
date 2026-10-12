@@ -597,8 +597,12 @@ def market_text(d, m):
     if not s:
         return fmt("📊 Похожих не нашлось", f"Просмотрел объявлений: {m.get('seen', 0)}. "
                    "Уточни описание — поищу снова.", note)
+    if m.get("source") == "web":
+        note = ("🌐 Примерно — по поиску в интернете (Авито не пускает сервер). "
+                + esc(m.get("web_note") or "") + f" · {note}")
     body = "\n".join([
-        f"Похожих объявлений: <b>{s['n']}</b> из {m.get('seen', s['total'])}",
+        (f"Цен найдено: <b>{s['n']}</b>" if m.get("source") == "web" else
+         f"Похожих объявлений: <b>{s['n']}</b> из {m.get('seen', s['total'])}"),
         f"Диапазон: {market.fmt_rub(s['min'])[:-2]} – {market.fmt_rub(s['max'])}",
         f"⚡ Быстро продать: {market.fmt_rub(s['fast'])}",
         f"💎 Дороже рынка: {market.fmt_rub(s['high'])}",
@@ -631,8 +635,13 @@ def fresh_market(d, query):
 
 
 def market_for(d, query):
-    """Собрать цены на Авито по запросу и запомнить в объявлении. Ошибки — market.Blocked и прочие."""
-    items = market.collect(query, st.get("region") or "all")
+    """Собрать цены на Авито по запросу и запомнить в объявлении. Авито не пустил — цены из интернета (ai.web_prices).
+    Ошибки — market.Blocked (и Авито, и интернет не дали цен) и прочие."""
+    try:
+        items = market.collect(query, st.get("region") or "all")
+    except market.Blocked as e:
+        print("market blocked:", e, "— ищу цены в интернете")
+        return web_market_for(d, query)
     similar = items
     if items:
         try:
@@ -643,6 +652,24 @@ def market_for(d, query):
     m = {"query": query, "ts": time.time(), "seen": len(items), "stats": market.stats(similar),
          "prices": market.trim_outliers([i["price"] for i in similar]),  # для гистограммы в приложении
          "sample": [{"t": i["title"], "p": i["price"], "u": i["url"]} for i in similar[:10]]}
+    with lock:
+        d["market"] = m
+        save()
+    return m
+
+
+def web_market_for(d, query):
+    item = f"{d.get('title') or query}. {(d.get('description') or d.get('info') or '')[:300]}"
+    try:
+        w = ai.web_prices(item)
+    except ai.AIError as e:
+        raise market.Blocked(f"и поиск в интернете не помог: {e}")
+    prices = market.trim_outliers(w["prices"])
+    if not prices:
+        raise market.Blocked("в интернете цен не нашлось")
+    m = {"query": query, "ts": time.time(), "seen": len(w["prices"]), "source": "web",
+         "stats": market.stats([{"price": p} for p in w["prices"]]), "prices": prices,
+         "sources": w["sources"], "web_note": w["note"], "sample": []}
     with lock:
         d["market"] = m
         save()
@@ -661,7 +688,8 @@ def check_market(chat, force=False, mid=None):
     if m:
         return edit(chat, mid, market_text(d, m), market_buttons(m)) if mid else \
             send(chat, market_text(d, m), market_buttons(m))
-    status = fmt("🔎 Ищу похожие на Авито…", note=f"До {market.WANT} объявлений — это до минуты.")
+    status = fmt("🔎 Ищу похожие на Авито…", note=f"До {market.WANT} объявлений — до минуты. "
+                                                 "Если Авито не пустит — поищу цены в интернете (до 5 минут).")
     if mid:
         edit(chat, mid, status)
     else:
@@ -671,7 +699,7 @@ def check_market(chat, force=False, mid=None):
         m = market_for(d, query)
     except market.Blocked as e:
         print("market blocked:", e)
-        return edit(chat, mid, fail("Авито не пустил к поиску — попробуй через пару минут."),
+        return edit(chat, mid, fail(f"Цены не нашёл: Авито не пускает сервер, {esc(e)}."),
                     [[b("🔁 Ещё раз", "mk|f"), {"text": "🔎 Открыть поиск",
                                                 "url": market.search_url(query, st.get("region"))}],
                      [b("‹ Назад", "card")]])
