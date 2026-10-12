@@ -1,13 +1,14 @@
 'use strict';
-/* Ритм — планер внутри Telegram. Без сборки и библиотек.
-   Данные: GET /api/all один раз, дальше изменения точечно (POST /api/...), интерфейс обновляется сразу. */
+/* Ритм — планер внутри Telegram. Общий вид и помощники — kit.css / kit.js (Kit.*), здесь — только экраны.
+   Данные: GET api/all один раз, дальше изменения точечно (POST api/...), интерфейс обновляется сразу. */
 
-const tg = window.Telegram && window.Telegram.WebApp;
+const { tg, esc } = Kit;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(2, '0');
 const plural = (n, a, b, c) => { n = Math.abs(n); const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+const haptic = k => Kit.haptic(k === 'light' || k === 'medium' ? 'tap' : k);
+const api = (path, body) => Kit.api('api/' + path, body);
 
 /* ---------- даты (строки YYYY-MM-DD, считаем в UTC, чтобы не мешали часовые пояса) ---------- */
 const D = {
@@ -38,7 +39,7 @@ function rel(s) {
 }
 function span(mon) {
   const sun = D.add(mon, 6);
-  return D.mon(mon) === D.mon(sun) ? `${D.day(mon)} – ${D.day(sun)} ${MG[D.mon(sun)]}` : `${dms(mon)} – ${dms(sun)}`;
+  return D.mon(mon) === D.mon(sun) ? `${D.day(mon)}–${D.day(sun)} ${MG[D.mon(sun)]}` : `${dms(mon)} – ${dms(sun)}`;
 }
 function repeatText(r) {
   if (r === '1234567') return 'Каждый день';
@@ -50,10 +51,6 @@ function nowHM() { const d = new Date(); return pad(d.getHours()) + ':' + pad(d.
 
 /* ---------- иконки ---------- */
 const I = {
-  day: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
-  week: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4M7.5 13.5h3M13.5 13.5h3M7.5 17h3"/></svg>',
-  month: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4"/><circle cx="8" cy="13.5" r=".6"/><circle cx="12" cy="13.5" r=".6"/><circle cx="16" cy="13.5" r=".6"/><circle cx="8" cy="17" r=".6"/><circle cx="12" cy="17" r=".6"/></svg>',
-  goals: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/></svg>',
   gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   left: '<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>',
   right: '<svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>',
@@ -72,6 +69,7 @@ const COLORS = { violet: '#8b7cff', blue: '#4da3ff', teal: '#2dd4bf', green: '#4
 const EMOJI = ['🎯', '🏆', '🥊', '💪', '🏃', '📚', '🧠', '💡', '💻', '🚀', '🎨', '🎵', '🎮', '📈', '💰', '🏠', '✈️', '🌱', '🧘', '❤️', '😴', '🍎', '💧', '📝', '🎓', '🗣️', '🤝', '🎉', '⭐', '🔥', '⚡', '🌍'];
 const HZ = { week: 'Неделя', month: 'Месяц', year: 'Год', none: 'Без срока' };
 const gc = g => COLORS[g && g.color] || COLORS.violet;
+const LOGO = '🗓';
 
 /* ---------- состояние ---------- */
 const S = {
@@ -79,18 +77,6 @@ const S = {
   view: 'day', sel: null, week: null, month: null, msel: null, goalId: null, goalsTab: 'active',
   prev: 'goals', pop: null, lastKey: '',
 };
-
-async function api(path, body) {
-  const r = await fetch('api/' + path, {
-    method: body ? 'POST' : 'GET',
-    headers: { 'Content-Type': 'application/json', 'X-Init-Data': (tg && tg.initData) || '' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let j = {};
-  try { j = await r.json(); } catch (e) { j = { error: 'Сервер не ответил' }; }
-  if (!r.ok) throw new Error(j.error || 'Ошибка ' + r.status);
-  return j;
-}
 
 function load(data) {
   S.user = data.user;
@@ -139,18 +125,30 @@ function goalsFor(hz, day) {
   const st = periodStart(hz, day);
   return [...S.goals.values()].filter(g => g.status === 'active' && g.horizon === hz && g.start === st);
 }
-const notesOf = g => [...S.notes.values()].filter(n => n.goal === g.id).sort((a, b) => b.created.localeCompare(a.created) || b.id - a.id);
+const byNew = (a, b) => b.created.localeCompare(a.created) || b.id - a.id;
+const notesOf = g => [...S.notes.values()].filter(n => n.goal === g.id).sort(byNew);
 
 /* ---------- маленькие куски разметки ---------- */
-function ring(p, size = 48, sw = 5, label) {
-  const r = size / 2 - sw / 2 - 1, c = 2 * Math.PI * r;
-  return `<div class="ring${size > 70 ? ' big' : ''}${p >= 100 ? ' full' : ''}" style="width:${size}px;height:${size}px">
-    <svg viewBox="0 0 ${size} ${size}"><circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}"/>
-    <circle class="val" cx="${size / 2}" cy="${size / 2}" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(p, 100) / 100)}"/></svg>
-    <div class="lbl">${label != null ? label : p + '%'}</div></div>`;
+function hero(title, sub, end = '') {
+  return `<header class="hero"><div class="logo">${LOGO}</div><div class="titles"><h1>${title}</h1><div class="sub">${sub}</div></div>${end ? `<div class="end">${end}</div>` : ''}</header>`;
 }
-const bar = (p, cls = '', color) => `<div class="bar ${cls}"><i style="width:${Math.max(0, Math.min(100, p))}%${color ? ';background:' + color : ''}"></i></div>`;
-const checkBox = (on, color) => `<span class="check${on ? ' on' : ''}" style="--c:${color || 'var(--accent)'}">${I.check}</span>`;
+const gearBtn = () => `<button class="btn icon tonal" data-a="settings" aria-label="Настройки">${I.gear}</button>`;
+function ring(p, size = 64, w = 7, color) {
+  const full = p >= 100;
+  return `<div class="ring-wrap"><div class="ring${full ? ' full' : ''}" style="--p:${Math.min(p, 100)};--size:${size}px;--w:${w}px${color ? ';--accent:' + color : ''}"></div>
+    <div class="ring-v pct-v${size > 70 ? ' big' : ''}">${p}%</div></div>`;
+}
+const bar = (p, color) => `<div class="bar thin"><i style="width:${Math.max(0, Math.min(100, p))}%${color ? ';background:' + color : ''}"></i></div>`;
+const checkBox = (on, color, key) => `<span class="check${on ? ' on' : ''}${S.pop === key ? ' pop' : ''}" style="--c:${color || 'var(--accent)'}">${I.check}</span>`;
+function label(title, extra = '', link = '') {
+  return `<div class="label"><span class="lt">${title}${extra !== '' ? ` <span class="cnt">${extra}</span>` : ''}</span>${link}</div>`;
+}
+const more = (text, a, attrs = '') => `<button class="more" data-a="${a}" ${attrs}>${text}</button>`;
+function pager(title, sub) {
+  return `<div class="pager" data-swipe="1"><button class="btn icon" data-a="shift" data-n="-1" aria-label="Назад">${I.left}</button>
+    <div class="pg"><b>${title}</b><small>${sub}</small></div>
+    <button class="btn icon" data-a="shift" data-n="1" aria-label="Вперёд">${I.right}</button></div>`;
+}
 
 function taskRow(t, day, opts = {}) {
   const done = isDone(t, day);
@@ -159,22 +157,21 @@ function taskRow(t, day, opts = {}) {
   if (opts.showDate && t.date && !t.repeat) meta.push(`<span>${I.cal}${rel(t.date) || dms(t.date)}</span>`);
   if (g && !opts.noGoal) meta.push(`<span style="color:${gc(g)}"><em>${esc(g.emoji)} ${esc(g.title)}</em></span>`);
   if (t.repeat) meta.push(`<span>${I.repeat}${repeatText(t.repeat)}</span>`);
-  if (t.time && t.remind >= 0) meta.push(`<span>${I.bell}${t.remind ? t.remind + ' мин' : ''}</span>`);
+  if (t.time && t.remind >= 0) meta.push(`<span>${I.bell}${t.remind ? t.remind + ' мин' : 'вовремя'}</span>`);
   if (t.note) meta.push(`<span>${I.note}<em>${esc(t.note.split('\n')[0].slice(0, 60))}</em></span>`);
-  const key = t.id + '|' + day;
   return `<div class="task${done ? ' done' : ''}${t.important ? ' imp' : ''}${opts.now ? ' now' : ''}" data-a="edit-task" data-id="${t.id}" data-date="${day || ''}">
-    ${opts.noTime ? '' : `<div class="time${t.time ? '' : ' none'}">${t.time || '—'}</div>`}
-    <span data-a="toggle" data-id="${t.id}" data-date="${day || ''}">${checkBox(done, g ? gc(g) : null).replace('class="check', `class="check${S.pop === key ? ' pop' : ''}`)}</span>
-    <div class="body"><div class="t">${t.important ? '<span class="flag">! </span>' : ''}${esc(t.title)}</div>${meta.length ? `<div class="meta">${meta.join('')}</div>` : ''}</div>
+    ${opts.noTime ? '' : `<div class="tm">${t.time || '<span class="dash">—</span>'}</div>`}
+    <span class="ck" data-a="toggle" data-id="${t.id}" data-date="${day || ''}">${checkBox(done, g ? gc(g) : null, t.id + '|' + day)}</span>
+    <div class="body"><div class="t">${t.important ? '<span class="flag">!</span> ' : ''}${esc(t.title)}</div>${meta.length ? `<div class="meta">${meta.join('')}</div>` : ''}</div>
     ${opts.after || ''}
   </div>`;
 }
 function miniRow(t, day) {
-  const done = isDone(t, day), g = t.goal && S.goals.get(t.goal), key = t.id + '|' + day;
+  const done = isDone(t, day), g = t.goal && S.goals.get(t.goal);
   return `<div class="mini${done ? ' done' : ''}" data-a="edit-task" data-id="${t.id}" data-date="${day}">
-    <span data-a="toggle" data-id="${t.id}" data-date="${day}">${checkBox(done, g ? gc(g) : null).replace('class="check', `class="check${S.pop === key ? ' pop' : ''}`)}</span>
-    <span class="t">${t.important ? '<b class="flag">! </b>' : ''}${g ? esc(g.emoji) + ' ' : ''}${esc(t.title)}</span>
-    ${t.time ? `<span class="tm">${t.time}</span>` : ''}${t.repeat ? `<span class="tm">${I.repeat.replace('<svg', '<svg style="width:13px;height:13px"')}</span>` : ''}
+    <span class="ck" data-a="toggle" data-id="${t.id}" data-date="${day}">${checkBox(done, g ? gc(g) : null, t.id + '|' + day)}</span>
+    <span class="t">${t.important ? '<b class="flag">!</b> ' : ''}${g ? esc(g.emoji) + ' ' : ''}${esc(t.title)}</span>
+    <span class="tm">${t.repeat ? I.repeat : ''}${t.time || ''}</span>
   </div>`;
 }
 function quickRow(date, goal, placeholder = 'Добавить задачу') {
@@ -184,22 +181,19 @@ function quickRow(date, goal, placeholder = 'Добавить задачу') {
 function goalChip(g) {
   const p = pct(g);
   return `<button class="gchip" style="--gc:${gc(g)}" data-a="open-goal" data-id="${g.id}">
-    <div class="e">${esc(g.emoji)}</div><div class="gt">${esc(g.title)}</div>${bar(p, 'thin')}<div class="pct">${p}%</div></button>`;
+    <span class="e">${esc(g.emoji)}</span><span class="gt">${esc(g.title)}</span>${bar(p, gc(g))}<span class="pct">${p}%</span></button>`;
 }
 function goalRow(g) {
   const p = pct(g), st = steps(g), nn = notesOf(g).length, sub = [];
   const end = periodEnd(g);
-  if (g.due) sub.push(`дедлайн ${dms(g.due)}`);
+  if (g.due) sub.push(`до ${dms(g.due)}`);
   else if (g.status === 'active' && end) sub.push(g.horizon === 'year' ? `до конца ${end.slice(0, 4)}` : `до ${dms(end)}`);
   if (st.length) sub.push(`${st.filter(t => t.done).length}/${st.length} ${plural(st.length, 'шаг', 'шага', 'шагов')}`);
   if (nn) sub.push(`${nn} ${plural(nn, 'заметка', 'заметки', 'заметок')}`);
-  return `<button class="goal${g.status === 'done' ? ' isdone' : ''}" style="--gc:${gc(g)}" data-a="open-goal" data-id="${g.id}">
-    <div class="em">${esc(g.emoji)}</div>
-    <div class="gb"><div class="gt">${esc(g.title)}</div><div class="gs">${sub.map(x => `<span>${x}</span>`).join('<span>·</span>') || '&nbsp;'}</div>${bar(p, 'thin')}</div>
-    <div class="gp">${p}%</div></button>`;
-}
-function sec(title, extra = '', link = '') {
-  return `<div class="sec"><h3>${title}</h3>${extra ? `<span class="count">${extra}</span>` : ''}<span class="spacer"></span>${link}</div>`;
+  return `<button class="row goal${g.status === 'done' ? ' isdone' : ''}" style="--gc:${gc(g)}" data-a="open-goal" data-id="${g.id}">
+    <span class="ic">${esc(g.emoji)}</span>
+    <span class="main"><span class="title">${esc(g.title)}</span><span class="meta clip">${sub.join(' · ') || '&nbsp;'}</span>${bar(p, gc(g))}</span>
+    <span class="end gp">${p}%</span></button>`;
 }
 function linkify(text) {
   return esc(text).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" data-link>${u}</a>`);
@@ -211,105 +205,100 @@ function noteDate(isoStr) {
   const base = r || (d.getFullYear() === D.year(S.today) ? dms(local) : `${dms(local)} ${d.getFullYear()}`);
   return `${base}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+function noteCard(n, withGoal) {
+  const g = n.goal && S.goals.get(n.goal);
+  return `<button class="card nc" style="--gc:${g ? gc(g) : 'var(--accent)'}" data-a="edit-note" data-id="${n.id}">
+    <span class="nd">${noteDate(n.created)}${n.updated && n.updated !== n.created ? ' · изменено' : ''}${g && withGoal ? ` · <em>${esc(g.emoji)} ${esc(g.title)}</em>` : ''}</span>
+    <span class="nt">${linkify(n.text)}</span></button>`;
+}
+const composer = (placeholder) => `<div class="card composer"><textarea id="note-in" rows="1" placeholder="${placeholder}" maxlength="10000"></textarea>
+    <button class="send" data-a="note-send" disabled aria-label="Сохранить">${I.send}</button></div>`;
 
 /* ---------- экраны ---------- */
 function viewDay() {
   const day = S.sel, tasks = dayTasks(day), done = tasks.filter(t => isDone(t, day)).length;
-  const isToday = day === S.today, mon = D.monday(day);
-  let html = `<div class="top"><div class="grow"><div class="eyebrow">${WDL[D.wd(day)]}${rel(day) ? ' · ' + rel(day).toLowerCase() : ''}</div>
-      <div class="title">${dm(day)}</div></div>
-      ${isToday ? '' : `<button class="pill-btn" data-a="go-today">Сегодня</button>`}
-      <button class="icon-btn" data-a="settings" aria-label="Настройки">${I.gear}</button></div>`;
-  html += `<div class="strip" data-swipe="week">${[0, 1, 2, 3, 4, 5, 6].map(i => {
+  const isToday = day === S.today, mon = D.monday(day), r = rel(day);
+  const end = (isToday ? '' : `<button class="btn sm tonal" data-a="go-today">Сегодня</button>`) + gearBtn();
+  let html = hero(r || WDL[D.wd(day)], `${r ? WDL[D.wd(day)] + ', ' : ''}${dm(day)}`, end);
+  html += `<div class="strip" data-swipe="1">${[0, 1, 2, 3, 4, 5, 6].map(i => {
     const d = D.add(mon, i), ts = dayTasks(d), dn = ts.filter(t => isDone(t, d)).length;
-    const dots = ts.slice(0, 3).map((t, k) => `<i class="${dn === ts.length ? 'ok' : ''}"></i>`).join('');
+    const dots = ts.slice(0, 3).map(() => `<i class="${dn === ts.length ? 'ok' : ''}"></i>`).join('');
     return `<button class="d${d === S.today ? ' today' : ''}${d === day ? ' sel' : ''}" data-a="pick-day" data-date="${d}">
       <span class="wd">${WD[i]}</span><span class="n">${D.day(d)}</span><span class="dots">${dots}</span></button>`;
   }).join('')}</div>`;
 
-  const nothing = !S.tasks.size && !S.goals.size;
-  if (nothing && !store.get('welcomed')) {
-    html += `<div class="card welcome"><button class="x" data-a="welcome-close" aria-label="Закрыть">${I.x}</button>
-      <b>Привет! Это твой планер</b><p>Три вещи, которые стоит знать:</p>
-      <ul><li><span class="ic">${I.plus}</span><span><b style="display:inline;font-size:inherit;padding:0">+</b> внизу — задача на день, со временем и напоминанием</span></li>
-      <li><span class="ic">${I.goals}</span><span>Во вкладке «Цели» — цели на неделю, месяц или год, с шагами и заметками</span></li>
-      <li><span class="ic">${I.send}</span><span>Или просто напиши боту: <i>завтра в 18:00 тренировка</i></span></li></ul>
-      <button class="btn wide" data-a="fab">Добавить первую задачу</button></div>`;
-  }
-
+  // главная карточка: прогресс дня и большая кнопка «Добавить»
   if (tasks.length) {
     const p = Math.round(100 * done / tasks.length), left = tasks.length - done;
     const msg = left === 0 ? 'Всё сделано — ты молодец' : done === 0 ? (isToday ? 'Начни с самого важного' : 'Запланировано') : `Осталось ${left} — так держать`;
-    html += `<div class="card summary">${ring(p)}<div class="txt"><b>${done} из ${tasks.length} ${plural(tasks.length, 'задачи', 'задач', 'задач')}</b><span>${msg}</span></div></div>`;
+    html += `<section class="card feature hero-card">
+      <div class="sum">${ring(p)}<div class="sum-t"><div class="sum-n"><b>${done}</b><span>из ${tasks.length}</span></div><div class="hint">${msg}</div></div></div>
+      <button class="btn primary" data-a="new-task" data-date="${day}">${I.plus}Добавить задачу</button></section>`;
+  } else {
+    html += `<section class="card feature hero-card empty-day">
+      <div class="sum"><div class="big-e">${isToday ? '🌤' : '🗓'}</div><div class="sum-t"><b class="sum-h">${isToday ? 'Свободный день' : 'Пока пусто'}</b>
+      <div class="hint">Добавь задачи — со временем и напоминанием или просто списком.</div></div></div>
+      <button class="btn primary" data-a="new-task" data-date="${day}">${I.plus}Добавить задачу</button>
+      <div class="hint tip">Или напиши боту: <i>завтра в 18:00 тренировка</i> — можно голосом или фото списка.</div></section>`;
   }
 
   if (isToday) {
     const late = overdue();
     if (late.length) {
-      html += sec('Просрочено', late.length, `<button class="link" data-a="all-today">Все на сегодня</button>`);
-      html += `<div class="card">${late.map(t => taskRow(t, t.date, { showDate: true, noTime: true, after: `<button class="arrow-btn" data-a="to-today" data-id="${t.id}">→ сегодня</button>` })).join('')}</div>`;
+      html += label('Просрочено', late.length, more('Все на сегодня', 'all-today'));
+      html += `<div class="list">${late.map(t => taskRow(t, t.date, { showDate: true, noTime: true, after: `<button class="btn sm tonal mv" data-a="to-today" data-id="${t.id}">На сегодня</button>` })).join('')}</div>`;
     }
   }
 
   const focus = [...goalsFor('week', day), ...goalsFor('month', day)];
   if (focus.length) {
-    html += sec('Цели в фокусе', '', `<button class="link" data-a="tab" data-v="goals">Все</button>`);
-    html += `<div class="goal-chips">${focus.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week">+ Цель</button></div>`;
+    html += label('Цели в фокусе', '', more('Все', 'tab', 'data-v="goals"'));
+    html += `<div class="goal-chips">${focus.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week">${I.plus}Цель</button></div>`;
   }
 
-  html += sec('План', tasks.length ? `${tasks.length}` : '');
-  if (tasks.length) {
-    let nowId = null;
-    if (isToday) { const hm = nowHM(); const n = tasks.find(t => t.time && t.time >= hm && !isDone(t, day)); nowId = n && n.id; }
-    html += `<div class="card">${tasks.map(t => taskRow(t, day, { now: t.id === nowId })).join('')}${quickRow(day)}</div>`;
-  } else {
-    html += `<div class="card"><div class="empty"><div class="big">${isToday ? '🌤' : '🗓'}</div><b>${isToday ? 'Свободный день' : 'Пока пусто'}</b>
-      <p>Добавь задачи — со временем и напоминанием или просто списком.</p></div>${quickRow(day)}</div>`;
-  }
+  html += label('План', tasks.length ? `${done}/${tasks.length}` : '');
+  let nowId = null;
+  if (isToday) { const hm = nowHM(); const n = tasks.find(t => t.time && t.time >= hm && !isDone(t, day)); nowId = n && n.id; }
+  html += `<div class="list">${tasks.map(t => taskRow(t, day, { now: t.id === nowId })).join('')}${quickRow(day)}</div>`;
   return html;
 }
 
 function viewWeek() {
-  const mon = S.week, isCur = mon === D.monday(S.today);
+  const mon = S.week, cur = D.monday(S.today), isCur = mon === cur, k = D.diff(mon, cur) / 7;
   let total = 0, done = 0;
   const days = [0, 1, 2, 3, 4, 5, 6].map(i => {
     const d = D.add(mon, i), ts = dayTasks(d), dn = ts.filter(t => isDone(t, d)).length;
     total += ts.length; done += dn;
     return { d, ts, dn };
   });
-  let html = `<div class="top"><div class="grow"><div class="eyebrow">Неделя ${D.week(mon)}${isCur ? ' · эта' : D.diff(mon, D.monday(S.today)) === 7 ? ' · следующая' : D.diff(mon, D.monday(S.today)) === -7 ? ' · прошлая' : ''}</div>
-    <div class="title">${span(mon)}</div></div>
-    ${isCur ? '' : `<button class="pill-btn" data-a="go-today">Сейчас</button>`}
-    <div class="nav"><button class="icon-btn" data-a="shift" data-n="-1">${I.left}</button><button class="icon-btn" data-a="shift" data-n="1">${I.right}</button></div></div>`;
-  if (total) {
-    const p = Math.round(100 * done / total);
-    html += `<div class="card summary" style="margin-top:8px">${ring(p)}<div class="txt"><b>${done} из ${total} за неделю</b>
-      <span>${p === 100 ? 'Идеальная неделя' : p >= 60 ? 'Отличный темп' : 'Шаг за шагом'}</span></div></div>`;
-  }
+  const p = total ? Math.round(100 * done / total) : 0;
+  const sub = total ? `${done} из ${total} · ${p === 100 ? 'идеальная неделя' : p >= 60 ? 'отличный темп' : 'шаг за шагом'}` : 'Пока ничего не запланировано';
+  let html = hero('Неделя', sub, isCur ? '' : `<button class="btn sm tonal" data-a="go-today">Сейчас</button>`);
+  html += pager(span(mon), `Неделя ${D.week(mon)}${k === 0 ? ' · эта' : k === 1 ? ' · следующая' : k === -1 ? ' · прошлая' : ''}`);
+  if (total) html += `<div class="wbar">${bar(p)}<span class="pct-v">${p}%</span></div>`;
   const goals = goalsFor('week', mon);
-  html += sec('Цели недели', goals.length || '');
-  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week" data-start="${mon}">+ Цель на неделю</button></div>`;
-  html += sec('Дни');
+  html += label('Цели недели', goals.length || '');
+  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="week" data-start="${mon}">${I.plus}Цель на неделю</button></div>`;
+  html += label('Дни');
   html += days.map(({ d, ts, dn }) => {
-    const past = d < S.today, today = d === S.today;
-    return `<div class="card day-card${today ? ' today' : ''}${past && !today ? ' past' : ''}">
+    const today = d === S.today, past = d < S.today;
+    return `<div class="card tight day-card${today ? ' today' : ''}${past ? ' past' : ''}">
       <div class="dh" data-a="open-day" data-date="${d}"><div class="dn"><b>${D.day(d)}</b><small>${WD[D.wd(d)]}</small></div>
-        <div class="dtx">${WDL[D.wd(d)]}${today ? ' <em>· сегодня</em>' : ''}</div>
-        <span class="dc">${ts.length ? `${dn}/${ts.length}` : ''}</span>${I.right}</div>
-      ${ts.length ? ts.map(t => miniRow(t, d)).join('') : '<div class="free">Свободно</div>'}
-      <button class="add-line" data-a="new-task" data-date="${d}">${I.plus}Добавить задачу</button></div>`;
+        <div class="dtx">${WDL[D.wd(d)]}${today ? ' <em>сегодня</em>' : ''}${ts.length ? '' : ' <span class="free">· свободно</span>'}</div>
+        <span class="dc">${ts.length ? `${dn}/${ts.length}` : ''}</span>
+        <button class="btn icon add" data-a="new-task" data-date="${d}" aria-label="Добавить">${I.plus}</button></div>
+      ${ts.map(t => miniRow(t, d)).join('')}</div>`;
   }).join('');
   const inbox = [...S.tasks.values()].filter(t => !t.date && !t.repeat && !t.done);
-  html += sec('Без даты', inbox.length || '');
-  html += `<div class="card">${inbox.map(t => taskRow(t, null, { noTime: true })).join('')}${quickRow('', '', 'Когда-нибудь…')}</div>`;
+  html += label('Без даты', inbox.length || '');
+  html += `<div class="list">${inbox.map(t => taskRow(t, null, { noTime: true })).join('')}${quickRow('', '', 'Когда-нибудь…')}</div>`;
   return html;
 }
 
 function viewMonth() {
   const first = S.month, n = D.dim(first), start = D.monday(first);
   const cells = Math.ceil((D.diff(first, start) + n) / 7) * 7;
-  let total = 0, done = 0;
-  let grid = '';
+  let total = 0, done = 0, grid = '';
   for (let i = 0; i < cells; i++) {
     const d = D.add(start, i), out = d.slice(0, 7) !== first.slice(0, 7);
     const ts = dayTasks(d), dn = ts.filter(t => isDone(t, d)).length;
@@ -319,58 +308,61 @@ function viewMonth() {
     grid += `<button class="${cls}" data-a="cal-day" data-date="${d}"><span class="n">${D.day(d)}</span><span class="dots">${dots}</span></button>`;
   }
   const isCur = first === D.first(S.today);
-  let html = `<div class="top"><div class="grow"><div class="eyebrow">${D.year(first)}${isCur ? ' · этот месяц' : ''}</div><div class="title">${MN[D.mon(first)]}</div></div>
-    ${isCur ? '' : `<button class="pill-btn" data-a="go-today">Сейчас</button>`}
-    <div class="nav"><button class="icon-btn" data-a="shift" data-n="-1">${I.left}</button><button class="icon-btn" data-a="shift" data-n="1">${I.right}</button></div></div>`;
-  html += `<div class="card cal" data-swipe="month" style="margin-top:8px"><div class="wds">${WD.map(w => `<div>${w}</div>`).join('')}</div><div class="grid">${grid}</div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>есть задачи</span><span><i style="background:var(--good)"></i>всё сделано</span></div></div>`;
-
+  const p = total ? Math.round(100 * done / total) : 0;
+  let html = hero('Месяц', total ? `${done} из ${total} · ${p >= 80 ? 'мощный месяц' : 'каждый день — шаг'}` : 'Пока ничего не запланировано',
+    isCur ? '' : `<button class="btn sm tonal" data-a="go-today">Сейчас</button>`);
+  html += pager(`${MN[D.mon(first)]} ${D.year(first)}`, isCur ? 'этот месяц' : `${total} ${plural(total, 'задача', 'задачи', 'задач')}`);
+  html += `<div class="card cal" data-swipe="1"><div class="wds">${WD.map(w => `<div>${w}</div>`).join('')}</div><div class="grid">${grid}</div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>есть задачи</span><span><i style="background:var(--ok)"></i>всё сделано</span></div></div>`;
   const sel = S.msel, ts = dayTasks(sel);
-  html += sec(`${rel(sel) ? rel(sel) + ', ' : ''}${dm(sel)}`, ts.length ? `${ts.filter(t => isDone(t, sel)).length}/${ts.length}` : '', `<button class="link" data-a="open-day" data-date="${sel}">Открыть день</button>`);
-  html += `<div class="card" style="padding-top:4px">${ts.length ? ts.map(t => miniRow(t, sel)).join('') : '<div class="free" style="padding:12px 16px 4px">Ничего не запланировано</div>'}${quickRow(sel)}</div>`;
-
-  if (total) {
-    const p = Math.round(100 * done / total);
-    html += sec('Итог месяца');
-    html += `<div class="card summary">${ring(p)}<div class="txt"><b>${done} из ${total} задач</b><span>${p >= 80 ? 'Мощный месяц' : 'Каждый день — шаг вперёд'}</span></div></div>`;
-  }
+  html += label(`${rel(sel) ? rel(sel) + ', ' : ''}${dm(sel)}`, ts.length ? `${ts.filter(t => isDone(t, sel)).length}/${ts.length}` : '', more('Открыть день', 'open-day', `data-date="${sel}"`));
+  html += `<div class="list">${ts.length ? ts.map(t => miniRow(t, sel)).join('') : '<div class="free-line">Ничего не запланировано</div>'}${quickRow(sel)}</div>`;
   const goals = goalsFor('month', first);
-  html += sec('Цели месяца', goals.length || '');
-  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="month" data-start="${first}">+ Цель на месяц</button></div>`;
+  html += label('Цели месяца', goals.length || '');
+  html += `<div class="goal-chips">${goals.map(goalChip).join('')}<button class="gchip add" data-a="new-goal" data-h="month" data-start="${first}">${I.plus}Цель на месяц</button></div>`;
   return html;
 }
 
+const GOAL_TABS = [['active', 'В работе'], ['done', 'Готово'], ['archived', 'Архив'], ['notes', 'Заметки']];
 function viewGoals() {
   const all = [...S.goals.values()];
   const active = all.filter(g => g.status === 'active'), doneG = all.filter(g => g.status === 'done'), arch = all.filter(g => g.status === 'archived');
   const tab = S.goalsTab;
-  let html = `<div class="top"><div class="grow"><div class="eyebrow">${active.length} в работе · ${doneG.length} ${plural(doneG.length, 'достигнута', 'достигнуты', 'достигнуто')}</div><div class="title">Цели</div></div>
-    <button class="icon-btn" data-a="settings" aria-label="Настройки">${I.gear}</button></div>
-    <div class="seg">${[['active', 'В работе'], ['done', 'Достигнуты'], ['archived', 'Архив']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-a="goals-tab" data-t="${k}">${l}</button>`).join('')}</div>`;
+  const end = `<button class="btn icon primary" data-a="new-goal" data-h="month" aria-label="Новая цель">${I.plus}</button>${gearBtn()}`;
+  let html = hero('Цели', `${active.length} в работе · ${doneG.length} ${plural(doneG.length, 'достигнута', 'достигнуты', 'достигнуто')}`, end);
+  html += `<div class="seg">${GOAL_TABS.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-a="goals-tab" data-t="${k}">${l}</button>`).join('')}</div>`;
+  if (tab === 'notes') return html + viewNotes();
   const list = tab === 'active' ? active : tab === 'done' ? doneG : arch;
   if (!list.length) {
     if (tab === 'active') {
-      html += `<div class="card" style="margin-top:16px"><div class="empty"><div class="big">🎯</div><b>Поставь первую цель</b>
-        <p>Цель — это то, к чему ты идёшь неделю, месяц или год.</p>
+      return html + `<section class="card feature"><div class="empty"><span class="e">🎯</span><b>Поставь первую цель</b>
+        То, к чему идёшь неделю, месяц или год.</div>
         <div class="tips"><div><span>🪜</span><span>Разбей на <b>шаги</b> — прогресс посчитается сам</span></div>
         <div><span>📝</span><span>Пиши <b>заметки</b>: мысли, идеи, что получилось</span></div>
         <div><span>☀️</span><span>Цели недели и месяца бот присылает по утрам</span></div></div>
-        <button class="btn" data-a="new-goal" data-h="month">Новая цель</button></div></div>`;
-    } else {
-      html += `<div class="card" style="margin-top:16px"><div class="empty"><div class="big">${tab === 'done' ? '🏆' : '🗄'}</div>
-        <b>${tab === 'done' ? 'Здесь будут твои победы' : 'Архив пуст'}</b><p>${tab === 'done' ? 'Достигнутые цели остаются здесь навсегда.' : 'Сюда уходят цели, которые больше не актуальны.'}</p></div></div>`;
+        <button class="btn primary" data-a="new-goal" data-h="month">${I.plus}Новая цель</button></section>`;
     }
-    return html;
+    return html + `<div class="card"><div class="empty"><span class="e">${tab === 'done' ? '🏆' : '🗄'}</span>
+      <b>${tab === 'done' ? 'Здесь будут твои победы' : 'Архив пуст'}</b>${tab === 'done' ? 'Достигнутые цели остаются здесь навсегда.' : 'Сюда уходят цели, которые больше не актуальны.'}</div></div>`;
   }
-  if (tab !== 'active') return html + `<div class="card" style="margin-top:16px">${list.map(goalRow).join('')}</div>`;
-  const label = { week: 'Неделя', month: 'Месяц', year: 'Год', none: 'Без срока' };
+  if (tab !== 'active') return html + `<div class="list">${list.map(goalRow).join('')}</div>`;
   for (const hz of ['week', 'month', 'year', 'none']) {
     const part = list.filter(g => g.horizon === hz).sort((a, b) => (b.start || '').localeCompare(a.start || '') || a.pos - b.pos);
     if (!part.length) continue;
-    html += sec(label[hz], part.length);
-    html += `<div class="card">${part.map(goalRow).join('')}</div>`;
+    html += label(HZ[hz], part.length);
+    html += `<div class="list">${part.map(goalRow).join('')}</div>`;
   }
   return html;
+}
+
+function viewNotes() {
+  const notes = [...S.notes.values()].sort(byNew);
+  let html = composer('Заметка, мысль, идея…');
+  if (!notes.length) {
+    return html + `<div class="card"><div class="empty"><span class="e">📝</span><b>Пока нет заметок</b>
+      Пиши сюда или боту: <i>заметка: купить подарок маме</i>. Заметки к цели — на её странице.</div></div>`;
+  }
+  return html + `<div class="timeline">${notes.map(n => noteCard(n, true)).join('')}</div>`;
 }
 
 function viewGoal() {
@@ -383,60 +375,69 @@ function viewGoal() {
   if (g.horizon === 'month' && g.start) period = MN[D.mon(g.start)] + ' ' + D.year(g.start);
   if (g.horizon === 'year' && g.start) period = 'Год ' + D.year(g.start);
   const status = g.status === 'done' ? 'Достигнута' : g.status === 'archived' ? 'В архиве' : end && end < S.today ? 'Срок прошёл' : '';
-  let html = `<div class="hero" style="--gc:${gc(g)}"><div class="row"><div class="he">${esc(g.emoji)}</div><div class="grow"></div>${ring(p, 72, 7)}</div>
-    <div class="ht">${esc(g.title)}</div>
-    <div class="hs"><span>${period}</span>${g.due ? `<span>Дедлайн ${dm(g.due)}</span>` : ''}${status ? `<span>· ${status}</span>` : ''}</div>
-    ${g.why ? `<div class="why">${esc(g.why)}</div>` : ''}</div>`;
+  let html = `<button class="back" data-a="back">${I.left}<span>${S.prev === 'goals' ? 'Цели' : 'Назад'}</span></button>`;
+  html += `<section class="card goal-hero" style="--gc:${gc(g)}"><div class="gh-top"><div class="he">${esc(g.emoji)}</div>${ring(p, 76, 8, gc(g))}</div>
+    <h2 class="ht">${esc(g.title)}</h2>
+    <div class="hs"><span>${period}</span>${g.due ? `<span>Дедлайн ${dm(g.due)}</span>` : ''}${status ? `<span class="pill ${g.status === 'done' ? 'ok' : 'warn'}">${status}</span>` : ''}</div>
+    ${g.why ? `<div class="why"><b>Зачем:</b> ${esc(g.why)}</div>` : ''}</section>`;
   if (!st.length && g.status === 'active') {
-    html += `<div class="card slider-card" style="margin-top:8px"><div class="lbl"><span>Прогресс вручную</span><b id="pv">${g.progress || 0}%</b></div>
+    html += `<div class="card slider-card"><div class="lbl"><span>Прогресс вручную</span><b id="pv" class="pct-v">${g.progress || 0}%</b></div>
       <input type="range" min="0" max="100" step="5" value="${g.progress || 0}" data-progress="${g.id}" style="--gc:${gc(g)}">
       <div class="hint">Или добавь шаги ниже — тогда прогресс посчитается сам.</div></div>`;
   }
-  html += sec('Шаги', st.length ? `${st.filter(t => t.done).length}/${st.length}` : '');
-  html += `<div class="card">${st.map(t => taskRow(t, t.date, { noTime: true, showDate: true, noGoal: true })).join('')}${quickRow('', g.id, st.length ? 'Ещё шаг…' : 'Первый шаг…')}</div>`;
+  html += label('Шаги', st.length ? `${st.filter(t => t.done).length}/${st.length}` : '');
+  html += `<div class="list">${st.map(t => taskRow(t, t.date, { noTime: true, showDate: true, noGoal: true })).join('')}${quickRow('', g.id, st.length ? 'Ещё шаг…' : 'Первый шаг…')}</div>`;
   if (hb.length) {
-    html += sec('Регулярно');
-    html += `<div class="card">${hb.map(t => `<div class="task" data-a="edit-task" data-id="${t.id}" data-date="${S.today}"><div class="body"><div class="t">${esc(t.title)}</div>
+    html += label('Регулярно');
+    html += `<div class="list">${hb.map(t => `<div class="task" data-a="edit-task" data-id="${t.id}" data-date="${S.today}"><div class="body"><div class="t">${esc(t.title)}</div>
       <div class="meta"><span>${I.repeat}${repeatText(t.repeat)}${t.time ? ' · ' + t.time : ''}</span></div></div></div>`).join('')}</div>`;
   }
-  html += sec('Заметки', notes.length || '');
-  html += `<div class="card composer"><textarea id="note-in" rows="1" placeholder="Мысль, идея, что получилось…" maxlength="10000"></textarea>
-    <button class="send" data-a="note-send" disabled aria-label="Сохранить">${I.send}</button></div>`;
-  if (notes.length) {
-    html += `<div class="timeline" style="--gc:${gc(g)}">${notes.map(n => `<button class="card note" data-a="edit-note" data-id="${n.id}">
-      <div class="nd">${noteDate(n.created)}${n.updated && n.updated !== n.created ? ' · изменено' : ''}</div><div class="nt">${linkify(n.text)}</div></button>`).join('')}</div>`;
-  }
+  html += label('Заметки', notes.length || '');
+  html += composer('Мысль, идея, что получилось…');
+  if (notes.length) html += `<div class="timeline">${notes.map(n => noteCard(n, false)).join('')}</div>`;
   html += `<div class="actions">`;
   if (g.status === 'active') {
-    html += `<button class="btn good wide" data-a="goal-status" data-s="done">Цель достигнута</button>
-      <div class="two"><button class="btn ghost" data-a="edit-goal">Изменить</button><button class="btn ghost" data-a="goal-status" data-s="archived">В архив</button></div>`;
+    html += `<button class="btn good" data-a="goal-status" data-s="done">🏆 Цель достигнута</button>
+      <div class="btns"><button class="btn tonal" data-a="edit-goal">Изменить</button><button class="btn" data-a="goal-status" data-s="archived">В архив</button></div>`;
   } else {
-    html += `<button class="btn ghost wide" data-a="goal-status" data-s="active">Вернуть в работу</button>
-      <div class="two"><button class="btn ghost" data-a="edit-goal">Изменить</button><button class="btn danger" data-a="goal-delete">Удалить</button></div>`;
+    html += `<button class="btn tonal" data-a="goal-status" data-s="active">Вернуть в работу</button>
+      <div class="btns"><button class="btn" data-a="edit-goal">Изменить</button><button class="btn danger" data-a="goal-delete">Удалить</button></div>`;
   }
   return html + `</div>`;
 }
 
 /* ---------- отрисовка ---------- */
-const TABS = [['day', 'День', I.day], ['week', 'Неделя', I.week], ['month', 'Месяц', I.month], ['goals', 'Цели', I.goals]];
+const TI = {
+  day: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  week: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4M7.5 13.5h3M13.5 13.5h3M7.5 17h3"/></svg>',
+  month: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4"/><circle cx="8" cy="13.5" r=".6"/><circle cx="12" cy="13.5" r=".6"/><circle cx="16" cy="13.5" r=".6"/><circle cx="8" cy="17" r=".6"/><circle cx="12" cy="17" r=".6"/></svg>',
+  goals: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/></svg>',
+};
+const TABS = [{ id: 'day', icon: TI.day, label: 'День' }, { id: 'week', icon: TI.week, label: 'Неделя' }, { id: 'month', icon: TI.month, label: 'Месяц' }, { id: 'goals', icon: TI.goals, label: 'Цели' }];
+let TB = null;
 function render() {
   const v = $('#view');
   const fn = { day: viewDay, week: viewWeek, month: viewMonth, goals: viewGoals, goal: viewGoal }[S.view];
   const key = S.view + (S.view === 'day' ? S.sel : S.view === 'week' ? S.week : S.view === 'month' ? S.month : S.view === 'goal' ? S.goalId : S.goalsTab);
-  const focus = document.activeElement && document.activeElement.matches('[data-quick]') ? document.activeElement.dataset.date + '|' + document.activeElement.dataset.goal : null;
+  const ae = document.activeElement;
+  const focus = ae && ae.matches('[data-quick]') ? ae.dataset.date + '|' + ae.dataset.goal : null;
+  const draft = $('#note-in') ? $('#note-in').value : '';
   const html = fn();
   if (html === undefined) return;
   v.innerHTML = html;
   if (key !== S.lastKey) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); }
   if (key.slice(0, 4) !== S.lastKey.slice(0, 4)) window.scrollTo(0, 0);
+  const sameScreen = key === S.lastKey;
   S.lastKey = key;
   S.pop = null;
-  const active = S.view === 'goal' ? 'goals' : S.view;
-  $('#tabs').innerHTML = TABS.map(([k, l, ic]) => `<button class="tab${k === active ? ' on' : ''}" data-a="tab" data-v="${k}">${ic}<span>${l}</span></button>`).join('');
-  $('#fab').classList.toggle('hide', S.view === 'goal');
+  if (TB) TB.set(S.view === 'goal' ? 'goals' : S.view);
   if (focus) { const el = $$('[data-quick]').find(e => e.dataset.date + '|' + e.dataset.goal === focus); if (el) el.focus(); }
   const ta = $('#note-in');
-  if (ta) ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; $('[data-a="note-send"]').disabled = !ta.value.trim(); });
+  if (ta) {
+    const fit = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; $('[data-a="note-send"]').disabled = !ta.value.trim(); };
+    ta.addEventListener('input', fit);
+    if (sameScreen && draft) { ta.value = draft; fit(); }
+  }
   backButton();
 }
 
@@ -447,31 +448,13 @@ function go(view, extra = {}) {
   haptic('select');
 }
 
-/* ---------- Telegram: тема, кнопка «назад», вибро ---------- */
-function haptic(kind) {
-  const h = tg && tg.HapticFeedback;
-  if (!h || !tg.isVersionAtLeast || !tg.isVersionAtLeast('6.1')) return;
-  try {
-    if (kind === 'select') h.selectionChanged();
-    else if (kind === 'success' || kind === 'error' || kind === 'warning') h.notificationOccurred(kind);
-    else h.impactOccurred(kind || 'light');
-  } catch (e) { /* старый клиент */ }
-}
-function applyTheme() {
-  const light = tg ? tg.colorScheme === 'light' : matchMedia('(prefers-color-scheme: light)').matches;
-  document.body.classList.toggle('light', light);
-  const bg = getComputedStyle(document.body).getPropertyValue('--bg').trim();
-  if (tg && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
-    try { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); } catch (e) { /* */ }
-    try { if (tg.isVersionAtLeast('7.10')) tg.setBottomBarColor(bg); } catch (e) { /* */ }
-  }
-}
+/* ---------- Telegram: кнопка «назад», подтверждения ---------- */
 function backButton() {
-  if (!tg || !tg.BackButton || !tg.isVersionAtLeast || !tg.isVersionAtLeast('6.1')) return;
-  if (sheetOpen || S.view === 'goal') tg.BackButton.show(); else tg.BackButton.hide();
+  if (!tg || !tg.BackButton) return;
+  if (sheetEl || S.view === 'goal') tg.BackButton.show(); else tg.BackButton.hide();
 }
 function back() {
-  if (sheetOpen) return closeSheet();
+  if (sheetEl) return closeSheet();
   if (S.view === 'goal') go(S.prev || 'goals');
 }
 function confirmPopup(message, buttons) {
@@ -483,26 +466,21 @@ function confirmPopup(message, buttons) {
     }
   });
 }
-const store = {
-  get: k => { try { return localStorage.getItem('ritm.' + k); } catch (e) { return null; } },
-  set: (k, v) => { try { localStorage.setItem('ritm.' + k, v); } catch (e) { /* */ } },
-};
 
-/* ---------- тост и конфетти ---------- */
-let toastTimer;
+/* ---------- уведомление снизу (с кнопкой «Вернуть») и конфетти ---------- */
+let snackTimer;
 function toast(text, action, fn) {
-  const t = $('#toast');
+  const t = $('#snack');
   t.innerHTML = `<span>${esc(text)}</span>${action ? `<button>${esc(action)}</button>` : ''}`;
-  t.classList.toggle('has-btn', !!action);
   if (action) t.querySelector('button').onclick = () => { t.classList.remove('show'); fn(); };
   t.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), action ? 4500 : 2200);
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(() => t.classList.remove('show'), action ? 4500 : 2200);
 }
 function confetti() {
   const c = $('#confetti'), x = c.getContext('2d'), dpr = devicePixelRatio || 1;
   c.width = innerWidth * dpr; c.height = innerHeight * dpr; x.scale(dpr, dpr);
-  const cols = Object.values(COLORS);
+  const cols = ['#ff7a45', '#ffb38a', '#fbbf24', '#34c759', '#4da3ff', '#f472b6'];
   const ps = Array.from({ length: 140 }, () => ({
     x: innerWidth / 2 + (Math.random() - .5) * 80, y: innerHeight * .45, vx: (Math.random() - .5) * 13, vy: -Math.random() * 15 - 5,
     r: Math.random() * 6 + 4, c: cols[Math.random() * cols.length | 0], a: Math.random() * 6, va: (Math.random() - .5) * .4,
@@ -594,40 +572,48 @@ async function saveGoal(data) {
   return r.goal;
 }
 
-/* ---------- шторки ---------- */
-let sheetOpen = null;
+/* ---------- листы снизу (вид — kit .sheet; свой код — ради свайпа вниз и кнопки «Назад») ---------- */
+let sheetEl = null, backdropEl = null;
 function openSheet(html, mount) {
   closeSheet(true);
-  const root = $('#sheet-root');
-  root.innerHTML = `<div class="backdrop"></div><div class="sheet" role="dialog"><div class="grab"></div>${html}</div>`;
-  const bd = $('.backdrop', root), sh = $('.sheet', root);
-  bd.onclick = () => closeSheet();
-  requestAnimationFrame(() => { bd.classList.add('show'); sh.classList.add('show'); });
-  // свайп вниз по ручке закрывает
-  let y0 = null;
+  backdropEl = document.createElement('div');
+  backdropEl.className = 'sheet-backdrop';
+  sheetEl = document.createElement('div');
+  sheetEl.className = 'sheet';
+  sheetEl.setAttribute('role', 'dialog');
+  sheetEl.innerHTML = html;
+  document.body.append(backdropEl, sheetEl);
+  const sh = sheetEl;
+  backdropEl.onclick = () => closeSheet();
+  requestAnimationFrame(() => { if (backdropEl) backdropEl.classList.add('open'); sh.classList.add('open'); });
+  let y0 = null;  // свайп вниз закрывает
   sh.addEventListener('touchstart', e => { y0 = sh.scrollTop <= 0 ? e.touches[0].clientY : null; }, { passive: true });
   sh.addEventListener('touchmove', e => { if (y0 != null) { const dy = e.touches[0].clientY - y0; if (dy > 0) sh.style.transform = `translateY(${dy}px)`; } }, { passive: true });
   sh.addEventListener('touchend', e => { if (y0 == null) return; const dy = e.changedTouches[0].clientY - y0; sh.style.transform = ''; if (dy > 110) closeSheet(); y0 = null; });
-  sheetOpen = sh;
   mount && mount(sh);
   // выбранный вариант в длинном ряду — сразу на виду
-  $$('.chips.scroll', sh).forEach(row => { const on = $('.chip.on', row); if (on && on.offsetLeft + on.offsetWidth > row.clientWidth) row.scrollLeft = on.offsetLeft - 18; });
+  $$('.chips', sh).forEach(row => {
+    const on = $('.chip.on', row);
+    if (!on) return;
+    const x = on.getBoundingClientRect().left - row.getBoundingClientRect().left;
+    if (x + on.offsetWidth > row.clientWidth) row.scrollLeft = x - 16;
+  });
   backButton();
   return sh;
 }
 function closeSheet(instant) {
-  const root = $('#sheet-root');
-  if (!sheetOpen) return;
-  sheetOpen = null;
+  if (!sheetEl) return;
+  const s = sheetEl, b = backdropEl;
+  sheetEl = backdropEl = null;
   if (document.activeElement) document.activeElement.blur();
-  if (instant) { root.innerHTML = ''; return; }
-  $('.backdrop', root).classList.remove('show');
-  $('.sheet', root).classList.remove('show');
-  setTimeout(() => { if (!sheetOpen) root.innerHTML = ''; }, 350);
+  if (instant) { s.remove(); b.remove(); } else {
+    s.classList.remove('open'); b.classList.remove('open');
+    setTimeout(() => { s.remove(); b.remove(); }, 340);
+  }
   backButton();
 }
-function chips(name, items, cur, cls = '') {
-  return `<div class="chips ${cls}" data-group="${name}">${items.map(([v, l]) => `<button class="chip${String(v) === String(cur) ? ' on' : ''}" data-v="${v}">${l}</button>`).join('')}</div>`;
+function chips(name, items, cur) {
+  return `<div class="chips" data-group="${name}">${items.map(([v, l]) => `<button class="chip${String(v) === String(cur) ? ' on' : ''}" data-v="${v}">${l}</button>`).join('')}</div>`;
 }
 function bindChips(sh, name, fn) {
   const g = $(`[data-group="${name}"]`, sh);
@@ -640,6 +626,8 @@ function bindChips(sh, name, fn) {
     fn(b.dataset.v, b);
   });
 }
+const REMIND = [[-1, 'Нет'], [0, 'В это время'], [10, 'За 10 мин'], [15, 'За 15 мин'], [30, 'За 30 мин'], [60, 'За час']];
+const PRESET = ['09:00', '16:00', '18:00', '20:00'];
 
 function taskSheet(t, day, defaults = {}) {
   const isNew = !t;
@@ -647,32 +635,31 @@ function taskSheet(t, day, defaults = {}) {
   if (isNew && f.time) f.remind = S.user.remind;
   const tomorrow = D.add(S.today, 1);
   const goals = [...S.goals.values()].filter(g => g.status === 'active' || g.id === f.goal);
-  const dateLabel = d => !d ? 'Дата' : d === S.today || d === tomorrow ? 'Дата' : `${rel(d) || dms(d)}`;
+  const dateLabel = d => !d || d === S.today || d === tomorrow ? 'Дата' : `${rel(d) || dms(d)}`;
   const dateKey = d => !d ? 'none' : d === S.today ? 'today' : d === tomorrow ? 'tomorrow' : 'pick';
   const repKey = r => !r ? '' : r === '1234567' ? 'daily' : r === '12345' ? 'weekdays' : 'custom';
-  const html = `<h2><span class="grow">${isNew ? 'Новая задача' : 'Задача'}</span></h2>
+  const html = `<h2>${isNew ? 'Новая задача' : 'Задача'}</h2>
     <textarea class="big-input" id="f-title" rows="1" placeholder="Что сделать?" maxlength="300">${esc(f.title)}</textarea>
-    <div class="row-lbl" id="date-lbl">${f.repeat ? 'Начиная с' : 'Когда'}</div>
-    <div class="chips scroll" data-group="date">
+    <div class="label" id="date-lbl">${f.repeat ? 'Начиная с' : 'Когда'}</div>
+    <div class="chips" data-group="date">
       <button class="chip" data-v="today">Сегодня</button><button class="chip" data-v="tomorrow">Завтра</button>
       <label class="chip" data-v="pick">${I.cal}<span id="date-txt">${dateLabel(f.date)}</span><input type="date" id="f-date" value="${f.date || ''}"></label>
       <button class="chip" data-v="none">Без даты</button></div>
-    <div class="row-lbl">Время</div>
-    <div class="chips scroll" data-group="time">
+    <div class="label">Время</div>
+    <div class="chips" data-group="time">
       <button class="chip" data-v="">Весь день</button>
-      <label class="chip" data-v="pick">${I.clock}<span id="time-txt">${f.time && !['09:00', '16:00', '18:00', '20:00'].includes(f.time) ? f.time : 'Выбрать'}</span><input type="time" id="f-time" value="${f.time || ''}"></label>
-      ${['09:00', '16:00', '18:00', '20:00'].map(x => `<button class="chip" data-v="${x}">${x}</button>`).join('')}</div>
-    <div id="remind-box" class="${f.time ? '' : 'hidden'}"><div class="row-lbl">${I.bell} Напомнить</div>
-      ${chips('remind', [[-1, 'Нет'], [0, 'В это время'], [10, 'За 10 мин'], [15, 'За 15 мин'], [30, 'За 30 мин'], [60, 'За час']], f.remind, 'scroll')}</div>
-    <div class="row-lbl">Повтор</div>
-    ${chips('repeat', [['', 'Нет'], ['daily', 'Каждый день'], ['weekdays', 'По будням'], ['custom', 'Дни недели']], repKey(f.repeat), 'scroll')}
-    <div id="wd-box" class="${repKey(f.repeat) === 'custom' ? '' : 'hidden'}" style="margin-top:8px"><div class="chips" data-wd>${WD.map((w, i) => `<button class="chip wd${(f.repeat || '').includes(String(i + 1)) ? ' on' : ''}" data-d="${i + 1}">${w}</button>`).join('')}</div></div>
-    ${goals.length ? `<div class="row-lbl">Цель</div>${chips('goal', [['', 'Без цели'], ...goals.map(g => [g.id, `${esc(g.emoji)} ${esc(g.title.length > 22 ? g.title.slice(0, 21) + '…' : g.title)}`])], f.goal || '', 'scroll')}` : ''}
-    <div class="switch-row" data-a2="imp"><div class="grow"><b>Важное</b><small>Выше в списке, с красной отметкой</small></div><span class="switch${f.important ? ' on' : ''}" id="f-imp"></span></div>
-    <div class="row-lbl">Заметка</div>
-    <textarea class="field" id="f-note" placeholder="Детали, ссылки, мысли…" maxlength="5000">${esc(f.note || '')}</textarea>
-    <div class="actions"><button class="btn wide" id="f-save">${isNew ? 'Добавить' : 'Сохранить'}</button>
-      ${isNew ? '' : `<div class="two">${t.repeat ? '<span></span>' : `<button class="btn ghost" id="f-move">${t.date === S.today ? 'На завтра' : 'На сегодня'}</button>`}<button class="btn danger" id="f-del">Удалить</button></div>`}</div>`;
+      <label class="chip" data-v="pick">${I.clock}<span id="time-txt">${f.time && !PRESET.includes(f.time) ? f.time : 'Выбрать'}</span><input type="time" id="f-time" value="${f.time || ''}"></label>
+      ${PRESET.map(x => `<button class="chip" data-v="${x}">${x}</button>`).join('')}</div>
+    <div id="remind-box" class="${f.time ? '' : 'hidden'}"><div class="label">Напомнить</div>${chips('remind', REMIND, f.remind)}</div>
+    <div class="label">Повтор</div>
+    ${chips('repeat', [['', 'Нет'], ['daily', 'Каждый день'], ['weekdays', 'По будням'], ['custom', 'Дни недели']], repKey(f.repeat))}
+    <div id="wd-box" class="${repKey(f.repeat) === 'custom' ? '' : 'hidden'}"><div class="wds-pick" data-wd>${WD.map((w, i) => `<button class="chip${(f.repeat || '').includes(String(i + 1)) ? ' on' : ''}" data-d="${i + 1}">${w}</button>`).join('')}</div></div>
+    ${goals.length ? `<div class="label">Цель</div>${chips('goal', [['', 'Без цели'], ...goals.map(g => [g.id, `${esc(g.emoji)} ${esc(g.title.length > 22 ? g.title.slice(0, 21) + '…' : g.title)}`])], f.goal || '')}` : ''}
+    <div class="list opt"><div class="row no-ic tap" data-a2="imp"><div class="main"><div class="title">Важное</div><div class="meta">Выше в списке, с красной отметкой</div></div><button class="switch${f.important ? ' on' : ''}" id="f-imp" aria-label="Важное"></button></div></div>
+    <div class="label">Заметка</div>
+    <textarea id="f-note" rows="3" placeholder="Детали, ссылки, мысли…" maxlength="5000">${esc(f.note || '')}</textarea>
+    <div class="actions"><button class="btn primary" id="f-save">${isNew ? 'Добавить' : 'Сохранить'}</button>
+      ${isNew ? '' : `<div class="btns">${t.repeat ? '' : `<button class="btn tonal" id="f-move">${t.date === S.today ? 'На завтра' : 'На сегодня'}</button>`}<button class="btn danger" id="f-del">Удалить</button></div>`}</div>`;
   openSheet(html, sh => {
     const title = $('#f-title', sh);
     const grow = () => { title.style.height = 'auto'; title.style.height = title.scrollHeight + 'px'; };
@@ -683,10 +670,12 @@ function taskSheet(t, day, defaults = {}) {
       $('#date-txt', sh).textContent = dateLabel(f.date);
     };
     const markTime = () => {
-      const preset = ['09:00', '16:00', '18:00', '20:00'];
-      $$('[data-group="time"] .chip', sh).forEach(c => c.classList.toggle('on', c.dataset.v === 'pick' ? !!f.time && !preset.includes(f.time) : c.dataset.v === (f.time || '')));
-      $('#time-txt', sh).textContent = f.time && !preset.includes(f.time) ? f.time : 'Выбрать';
+      $$('[data-group="time"] .chip', sh).forEach(c => c.classList.toggle('on', c.dataset.v === 'pick' ? !!f.time && !PRESET.includes(f.time) : c.dataset.v === (f.time || '')));
+      $('#time-txt', sh).textContent = f.time && !PRESET.includes(f.time) ? f.time : 'Выбрать';
       $('#remind-box', sh).classList.toggle('hidden', !f.time);
+    };
+    const autoRemind = had => {
+      if (f.time && !had && f.remind < 0) { f.remind = S.user.remind; $$('[data-group="remind"] .chip', sh).forEach(c => c.classList.toggle('on', +c.dataset.v === f.remind)); }
     };
     markDate(); markTime();
     $('[data-group="date"]', sh).addEventListener('click', e => {
@@ -700,14 +689,9 @@ function taskSheet(t, day, defaults = {}) {
       const b = e.target.closest('.chip'); if (!b || b.dataset.v === 'pick') return;
       const had = !!f.time;
       f.time = b.dataset.v || null;
-      if (f.time && !had && f.remind < 0) { f.remind = S.user.remind; $$('[data-group="remind"] .chip', sh).forEach(c => c.classList.toggle('on', +c.dataset.v === f.remind)); }
-      haptic('select'); markTime();
+      autoRemind(had); haptic('select'); markTime();
     });
-    $('#f-time', sh).addEventListener('change', e => {
-      const had = !!f.time; f.time = e.target.value || null;
-      if (f.time && !had && f.remind < 0) { f.remind = S.user.remind; $$('[data-group="remind"] .chip', sh).forEach(c => c.classList.toggle('on', +c.dataset.v === f.remind)); }
-      markTime();
-    });
+    $('#f-time', sh).addEventListener('change', e => { const had = !!f.time; f.time = e.target.value || null; autoRemind(had); markTime(); });
     bindChips(sh, 'remind', v => { f.remind = +v; });
     bindChips(sh, 'repeat', v => {
       f.repeat = { '': '', daily: '1234567', weekdays: '12345', custom: f.repeat && repKey(f.repeat) === 'custom' ? f.repeat : String(D.wd(f.date || S.today) + 1) }[v];
@@ -726,12 +710,13 @@ function taskSheet(t, day, defaults = {}) {
     $('#f-save', sh).addEventListener('click', async e => {
       f.title = title.value.trim(); f.note = $('#f-note', sh).value;
       if (!f.title) { title.focus(); haptic('error'); return; }
-      e.target.disabled = true;
-      try {
-        await saveTask({ id: t && t.id, title: f.title, date: f.date, time: f.time, repeat: f.repeat || '', goal: f.goal, remind: f.time ? f.remind : -1, important: f.important, note: f.note });
-        haptic('success'); closeSheet(); render();
-        if (isNew) toast('Добавлено');
-      } catch (err) { e.target.disabled = false; toast(err.message); }
+      await Kit.busy(e.currentTarget, async () => {
+        try {
+          await saveTask({ id: t && t.id, title: f.title, date: f.date, time: f.time, repeat: f.repeat || '', goal: f.goal, remind: f.time ? f.remind : -1, important: f.important, note: f.note });
+          haptic('success'); closeSheet(); render();
+          if (isNew) toast('Добавлено');
+        } catch (err) { toast(err.message); }
+      });
     });
     const mv = $('#f-move', sh);
     if (mv) mv.addEventListener('click', async () => {
@@ -745,7 +730,7 @@ function taskSheet(t, day, defaults = {}) {
 }
 
 function periodLabel(hz, start) {
-  if (hz === 'week') { const cur = D.monday(S.today); const n = D.diff(start, cur) / 7; return span(start) + (n === 0 ? ' · эта' : n === 1 ? ' · следующая' : ''); }
+  if (hz === 'week') { const n = D.diff(start, D.monday(S.today)) / 7; return span(start) + (n === 0 ? ' · эта' : n === 1 ? ' · следующая' : ''); }
   if (hz === 'month') return MN[D.mon(start)] + ' ' + D.year(start) + (start === D.first(S.today) ? ' · этот' : '');
   if (hz === 'year') return D.year(start) + ' год';
   return '';
@@ -754,22 +739,22 @@ function goalSheet(g, defaults = {}) {
   const isNew = !g;
   const f = g ? { ...g } : { title: '', emoji: '🎯', color: 'violet', horizon: 'month', start: null, due: null, why: '', ...defaults };
   if (!f.start && f.horizon !== 'none') f.start = periodStart(f.horizon, S.today);
-  const html = `<h2><span class="grow">${isNew ? 'Новая цель' : 'Цель'}</span></h2>
-    <div class="head-row"><button class="emoji-btn" id="g-emoji" style="--gc:${gc(f)}">${esc(f.emoji)}</button>
+  const html = `<h2>${isNew ? 'Новая цель' : 'Цель'}</h2>
+    <div class="head-row"><button class="emoji-btn" id="g-emoji" style="--gc:${gc(f)}" aria-label="Значок">${esc(f.emoji)}</button>
       <textarea class="big-input" id="g-title" rows="1" placeholder="Чего хочу достичь?" maxlength="200">${esc(f.title)}</textarea></div>
     <div class="emoji-grid hidden" id="g-emojis">${EMOJI.map(e => `<button class="${e === f.emoji ? 'on' : ''}" data-e="${e}">${e}</button>`).join('')}</div>
-    <div class="row-lbl">Срок</div>
-    <div class="seg" data-group="hz" style="margin:0">${Object.entries(HZ).map(([k, l]) => `<button class="${k === f.horizon ? 'on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>
-    <div class="period ${f.horizon === 'none' ? 'hidden' : ''}" id="g-period"><button data-n="-1">${I.left}</button><div class="pl" id="g-pl">${periodLabel(f.horizon, f.start)}</div><button data-n="1">${I.right}</button></div>
-    <div class="row-lbl">Дедлайн</div>
+    <div class="label">Срок</div>
+    <div class="seg" data-group="hz">${Object.entries(HZ).map(([k, l]) => `<button class="${k === f.horizon ? 'on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>
+    <div class="period ${f.horizon === 'none' ? 'hidden' : ''}" id="g-period"><button class="btn icon" data-n="-1">${I.left}</button><div class="pl" id="g-pl">${periodLabel(f.horizon, f.start)}</div><button class="btn icon" data-n="1">${I.right}</button></div>
+    <div class="label">Дедлайн</div>
     <div class="chips"><label class="chip${f.due ? ' on' : ''}" id="g-due-chip">${I.flag}<span id="g-due-txt">${f.due ? dm(f.due) : 'Выбрать дату'}</span><input type="date" id="g-due" value="${f.due || ''}"></label>
       <button class="chip ${f.due ? '' : 'hidden'}" id="g-due-x">${I.x} Убрать</button></div>
-    <div class="row-lbl">Цвет</div>
-    <div class="swatches">${Object.entries(COLORS).map(([k, c]) => `<button class="sw${k === f.color ? ' on' : ''}" style="--gc:${c}" data-c="${k}"></button>`).join('')}</div>
-    <div class="row-lbl">Зачем мне это</div>
-    <textarea class="field" id="g-why" placeholder="Что изменится, когда достигну? Это помогает не бросить." maxlength="2000">${esc(f.why || '')}</textarea>
-    <div class="hint">Шаги и заметки добавляются на странице цели.</div>
-    <div class="actions"><button class="btn wide" id="g-save">${isNew ? 'Поставить цель' : 'Сохранить'}</button></div>`;
+    <div class="label">Цвет</div>
+    <div class="swatches">${Object.entries(COLORS).map(([k, c]) => `<button class="sw${k === f.color ? ' on' : ''}" style="--gc:${c}" data-c="${k}" aria-label="${k}"></button>`).join('')}</div>
+    <div class="label">Зачем мне это</div>
+    <textarea id="g-why" rows="3" placeholder="Что изменится, когда достигну? Это помогает не бросить." maxlength="2000">${esc(f.why || '')}</textarea>
+    <div class="hint pad">Шаги и заметки добавляются на странице цели.</div>
+    <div class="actions"><button class="btn primary" id="g-save">${isNew ? 'Поставить цель' : 'Сохранить'}</button></div>`;
   openSheet(html, sh => {
     const title = $('#g-title', sh);
     const grow = () => { title.style.height = 'auto'; title.style.height = title.scrollHeight + 'px'; };
@@ -815,20 +800,22 @@ function goalSheet(g, defaults = {}) {
     $('#g-save', sh).addEventListener('click', async e => {
       f.title = title.value.trim(); f.why = $('#g-why', sh).value;
       if (!f.title) { title.focus(); haptic('error'); return; }
-      e.target.disabled = true;
-      try {
-        const saved = await saveGoal({ id: g && g.id, title: f.title, emoji: f.emoji, color: f.color, horizon: f.horizon, start: f.horizon === 'none' ? null : f.start, due: f.due, why: f.why });
-        haptic('success'); closeSheet();
-        if (isNew) go('goal', { goalId: saved.id }); else render();
-      } catch (err) { e.target.disabled = false; toast(err.message); }
+      await Kit.busy(e.currentTarget, async () => {
+        try {
+          const saved = await saveGoal({ id: g && g.id, title: f.title, emoji: f.emoji, color: f.color, horizon: f.horizon, start: f.horizon === 'none' ? null : f.start, due: f.due, why: f.why });
+          haptic('success'); closeSheet();
+          if (isNew) go('goal', { goalId: saved.id }); else render();
+        } catch (err) { toast(err.message); }
+      });
     });
   });
 }
 
 function noteSheet(n) {
-  openSheet(`<h2><span class="grow">Заметка</span></h2><div class="hint" style="margin:-8px 0 16px">${noteDate(n.created)}</div>
-    <textarea class="field" id="n-text" style="min-height:180px" maxlength="10000">${esc(n.text)}</textarea>
-    <div class="actions"><button class="btn wide" id="n-save">Сохранить</button><button class="btn danger wide" id="n-del">Удалить заметку</button></div>`, sh => {
+  const g = n.goal && S.goals.get(n.goal);
+  openSheet(`<h2>Заметка</h2><div class="hint pad sub-h">${noteDate(n.created)}${g ? ` · ${esc(g.emoji)} ${esc(g.title)}` : ''}</div>
+    <textarea id="n-text" class="note-edit" maxlength="10000">${esc(n.text)}</textarea>
+    <div class="actions"><button class="btn primary" id="n-save">Сохранить</button><button class="btn danger" id="n-del">Удалить заметку</button></div>`, sh => {
     $('#n-save', sh).addEventListener('click', async () => {
       const text = $('#n-text', sh).value.trim();
       if (!text) return;
@@ -852,36 +839,35 @@ const TZ = [['Europe/Kaliningrad', 'Калининград (UTC+2)'], ['Europe/M
 function settingsSheet() {
   const u = S.user;
   const f = { morning: u.morning, evening: u.evening, remind: u.remind, tz: u.tz };
-  let tzs = TZ.slice();
+  const tzs = TZ.slice();
   try { const dev = Intl.DateTimeFormat().resolvedOptions().timeZone; if (dev && !tzs.some(t => t[0] === dev)) tzs.push([dev, dev + ' (это устройство)']); } catch (e) { /* */ }
   if (!tzs.some(t => t[0] === f.tz)) tzs.push([f.tz, f.tz]);
-  const row = (key, icon, title, sub) => `<div class="switch-row"><div class="grow"><b>${title}</b><small>${sub}</small>
-    <div class="${f[key] ? '' : 'hidden'}" id="s-${key}-box" style="margin-top:8px"><input type="time" class="time-input" id="s-${key}-t" value="${f[key] || (key === 'morning' ? '07:30' : '21:30')}"></div></div>
-    <span class="switch${f[key] ? ' on' : ''}" id="s-${key}"></span></div>`;
-  openSheet(`<h2><span class="grow">Настройки</span></h2>
-    ${row('morning', '☀️', 'Утренний план', 'Задачи и цели на день')}
-    ${row('evening', '🌙', 'Итоги дня', 'Что сделано и перенос на завтра')}
-    <div class="row-lbl">Напоминание для новых задач со временем</div>
-    ${chips('remind', [[-1, 'Нет'], [0, 'В это время'], [10, 'За 10 мин'], [15, 'За 15 мин'], [30, 'За 30 мин'], [60, 'За час']], f.remind, 'scroll')}
-    <div class="row-lbl">Часовой пояс</div>
-    <select class="field" id="s-tz">${tzs.map(([v, l]) => `<option value="${v}"${v === f.tz ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
-    <div class="row-lbl">Подсказка</div>
-    <div class="card tip-card">Задачи можно добавлять сообщением боту:<br>
-      <i>«завтра в 18:00 тренировка»</i>, <i>«по пн и ср английский в 19:00»</i>, <i>«12.10 контрольная!»</i>.<br>Команда /today — план с галочками прямо в чате.</div>
-    <div class="actions"><button class="btn wide" id="s-save">Сохранить</button></div>`, sh => {
+  const row = (key, icon, title, sub) => `<div class="row set-row"><span class="ic">${icon}</span><div class="main"><div class="title">${title}</div><div class="meta">${sub}</div>
+    <div class="${f[key] ? '' : 'hidden'}" id="s-${key}-box"><input type="time" class="time-input" id="s-${key}-t" value="${f[key] || (key === 'morning' ? '07:30' : '21:30')}"></div></div>
+    <button class="switch${f[key] ? ' on' : ''}" id="s-${key}" aria-label="${title}"></button></div>`;
+  openSheet(`<h2>Настройки</h2>
+    <div class="list opt">${row('morning', '☀️', 'Утренний план', 'Задачи и цели на день')}${row('evening', '🌙', 'Итоги дня', 'Что сделано и перенос на завтра')}</div>
+    <div class="label">Напоминание для задач со временем</div>
+    ${chips('remind', REMIND, f.remind)}
+    <div class="label">Часовой пояс</div>
+    <select id="s-tz">${tzs.map(([v, l]) => `<option value="${v}"${v === f.tz ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+    <div class="note tip-note"><span>💬</span><span>Задачи можно добавлять сообщением боту — текстом, голосом, фото или видео: <i>завтра в 18:00 тренировка</i>, <i>по пн и ср английский в 19:00</i>. «Заметка: …» — сохранит заметку.</span></div>
+    <div class="actions"><button class="btn primary" id="s-save">Сохранить</button></div>`, sh => {
     for (const k of ['morning', 'evening']) {
       $(`#s-${k}`, sh).addEventListener('click', e => {
-        const on = !e.target.classList.contains('on');
-        e.target.classList.toggle('on', on);
+        const on = !e.currentTarget.classList.contains('on');
+        e.currentTarget.classList.toggle('on', on);
         $(`#s-${k}-box`, sh).classList.toggle('hidden', !on);
         haptic('light');
       });
     }
     bindChips(sh, 'remind', v => { f.remind = +v; });
-    $('#s-save', sh).addEventListener('click', async () => {
+    $('#s-save', sh).addEventListener('click', async e => {
       const body = { remind: f.remind, tz: $('#s-tz', sh).value };
       for (const k of ['morning', 'evening']) body[k] = $(`#s-${k}`, sh).classList.contains('on') ? $(`#s-${k}-t`, sh).value : '';
-      try { const r = await api('settings', body); S.user = r.user; closeSheet(); toast('Сохранено'); haptic('success'); } catch (e) { toast(e.message); }
+      await Kit.busy(e.currentTarget, async () => {
+        try { const r = await api('settings', body); S.user = r.user; closeSheet(); toast('Сохранено'); haptic('success'); } catch (err) { toast(err.message); }
+      });
     });
   });
 }
@@ -893,6 +879,7 @@ const A = {
     if (v === 'day' && S.view !== 'day') S.sel = S.sel || S.today;
     go(v);
   },
+  back: () => back(),
   'pick-day': el => { S.sel = el.dataset.date; render(); haptic('select'); },
   'open-day': el => go('day', { sel: el.dataset.date }),
   'cal-day': el => {
@@ -910,14 +897,16 @@ const A = {
   shift: el => shift(+el.dataset.n),
   toggle: (el, e) => { e.stopPropagation(); toggleTask(+el.dataset.id, el.dataset.date || null); },
   'edit-task': el => { const t = S.tasks.get(+el.dataset.id); if (t) taskSheet(t, el.dataset.date || null); },
-  'new-task': el => taskSheet(null, el.dataset.date),
+  'new-task': (el, e) => { e.stopPropagation(); taskSheet(null, el.dataset.date || null); },
   'to-today': async (el, e) => {
     e.stopPropagation();
     try { await saveTask({ id: +el.dataset.id, date: S.today }); haptic('success'); render(); } catch (err) { toast(err.message); }
   },
-  'all-today': async () => {
+  'all-today': async el => {
     const late = overdue();
-    try { for (const t of late) await saveTask({ id: t.id, date: S.today }); render(); toast(`Перенесено: ${late.length}`); } catch (err) { toast(err.message); }
+    await Kit.busy(el, async () => {
+      try { for (const t of late) await saveTask({ id: t.id, date: S.today }); render(); toast(`Перенесено: ${late.length}`); } catch (err) { toast(err.message); }
+    });
   },
   'open-goal': el => go('goal', { goalId: +el.dataset.id }),
   'new-goal': el => goalSheet(null, { horizon: el.dataset.h || 'month', start: el.dataset.start || null }),
@@ -947,31 +936,28 @@ const A = {
     const ta = $('#note-in'), text = ta.value.trim();
     if (!text) return;
     el.disabled = true;
-    try { const r = await api('note', { goal: S.goalId, text }); S.notes.set(r.note.id, r.note); render(); haptic('success'); }
-    catch (e) { el.disabled = false; toast(e.message); }
+    try {
+      const r = await api('note', { goal: S.view === 'goal' ? S.goalId : null, text });
+      S.notes.set(r.note.id, r.note); ta.value = ''; render(); haptic('success');
+    } catch (e) { el.disabled = false; toast(e.message); }
   },
   'edit-note': (el, e) => { if (e.target.closest('a')) return; const n = S.notes.get(+el.dataset.id); if (n) noteSheet(n); },
   settings: () => settingsSheet(),
-  'welcome-close': () => { store.set('welcomed', '1'); render(); },
-  fab: () => {
-    store.set('welcomed', '1');
-    if (S.view === 'goals') return goalSheet(null, {});
-    const day = S.view === 'day' ? S.sel : S.view === 'month' ? S.msel : (S.today >= S.week && S.today <= D.add(S.week, 6) ? S.today : S.week);
-    taskSheet(null, day);
-  },
 };
 // эти действия сами дают отклик (выбор, галочка, успех) — общий «тап» им не нужен
-const OWN_HAPTIC = new Set(['tab', 'pick-day', 'open-day', 'cal-day', 'go-today', 'shift', 'toggle', 'open-goal', 'goals-tab', 'to-today']);
+const OWN_HAPTIC = new Set(['tab', 'pick-day', 'open-day', 'cal-day', 'go-today', 'shift', 'toggle', 'open-goal', 'goals-tab', 'to-today', 'back']);
 function shift(n) {
   if (S.view === 'week') S.week = D.add(S.week, 7 * n);
   else if (S.view === 'month') { S.month = D.addMonths(S.month, n); S.msel = S.month.slice(0, 7) === S.today.slice(0, 7) ? S.today : S.month; }
   else if (S.view === 'day') S.sel = D.add(S.sel, 7 * n);
+  else return;
   render(); haptic('select');
 }
 
 document.addEventListener('click', e => {
   const a = e.target.closest('a[data-link]');
   if (a) { e.preventDefault(); if (tg && tg.openLink) tg.openLink(a.href); else window.open(a.href, '_blank'); return; }
+  if (sheetEl && sheetEl.contains(e.target)) return;  // в листах — свои обработчики
   const el = e.target.closest('[data-a]');
   if (!el || !A[el.dataset.a]) return;
   if (!OWN_HAPTIC.has(el.dataset.a)) haptic('light');
@@ -989,7 +975,7 @@ document.addEventListener('change', e => {
 document.addEventListener('input', e => {
   if (e.target.matches('[data-progress]')) { const pv = $('#pv'); if (pv) pv.textContent = e.target.value + '%'; }
 });
-// свайпы: полоса недели и календарь листаются пальцем
+// свайпы: полоса недели, листалка и календарь листаются пальцем
 let sx = null, sy = null;
 document.addEventListener('touchstart', e => { if (e.target.closest('[data-swipe]')) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sx = null; }, { passive: true });
 document.addEventListener('touchend', e => {
@@ -998,49 +984,51 @@ document.addEventListener('touchend', e => {
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) shift(dx < 0 ? 1 : -1);
   sx = null;
 }, { passive: true });
-// при открытой клавиатуре прячем нижнее меню
+// при открытой клавиатуре прячем нижние вкладки
 document.addEventListener('focusin', e => { if (e.target.matches('input:not([type=range]):not([type=date]):not([type=time]), textarea')) document.body.classList.add('kb'); });
 document.addEventListener('focusout', () => document.body.classList.remove('kb'));
 
 /* ---------- запуск ---------- */
+function skeleton() {
+  return `<div aria-busy="true" aria-label="Загрузка"><div class="hero"><div class="sk" style="width:52px;height:52px;border-radius:16px"></div>
+    <div class="titles"><div class="sk" style="height:24px;width:55%"></div><div class="sk" style="height:14px;width:40%;margin-top:8px"></div></div></div>
+    <div class="sk" style="height:68px;margin-bottom:16px"></div><div class="sk" style="height:150px;border-radius:24px;margin-bottom:24px"></div>
+    <div class="sk" style="height:260px;border-radius:24px"></div></div>`;
+}
 async function boot() {
-  if (tg) {
-    tg.ready(); tg.expand();
-    try { if (tg.isVersionAtLeast('7.7')) tg.disableVerticalSwipes(); } catch (e) { /* */ }
-    tg.onEvent('themeChanged', applyTheme);
-    if (tg.BackButton) tg.BackButton.onClick(back);
-  }
-  applyTheme();
+  if (tg && tg.BackButton) tg.BackButton.onClick(back);
   const v = $('#view');
   if (!tg || !tg.initData) {
-    v.innerHTML = `<div class="error-box"><div class="big">📱</div><h2>Открой через Telegram</h2><p>Планер работает внутри Telegram — кнопка «Планер» в чате с ботом.</p></div>`;
-    $('#fab').classList.add('hide');
+    v.innerHTML = hero('Ритм', 'Планер дня, недели и целей') + `<div class="card"><div class="empty"><span class="e">📱</span><b>Открой через Telegram</b>Планер работает внутри Telegram — кнопка «Планер» в чате с ботом.</div></div>`;
     return;
   }
-  v.innerHTML = `<div class="skel" aria-busy="true" aria-label="Загрузка"><div class="sk sk-l"></div><div class="sk sk-h"></div>
-    <div class="sk sk-strip"></div><div class="sk sk-card"></div><div class="sk sk-card tall"></div></div>`;
-  $('#tabs').innerHTML = TABS.map(([k, l, ic]) => `<button class="tab${k === 'day' ? ' on' : ''}">${ic}<span>${l}</span></button>`).join('');
+  v.innerHTML = skeleton();
+  TB = Kit.tabbar($('#tabs'), TABS, 'day', id => A.tab({ dataset: { v: id } }));
   try {
     load(await api('all'));
   } catch (e) {
-    v.innerHTML = `<div class="error-box"><div class="big">😕</div><h2>Не загрузилось</h2><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Обновить</button></div>`;
-    $('#fab').classList.add('hide');
+    $('#tabs').hidden = true;
+    document.body.classList.remove('has-tabbar');
+    v.innerHTML = hero('Ритм', 'Не загрузилось') + `<div class="card"><div class="empty"><span class="e">😕</span><b>Не загрузилось</b>${esc(e.message)}</div>
+      <button class="btn primary" onclick="location.reload()">Обновить</button></div>`;
     return;
   }
   S.sel = S.today; S.week = D.monday(S.today); S.month = D.first(S.today); S.msel = S.today;
   const p = new URLSearchParams(location.search).get('p') || '';
-  const m = p.match(/^\/(day|week|month|goals|goal)(?:\/([\w-]+))?/);
+  const m = p.match(/^\/(day|week|month|goals|goal|notes)(?:\/([\w-]+))?/);
   if (m) {
     const [, view, arg] = m;
     if (view === 'day' && arg && /^\d{4}-\d\d-\d\d$/.test(arg)) S.sel = arg;
     if (view === 'goal' && arg && S.goals.has(+arg)) { S.goalId = +arg; S.prev = 'goals'; }
-    S.view = view === 'goal' && !S.goalId ? 'goals' : view;
+    if (view === 'notes') S.goalsTab = 'notes';
+    S.view = view === 'notes' || (view === 'goal' && !S.goalId) ? 'goals' : view;
   }
   render();
+  if (p === '/settings') settingsSheet();
   // в полночь (и когда приложение снова открыли) обновляем «сегодня»
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden) return;
-    try { const d = await api('all'); const was = S.today; load(d); if (S.sel === was) S.sel = S.today; if (!sheetOpen) render(); } catch (e) { /* */ }
+    try { const d = await api('all'); const was = S.today; load(d); if (S.sel === was) S.sel = S.today; if (!sheetEl) render(); } catch (e) { /* */ }
   });
 }
 boot();
