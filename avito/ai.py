@@ -143,20 +143,24 @@ def reply_buyer(ad, buyer, image=None, history=(), floor=None, notes=""):
 
 WEB_PRICES = """Сколько сейчас стоит на вторичном рынке России: {item}
 Ищи в интернете цены объявлений б/у: Авито (через поиск), Юла, Яндекс Маркет б/у, барахолки, свежие статьи с ценами.
-Бери только ту же вещь (модель, объём, комплектация), без новых из магазинов и без trade-in. Не выдумывай: нет цен — пустой список.
-Ответ — только JSON: {{"prices": [цены в рублях], "sources": [ссылки], "note": "откуда цены и насколько свежие, одна строка"}}"""
+Бери только ту же вещь (модель, объём, комплектация), без trade-in. Не выдумывай: нет цен — пустой список.
+Цены б/у — в "prices"; если б/у не нашёл — найди цены НОВОЙ такой же вещи в магазинах и положи их в "new".
+Ответ — только JSON: {{"prices": [цены б/у в рублях], "new": [цены новых в рублях], "sources": [ссылки],
+"note": "откуда цены и насколько свежие, одна строка"}}"""
 
 
 def web_prices(item):
     """Запасной путь, когда Авито не пускает сервер: цены из поиска в интернете. -> {prices, sources, note}."""
     res = json_from(claude(WEB_PRICES.format(item=item), timeout=300, web=True))
-    prices = []
-    for p in res.get("prices") or []:
-        try:
-            v = int(float(str(p).replace(" ", "").replace(",", ".")))
-        except ValueError:
-            continue
-        if 0 < v < 100_000_000:
-            prices.append(v)
-    return {"prices": prices, "sources": [str(s) for s in res.get("sources") or []][:10],
-            "note": str(res.get("note") or "")[:300]}
+    def nums(xs):
+        out = []
+        for p in xs or []:
+            try:
+                v = int(float(str(p).replace(" ", "").replace(",", ".")))
+            except ValueError:
+                continue
+            if 0 < v < 100_000_000:
+                out.append(v)
+        return out
+    return {"prices": nums(res.get("prices")), "new": nums(res.get("new")),
+            "sources": [str(s) for s in res.get("sources") or []][:10], "note": str(res.get("note") or "")[:300]}

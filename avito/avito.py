@@ -600,8 +600,13 @@ def market_text(d, m):
     if m.get("source") == "web":
         note = ("🌐 Примерно — по поиску в интернете (Авито не пускает сервер). "
                 + esc(m.get("web_note") or "") + f" · {note}")
+    elif m.get("source") == "new":
+        nm = (m.get("new_median") or {}).get("median")
+        note = ("🧮 Предположение: цен б/у в интернете нет, Авито не пускает сервер. "
+                + (f"Новая стоит ~{market.fmt_rub(nm)}, " if nm else "") + "б/у обычно ~55 % от новой. "
+                + esc(m.get("web_note") or "") + f" · {note}")
     body = "\n".join([
-        (f"Цен найдено: <b>{s['n']}</b>" if m.get("source") == "web" else
+        (f"Цен найдено: <b>{s['n']}</b>" if m.get("source") in ("web", "new") else
          f"Похожих объявлений: <b>{s['n']}</b> из {m.get('seen', s['total'])}"),
         f"Диапазон: {market.fmt_rub(s['min'])[:-2]} – {market.fmt_rub(s['max'])}",
         f"⚡ Быстро продать: {market.fmt_rub(s['fast'])}",
@@ -658,17 +663,23 @@ def market_for(d, query):
     return m
 
 
+USED_SHARE = 0.55  # б/у без цен в интернете: ориентир ~55 % от новой (предположение, в боте так и написано)
+
+
 def web_market_for(d, query):
     item = f"{d.get('title') or query}. {(d.get('description') or d.get('info') or '')[:300]}"
     try:
         w = ai.web_prices(item)
     except ai.AIError as e:
         raise market.Blocked(f"и поиск в интернете не помог: {e}")
-    prices = market.trim_outliers(w["prices"])
+    used = bool(w["prices"])
+    raw = w["prices"] or [round(p * USED_SHARE) for p in w.get("new") or []]  # б/у не нашлось — от цены новых
+    prices = market.trim_outliers(raw)
     if not prices:
         raise market.Blocked("в интернете цен не нашлось")
-    m = {"query": query, "ts": time.time(), "seen": len(w["prices"]), "source": "web",
-         "stats": market.stats([{"price": p} for p in w["prices"]]), "prices": prices,
+    m = {"query": query, "ts": time.time(), "seen": len(raw), "source": "web" if used else "new",
+         "stats": market.stats([{"price": p} for p in raw]), "prices": prices,
+         "new_median": market.stats([{"price": p} for p in w.get("new") or []]) if not used else None,
          "sources": w["sources"], "web_note": w["note"], "sample": []}
     with lock:
         d["market"] = m
