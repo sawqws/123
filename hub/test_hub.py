@@ -170,6 +170,23 @@ class HubTest(Base):
             self.assertIn("На диске", hub.watch_once()[0][0])
             self.assertEqual(hub.watch_once(), [])
 
+    def test_server_percent(self):
+        s = {"mem_total": 1964, "mem_free": 1439, "disk_total": 78.7, "disk_free": 65.4, "load": "0.23",
+             "uptime": 3 * 86400}
+        self.assertEqual(hub.usage(s, cpus=1), {"mem": 27, "disk": 17, "cpu": 23})
+        self.assertEqual(hub.usage({"load": "3.0"}, cpus=2), {"cpu": 150})
+        self.assertEqual(hub.usage({}), {})
+        with mock.patch.object(hub, "server", return_value=s), mock.patch.object(hub.os, "cpu_count", return_value=1):
+            hub.on_message(self.msg("/server"))
+        text, _ = self.last()
+        self.assertIn("Сервер: всё в порядке", text)
+        self.assertIn("🟢 Память: занято 27% (525 из 1964 МБ)", text)
+        self.assertIn("🟢 Диск: занято 17% (13.3 из 78.7 ГБ)", text)
+        self.assertIn("🟢 Процессор: занят 23%", text)
+        with mock.patch.object(hub, "server", return_value={**s, "mem_free": 100}):
+            hub.on_message(self.msg("/server"))
+        self.assertIn("Сервер: перегружен", self.last()[0])
+
 
 class RemoteTest(Base):
     """Вход для Claude: настоящий веб-сервер Главного на свободном порту и hub/remote.py против него."""

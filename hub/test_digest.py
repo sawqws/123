@@ -143,7 +143,7 @@ class Due(unittest.TestCase):
         self.assertIn("Отбивка · сб 10.10", text)
         self.assertIn("Не работают: 💪 Тренер (errored)", text)
         self.assertIn("Работают: 1", text)
-        self.assertIn("память 900/2000 МБ", text)
+        self.assertIn("Сервер занят: память 55% · диск 50%", text)
         self.assertIn("осталось 7 дн.", text)
         self.assertIn("Сегодня: 22:00 спать", text)
         self.assertIn("Завтра: 10:00 уборка; 22:00 спать", text)
