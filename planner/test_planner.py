@@ -326,6 +326,8 @@ class BotTest(unittest.TestCase):
             self.assertTrue(planner.use_url(cands[0]))
             self.assertEqual(planner.public_url, cands[0])
             planner.use_url(cands[0])  # тот же адрес — второй раз не пишет
+            planner.use_url(cands[1])  # адрес сменился (IP, туннель) — кнопка новая, но сообщения нет
+            planner.use_url(cands[0])
         ready = [t for t in self.texts() if "Планер готов" in t]
         self.assertEqual(len(ready), 1)
         menu = [p for m, p in self.sent if m == "setChatMenuButton"]
