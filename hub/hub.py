@@ -386,24 +386,51 @@ def paid_left(paid, today=None):
     return (datetime.date.fromisoformat(paid) - (today or datetime.datetime.now(TZ).date())).days
 
 
+def usage(s, cpus=None):
+    """Сколько занято, в процентах: {"mem": 27, "disk": 17, "cpu": 23}. Процессор — средняя нагрузка
+    за минуту на все ядра (load 1.0 на одном ядре = 100%)."""
+    out = {}
+    if s.get("mem_total"):
+        out["mem"] = round((s["mem_total"] - s["mem_free"]) / s["mem_total"] * 100)
+    if s.get("disk_total"):
+        out["disk"] = round((s["disk_total"] - s["disk_free"]) / s["disk_total"] * 100)
+    try:
+        out["cpu"] = round(float(s["load"]) / (cpus or os.cpu_count() or 1) * 100)
+    except (KeyError, TypeError, ValueError):
+        pass
+    return out
+
+
+def level(p):
+    return "🟢" if p < 70 else "🟡" if p < 90 else "🔴"
+
+
 def server_card(chat, mid):
     s = server()
+    u = usage(s)
     lines = []
-    if "mem_total" in s:
-        lines.append(f"• Память: свободно {s['mem_free']} из {s['mem_total']} МБ")
-    if "disk_total" in s:
-        lines.append(f"• Диск: свободно {s['disk_free']} из {s['disk_total']} ГБ")
-    if "load" in s:
-        lines.append(f"• Нагрузка {s['load']} · без перезагрузки {ago(s.get('uptime', 0))}")
+    if "mem" in u:
+        lines.append(f"{level(u['mem'])} Память: занято {u['mem']}% "
+                     f"({s['mem_total'] - s['mem_free']} из {s['mem_total']} МБ)")
+    if "disk" in u:
+        lines.append(f"{level(u['disk'])} Диск: занято {u['disk']}% "
+                     f"({round(s['disk_total'] - s['disk_free'], 1)} из {s['disk_total']} ГБ)")
+    if "cpu" in u:
+        lines.append(f"{level(u['cpu'])} Процессор: занят {u['cpu']}%")
+    if s.get("uptime"):
+        lines.append(f"• Работает без перезагрузки {ago(s['uptime'])}")
     paid = setting("paid")
-    foot = ""
     if paid:
         left = paid_left(paid)
         lines.append(f"• Оплачен до {fmt_date(paid)} — " + (f"осталось {left} дн" if left > 0 else
                                                             "срок сегодня!" if left == 0 else "срок прошёл!"))
-    else:
-        foot = "<i>Срок оплаты не указан — пришли /paid ДД.ММ, напомню заранее.</i>"
-    return show(chat, mid, card("🖥 <b>Сервер</b>", lines, foot), [[b("‹ Назад", "home")]])
+    worst = max(u.values(), default=0)
+    title = ("🖥 <b>Сервер: всё в порядке</b>" if worst < 70 else
+             "🖥 <b>Сервер: тесновато</b>" if worst < 90 else "🖥 <b>Сервер: перегружен</b>")
+    foot = "<i>🟢 до 70% — нормально · 🟡 70–90% — тесно · 🔴 больше 90% — боты могут падать</i>"
+    if not paid:
+        foot += "\n<i>Срок оплаты не указан — пришли /paid ДД.ММ, напомню заранее.</i>"
+    return show(chat, mid, card(title, lines, foot), [[b("‹ Назад", "home")]])
 
 
 def fmt_date(iso):
