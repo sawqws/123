@@ -224,3 +224,18 @@ html[data-scheme="light"] .prose li::marker { color: color-mix(in srgb, var(--ac
   .macro .mt { font-size: 13px; }
 }
 .kring .arc { filter: none; }
+
+/* расшифровки и сводка */
+.qm { display: inline-grid; place-items: center; width: 15px; height: 15px; margin-left: 2px; border-radius: 50%; font: 700 10px/1 inherit;
+  font-style: normal; background: var(--field); color: var(--hint); vertical-align: 1px; }
+.hint-line { margin: -4px 4px 12px; font-size: 13px; color: var(--hint); text-align: center; }
+.summary-entry { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; color: inherit; font: inherit; cursor: pointer; }
+.summary-entry .se-ic { font-size: 26px; flex: none; }
+.summary-entry .se-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.summary-entry .se-main .muted { font-size: 13px; }
+details.about { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: var(--field); }
+details.about summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--link); list-style: none; }
+details.about summary::before { content: "ⓘ "; }
+details.about p { margin: 8px 0 0; font-size: 14px; line-height: 1.45; }
+.zones { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin: 12px 0 6px; }
+.zones span { display: block; }

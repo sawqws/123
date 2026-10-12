@@ -1489,6 +1489,17 @@ def route(uid, path, b):
             db.brief(uid, today.isoformat(), "progress", ai.to_html(ai.progress(ctx)))
         last = db.q("SELECT day, text FROM briefs WHERE user=? AND kind='progress' ORDER BY day DESC LIMIT 1", (uid,))
         return {"progress": last[0] if last else None}
+    if path == "/api/summary":
+        period = str(b.get("period") or "week")
+        s = insights.summary(db, uid, today, period)
+        kind = f"sum-{period}"
+        if b.get("make"):
+            if not s["stats"]["days"] and not (s.get("day") or {}).get("cycle"):
+                raise ValueError("за этот период нет данных WHOOP")
+            ctx = insights.summary_context(s, profile(uid), whoop.body(db, uid))
+            db.brief(uid, today.isoformat(), kind, ai.summary(ctx, period))
+        cached = db.brief(uid, today.isoformat(), kind)
+        return {"summary": s, "text": cached["text"] if cached else None}
     if path == "/api/brief":
         ctx, t = context(uid)
         if not t["has_data"]:

@@ -259,6 +259,44 @@ class InsightsTest(unittest.TestCase):
         self.assertEqual(insights.sport_name("box-jumps"), "Box jumps")
 
 
+class SummaryTest(unittest.TestCase):
+    """Сводка за день / неделю / месяц / всё время: цифры, с чем сравниваем, советы Claude (подменён) с кэшем."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db, _ = seeded()
+
+    def test_periods(self):
+        first = self.db.first_day(U)
+        self.assertLess(first, TODAY.isoformat())
+        w = insights.summary(self.db, U, TODAY, "week")
+        self.assertEqual((w["span"], w["prev_label"]), (7, "прошлая неделя"))
+        self.assertGreater(w["stats"]["days"], 4)
+        self.assertEqual(w["stats"]["green"] + w["stats"]["yellow"] + w["stats"]["red"], w["stats"]["days"])
+        self.assertIsNotNone(w["prev"]["hrv"])
+        self.assertGreaterEqual(w["stats"]["best"]["recovery"], w["stats"]["worst"]["recovery"])
+        m = insights.summary(self.db, U, TODAY, "month")
+        self.assertEqual(m["span"], 30)
+        a = insights.summary(self.db, U, TODAY, "all")
+        self.assertEqual(a["since"], first)
+        self.assertEqual(a["prev_label"], "первый месяц с WHOOP")
+        self.assertIn("last", a["stats"])
+        d = insights.summary(self.db, U, TODAY, "day")
+        self.assertEqual(d["day"]["recovery"]["score"], 82)
+        self.assertGreater(d["prev"]["days"], 20)  # норма за 30 дней
+        ctx = insights.summary_context(w, {"age": 14}, whoop.body(self.db, U))
+        self.assertIn("СРАВНЕНИЕ — прошлая неделя", ctx)
+        with self.assertRaises(ValueError):
+            insights.summary(self.db, U, TODAY, "year")
+
+    def test_empty_user(self):
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "e.db"))
+        db.user(U, "Глеб")
+        s = insights.summary(db, U, TODAY, "all")
+        self.assertEqual(s["stats"]["days"], 0)
+        self.assertIsNone(s["stats"]["best"])
+
+
 class AITest(unittest.TestCase):
     def test_to_html(self):
         h = ai.to_html("### Итог\n**Готов** к работе <3\n- сон 8 ч\n* вода")
@@ -430,6 +468,20 @@ class BotTest(unittest.TestCase):
         self.assertEqual(r.json["today"]["recovery"]["score"], 82)
         self.assertEqual(len(r.json["series"]), 30)
         self.assertEqual(r.json["redirect"], "https://coach.example/whoop/callback")
+
+    def test_summary_api(self):
+        asked = []
+        with mock.patch.object(ai, "summary", lambda ctx, per: asked.append(per) or "**Итог** — неделя лучше прошлой.\n- Спи 9 ч"):
+            r = call("/api/summary", {"period": "week"})  # без make — только цифры, советов ещё нет
+            self.assertEqual(r.code, 200)
+            self.assertIsNone(r.json["text"])
+            self.assertEqual(r.json["summary"]["period"], "week")
+            r = call("/api/summary", {"period": "week", "make": 1})
+            self.assertIn("Итог", r.json["text"])
+            r = call("/api/summary", {"period": "week"})  # советы на сегодня запомнены
+            self.assertIn("Итог", r.json["text"])
+        self.assertEqual(asked, ["week"])
+        self.assertEqual(call("/api/summary", {"period": "year"}).code, 400)
 
     def test_profile_and_meals(self):
         self.assertEqual(call("/api/profile", {"age": "14", "weight": "60,5", "goal": "mass", "sport": "бокс"}).json["profile"],

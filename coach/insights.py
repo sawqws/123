@@ -511,6 +511,111 @@ def progress_context(db, uid, day, profile, body, days=60):
     return "\n".join(lines), p
 
 
+# ---------- сводка за период ----------
+
+PERIODS = {"day": "День", "week": "Неделя", "month": "Месяц", "all": "Всё время"}
+
+
+def period_stats(data, since, until):
+    """Средние и итоги за дни since..until (включительно) из by_day()."""
+    vs = [v for d, v in data.items() if since <= d <= until]
+    rec = [v["recovery"] for v in vs if v["recovery"]]
+    slp = [v["sleep"] for v in vs if v["sleep"]]
+    cyc = [v["cycle"] for v in vs if v["cycle"]]
+    wk = [x for v in vs for x in v["workouts"]]
+    beds = [b for b in (_bed_hour(x) for x in slp) if b is not None]
+    sports = {}
+    for x in wk:
+        sports.setdefault(x["sport"], [0, 0])
+        sports[x["sport"]][0] += 1
+        sports[x["sport"]][1] += x["minutes"] or 0
+    ranked = sorted(((d, v["recovery"]["score"]) for d, v in data.items() if since <= d <= until and v["recovery"]),
+                    key=lambda x: x[1])
+    return {
+        "days": len(rec), "recovery": _mean(r["score"] for r in rec),
+        "green": sum(r["zone"] == "green" for r in rec), "yellow": sum(r["zone"] == "yellow" for r in rec),
+        "red": sum(r["zone"] == "red" for r in rec),
+        "hrv": _mean(r["hrv"] for r in rec), "rhr": _mean(r["rhr"] for r in rec),
+        "sleep": _mean(x["hours"] for x in slp), "need": _mean(x["need"] for x in slp),
+        "perf": _mean(x["performance"] for x in slp),
+        "bed": _mean(beds), "bed_spread": round(statistics.pstdev(beds), 2) if len(beds) > 2 else None,
+        "strain": _mean(c["strain"] for c in cyc), "kcal": _mean(c["kcal"] for c in cyc if c["kcal"]),
+        "workouts": len(wk), "minutes": sum(x["minutes"] or 0 for x in wk),
+        "sports": [{"sport": k, "count": c, "minutes": m} for k, (c, m) in
+                   sorted(sports.items(), key=lambda kv: -kv[1][1])[:4]],
+        "best": {"day": ranked[-1][0], "recovery": ranked[-1][1]} if ranked else None,
+        "worst": {"day": ranked[0][0], "recovery": ranked[0][1]} if ranked else None,
+    }
+
+
+def summary(db, uid, day, period, first=None):
+    """Сводка за день / неделю / месяц / всё время и с чем сравнить:
+    день — с обычным уровнем за 30 дней до него, неделя и месяц — с прошлой неделей / месяцем,
+    всё время — первый месяц с браслетом против последнего."""
+    if period not in PERIODS:
+        raise ValueError("нет такого периода")
+    iso = day.isoformat()
+    first = first or db.first_day(uid) or iso
+    if period == "day":
+        since = iso
+    elif period == "week":
+        since = (day - datetime.timedelta(days=6)).isoformat()
+    elif period == "month":
+        since = (day - datetime.timedelta(days=29)).isoformat()
+    else:
+        since = first
+    n = (day - datetime.date.fromisoformat(since)).days + 1
+    lo = min(since, (datetime.date.fromisoformat(since) - datetime.timedelta(days=max(n, 30))).isoformat())
+    data = by_day(db, uid, lo, iso)
+    cur = period_stats(data, since, iso)
+    if period == "day":
+        prev, prev_label = baseline(data, day), "обычно (30 дней)"
+    elif period == "all":
+        f = datetime.date.fromisoformat(first)
+        end_first = min(f + datetime.timedelta(days=29), day).isoformat()
+        prev, prev_label = period_stats(data, first, end_first), "первый месяц с WHOOP"
+        cur = dict(cur, last=period_stats(data, (day - datetime.timedelta(days=29)).isoformat(), iso))
+    else:
+        p_until = (datetime.date.fromisoformat(since) - datetime.timedelta(days=1))
+        p_since = (p_until - datetime.timedelta(days=n - 1)).isoformat()
+        prev = period_stats(data, p_since, p_until.isoformat())
+        prev_label = "прошлая неделя" if period == "week" else "прошлый месяц"
+    one = data.get(iso) or {}
+    return {"period": period, "title": PERIODS[period], "since": since, "until": iso, "span": n, "first": first,
+            "stats": cur, "prev": prev, "prev_label": prev_label,
+            "day": {"recovery": one.get("recovery"), "sleep": one.get("sleep"), "cycle": one.get("cycle"),
+                    "workouts": one.get("workouts") or []} if period == "day" else None}
+
+
+def summary_context(s, profile, body):
+    """Сводка текстом для Claude — цифры уже посчитаны."""
+    def line(x):
+        if not x:
+            return "нет данных"
+        return (f"дней с данными {x.get('days')}, восстановление {x.get('recovery')}% "
+                f"(зелёных {x.get('green', '—')}, жёлтых {x.get('yellow', '—')}, красных {x.get('red', '—')}), "
+                f"ВСР {x.get('hrv')} мс, пульс покоя {x.get('rhr')}, сон {x.get('sleep')} ч (нужно {x.get('need', '—')}, "
+                f"выполнение {x.get('perf', '—')}%), отбой {_clock(x.get('bed'))} ±{x.get('bed_spread', '—')} ч, "
+                f"нагрузка {x.get('strain')}, траты {x.get('kcal')} ккал, тренировок {x.get('workouts', '—')} "
+                f"({x.get('minutes', '—')} мин)")
+    st = s["stats"]
+    lines = ["ПРОФИЛЬ: " + profile_line(profile, body),
+             f"ПЕРИОД: {s['title']} ({s['since']} — {s['until']}, {s['span']} дн; WHOOP с {s['first']})",
+             "ЗА ПЕРИОД: " + line(st),
+             f"СРАВНЕНИЕ — {s['prev_label']}: " + line(s["prev"])]
+    if st.get("last"):
+        lines.append("ПОСЛЕДНИЕ 30 ДНЕЙ: " + line(st["last"]))
+    if st.get("sports"):
+        lines.append("СПОРТ: " + "; ".join(f"{x['sport']} {x['count']} раз, {x['minutes']} мин" for x in st["sports"]))
+    if st.get("best"):
+        lines.append(f"ЛУЧШИЙ ДЕНЬ: {st['best']['day']} ({st['best']['recovery']}%), "
+                     f"ХУДШИЙ: {st['worst']['day']} ({st['worst']['recovery']}%)")
+    d = s.get("day") or {}
+    for w in d.get("workouts") or []:
+        lines.append(f"ТРЕНИРОВКА: {w['sport']} {w['minutes']} мин, нагрузка {w['strain']}")
+    return "\n".join(lines)
+
+
 def profile_line(p, body):
     parts = []
     if p.get("age"):
