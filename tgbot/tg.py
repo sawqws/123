@@ -119,6 +119,7 @@ def parser():
     c.add_argument("--remove", nargs="+", help="какие чаты убрать")
     c.add_argument("--emoji", help="значок папки, например 📚")
     c.add_argument("--delete", action="store_true", help="удалить папку (чаты останутся)")
+    c.add_argument("--all-bots", action="store_true", help="все боты (тип чатов) — попадут и будущие")
     c = cmd("archive", "⚠ убрать чаты в архив")
     c.add_argument("chats", nargs="+")
     c = cmd("unarchive", "⚠ вернуть чаты из архива")

@@ -186,6 +186,15 @@ class Actions(unittest.TestCase):
         self.assertEqual(len(req.filter.include_peers), 1)
         self.assertIn("1 чатов", out)
 
+    def test_folder_all_bots(self):
+        ctx = Ctx()
+        out = run(actions.run(ctx, "folder", {"name": "Bot", "chats": [], "all_bots": True}))
+        req = ctx.client.calls[-1]
+        self.assertTrue(req.filter.bots)
+        self.assertEqual(req.filter.title.text, "Bot")
+        self.assertIn("все боты", ctx.asked[0])
+        self.assertIn("+ все боты", out)
+
     def test_dates(self):
         d = actions.date("2026-10-10 09:00")
         self.assertEqual(d.astimezone(UTC).hour, 6)

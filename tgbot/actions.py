@@ -591,9 +591,11 @@ async def folder(ctx, a):
             have.add(utils.get_peer_id(c))
     drop = {utils.get_peer_id(c) for c in rem}
     peers = [p for p in peers if utils.get_peer_id(p) not in drop]
-    if not peers and not (f and (f.contacts or f.non_contacts or f.groups or f.broadcasts or f.bots)):
+    bots = bool(a.get("all_bots"))  # «все боты» — тип чатов: попадут и будущие боты
+    if not peers and not bots and not (f and (f.contacts or f.non_contacts or f.groups or f.broadcasts or f.bots)):
         raise Fail("в папке не останется чатов — удали её через --delete")
     what = (f"📁 Папка «{a['name']}»" + (" (новая)" if not f else "")
+            + ("\n🤖 все боты — и те, что появятся потом" if bots else "")
             + (":\n➕ " + ", ".join(name(c) for c in add) if add else "")
             + ("\n➖ " + ", ".join(name(c) for c in rem) if rem else ""))
     await ctx.confirm(what)
@@ -603,12 +605,14 @@ async def folder(ctx, a):
         f.exclude_peers = [p for p in f.exclude_peers if utils.get_peer_id(p) not in have]
         if a.get("emoji"):
             f.emoticon = a["emoji"]
+        if bots:
+            f.bots = True
     else:
         fid = max([f.id for f in fs] + [1]) + 1
         f = types.DialogFilter(id=fid, title=types.TextWithEntities(a["name"], []), pinned_peers=[],
-                               include_peers=peers, exclude_peers=[], emoticon=a.get("emoji"))
+                               include_peers=peers, exclude_peers=[], emoticon=a.get("emoji"), bots=bots or None)
     await ctx.client(functions.messages.UpdateDialogFilterRequest(f.id, f))
-    return f"✅ Папка «{a['name']}»: {len(peers)} чатов"
+    return f"✅ Папка «{a['name']}»: {len(peers)} чатов" + (" + все боты" if bots else "")
 
 
 async def edit_folder(ctx, a, folder_id, verb):
