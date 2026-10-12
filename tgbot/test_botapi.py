@@ -344,7 +344,155 @@ class AgentOverBotApi(unittest.TestCase):
         self.assertIsNone(agent.manual_keys("e W - S G 3"))
 
 
+class ViaHub(AgentOverBotApi):
+    """Секретарь внутри Главного: Telegram не опрашивает, обновления приходят от hub.py через сокет агента,
+    кнопки — с префиксом «s:», ответы — тем же токеном. Проверяем вместе с настоящим кодом hub.py."""
+
+    def setUp(self):
+        super().setUp()
+        sys.path.insert(0, os.path.join(os.path.dirname(agent.HERE), "hub"))
+        import hub
+        self.hub = hub
+        self.hub_sent = []
+        for p in (mock.patch.object(hub, "AGENT_SOCK", agent.SOCK),
+                  mock.patch.object(hub, "tg", side_effect=lambda m, **kw: self.hub_sent.append((m, kw)) or {"ok": True}),
+                  mock.patch.object(hub, "owner", return_value=OWNER), mock.patch.object(hub, "allowed", lambda u: u == OWNER),
+                  mock.patch.object(hub, "setting", return_value=None)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(setattr, botapi, "PREFIX", "")
+
+    def run_hub_agent(self, tg, scenario, old_token="", allowed=0):
+        async def go():
+            a = agent.Agent("123:abc", allowed=allowed, via_hub=True, old_token=old_token)
+            a.bot = botapi.Bot("123:abc", base=tg.base)
+            task = asyncio.create_task(a.main())
+            try:
+                await self.until(lambda: os.path.exists(agent.SOCK))
+                await scenario(a)
+            finally:
+                task.cancel()
+        asyncio.run(asyncio.wait_for(go(), 30))
+
+    def msg(self, **kw):
+        return {"message_id": 5, "chat": {"id": OWNER, "type": "private"}, "from": {"id": OWNER}, **kw}
+
+    def test_free_text_goes_to_secretary_and_answer_comes_back(self):
+        tg = FakeTelegram()
+
+        async def scenario(a):
+            a.run_claude = mock.AsyncMock(return_value=(True, "**Готово**: буду в 6"))
+            await asyncio.to_thread(self.hub.on_message, self.msg(text="Ответьте Пете, что буду в 6"))
+            await self.until(lambda: any("буду в 6" in p["text"] for p in tg.sent("sendMessage")))
+            self.assertEqual(a.run_claude.await_args[0][0], "Ответьте Пете, что буду в 6")
+            self.assertEqual(a.owner(), OWNER)  # владелец — тот, что у Главного
+            self.assertFalse(tg.sent("getUpdates"))  # Telegram опрашивает только Главный
+            self.assertFalse(tg.sent("setMyCommands"))  # команды и профиль — Главного
+            self.assertFalse([kw for m, kw in self.hub_sent if m == "sendMessage"])  # Главный сам не отвечал
+        self.run_hub_agent(tg, scenario)
+
+    def test_buttons_prefixed_and_routed_back(self):
+        tg = FakeTelegram()
+
+        async def scenario(a):
+            await asyncio.to_thread(self.hub.on_message, self.msg(text="/login"))
+            await self.until(lambda: any("Как подключиться" in p["text"] for p in tg.sent("sendMessage")))
+            kb = [p for p in tg.sent("sendMessage") if "Как подключиться" in p["text"]][0]["reply_markup"]
+            datas = [b["callback_data"] for r in kb["inline_keyboard"] for b in r]
+            self.assertEqual(datas, ["s:login:desktop", "s:login:own"])
+            cq = {"id": "q", "from": {"id": OWNER}, "data": "s:m:help",
+                  "message": {"message_id": tg.mid, "chat": {"id": OWNER}, "text": "x"}}
+            await asyncio.to_thread(self.hub.on_callback, cq)
+            await self.until(lambda: any("Чем я могу помочь" in p["text"] for p in tg.sent("editMessageText")))
+            self.assertTrue(tg.sent("answerCallbackQuery"))  # ответил на кнопку Секретарь, не Главный
+            self.assertFalse([m for m, kw in self.hub_sent if m == "answerCallbackQuery"])
+            body, rows = await a.dashboard()
+            self.assertIn({"text": "‹ Главная", "callback_data": "home"}, [b for r in rows for b in r])
+            st = await asyncio.to_thread(self.hub.secretary_status)
+            self.assertEqual((st["account"], st["busy"]), (None, False))
+        self.run_hub_agent(tg, scenario)
+
+    def test_photo_and_video_to_claude(self):
+        tg = FakeTelegram()
+        seen = []
+
+        def photo_path(token, msg, folder):
+            self.assertEqual(token, "123:abc")
+            os.makedirs(folder, exist_ok=True)
+            open(os.path.join(folder, "p.jpg"), "w").close()
+            return os.path.join(folder, "p.jpg")
+
+        def video(token, msg, folder):
+            os.makedirs(folder, exist_ok=True)
+            return {"frames": [os.path.join(folder, "frame-1.jpg"), os.path.join(folder, "frame-2.jpg")],
+                    "text": "как решить это уравнение", "seconds": 7}
+
+        async def scenario(a):
+            async def ask(text, title=None, source="chat"):
+                seen.append((text, title, sorted(os.listdir(agent.WORK))))
+            a.ask = ask
+            await asyncio.to_thread(self.hub.on_message, self.msg(photo=[{"file_id": "F"}], caption="что это?"))
+            await self.until(lambda: seen)
+            text, title, _ = seen[0]
+            self.assertTrue(text.startswith("что это?"))
+            self.assertIn("инструментом Read: " + os.path.join(agent.WORK, "media"), text)
+            self.assertEqual(title, "📷 что это?")
+            await asyncio.to_thread(self.hub.on_message, self.msg(video_note={"file_id": "V", "duration": 7}))
+            await self.until(lambda: len(seen) == 2)
+            text, title, _ = seen[1]
+            self.assertIn("frame-1.jpg\n", text)
+            self.assertIn("«как решить это уравнение»", text)
+            self.assertIn("(7 с)", text)
+            await self.until(lambda: not os.listdir(os.path.join(agent.WORK, "media")))  # файлы убраны
+        with mock.patch.object(agent.media, "photo_path", photo_path), mock.patch.object(agent.media, "video", video):
+            self.run_hub_agent(tg, scenario)
+
+    def test_moved_notice_in_old_bot_once(self):
+        tg = FakeTelegram()
+
+        async def scenario(a):
+            await self.until(lambda: any("переехал" in p.get("text", "") for p in tg.sent("sendMessage")))
+            sent = [p for p in tg.sent("sendMessage") if "переехал" in p["text"]][0]
+            self.assertIn("@secretary_bot", sent["text"])
+            self.assertEqual(sent["reply_markup"], {"remove_keyboard": True})
+            self.assertEqual(tg.sent("setChatMenuButton")[-1]["menu_button"], {"type": "commands"})
+            with open(agent.SETTINGS) as f:
+                self.assertTrue(json.load(f)["moved"])
+        self.run_hub_agent(tg, scenario, old_token="999:old", allowed=OWNER)
+        n = len(tg.sent("sendMessage"))
+        self.run_hub_agent(tg, lambda a: asyncio.sleep(0.3), old_token="999:old", allowed=OWNER)
+        self.assertEqual(len(tg.sent("sendMessage")), n)  # второй раз не пишет
+
+
+class Resolve(unittest.TestCase):
+    def test_modes(self):
+        d = tempfile.mkdtemp()
+        hub_env, own_env = os.path.join(d, "hub.env"), os.path.join(d, "own.env")
+        with open(own_env, "w") as f:
+            f.write("TG_AGENT_TOKEN=2:own\nTG_ALLOWED_ID=7\n")
+        self.assertEqual(agent.resolve({}, hub_env, own_env), ("2:own", False, ""))  # Главного нет — свой бот
+        with open(hub_env, "w") as f:
+            f.write("HUB_TOKEN=1:hub\nHUB_ALLOWED=7\n")
+        self.assertEqual(agent.resolve({}, hub_env, own_env), ("1:hub", True, "2:own"))  # есть Главный — внутри него
+        self.assertEqual(agent.resolve({"TG_MODE": "own"}, hub_env, own_env), ("2:own", False, ""))
+        with open(own_env, "a") as f:
+            f.write("TG_MODE=own\n")  # режим в файле действует и после pm2 restart со старым окружением
+        self.assertEqual(agent.resolve({}, hub_env, own_env)[1], False)
+        with self.assertRaises(SystemExit):
+            agent.resolve({}, os.path.join(d, "nope"), os.path.join(d, "nope2"))
+
+
 class MarkupTest(unittest.TestCase):
+    def test_prefix_only_inside_hub(self):
+        self.assertEqual(botapi.Button.inline("Да", "ok:1")["callback_data"], "ok:1")
+        try:
+            botapi.PREFIX = "s:"
+            self.assertEqual(botapi.Button.inline("Да", "ok:1")["callback_data"], "s:ok:1")
+            ev = botapi.CallbackEvent(None, {"id": "1", "from": {"id": 1}, "data": "s:ok:1"})
+            self.assertEqual(ev.data, b"ok:1")
+        finally:
+            botapi.PREFIX = ""
+
     def test_reply_keyboard_options(self):
         m = botapi.markup([[botapi.Button.text("A", resize=True, persistent=True, placeholder="…")], [botapi.Button.text("B")]])
         self.assertEqual(m, {"keyboard": [[{"text": "A"}], [{"text": "B"}]], "resize_keyboard": True,
