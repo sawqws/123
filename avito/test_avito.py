@@ -524,6 +524,97 @@ def init_data(token, uid=7, age=0):
     return urllib.parse.urlencode(pairs)
 
 
+
+class Chats(Flow):
+    """Чаты Авито через официальный API (подменён): ключи, новое сообщение → черновик → «Отправить», автоответ."""
+
+    def setUp(self):
+        super().setUp()
+        import chats
+        self.chats = chats
+        self.calls, self.sent_av = [], []
+        self.chat = {"id": "u2i-abc", "users": [{"id": 1, "name": "Глеб"}, {"id": 2, "name": "Ольга"}],
+                     "context": {"type": "item", "value": {"id": 9, "title": "iPhone 13 128 ГБ",
+                                                          "price_string": "35 000 ₽", "url": "https://avito.ru/9"}},
+                     "last_message": {"id": "m1", "direction": "in", "created": 100, "type": "text",
+                                      "content": {"text": "Торг уместен?"}}}
+        self.msgs = [{"id": "m0", "direction": "out", "author_id": 1, "created": 50, "type": "text",
+                      "content": {"text": "Здравствуйте"}},
+                     {"id": "m1", "direction": "in", "author_id": 2, "created": 100, "type": "text",
+                      "content": {"text": "Торг уместен?"}}]
+        self.forbidden = False
+
+        def http(method, path, params=None, body=None, form=None, auth=True):
+            self.calls.append((method, path))
+            if self.forbidden:
+                raise chats.AvitoError(chats.NO_TARIFF)
+            if path == "/core/v1/accounts/self":
+                return {"id": 1, "name": "Глеб"}
+            if path.endswith("/chats"):
+                return {"chats": [self.chat]}
+            if path.endswith("/messages/"):
+                return {"messages": self.msgs}
+            if path.endswith("/messages"):
+                self.sent_av.append(body["message"]["text"])
+                return {"id": "m2"}
+            if "/chats/" in path and method == "GET":
+                return self.chat
+            return {"ok": True}
+        self.patches += [mock.patch.object(chats, "http", http),
+                         mock.patch.object(ai, "reply_buyer", lambda ad, buyer, image=None, history=(), floor=None,
+                                           notes="": {"reply": f"Здравствуйте! Немного уступлю ({ad['price']}).",
+                                                      "note": ""})]
+        for p in self.patches[-2:]:
+            p.start()
+
+    def connect(self):
+        avito.on_message(self.msg(text="/chats", message_id=1))
+        self.assertIn("Подключить чаты Авито", self.texts()[-1])
+        avito.on_message(self.msg(text="client123456 secret987654321", message_id=5))
+        self.assertIn(("deleteMessage", {"chat_id": 7, "message_id": 5}), self.sent)
+        self.assertIn("Авито подключён", self.texts()[-1])
+        self.assertEqual(avito.st["av_user"]["id"], 1)
+
+    def test_connect_new_message_send(self):
+        self.connect()
+        self.assertEqual(self.chats.poll_once(), 0)  # старые непрочитанные при подключении не шлём
+        self.chat["last_message"] = dict(self.chat["last_message"], id="m3", created=200)
+        self.msgs.append({"id": "m3", "direction": "in", "author_id": 2, "created": 200, "type": "text",
+                          "content": {"text": "А зарядка есть?"}})
+        self.assertEqual(self.chats.poll_once(), 1)
+        card = self.texts()[-1]
+        self.assertIn("Ольга", card)
+        self.assertIn("А зарядка есть?", card)
+        self.assertNotIn("Торг уместен?", card)  # уже виденное не повторяем
+        self.assertIn("35000", card)
+        k = self.chats.key("u2i-abc")
+        avito.on_callback({"id": "1", "from": {"id": 7}, "data": f"avs|{k}",
+                           "message": {"chat": {"id": 7}, "message_id": 40}})
+        self.assertEqual(self.sent_av, ["Здравствуйте! Немного уступлю (35000)."])
+        self.assertEqual(self.chats.poll_once(), 0)  # повторно не присылает
+
+    def test_own_reply_and_auto_mode(self):
+        self.connect()
+        k = self.chats.key("u2i-abc")
+        avito.on_callback({"id": "1", "from": {"id": 7}, "data": f"avw|{k}", "message": {"chat": {"id": 7}, "message_id": 3}})
+        avito.on_message(self.msg(text="Да, зарядка есть", message_id=6))
+        self.assertEqual(self.sent_av, ["Да, зарядка есть"])
+        avito.st["av_mode"] = "auto"
+        self.chat["last_message"] = dict(self.chat["last_message"], id="m4", created=300)
+        self.msgs.append({"id": "m4", "direction": "in", "author_id": 2, "created": 300, "type": "text",
+                          "content": {"text": "Заберу сегодня"}})
+        self.chats.poll_once()
+        self.assertEqual(len(self.sent_av), 2)
+        self.assertIn("Ответил сам", self.texts()[-1])
+
+    def test_no_tariff(self):
+        avito.on_message(self.msg(text="/chats", message_id=1))
+        self.forbidden = True
+        avito.on_message(self.msg(text="client123456 secret987654321", message_id=5))
+        self.assertIn("Максимальный", self.texts()[-1])
+        self.assertNotIn("av_keys", avito.st)
+
+
 class InitData(unittest.TestCase):
     def setUp(self):
         avito.st.clear()
