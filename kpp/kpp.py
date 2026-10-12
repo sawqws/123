@@ -46,6 +46,7 @@ import domyland as dl  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые и фото (common/media.py)
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 TOKEN = os.environ.get("KPP_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
@@ -1027,6 +1028,8 @@ def main():
     else:
         threading.Thread(target=https, daemon=True).start()
     print("КПП запущен")
+    sup = support.Support(TOKEN, "КПП", folders=["kpp"], pm2="kpp-bot", allowed=allowed,
+                          tests=["python3 kpp/test_kpp.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -1036,6 +1039,8 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
+                continue
             try:
                 with LOCK:
                     if u.get("callback_query"):

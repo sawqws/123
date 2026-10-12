@@ -48,6 +48,7 @@ import ai  # noqa: E402
 import chats  # noqa: E402
 import market  # noqa: E402
 import media  # noqa: E402
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 chats.ui = sys.modules[__name__]
 
@@ -1644,6 +1645,8 @@ def main():
     else:
         threading.Thread(target=https, daemon=True).start()
     print("Авито-бот запущен")
+    sup = support.Support(TOKEN, "Авито", folders=["avito"], pm2="avito-bot", allowed=allowed,
+                          tests=["python3 avito/test_avito.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -1653,6 +1656,8 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
+                continue
             try:
                 if u.get("callback_query"):
                     on_callback(u["callback_query"])

@@ -43,6 +43,7 @@ import botapi  # noqa: E402
 import get_api
 import jobs  # noqa: E402
 import media  # noqa: E402
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает Секретаря
 import ui  # noqa: E402
 import web  # noqa: E402
 from botapi import Bot, BotError, Button  # noqa: E402
@@ -1385,6 +1386,9 @@ class Agent:
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
             await self.say(card("✦ Обновился", esc(head)), buttons=MENU)
         if not self.via_hub:
+            self.bot.intercept = support.Support(
+                self.bot.token, "Секретарь", folders=["tgbot"], pm2="tg-agent", allowed=lambda uid: uid == self.owner(),
+                tests=["tgbot/.venv/bin/python tgbot/test_tgbot.py", "python3 tgbot/test_get_api.py"]).intercept
             await self.bot.run(self.on_message, self.on_callback)
             return
         print("Режим «через Главного»: Telegram опрашивает hub-bot, обновления приходят в сокет", flush=True)

@@ -50,6 +50,7 @@ import whoop  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
+import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 TOKEN = os.environ.get("COACH_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
@@ -1662,6 +1663,8 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     print(f"{NAME} запущен")
+    sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
+                          tests=["python3 coach/test_coach.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -1671,6 +1674,8 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
+                continue
             try:
                 if u.get("callback_query"):
                     on_callback(u["callback_query"])
