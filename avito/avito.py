@@ -45,8 +45,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import ai  # noqa: E402
+import chats  # noqa: E402
 import market  # noqa: E402
 import media  # noqa: E402
+
+chats.ui = sys.modules[__name__]
 
 TOKEN = os.environ.get("AVITO_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
@@ -221,6 +224,20 @@ def fail(text):
     return f"⚠️ {text}"
 
 
+def clip(text, n=24):
+    """Текст кнопки до ~24 символов — иначе Telegram режет его посередине."""
+    text = str(text)
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def show(chat, mid, text, buttons=None):
+    return edit(chat, mid, text, buttons) if mid else send(chat, text, buttons)
+
+
+def owner():
+    return st.get("owner") or (min(ALLOWED) if ALLOWED else None)
+
+
 def send_album(chat, paths, caption=""):
     """Фото альбомом (по 10 штук), подпись — у первого."""
     for i in range(0, len(paths), 10):
@@ -240,6 +257,7 @@ def setup_bot():
         {"command": "new", "description": "Новое объявление"},
         {"command": "ad", "description": "Текущее объявление"},
         {"command": "ads", "description": "Все объявления"},
+        {"command": "chats", "description": "Чаты Авито"},
         {"command": "buyer", "description": "Ответить покупателю"},
         {"command": "price", "description": "Средняя цена на Авито"},
         {"command": "photos", "description": "Фото на белом фоне"},
@@ -747,6 +765,7 @@ def help_text(name=""):
 
 def help_buttons():
     rows = app_buttons()
+    rows.append([b("💬 Чаты Авито", "avl")])
     if draft():
         rows.append([b("📝 Текущее объявление", "card")])
     return rows
@@ -992,6 +1011,8 @@ def on_wait(chat, msg, text):
     w = waiting()
     if not w:
         return False
+    if w["kind"] in ("avkeys", "avreply"):
+        return chats.on_wait(chat, msg, text, w)
     if w["kind"] == "floor":
         if not text or media.kind(msg):
             return False
@@ -1067,6 +1088,8 @@ def on_message(msg):
         show_card(chat)
     elif cmd == "/ads":
         send(chat, *ads_view())
+    elif cmd == "/chats":
+        run(chat, chats.show_chats, chat)
     elif cmd == "/buyer":
         ask_buyer(chat)
     elif cmd == "/price":
@@ -1152,6 +1175,14 @@ def on_callback(cq):
         tg("answerCallbackQuery", callback_query_id=cq["id"])
         return
     d = draft()
+    if data[0].startswith("av"):
+        note = chats.on_callback(chat, mid, data)
+        if note is not None:
+            try:
+                tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
+            except Exception:
+                pass
+            return
     if data[0] == "gen":
         run(chat, write, chat, "", mid)
     elif data[0] == "re":
@@ -1607,6 +1638,7 @@ def main():
     os.makedirs(DRAFTS, exist_ok=True)
     threading.Thread(target=serve, daemon=True).start()
     setup_bot()
+    chats.start()
     if public_url:
         set_menu()
     else:
