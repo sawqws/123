@@ -8,14 +8,15 @@
   python3 tgbot/get_api.py          спросит номер и код, напечатает «api_id api_hash» последней строкой
 Только стандартная библиотека Python. Вопросы пишет в терминал (/dev/tty), так что работает и внутри curl | bash.
 """
+import http.client
 import json
+import os
 import random
 import re
 import sys
+import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 BASE = "https://my.telegram.org"
 
@@ -48,13 +49,17 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, 
 
 
 class Site:
-    """Куки храним сами: http.cookiejar не принял куку входа сайта (вход «true», а /apps — Unauthorized)."""
+    """Куки храним сами (http.cookiejar не принял куку входа). Все запросы — через ОДНО соединение keep-alive:
+    вход на сайте привязан к IP, а через прокси с несколькими выходными IP каждый новый запрос мог уйти
+    с другого адреса (сайт «забывал» вход и отвечал ERROR на создание приложения)."""
 
     def __init__(self, base=BASE):
         self.base = base
+        u = urllib.parse.urlparse(base)
+        self.host, self.port, self.secure = u.hostname, u.port or (443 if u.scheme == "https" else 80), u.scheme == "https"
         self.cookies = {}
-        self.tries = 20  # повторы, если сайт «забыл» вход (см. keys)
-        self.http = urllib.request.build_opener()
+        self.tries = 20  # повторы, если сайт всё же «забыл» вход (см. keys)
+        self.conn = None
 
     def remember(self, headers):
         for h in headers.get_all("Set-Cookie") or []:
@@ -62,26 +67,48 @@ class Site:
             if name:
                 self.cookies[name] = value
 
-    def req(self, path, data=None):
+    def connect(self):
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") if self.secure else None
+        ctx = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE") or None) if self.secure else None
+        if proxy:
+            p = urllib.parse.urlparse(proxy)
+            c = http.client.HTTPSConnection(p.hostname, p.port, context=ctx, timeout=30)
+            c.set_tunnel(self.host, self.port)
+        elif self.secure:
+            c = http.client.HTTPSConnection(self.host, self.port, context=ctx, timeout=30)
+        else:
+            c = http.client.HTTPConnection(self.host, self.port, timeout=30)
+        self.conn = c
+
+    def req(self, path, data=None, _redirects=3):
         body = urllib.parse.urlencode(data).encode() if data is not None else None
-        headers = {"User-Agent": UA, "Referer": self.base + "/auth"}
+        headers = {"User-Agent": UA, "Referer": self.base + "/auth", "Connection": "keep-alive"}
         if body is not None:  # как jQuery на сайте
             headers["X-Requested-With"] = "XMLHttpRequest"
             headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
         if self.cookies:
             headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
-        for attempt in range(3):  # прокси иногда рвёт соединение
+        for attempt in range(3):
+            if self.conn is None:
+                self.connect()
             try:
-                with self.http.open(urllib.request.Request(self.base + path, body, headers), timeout=30) as r:
-                    self.remember(r.headers)
-                    return r.read().decode("utf-8", "replace")
-            except urllib.error.HTTPError as e:
-                self.remember(e.headers)
-                raise Fail(e.read().decode("utf-8", "replace").strip() or f"HTTP {e.code}")
-            except (urllib.error.URLError, ConnectionError) as e:
+                self.conn.request("POST" if body is not None else "GET", path, body, headers)
+                r = self.conn.getresponse()
+                text = r.read().decode("utf-8", "replace")
+                break
+            except (OSError, http.client.HTTPException) as e:  # соединение порвалось — новое (IP может смениться)
+                self.conn.close()
+                self.conn = None
                 if attempt == 2:
-                    raise Fail(f"нет связи с {self.base}: {getattr(e, 'reason', e)}")
+                    raise Fail(f"нет связи с {self.base}: {e}")
                 time.sleep(2)
+        self.remember(r.headers)
+        if r.status in (301, 302, 303) and r.getheader("Location") and _redirects:
+            loc = urllib.parse.urlparse(r.getheader("Location"))
+            return self.req(loc.path + (f"?{loc.query}" if loc.query else ""), None, _redirects - 1)
+        if r.status >= 400:
+            raise Fail(text.strip() or f"HTTP {r.status}")
+        return text
 
     def send_code(self, phone):
         self.req("/auth")  # как браузер: сначала страница входа
@@ -105,6 +132,9 @@ class Site:
             page = self.last_page = self.req("/apps")
             if "my_login_form" not in page:
                 break
+            if self.conn is not None:  # вход привязан к другому IP — новое соединение, другой выходной адрес
+                self.conn.close()
+                self.conn = None
             time.sleep(1)  # выкинуло на вход: выход в интернет через несколько IP, а вход привязан к одному
         found = parse_keys(page)
         if found:
@@ -114,22 +144,30 @@ class Site:
             raise Fail("не нашёл ни ключей, ни формы создания на /apps — похоже, вход не прошёл")
         return None, form_hash
 
-    def create(self, form_hash):
-        for attempt in range(min(self.tries, 10)):
-            try:
-                text = self._create(form_hash)
-            except Fail as e:
-                text = str(e)
-            if not any(w in text for w in ("Unauthorized", "my_login_form", "ERROR")):
-                break
-            time.sleep(2)  # «ERROR» бывает, когда запрос ушёл не с того IP, что вход
-        if text.strip().upper().startswith("ERROR"):
-            raise Fail("сайт ответил ERROR при создании приложения (с сервера тоже) — попробуй через час")
+    # Варианты полей: сайт на создание отвечает просто «ERROR» без причины — пробуем по-разному.
+    VARIANTS = [("Gleb Agent", "desktop", "", "personal assistant"),
+                ("Personal Notes", "android", "https://telegram.org", "Personal notes and reminders app"),
+                ("Daily Helper", "other", "", "Personal desktop helper for messages and reminders")]
 
-    def _create(self, form_hash):
-        return self.req("/apps/create", {
-            "hash": form_hash, "app_title": "Gleb Agent", "app_shortname": f"glebagent{random.randint(1000, 999999)}",
-            "app_url": "", "app_platform": "desktop", "app_desc": "personal assistant"})
+    def create(self, form_hash):
+        tried = []
+        for title, platform, url, desc in self.VARIANTS:
+            for attempt in range(2):
+                try:
+                    text = self._create(form_hash, title, platform, url, desc)
+                except Fail as e:
+                    text = str(e)
+                tried.append(f"{title}/{platform}: {text.strip()[:40] or 'ok'}")
+                if not any(w in text for w in ("Unauthorized", "my_login_form", "ERROR")):
+                    return
+                time.sleep(2)
+        self.tried = tried
+        raise Fail("сайт ответил ERROR при создании приложения на все варианты полей")
+
+    def _create(self, form_hash, title="Gleb Agent", platform="desktop", url="", desc="personal assistant"):
+        short = re.sub(r"[^a-z]", "", title.lower())[:20] + str(random.randint(1000, 999999))
+        return self.req("/apps/create", {"hash": form_hash, "app_title": title, "app_shortname": short,
+                                         "app_url": url, "app_platform": platform, "app_desc": desc})
 
 
 def parse_form_hash(page):
