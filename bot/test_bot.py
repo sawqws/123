@@ -884,5 +884,284 @@ class ParallelTest(BotTest):
         self.assertIsNone(bot.draft())
 
 
+def _day(n):
+    import datetime
+    return (datetime.date.today() + datetime.timedelta(days=n)).isoformat()
+
+
+U = lambda n: f"{n:08d}-0000-0000-0000-000000000000"  # uuid темы
+TOPICS = [  # как horo/prep.js без аргументов (и overview.json → topics)
+    {"uuid": U(1), "subj": "Математика", "icon": "📐", "title": "А3. Умножение и деление алгебраических дробей",
+     "start": _day(-6), "deadline": _day(6), "tasks": [
+         {"title": "1. Умножение алгебраических дробей", "type": "detailedAnswer", "status": "approved"},
+         {"title": "2. Возведение в степень", "type": "detailedAnswer", "status": "approved"},
+         {"title": "Подтверждение 2.0", "type": "detailedAnswer", "status": "appointed"}]},
+    {"uuid": U(2), "subj": "Математика", "icon": "📐", "title": "А2. Сложение и вычитание алгебраических дробей.",
+     "start": _day(-24), "deadline": _day(-5), "tasks": [{"title": "Приведение к общему знаменателю"}]},
+    {"uuid": U(3), "subj": "Математика", "icon": "📐", "title": "А1. Алгебраические дроби",
+     "start": _day(-60), "deadline": _day(-40), "tasks": []},  # давно — не «недавно прошли»
+    {"uuid": U(4), "subj": "Математика", "icon": "📐", "title": "Г1. Параллелограмм, его свойства и признаки",
+     "start": _day(-30), "deadline": _day(-2), "tasks": [{"title": "4. Свойства параллелограмма"}]},
+    {"uuid": U(5), "subj": "История", "icon": "🏛", "title": "2. Становление империи. Пётр I (1682-1721) (2026)",
+     "start": _day(-14), "deadline": _day(4), "tasks": [{"title": "1. Начало Северной войны"}]},
+    {"uuid": U(6), "subj": "Физическая культура", "icon": "🏃", "title": "Гимнастика", "start": _day(-40),
+     "deadline": _day(10), "tasks": []},
+    {"uuid": U(7), "subj": "История", "icon": "🏛", "title": "3. Эпоха дворцовых переворотов", "start": _day(5),
+     "deadline": _day(30), "tasks": []},  # ещё не началась
+    {"uuid": U(8), "subj": "Профильная технология", "icon": "📘", "title": "Проектная деятельность",
+     "start": _day(-40), "deadline": _day(240), "tasks": []},  # курс на год
+    {"uuid": U(9), "subj": "Экономика и менеджмент", "icon": "💰", "title": "Кто такой предприниматель?",
+     "start": _day(-40), "deadline": _day(1), "tasks": []},
+]
+DETAILS = [{"uuid": U(1), "title": "А3", "materials": [{"title": "Умножение", "text": "Чтобы умножить дроби, "
+            "перемножают числители и знаменатели"}], "checks": [], "questions": ["Найдите (2a/b)·(b/4)"]}]
+SPOILER_OK = {"b", "i", "u", "s", "a", "code", "pre", "blockquote", "tg-emoji", "tg-spoiler"}
+
+
+def check_html(test, text):
+    """Сообщение — только теги, которые понимает Telegram, все закрыты."""
+    from html.parser import HTMLParser
+
+    class Check(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.stack = []
+        def handle_starttag(self, tag, attrs):
+            test.assertIn(tag, SPOILER_OK)
+            self.stack.append(tag)
+        def handle_endtag(self, tag):
+            test.assertTrue(self.stack and self.stack.pop() == tag, (tag, text))
+    c = Check(); c.feed(text); c.close()
+    test.assertEqual(c.stack, [], text)
+
+
+class PrepTest(BotTest):
+    """📖 Подготовка: предмет -> что прошли -> 1/5/10 минут -> Claude; своё ТЗ; голосом; приложение."""
+
+    def setUp(self):
+        super().setUp()
+        self.ov["topics"] = TOPICS
+        self.ov["at"] = int(__import__("time").time() * 1000)
+        pathlib.Path(bot.OVERVIEW).write_text(json.dumps(self.ov))
+        self.edits = []
+        self.claude_out = None
+        p = mock.patch.object(bot, "PREP_DIR", os.path.join(self.tmp.name, "prep"))
+        p.start()
+        self.patches.append(p)
+        bot.PREP_CTX.clear()
+        bot.PREP_JOB.update(running=False, result=None, error="")
+
+    def fake_tg(self, method, **p):
+        if method == "editMessageText":
+            self.edits.append((p["text"], p.get("reply_markup")))
+        return super().fake_tg(method, **p)
+
+    def fake_node(self, *args, timeout=0, prog="node"):
+        if args[:1] == ("horo/prep.js",):
+            self.nodes.append(args)
+            return True, json.dumps(DETAILS if len(args) > 1 else TOPICS)
+        return super().fake_node(*args, timeout=timeout, prog=prog)
+
+    def fake_claude(self, prompt, tools, timeout=0, on_tool=None):
+        if "репетитор Глеба" not in prompt:
+            return super().fake_claude(prompt, tools, timeout, on_tool)
+        self.prompts.append(prompt)
+        if self.claude_out is not None:
+            return True, self.claude_out
+        n = 5 if "НОВЫЕ вопросы" in prompt else 2 if "за 1 минуту" in prompt else 9 if "за 10 минут" in prompt else 5
+        tag = "новый " if "НОВЫЕ" in prompt else ""
+        return True, "```json\n" + json.dumps({
+            "title": "Дроби <умножение>", "points": ["a/b · c/d = ac/bd", "**Сократи** до умножения"],
+            "sections": [] if n == 2 else [{"title": "Умножение", "text": "Числитель на числитель\nПример: 2/3·3/4 = 1/2"}],
+            "mistakes": [] if n == 2 else ["Забыл сократить → сокращай до умножения"],
+            "questions": [{"q": f"{tag}вопрос {i} <x>", "a": f"ответ {i}"} for i in range(1, n + 1)]},
+            ensure_ascii=False) + "\n```"
+
+    def press(self, data, mid=7):
+        bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": mid}})
+
+    def buttons(self, markup):
+        return [b for row in json.loads(markup)["inline_keyboard"] for b in row]
+
+    def test_subjects_and_what_was_studied(self):
+        subs = bot.prep.subjects(TOPICS)
+        names = [s["name"] for s in subs]
+        self.assertEqual(names[:2], ["Алгебра", "История"])  # сначала, где тема началась позже всех
+        self.assertIn("Геометрия", names)                      # математика — две кнопки
+        self.assertNotIn("Математика", names)
+        self.assertNotIn("Физическая культура", names)          # к физкультуре не готовим
+        self.assertEqual(subs[0]["icon"], "➗")
+        alg = [t["uuid"] for t in bot.prep.recent(TOPICS, "Алгебра")]
+        self.assertEqual(alg, [U(1), U(2)])                     # текущая первой; А1 давно — нет
+        self.assertEqual([t["uuid"] for t in bot.prep.recent(TOPICS, "История")], [U(5)])  # будущая — нет
+        self.assertEqual([t["uuid"] for t in bot.prep.recent(TOPICS, "Профильная технология")], [U(8)])  # хоть что-то
+        self.assertEqual(bot.prep.clean_title(TOPICS[4]["title"]), "2. Становление империи. Пётр I (1682-1721)")
+        self.assertEqual(bot.prep.subtopics(TOPICS[0]), ["Умножение алгебраических дробей", "Возведение в степень"])
+        self.assertTrue(all(len(f"{s['icon']} {bot.prep.short(s['name'])}") <= 24 for s in subs))
+
+    def test_phrases(self):
+        names = [s["name"] for s in bot.prep.subjects(TOPICS)]
+        d = lambda t: bot.prep.detect(t, names)
+        self.assertEqual(d("Подготовь к проверочной по алгебре за 5 минут."), ("Алгебра", 5, ""))
+        self.assertEqual(d("подготовь меня по истории за десять минут"), ("История", 10, ""))
+        self.assertEqual(d("натаскай по математике, быстро"), ("Алгебра", 1, ""))
+        self.assertEqual(d("подготовь к контрольной по геометрии подробно")[:2], ("Геометрия", 10))
+        self.assertEqual(d("подготовь по истории: Северная война и Полтава")[2],
+                         "подготовь по истории: Северная война и Полтава")
+        self.assertEqual(d("подготовь меня по квадратным уравнениям за 3 мин"),
+                         (None, 5, "подготовь меня по квадратным уравнениям за 3 мин"))
+        self.assertTrue(bot.prep.is_request("Повтори со мной историю"))
+        self.assertFalse(bot.prep.is_request("покажи оценки"))
+
+    def test_chat_subject_topics_time_result(self):
+        self.say(bot.BTN_PREP)
+        text, markup = self.last()
+        self.assertIn("Подготовка к проверочной", text)
+        rows = json.loads(markup)["inline_keyboard"]
+        self.assertLessEqual(max(map(len, rows)), 3)
+        self.assertTrue(all(len(b["text"]) <= 24 for b in self.buttons(markup)))
+        alg = next(b["callback_data"] for b in self.buttons(markup) if "Алгебра" in b["text"])
+        self.press(alg)
+        topics, kb = self.edits[-1]
+        self.assertIn("А3. Умножение и деление алгебраических дробей", topics)
+        self.assertNotIn("А1.", topics)
+        self.assertEqual([b["callback_data"] for b in self.buttons(kb)][:3], ["pp:t:1", "pp:t:5", "pp:t:10"])
+        self.press("pp:t:5")
+        self.assertEqual(self.nodes[-1], ("horo/prep.js", U(1), U(2)))  # теория тем с сайта, только чтение
+        p = self.prompts[-1]
+        self.assertIn("за 5 минут", p)
+        self.assertIn("Предмет: Алгебра", p)
+        self.assertIn("перемножают числители", p)  # теория с сайта в промпте
+        self.assertIn("Найдите (2a/b)·(b/4)", p)
+        text, markup = self.last()
+        self.assertEqual(text.count("<tg-spoiler>"), 5)
+        self.assertIn("Типовые ошибки", text)
+        self.assertIn("вопрос 1 &lt;x&gt;", text)  # текст Claude экранирован
+        self.assertIn("<b>Сократи</b>", text)
+        self.assertEqual([b["callback_data"] for b in self.buttons(markup)], ["pp:more", "pp:deep"])
+        for m, _ in self.msgs + self.edits:
+            check_html(self, bot.premium(m, True))
+
+    def test_formats_1_and_10_and_more(self):
+        self.say("/prep")
+        bot.prep_ctx(CHAT, "Алгебра")
+        self.press("pp:t:1")
+        p1, (text, markup) = self.prompts[-1], self.last()
+        self.assertIn("за 1 минуту", p1)
+        self.assertIn("ровно 2 быстрых вопроса", p1)
+        self.assertEqual(text.count("<tg-spoiler>"), 2)
+        self.assertNotIn("Типовые ошибки", text)
+        self.press("pp:more")
+        p = self.prompts[-1]
+        self.assertIn("НОВЫЕ вопросы", p)
+        self.assertIn("- вопрос 2 <x>", p)  # уже заданные — не повторять
+        self.assertIn("Ещё вопросы", self.last()[0])
+        self.assertEqual(len([a for a in self.nodes if a[0] == "horo/prep.js"]), 1)  # материалы — один раз
+        self.press("pp:deep")
+        self.assertIn("за 10 минут", self.prompts[-1])
+        self.assertIn("8–10 задач", self.prompts[-1])
+        self.assertEqual(self.last()[0].count("<tg-spoiler>"), 9)
+        self.assertEqual([b["callback_data"] for b in self.buttons(self.last()[1])], ["pp:more"])  # уже 10 минут
+
+    def test_long_result_splits_without_breaking_spoilers(self):
+        res = {"title": "x", "points": ["п" * 300] * 6, "sections": [{"title": f"т{i}", "text": "с " * 600}
+                                                                    for i in range(4)],
+               "mistakes": ["ошибка"] * 4, "questions": [{"q": "вопрос " * 40, "a": "ответ " * 30}] * 10}
+        html = bot.prep.render(res, "Алгебра", 10)
+        parts = bot.split(html)
+        self.assertGreater(len(parts), 1)
+        for part in parts:
+            self.assertLessEqual(len(part), 3500)
+            check_html(self, part)
+
+    def test_own_tz(self):
+        self.say(bot.BTN_PREP)
+        self.press("pp:tz")
+        self.assertEqual(bot.mode[CHAT], "prep_tz")
+        self.say("квадратные уравнения и теорема Виета")
+        self.assertNotIn(CHAT, bot.mode)
+        self.assertIn("Понял ТЗ", self.last()[0])
+        self.press("pp:t:1")
+        p = self.prompts[-1]
+        self.assertIn("ТЗ от Глеба", p)
+        self.assertIn("«квадратные уравнения и теорема Виета»", p)
+        self.assertFalse([a for a in self.nodes if a[0] == "horo/prep.js" and len(a) > 1])  # предмета нет — тем нет
+        self.assertIn("по ТЗ", self.last()[0])
+        # ТЗ после выбора предмета: предмет остаётся, время прямо в ТЗ
+        self.say(bot.BTN_PREP)
+        self.press(next(b["callback_data"] for b in self.buttons(self.last()[1]) if "История" in b["text"]))
+        self.press("pp:tz")
+        self.say("только Полтавская битва, за 5 минут")
+        p = self.prompts[-1]
+        self.assertIn("Предмет: История", p)
+        self.assertIn("Полтавская битва", p)
+        self.assertIn("за 5 минут", p)
+
+    def test_voice_request(self):
+        self.voice("Подготовь к проверочной по алгебре за 5 минут.")
+        p = self.prompts[-1]
+        self.assertIn("Предмет: Алгебра", p)
+        self.assertIn("за 5 минут", p)
+        self.assertEqual(self.last()[0].count("<tg-spoiler>"), 5)
+        n = len(self.prompts)
+        self.voice("Подготовь меня по истории")  # времени нет — темы и кнопки времени
+        self.assertEqual(len(self.prompts), n)
+        text, markup = self.last()
+        self.assertIn("Становление империи", text)
+        self.assertIn("pp:t:10", markup)
+        self.voice("Подготовка.")  # кнопка голосом
+        self.assertIn("Подготовка к проверочной", self.last()[0])
+
+    def test_not_json_and_errors(self):
+        self.claude_out = "Главное: **дроби** <b>умножаются</b>"
+        bot.prep_ctx(CHAT, "Алгебра")
+        self.press("pp:t:5")
+        text = self.last()[0]
+        check_html(self, text)
+        self.assertIn("<b>дроби</b> &lt;b&gt;умножаются", text)
+        bot.PREP_CTX.clear()
+        self.press("pp:more")  # бот перезапускался — подготовки уже нет
+        self.assertTrue(any("неактуальна" in m for m, _ in self.msgs))
+
+    def test_topics_from_site_when_overview_has_none(self):
+        pathlib.Path(bot.OVERVIEW).write_text(json.dumps({"at": 1, "tasks": []}))
+        self.say(bot.BTN_PREP)
+        self.assertEqual(self.nodes[0], ("horo/prep.js",))
+        self.assertIn("Алгебра", self.last()[1])
+        self.say(bot.BTN_PREP)  # второй раз — из кэша, без сайта
+        self.assertEqual(len(self.nodes), 1)
+
+    def test_app(self):
+        bot.save_settings({"owner": CHAT})
+        subs = bot.app_prep_subjects({})["subjects"]
+        alg = next(s for s in subs if s["name"] == "Алгебра")
+        self.assertEqual(alg["recent"], [U(1), U(2)])
+        self.assertEqual([t["uuid"] for t in alg["topics"]], [U(1), U(2), U(3)])
+        for bad in ({"subj": "Алгебра", "minutes": 3}, {"minutes": 5}, {"more": True}):
+            with self.assertRaises(ValueError):
+                bot.app_prep_run(bad)
+        self.assertEqual(bot.app_prep_run({"subj": "Алгебра", "topics": [U(3)], "minutes": 1}), {"ok": True})
+        self.assertEqual(self.nodes[-1], ("horo/prep.js", U(3)))  # темы, выбранные в приложении
+        st = bot.app_prep_state({})
+        self.assertFalse(st["running"])
+        self.assertEqual(len(st["result"]["questions"]), 2)
+        self.assertEqual(st["result"]["topics"][0]["title"], "А1. Алгебраические дроби")
+        self.assertIn("<tg-spoiler>", self.last()[0])  # результат — и в чат
+        bot.app_prep_run({"more": True})
+        r = bot.app_prep_state({})["result"]
+        self.assertTrue(r["more"])
+        self.assertEqual((len(r["questions"]), r["added"]), (7, 5))  # в приложении вопросы добавились к прежним
+        bot.app_prep_run({"again": True, "minutes": 10})
+        self.assertIn("за 10 минут", self.prompts[-1])
+        self.assertEqual(bot.app_prep_run({"tz": "Северная война", "minutes": 5}), {"ok": True})
+        self.assertIn("«Северная война»", self.prompts[-1])
+        bot.PREP_JOB["result"] = None  # после перезапуска — последний результат из файла
+        self.assertEqual(bot.app_prep_state({})["result"]["tz"], "Северная война")
+
+
+for _name in dir(BotTest):  # заготовки BotTest без его тестов
+    if _name.startswith("test_") and _name not in PrepTest.__dict__:
+        setattr(PrepTest, _name, None)
+
+
 if __name__ == "__main__":
     unittest.main()

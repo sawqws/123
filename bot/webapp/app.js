@@ -14,7 +14,7 @@ const lvlFmt = x => comma((+x).toFixed(1));
 /* ---------- состояние ---------- */
 const S = { tab: 'tasks', data: null, loading: false, error: '', state: null, me: null, seen: 0, sheet: null, link: '', polledAt: 0 };
 try { S.seen = +localStorage.getItem('hdp.seen') || 0; S.tab = localStorage.getItem('hdp.tab') || 'tasks'; } catch (e) { /* без хранилища */ }
-if (!['tasks', 'grades', 'teachers'].includes(S.tab)) S.tab = 'tasks';
+if (!['tasks', 'prep', 'grades', 'teachers'].includes(S.tab)) S.tab = 'tasks';
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* без хранилища */ } };
 
 /* ---------- сеть ---------- */
@@ -74,12 +74,12 @@ const empty = (e, title, text) => `<div class="card empty rise"><span class="e">
 const skel = n => '<div class="sk big"></div>' + Array.from({ length: n }, () => '<div class="sk row-sk"></div>').join('');
 
 /* ---------- отрисовка ---------- */
-const TITLES = { tasks: 'Задания', grades: 'Оценки', teachers: 'Учителя' };
+const TITLES = { tasks: 'Задания', prep: 'Подготовка', grades: 'Оценки', teachers: 'Учителя' };
 let tabs;
 
 function render() {
   const v = q('#view');
-  v.innerHTML = S.tab === 'tasks' ? tasksView() : S.tab === 'grades' ? gradesView() : teachersView();
+  v.innerHTML = S.tab === 'tasks' ? tasksView() : S.tab === 'prep' ? Prep.view() : S.tab === 'grades' ? gradesView() : teachersView();
   q('#title').textContent = TITLES[S.tab];
   renderHead(); renderLive(); renderStatus(); badges();
 }
@@ -404,6 +404,7 @@ const ACT = {
   alphabet: async () => { try { await api('/api/alphabet', {}); closeSheet(); toast('Листы алфавита — в чате', 'ok'); } catch (e) { toast(e.message, 'err'); } },
   chat: () => { if (tg) tg.close(); },
 };
+Object.assign(ACT, Prep.act);  // 📖 подготовка — prep.js
 
 function switchTab(id) {
   if (S.tab === id) { window.scrollTo({ top: 0, behavior: 'smooth' }); badges(); return; }
@@ -465,6 +466,7 @@ function start() {
   }
   tabs = Kit.tabbar(q('#tabs'), [
     { id: 'tasks', icon: '📋', label: 'Задания' },
+    { id: 'prep', icon: '📖', label: 'Подготовка' },
     { id: 'grades', icon: '📊', label: 'Оценки' },
     { id: 'teachers', icon: '💬', label: 'Учителя' },
   ], S.tab, switchTab);

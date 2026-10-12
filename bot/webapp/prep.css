@@ -1,0 +1,79 @@
+/* 📖 Подготовка к проверочной (prep.js): выбор предмета и тем, время, результат с вопросами. */
+.pp-hero { padding: 20px; }
+.pp-t { font: 700 22px/1.15 var(--font-d); letter-spacing: -.4px; overflow-wrap: anywhere; }
+.pp-hero .hint { margin: 4px 0 14px; font-size: 14px; }
+.pp-subj { margin: 0 -20px; padding: 2px 20px; }
+.pp-subj .chip { padding: 9px 14px; font-size: 14.5px; }
+
+/* темы: отметка слева */
+.pp-topic { align-items: flex-start; }
+.pp-check { flex: none; width: 24px; height: 24px; margin-top: 1px; border-radius: 8px; border: 2px solid var(--line);
+  background: var(--field); display: grid; place-items: center; transition: background .2s, border-color .2s; }
+.pp-topic.on .pp-check { background: var(--accent); border-color: transparent; }
+.pp-topic.on .pp-check::after { content: "✓"; color: var(--accent-ink); font: 800 14px/1 var(--font); }
+.pp-topic:not(.on) .title { color: var(--hint); }
+.pp-topics .row + .row::before { left: 52px; }
+
+/* время: три крупные кнопки */
+.pp-time { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 4px; }
+.pp-min { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 12px 6px 11px; min-width: 0;
+  border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--card); color: var(--text);
+  font: inherit; cursor: pointer; box-shadow: var(--shadow); transition: transform .16s var(--ease), border-color .2s, background .2s; }
+.pp-min:active { transform: scale(.97); }
+.pp-min .i { font-size: 22px; line-height: 1.1; }
+.pp-min b { font: 700 16px/1.2 var(--font-d); }
+.pp-min span:last-child { color: var(--hint); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pp-min.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--card));
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
+#pp-tz { min-height: 84px; margin-bottom: 14px; font-size: 15.5px; line-height: 1.4; }
+.pp-go + .btn { margin-top: 6px; }
+
+/* идёт подготовка */
+.pp-run .live-f { flex-wrap: wrap; }
+
+/* результат */
+.pp-res-h { display: flex; gap: 14px; align-items: center; padding: 18px; }
+.pp-res-h .main { flex: 1; min-width: 0; }
+.pp-res-h .s-sub { color: var(--hint); font-size: 13.5px; margin-bottom: 2px; }
+.pp-res-h .pp-t { font-size: 20px; }
+.pp-res-h .hint { margin-top: 4px; }
+.pp-ic { flex: none; width: 54px; height: 54px; border-radius: 17px; display: grid; place-items: center; font-size: 27px;
+  background: linear-gradient(145deg, var(--accent-2), var(--accent)); box-shadow: 0 10px 24px -12px var(--accent); }
+.pp-points ul, .pp-warn ul { margin: 0; padding: 0; list-style: none; }
+.pp-points li, .pp-warn li { position: relative; padding: 0 0 0 18px; line-height: 1.45; overflow-wrap: anywhere; }
+.pp-points li + li, .pp-warn li + li { margin-top: 9px; }
+.pp-points li::before { content: ""; position: absolute; left: 2px; top: .58em; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); }
+.pp-warn { border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 9%, var(--card)), var(--card)); }
+.pp-warn li::before { content: "!"; position: absolute; left: 1px; top: 0; color: var(--warn); font-weight: 800; }
+.pp-sec-t { font: 650 16px/1.3 var(--font-d); margin-bottom: 8px; }
+.pp-text { line-height: 1.5; overflow-wrap: anywhere; font-size: 15.5px; }
+.pp-text b, .pp-points b, .pp-warn b, .pp-q b { color: var(--text); font-weight: 700; }
+
+/* вопросы: ответ скрыт до нажатия */
+.pp-q { display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; padding: 14px 16px;
+  transition: transform .16s var(--ease), border-color .2s; }
+.pp-q:active { transform: scale(.99); }
+.pp-q.new { border-color: var(--accent-line); }
+.pp-q-h { display: flex; gap: 12px; align-items: flex-start; }
+.pp-n { flex: none; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font: 750 14px/1 var(--font);
+  background: var(--accent-soft); color: var(--accent); }
+.pp-q-t { flex: 1; min-width: 0; line-height: 1.45; overflow-wrap: anywhere; padding-top: 3px; }
+.pp-a { position: relative; margin: 12px 0 0 40px; padding: 10px 12px; border-radius: 12px; background: var(--field);
+  min-height: 42px; overflow: hidden; }
+.pp-a-t { line-height: 1.45; overflow-wrap: anywhere; filter: blur(7px); opacity: .55; user-select: none; transition: filter .25s, opacity .25s; }
+.pp-a-hint { position: absolute; inset: 0; display: grid; place-items: center; z-index: 1; color: var(--accent);
+  font-size: 13.5px; font-weight: 650; transition: opacity .2s; }
+.pp-q.open .pp-a { background: color-mix(in srgb, var(--ok) 11%, transparent); }
+.pp-q.open .pp-a-t { filter: none; opacity: 1; user-select: text; }
+.pp-q.open .pp-a-hint { opacity: 0; pointer-events: none; }
+.pp-topics-used { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.pp-topics-used .pill { max-width: 100%; }
+.pp-actions .btns { margin-bottom: 4px; }
+.pp-actions .hint.c { text-align: center; margin-top: 8px; }
+
+@media (max-width: 360px) {
+  .pp-min b { font-size: 15px; }
+  .pp-a { margin-left: 0; }
+}

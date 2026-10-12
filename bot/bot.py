@@ -35,6 +35,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 import drafts
+import prep
 import web
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
@@ -107,12 +108,13 @@ BTN_CHECK = "🩺 Проверка"
 BTN_HELP = "❓ Помощь"
 BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
+BTN_PREP = "📖 Подготовка"
 ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением)
     "📋 Что надо сделать": BTN_LIST, "⚡ Сдать все автотесты": BTN_ALL, "💬 Комментарии учителя": BTN_COMM,
     "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
 BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
-           BTN_APP, BTN_MORE}
+           BTN_APP, BTN_MORE, BTN_PREP}
 
 
 def menu_kb():
@@ -123,7 +125,8 @@ def menu_kb():
         "keyboard": [
             [b(BTN_DO, "primary"), b(BTN_SHOW)],
             [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
-            [b(BTN_ALL), b(BTN_APP), b(BTN_MORE)],
+            [b(BTN_PREP), b(BTN_ALL)],
+            [b(BTN_APP), b(BTN_MORE)],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
@@ -138,6 +141,7 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Оценки</b> — и сколько до следующей\n"
     "<b>Учителя</b> — комментарии и доработки\n"
     "<b>Автотесты</b> — сдам все новые тесты пачкой\n"
+    "<b>Подготовка</b> — к проверочной по тому, что прошли: за 1, 5 или 10 минут (или по своему ТЗ)\n"
     "<b>Голосовое</b> — как текст\n"
     "<b>Фото, скриншот</b> — найду задание и решу; при черновике — фото в него\n"
     "<b>Видео</b> — кадры как фото, речь как текст\n"
@@ -146,7 +150,8 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<i>Всё то же — в приложении: кнопка «HDP» слева от поля ввода</i>"
 )
 COMMANDS = [  # меню команд у поля ввода
-    ("start", "Главное меню"), ("app", "Открыть приложение"), ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
+    ("start", "Главное меню"), ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
+    ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
 ]
@@ -967,6 +972,9 @@ def on_callback(cq):
     if data.startswith("m:"):  # меню «Ещё»: правится на месте
         on_more(chat, mid, cq["id"], data[2:])
         return
+    if data.startswith("pp:"):  # 📖 подготовка: шаги правятся на месте
+        on_prep_button(chat, mid, cq["id"], data[3:])
+        return
     if data.startswith("hand:"):
         try:
             tg("answerCallbackQuery", callback_query_id=cq["id"])
@@ -1560,7 +1568,7 @@ def hear_video(msg):
     else:
         delete(chat, mid)
     frames = v.get("frames") or []
-    if said and (LINK.search(said) or draft() or spoken_button(said) in BUTTONS or not frames):
+    if said and (LINK.search(said) or draft() or spoken_button(said) in BUTTONS or prep.is_request(said) or not frames):
         handle(as_text(msg, spoken_button(said)))
     elif frames:
         look_images(chat, frames, said, msg.get("message_id"), video=True)
@@ -1695,6 +1703,15 @@ def handle(msg):
     if text.startswith("/help"):
         send(chat, HELP, menu=True, raw_html=True)
         return
+    if text.startswith("/prep") or text == BTN_PREP:
+        mode.pop(chat, None)
+        threading.Thread(target=prep_menu, args=(chat,), daemon=True).start()
+        return
+    if mode.get(chat) == "prep_tz":  # ждём своё ТЗ для подготовки (текстом или голосом)
+        if text and not text.startswith("/") and text not in BUTTONS and not LINK.search(text):
+            threading.Thread(target=prep_take_tz, args=(chat, text), daemon=True).start()
+            return
+        mode.pop(chat)
     if text.startswith("/app"):
         send_app(chat)
         return
@@ -1802,6 +1819,9 @@ def handle(msg):
         return
     if kind == "photo":  # черновика нет: ищем на фото задание
         threading.Thread(target=look_photo, args=(msg,), daemon=True).start()
+        return
+    if text and prep.is_request(text) and not LINK.search(text):  # «подготовь к проверочной по алгебре за 5 минут»
+        threading.Thread(target=prep_text, args=(chat, text), daemon=True).start()
         return
 
     simple = {
@@ -1986,6 +2006,272 @@ ROUTES = {
     "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),
     "/api/check": app_chat(check), "/api/alphabet": app_chat(send_alphabet),
 }
+
+
+# ---------- 📖 Подготовка к проверочной ----------
+# Предмет -> что прошли (темы с сайта, horo/prep.js, только чтение) -> 1 / 5 / 10 минут -> Claude (bot/prep_prompt.md)
+# -> конспект и вопросы с ответами под спойлером. Или своё ТЗ. Логика — bot/prep.py, здесь чат и приложение.
+
+PREP_DIR = os.path.join(REPO, "horo", "tmp", "prep")  # темы с сайта (если их нет в overview.json) и последний результат
+PREP_FRESH = 24 * 3600                                 # темы меняются редко: раз в сутки достаточно
+PREP_CTX = {}   # chat -> {"subj", "icon", "topics", "tz", "minutes", "asked", "details", "names"}
+PREP_JOB = {"running": False, "title": "", "sub": "", "t0": 0, "error": "", "result": None}
+
+
+def prep_cache(name):
+    return os.path.join(PREP_DIR, name)
+
+
+def prep_topics(fetch=True):
+    """Все темы по предметам: из overview.json (его обновляет приложение), иначе свой кэш, иначе с сайта."""
+    ov = overview() or {}
+    if ov.get("topics") and time.time() - ov.get("at", 0) / 1000 < PREP_FRESH:
+        return ov["topics"]
+    try:
+        if time.time() - os.path.getmtime(prep_cache("topics.json")) < PREP_FRESH:
+            with open(prep_cache("topics.json")) as f:
+                return json.load(f)
+    except (OSError, ValueError):
+        pass
+    if not fetch:
+        return ov.get("topics") or []
+    ok, out = node("horo/prep.js", timeout=180)
+    try:
+        topics = json.loads(out) if ok else None
+    except ValueError:
+        topics = None
+    if not isinstance(topics, list):
+        print("prep topics:", out[:300])
+        return ov.get("topics") or []
+    os.makedirs(PREP_DIR, exist_ok=True)
+    with open(prep_cache("topics.json") + ".part", "w") as f:
+        json.dump(topics, f, ensure_ascii=False)
+    os.replace(prep_cache("topics.json") + ".part", prep_cache("topics.json"))
+    return topics
+
+
+def prep_icon(topics, subj):
+    return next((prep.icon_of(t) for t in topics if prep.subject_of(t) == subj), "📖")
+
+
+def prep_ctx(chat, subj="", tz="", topics=None, uuids=None):
+    """Новый контекст подготовки: предмет и его недавние темы (или выбранные в приложении), ТЗ."""
+    every = topics if topics is not None else prep_topics()
+    chosen = [t for t in every if t.get("uuid") in set(uuids)] if uuids else (prep.recent(every, subj) if subj else [])
+    PREP_CTX[chat] = {"subj": subj or "", "icon": prep_icon(every, subj) if subj else "✍️", "topics": chosen,
+                      "tz": tz or "", "minutes": 0, "asked": [], "details": None,
+                      "names": [s["name"] for s in prep.subjects(every)]}
+    return PREP_CTX[chat]
+
+
+def prep_time_kb(back=True):
+    rows = [[(prep.BUTTON[m], f"pp:t:{m}", "primary" if m == 5 else None) for m in prep.MINUTES]]
+    if back:
+        rows.append([("‹ Предметы", "pp:back"), ("✍️ Своё ТЗ", "pp:tz")])
+    return kb(*rows)
+
+
+def prep_menu(chat, mid=None):
+    """Шаг 1: предметы кнопками (по 3 в ряд) и «Своё ТЗ»."""
+    live = None
+    if not (overview() or {}).get("topics") and not os.path.exists(prep_cache("topics.json")):
+        live = Live(chat, "Смотрю, что вы прошли", "темы с сайта HDP", progress=False)
+    try:
+        topics = prep_topics()
+    finally:
+        if live:
+            live.done()
+    subs = prep.subjects(topics)
+    PREP_CTX[chat] = {**PREP_CTX.get(chat, {}), "names": [s["name"] for s in subs]}
+    btns = [(f"{s['icon']} {prep.short(s['name'])}", f"pp:s:{i}") for i, s in enumerate(subs)]
+    rows = [btns[i:i + 3] for i in range(0, len(btns), 3)] + [[("✍️ Своё ТЗ", "pp:tz")]]
+    text = card("Подготовка к проверочной",
+                "Выбери предмет — посмотрю, что вы прошли, и подготовлю за 1, 5 или 10 минут." if subs else
+                "Тем с сайта пока не вижу — напиши своё ТЗ, по чему готовиться.",
+                "Или «✍️ Своё ТЗ»: напиши или скажи, по чему готовиться", "📖")
+    if mid:
+        edit(chat, mid, text, kb(*rows))
+    else:
+        send(chat, text, markup=kb(*rows), raw_html=True)
+
+
+def prep_ask_tz(chat):
+    mode[chat] = "prep_tz"
+    subj = (PREP_CTX.get(chat) or {}).get("subj")
+    send(chat, card("Своё ТЗ", "Напиши или скажи голосом, по чему подготовить: темы, параграфы, вопросы учителя.",
+                    (f"Предмет — {esc(subj)}. " if subj else "") + "Можно сразу время: «за 5 минут»", "✍️"),
+         raw_html=True)
+
+
+def prep_take_tz(chat, text):
+    """Своё ТЗ: предмет и время — если названы, иначе предмет из прошлого шага и кнопки времени."""
+    mode.pop(chat, None)
+    before = PREP_CTX.get(chat) or {}
+    topics = prep_topics()
+    subj, minutes, _ = prep.detect(text, [s["name"] for s in prep.subjects(topics)])
+    prep_ctx(chat, subj or before.get("subj") or "", text, topics)
+    if minutes:
+        prep_run(chat, minutes)
+    else:
+        send(chat, card("Понял ТЗ", esc(text), "Сколько у тебя времени?", "✍️"), markup=prep_time_kb(back=False),
+             raw_html=True)
+
+
+def prep_text(chat, text):
+    """«Подготовь к проверочной по алгебре за 5 минут» текстом или голосом: сразу к делу, чего нет — спросить."""
+    topics = prep_topics()
+    subj, minutes, tz = prep.detect(text, [s["name"] for s in prep.subjects(topics)])
+    if not subj and not tz:
+        prep_menu(chat)
+        return
+    ctx = prep_ctx(chat, subj, tz, topics)
+    if minutes:
+        prep_run(chat, minutes)
+    elif subj and not tz:
+        send(chat, prep.topics_html(subj, ctx["icon"], ctx["topics"]), markup=prep_time_kb(), raw_html=True)
+    else:
+        send(chat, card("Понял ТЗ", esc(text), "Сколько у тебя времени?", "✍️"), markup=prep_time_kb(back=False),
+             raw_html=True)
+
+
+def prep_run(chat, minutes, more=False):
+    """Готовит: материалы тем с сайта (только чтение) -> Claude -> карточки в чат (и в приложение)."""
+    ctx = PREP_CTX.get(chat)
+    if not ctx or not (ctx.get("subj") or ctx.get("tz")):
+        send(chat, err("Эта подготовка уже неактуальна — выбери предмет заново"), raw_html=True)
+        prep_menu(chat)
+        return
+    if not lock.acquire(blocking=False):
+        send(chat, BUSY)
+        return
+    subj, tz, topics = ctx["subj"], ctx["tz"], ctx["topics"]
+    minutes = minutes if minutes in prep.MINUTES else 5
+    sub = " · ".join(x for x in (subj or "своё ТЗ", "новые вопросы" if more else f"за {prep.SPAN[minutes]}") if x)
+    PREP_JOB.update(running=True, title="Ещё вопросы" if more else "Готовлю", sub=sub, t0=time.time(), error="")
+    t0 = time.time()
+    try:
+        live = Live(chat, "Придумываю вопросы" if more else "Готовлю", esc(sub), progress=False)
+        try:
+            if topics and ctx.get("details") is None:  # теория и вопросы тем с сайта — один раз на подготовку
+                ok, out = node("horo/prep.js", *[t["uuid"] for t in topics], timeout=180)
+                try:
+                    ctx["details"] = json.loads(out) if ok else []
+                except ValueError:
+                    ctx["details"] = []
+            ok, out = claude(prep.build_prompt(minutes, subj, topics, ctx.get("details") or [], tz,
+                                               ctx["asked"] if more else ()), [], timeout=300)
+        finally:
+            live.done()
+    finally:
+        lock.release()
+        PREP_JOB["running"] = False
+    if not ok:
+        PREP_JOB["error"] = plain(out)
+        send(chat, err(out), menu=True, raw_html=True)
+        return
+    res = prep.parse(out)
+    if not more:
+        ctx["minutes"], ctx["asked"] = minutes, []
+    if res:
+        ctx["asked"] += [q["q"] for q in res["questions"]]
+    row = [("🔁 Ещё вопросы", "pp:more")] + ([("📚 Подробнее (10 мин)", "pp:deep")] if ctx["minutes"] < 10 else [])
+    send(chat, prep.render(res, subj, minutes, more, topics, tz, out), markup=kb(row), raw_html=True)
+    prev = PREP_JOB.get("result") or {}
+    if more and res and prev.get("subj") == subj and prev.get("tz") == tz:  # в приложении — те же карточки, вопросов больше
+        PREP_JOB["result"] = {**prev, "more": True, "questions": (prev.get("questions") or []) + res["questions"],
+                              "added": len(res["questions"]), "at": int(time.time())}
+    else:
+        PREP_JOB["result"] = {"subj": subj, "icon": ctx["icon"], "minutes": ctx["minutes"], "more": more, "tz": tz,
+                              "topics": [prep.topic_brief(t) for t in topics], "secs": int(time.time() - t0),
+                              "at": int(time.time()), **(res or {"text": out.strip()[:6000]})}
+    try:
+        os.makedirs(PREP_DIR, exist_ok=True)
+        with open(prep_cache("last.json"), "w") as f:
+            json.dump(PREP_JOB["result"], f, ensure_ascii=False)
+    except OSError as e:
+        print("prep last:", e)
+
+
+def on_prep_button(chat, mid, cq_id, key):
+    """pp:s:N предмет · pp:t:M время · pp:tz своё ТЗ · pp:back к предметам · pp:more ещё вопросы · pp:deep 10 минут."""
+    quiet("answerCallbackQuery", callback_query_id=cq_id)
+    ctx = PREP_CTX.get(chat) or {}
+    act, _, arg = key.partition(":")
+    if act == "s":
+        names = ctx.get("names") or []
+        if not arg.isdigit() or int(arg) >= len(names):
+            threading.Thread(target=prep_menu, args=(chat, mid), daemon=True).start()
+            return
+        c = prep_ctx(chat, names[int(arg)])
+        edit(chat, mid, prep.topics_html(c["subj"], c["icon"], c["topics"]), prep_time_kb())
+    elif act == "back":
+        threading.Thread(target=prep_menu, args=(chat, mid), daemon=True).start()
+    elif act == "tz":
+        quiet("editMessageReplyMarkup", chat_id=chat, message_id=mid, reply_markup=json.dumps({"inline_keyboard": []}))
+        prep_ask_tz(chat)
+    elif act in ("t", "more", "deep"):
+        quiet("editMessageReplyMarkup", chat_id=chat, message_id=mid, reply_markup=json.dumps({"inline_keyboard": []}))
+        minutes = int(arg) if arg.isdigit() else 10 if act == "deep" else ctx.get("minutes") or 5
+        threading.Thread(target=prep_run, args=(chat, minutes, act == "more"), daemon=True).start()
+
+
+def app_prep_subjects(_):
+    """Предметы и их темы для приложения: недавние отмечены (их и возьмём по умолчанию)."""
+    topics = prep_topics(fetch=False)
+    if not topics and not PREP_JOB.get("loading"):
+        PREP_JOB["loading"] = True
+
+        def load():
+            try:
+                prep_topics()
+            finally:
+                PREP_JOB["loading"] = False
+        threading.Thread(target=load, daemon=True).start()
+    out = []
+    for s in prep.subjects(topics):
+        mine = sorted((t for t in prep.started(topics) if prep.subject_of(t) == s["name"]),
+                      key=lambda t: t["start"], reverse=True)
+        out.append({**s, "short": prep.short(s["name"]), "topics": [prep.topic_brief(t) for t in mine[:8]],
+                    "recent": [t["uuid"] for t in prep.recent(topics, s["name"])]})
+    return {"subjects": out, "loading": bool(PREP_JOB.get("loading")) and not topics}
+
+
+def app_prep_run(b):
+    """Подготовить из приложения: предмет, темы (uuid), минуты, своё ТЗ. more — ещё вопросы к последней."""
+    busy_check()
+    chat = owner()
+    minutes = int(b.get("minutes") or 5)
+    if minutes not in prep.MINUTES:
+        raise ValueError("Время — 1, 5 или 10 минут")
+    if b.get("more"):
+        if not PREP_CTX.get(chat):
+            raise ValueError("Сначала подготовься — потом будут ещё вопросы")
+        threading.Thread(target=prep_run, args=(chat, PREP_CTX[chat].get("minutes") or 5, True), daemon=True).start()
+        return {"ok": True}
+    subj, tz = str(b.get("subj") or "").strip(), str(b.get("tz") or "").strip()[:1000]
+    if not (b.get("again") and PREP_CTX.get(chat)):  # again: «Подробнее (10 мин)» — те же темы и ТЗ
+        if not subj and not tz:
+            raise ValueError("Выбери предмет или напиши своё ТЗ")
+        prep_ctx(chat, subj, tz, uuids=[str(u) for u in b.get("topics") or []] or None)
+    threading.Thread(target=prep_run, args=(chat, minutes), daemon=True).start()
+    return {"ok": True}
+
+
+def app_prep_state(_):
+    res = PREP_JOB.get("result")
+    if res is None:
+        try:
+            with open(prep_cache("last.json")) as f:
+                res = PREP_JOB["result"] = json.load(f)
+        except (OSError, ValueError):
+            res = None
+    return {"running": PREP_JOB["running"], "title": PREP_JOB["title"], "sub": PREP_JOB["sub"],
+            "secs": int(time.time() - PREP_JOB["t0"]) if PREP_JOB["running"] else 0, "error": PREP_JOB["error"],
+            "result": res}
+
+
+ROUTES.update({"/api/prep/subjects": app_prep_subjects, "/api/prep/run": app_prep_run,
+               "/api/prep/state": app_prep_state})
 
 
 def app_kb(text="✨ Открыть приложение"):
