@@ -72,7 +72,10 @@ function adHtml(a) {
   const photos = n ? `<div class="photos${cols}">` + shown.map((src, i) =>
     `<div class="ph"><img data-src="${esc(src)}" alt="">${i === 3 && n > 4 ? `<div class="more">+${n - 4}</div>` : ''}</div>`).join('') + '</div>' : '';
   const price = a.price ? `<div class="price">${esc(a.price_text)}</div>` : '<div class="price none">Цена не указана</div>';
-  const meta = [a.category, n ? `на белом ${a.clean} из ${n}` : ''].filter(Boolean).map(esc).join(' · ');
+  const status = a.status === 'live' ? '🟢 на Авито' : a.status === 'sold'
+    ? '✅ продано' + (a.sold_price ? ' за ' + a.sold_price.toLocaleString('ru') + ' ₽' : '') : '';
+  const meta = [status, a.category, n ? `на белом ${a.clean} из ${n}` : '', a.floor ? `торг до ${a.floor.toLocaleString('ru')} ₽` : '']
+    .filter(Boolean).map(esc).join(' · ');
   const desc = a.description
     ? `<div class="desc"><div class="txt" id="d-${esc(a.id)}">${esc(a.description)}</div></div>` +
       (a.description.length > 260 || a.description.split('\n').length > 6 ? `<button class="more-link" data-more="${esc(a.id)}">Показать полностью</button>` : '')
@@ -85,6 +88,7 @@ function adHtml(a) {
     (a.description ? `<button class="btn primary" data-copy="desc" data-ad="${esc(a.id)}">Копировать</button>` : '') +
     (a.title ? `<button class="btn" data-copy="title" data-ad="${esc(a.id)}">Название</button>` : '') +
     `<button class="btn wide" data-market="${esc(a.id)}">Средняя цена</button>` +
+    (a.url ? `<a class="btn wide" href="${esc(a.url)}" target="_blank" rel="noopener">Открыть на Авито</a>` : '') +
     '</div>' +
     `<div class="market" id="m-${esc(a.id)}">${a.market ? statsHtml(a.market, '', a.id) : ''}</div></article>`;
 }

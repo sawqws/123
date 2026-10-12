@@ -98,7 +98,7 @@ def draft(create=False):
     with lock:
         d = st.get("draft")
         if not d and create:
-            did = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            did = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]  # одна секунда — разные id
             d = st["draft"] = {"id": did, "photos": [], "info": "", "price": None}
             os.makedirs(os.path.join(DRAFTS, did), exist_ok=True)
             cleanup_old()
@@ -235,6 +235,8 @@ def setup_bot():
         {"command": "app", "description": "Приложение"},
         {"command": "new", "description": "Новое объявление"},
         {"command": "ad", "description": "Текущее объявление"},
+        {"command": "ads", "description": "Все объявления"},
+        {"command": "buyer", "description": "Ответить покупателю"},
         {"command": "price", "description": "Средняя цена на Авито"},
         {"command": "photos", "description": "Фото на белом фоне"},
         {"command": "region", "description": "Регион для сравнения цен"},
@@ -304,6 +306,12 @@ def card(d):
         lines = ["<b>📝 Описания пока нет</b>"]
     lines.append(f"<b>💰 {market.fmt_rub(d['price'])}</b>" if d.get("price")
                  else "💰 Пришли цену — например <code>3500</code>")
+    if d.get("status") == "sold":
+        lines.append("🎉 Продано" + (f" за {market.fmt_rub(d['sold_price'])}" if d.get("sold_price") else ""))
+    elif d.get("status") == "live":
+        lines.append("🟢 На Авито" + (f" — <a href=\"{esc(d['url'])}\">объявление</a>" if d.get("url") else ""))
+    if d.get("floor"):
+        lines.append(f"🤝 Торг до {market.fmt_rub(d['floor'])} <i>(покупателю не называю)</i>")
     if d.get("photos"):
         clean = sum(1 for p in d["photos"] if p.get("clean"))
         lines.append(f"🖼 На белом фоне: {clean} из {len(d['photos'])}")
@@ -320,7 +328,15 @@ def card(d):
 
 def card_buttons(d):
     rows = []
+    if d.get("status") == "sold":
+        return [[b("🆕 Новое", "new", "primary"), b("🗂 Все объявления", "ads")]]
+    if d.get("status") == "live":
+        rows.append([b("💬 Ответ покупателю", "buy", "primary"), b("💸 Продано", "sold")])
+        rows.append([b("🤝 Торг", "floor"), b("📊 Цена на Авито", "mk"), b("📋 Скопировать", "cp")])
+        rows.append([b("🔄 Переписать", "re"), b("🆕 Новое", "new")])
+        return rows
     if d.get("title"):
+        rows.append([b("📤 Выложить на Авито", "pub", "primary" if d.get("price") else None)])
         rows.append([b("📊 Цена на Авито", "mk", None if d.get("price") else "primary"), b("📋 Скопировать", "cp")])
         rows.append([b("🔄 Переписать", "re"), b("🆕 Новое", "new")])  # фото — альбомом выше и /photos
         return rows
@@ -569,10 +585,12 @@ HELP_STEPS = (
     "• Пара слов о вещи: бренд, размер, состояние.\n"
     "• Число — цена, другой текст — правка («короче»).\n"
     "• «Цена на Авито» — до 100 похожих объявлений.\n"
+    "• «📤 Выложить» — фото, название, цена, описание и кнопка на Авито.\n"
+    "• Выложил — «💬 Ответ покупателю»: его сообщение или скрин → готовый ответ с торгом.\n"
     "• Голосовые тоже понимаю.\n"
     "• /region moskva — цены по городу, /region all — по России."
 )
-HELP_NOTE = " · ".join(c + " " + w for c, w in (("/new", "новое"), ("/ad", "текущее"), ("/price", "цена"),
+HELP_NOTE = " · ".join(c + " " + w for c, w in (("/new", "новое"), ("/ad", "текущее"), ("/ads", "все"), ("/price", "цена"),
                                                       ("/app", "приложение")))
 
 
@@ -637,6 +655,217 @@ def copy_text(chat):
     tg("sendMessage", chat_id=chat, text=d.get("description") or "")
 
 
+# ---------- выложить, статусы, все объявления ----------
+
+ADD_URL = "https://www.avito.ru/additem"  # «Разместить объявление» (в приложении Авито — кнопка «+»)
+AVITO_LINK = re.compile(r"https?://(?:www\.|m\.)?avito\.ru/\S+")
+
+
+def publish(chat):
+    """Готовый набор для Авито: фото альбомом, название, цена, категория, описание отдельным сообщением.
+    Публиковать сам бот не может: API Авито для частных объявлений нет, а вход в аккаунт браузером — риск бана."""
+    d = draft()
+    if not d or not d.get("title"):
+        return send(chat, fail("Сначала опиши вещь — сделаю объявление."))
+    paths = [p.get("clean") or p["orig"] for p in d.get("photos") or []]
+    if paths:
+        send_album(chat, paths, "🖼 Фото — по порядку (сохрани: долгий тап → Сохранить)")
+    steps = ["1. Нажми «Подать на Авито» (или «+» в приложении Авито)."]
+    if d.get("category"):
+        steps.append(f"2. Категория: {esc(d['category'])}")
+    steps += [f"3. Фото — альбом выше{'' if paths else ' (фото нет — можно без них)'}.",
+              f"4. Название: <code>{esc(d['title'])}</code>",
+              (f"5. Цена: <code>{d['price']}</code>" if d.get("price")
+               else "5. Цена: пришли сюда число, подскажу по рынку — «📊 Цена»."),
+              "6. Описание — следующим сообщением (долгий тап → Копировать)."]
+    send(chat, fmt("📤 Выложить на Авито — 1 минута", "\n".join(steps),
+                   "Нажми на название или цену — скопируется. Выложил — жми «✅ Выложил»."),
+         [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]])
+    tg("sendMessage", chat_id=chat, text=d.get("description") or "")
+
+
+def set_live(chat, url=None, mid=None):
+    d = draft()
+    if not d:
+        return
+    with lock:
+        d["status"] = "live"
+        d.setdefault("live_at", time.time())
+        if url:
+            d["url"] = url
+        save()
+    if mid:
+        try:
+            tg("editMessageReplyMarkup", chat_id=chat, message_id=mid, reply_markup={"inline_keyboard": []})
+        except Exception:
+            pass
+    send(chat, fmt("🟢 Объявление на Авито", note=("Ссылку сохранил. " if url else "Пришли ссылку на него — сохраню. ")
+                   + "Покупатель написал — «💬 Ответ покупателю», подскажу ответ и поторгуюсь."))
+    show_card(chat)
+
+
+def set_sold(chat, price=None):
+    d = draft()
+    if not d:
+        return
+    with lock:
+        d["status"] = "sold"
+        d["sold_price"] = price or d.get("price")
+        d["sold_at"] = time.time()
+        save()
+    show_card(chat)
+
+
+def ads_view():
+    ads = all_ads()
+    if not ads:
+        return fmt("🗂 Объявлений пока нет", note="Пришли фото вещи — начнём."), None
+    marks = {"live": "🟢", "sold": "✅"}
+    lines, rows = [], []
+    for a in ads[:KEEP_ADS]:
+        title = a.get("title") or (a.get("info") or "Без описания")[:40]
+        price = market.fmt_rub(a["price"]) if a.get("price") else "без цены"
+        lines.append(f"{marks.get(a.get('status'), '📝')} {esc(title)} — {price}"
+                     + (" · сейчас" if a is st.get("draft") else ""))
+        if a is not st.get("draft"):
+            rows.append([b(f"{marks.get(a.get('status'), '📝')} {title[:20]}", f"open|{a['id']}")])
+    sold = sum(a.get("sold_price") or 0 for a in ads if a.get("status") == "sold")
+    note = "📝 черновик · 🟢 на Авито · ✅ продано" + (f" · продано на {market.fmt_rub(sold)}" if sold else "")
+    return fmt("🗂 Мои объявления", "\n".join(lines), note), rows[:8] or None
+
+
+def open_ad(chat, aid, mid=None):
+    with lock:
+        target = next((a for a in st.get("ads") or [] if a.get("id") == aid), None)
+        if not target:
+            return send(chat, fail("Этого объявления уже нет."))
+        cur = st.get("draft")
+        rest = [a for a in st.get("ads") or [] if a.get("id") != aid]
+        if cur and (cur.get("title") or cur.get("photos")):
+            rest = [cur] + rest
+        st["ads"], st["draft"] = rest[:KEEP_ADS - 1], target
+        save()
+    show_card(chat, mid)
+
+
+# ---------- ответы покупателям ----------
+
+WAIT_TTL = 15 * 60
+
+
+def waiting(kind=None):
+    """Что бот ждёт следующим сообщением: {"kind": "buyer"|"floor", "ts"}; протухает через 15 мин."""
+    w = st.get("wait")
+    if not w or time.time() - w.get("ts", 0) > WAIT_TTL:
+        return None
+    return w if kind is None or w.get("kind") == kind else None
+
+
+def ask_buyer(chat):
+    d = draft()
+    if not d or not (d.get("title") or d.get("info")):
+        return send(chat, fail("Сначала сделай объявление — отвечу по нему."))
+    with lock:
+        st["wait"] = {"kind": "buyer", "ts": time.time()}
+        save()
+    send(chat, fmt("💬 Что написал покупатель?",
+                   note="Перешли текст, скриншот чата Авито или надиктуй голосом — предложу ответ."),
+         [[b("Отмена", "nowait")]])
+
+
+def ask_floor(chat):
+    with lock:
+        st["wait"] = {"kind": "floor", "ts": time.time()}
+        save()
+    d = draft() or {}
+    cur = f"Сейчас: {market.fmt_rub(d['floor'])}. " if d.get("floor") else ""
+    send(chat, fmt("🤝 Минимальная цена", note=cur + "За сколько минимум готов отдать? Пришли число — "
+                                                      "покупателю не называю, торгуюсь постепенно."),
+         [[b("Без торга", "floor|0"), b("Отмена", "nowait")]])
+
+
+def buyer_reply(chat, text="", image=None, again=False):
+    d = draft()
+    if not d:
+        return send(chat, fail("Объявления нет."))
+    tg("sendChatAction", chat_id=chat, action="typing")
+    hist = list(d.get("chat") or [])
+    if again:
+        last = d.get("last_buyer") or {}
+        text, image = last.get("text", ""), last.get("image")
+        hist = hist[:-2] if len(hist) >= 2 and hist[-1]["who"] == "me" else hist
+    try:
+        res = ai.reply_buyer(d, text + ("\n(Прошлый вариант ответа не подошёл — напиши по-другому.)" if again else ""),
+                             image, hist, d.get("floor"), d.get("info", ""))
+    except ai.AIError as e:
+        return send(chat, fail(f"Не получилось: {esc(e)}"), [[b("🔁 Ещё раз", "buyr")]])
+    with lock:
+        d["last_buyer"] = {"text": text, "image": image}
+        d["chat"] = (hist + [{"who": "buyer", "text": text or "[скриншот чата]"},
+                             {"who": "me", "text": res["reply"]}])[-20:]
+        save()
+    reply = res["reply"]
+    rows = [[{"text": "📋 Скопировать", "copy_text": {"text": reply}}]] if len(reply) <= 256 else []
+    rows.append([b("🔄 Другой вариант", "buyr"), b("💬 Ещё сообщение", "buy")])
+    send(chat, fmt("💬 Ответ покупателю", esc(reply), ("💡 " + esc(res["note"])) if res["note"] else
+                   "Скопируй и отправь в чате Авито."), rows)
+    if len(reply) > 256:
+        tg("sendMessage", chat_id=chat, text=reply)
+
+
+def hear_buyer(chat, msg):
+    tg("sendChatAction", chat_id=chat, action="typing")
+    try:
+        text = media.voice_text(TOKEN, msg)
+    except media.MediaError as e:
+        return send(chat, fail(f"Голосовое не разобрал: {esc(e)}"))
+    send(chat, f"🎙 <i>«{esc(text)}»</i>")
+    buyer_reply(chat, text)
+
+
+def on_wait(chat, msg, text):
+    """Сообщение, которого бот ждал (покупатель, минимальная цена). True — обработано."""
+    w = waiting()
+    if not w:
+        return False
+    if w["kind"] == "floor":
+        if not text or media.kind(msg):
+            return False
+        price = parse_price(text)
+        if price is None and re.fullmatch(r"\s*\d[\d\s]*\s*", text):
+            price = int(re.sub(r"\D", "", text))
+        if not price:
+            send(chat, fail("Пришли число — например <code>3000</code>."))
+            return True
+        set_floor(chat, price)
+        return True
+    with lock:
+        st.pop("wait", None)
+        save()
+    kind = media.kind(msg)
+    if kind == "voice":
+        run(chat, hear_buyer, chat, msg)
+    elif kind == "photo":
+        path = media.photo_path(TOKEN, msg, os.path.join(ddir(draft()), "buyer"))
+        run(chat, buyer_reply, chat, (msg.get("caption") or "").strip(), path)
+    elif text:
+        run(chat, buyer_reply, chat, text)
+    else:
+        return False
+    return True
+
+
+def set_floor(chat, price):
+    d = draft()
+    with lock:
+        st.pop("wait", None)
+        if d:
+            d["floor"] = price or None
+        save()
+    send(chat, fmt(f"🤝 Торг до {market.fmt_rub(price)}" if price else "🤝 Без торга",
+                   note="Учту в ответах покупателям, цифру им не называю." if price else "Цену держу."))
+
+
 def on_message(msg):
     chat = msg["chat"]["id"]
     frm = msg.get("from") or {}
@@ -648,6 +877,8 @@ def on_message(msg):
         claim(uid)
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
+        return
+    if not text.startswith("/") and on_wait(chat, msg, text or (msg.get("caption") or "").strip()):
         return
     if media.kind(msg) == "photo":
         add_photo(chat, msg)
@@ -667,6 +898,10 @@ def on_message(msg):
         new_ad(chat)
     elif cmd == "/ad":
         show_card(chat)
+    elif cmd == "/ads":
+        send(chat, *ads_view())
+    elif cmd == "/buyer":
+        ask_buyer(chat)
     elif cmd == "/price":
         run(chat, check_market, chat)
     elif cmd == "/photos":
@@ -715,6 +950,13 @@ def on_text(chat, text, now=False):
     def later(fn, *args):
         fn(*args) if now else run(chat, fn, *args)
     d = draft(create=True)
+    link = AVITO_LINK.search(text)
+    if link and d.get("title"):
+        return set_live(chat, link.group(0).rstrip(").,"))
+    sold = re.match(r"^\s*прода(л|ла|но|ли)\b(.*)$", text, re.I)
+    if sold and d.get("title"):
+        rest = re.sub(r"^\s*за\s*", "", sold.group(2), flags=re.I).strip()
+        return set_sold(chat, parse_price(rest) if rest else None)
     price = parse_price(text)
     if price is not None and (d.get("title") or d.get("info") or d.get("photos")):
         d["price"] = price
@@ -765,6 +1007,36 @@ def on_callback(cq):
             note = "Фото пока нет"
     elif data[0] == "new":
         new_ad(chat)
+    elif data[0] == "pub":
+        run(chat, publish, chat)
+    elif data[0] == "live":
+        set_live(chat, mid=mid)
+        note = "Отметил: на Авито"
+    elif data[0] == "sold":
+        set_sold(chat)
+        note = "🎉 Продано!"
+    elif data[0] == "ads":
+        send(chat, *ads_view())
+    elif data[0] == "open":
+        open_ad(chat, data[1])
+    elif data[0] == "buy":
+        ask_buyer(chat)
+    elif data[0] == "buyr":
+        run(chat, buyer_reply, chat, "", None, True)
+    elif data[0] == "floor":
+        if len(data) > 1:
+            set_floor(chat, int(data[1]))
+        else:
+            ask_floor(chat)
+    elif data[0] == "nowait":
+        with lock:
+            st.pop("wait", None)
+            save()
+        note = "Отменил"
+        try:
+            tg("deleteMessage", chat_id=chat, message_id=mid)
+        except Exception:
+            pass
     try:
         tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
     except Exception:
@@ -843,7 +1115,9 @@ def ad_json(d):
             "description": d.get("description") or "", "category": d.get("category") or "",
             "price": d.get("price"), "price_text": market.fmt_rub(d["price"]) if d.get("price") else "",
             "query": ad_query(d), "photos": [f"/api/photo/{d['id']}/{n}" for n in range(len(photos))],
-            "clean": sum(1 for p in photos if p.get("clean")), "market": market_json(d.get("market"))}
+            "clean": sum(1 for p in photos if p.get("clean")), "market": market_json(d.get("market")),
+            "status": d.get("status") or "draft", "url": d.get("url") or "", "floor": d.get("floor"),
+            "sold_price": d.get("sold_price")}
 
 
 def app_state():

@@ -195,6 +195,31 @@ class Actions(unittest.TestCase):
         self.assertIn("все боты", ctx.asked[0])
         self.assertIn("+ все боты", out)
 
+    def test_botsfolder(self):
+        ctx = Ctx()
+        ctx.client.dialogs.append(dialog(user(50, "HDP", username="HDP_DIGITALBOT")))
+        out = run(actions.run(ctx, "botsfolder", {"bots": ["HDP_DIGITALBOT", "Avitooo1bot", "Taxii111bot"]}))
+        self.assertEqual([x[:2] for x in ctx.client.sent], [("Avitooo1bot", "/start"), ("Taxii111bot", "/start")])
+        req = ctx.client.calls[-1]
+        self.assertTrue(req.filter.bots)
+        self.assertEqual(req.filter.title.text, "Bot")
+        self.assertIn("3 ботах", ctx.asked[0])
+        self.assertIn("@Avitooo1bot", out)
+        no = Ctx(answer=False)
+        self.assertIn("не подтвердил", run(actions.run(no, "botsfolder", {"bots": ["Avitooo1bot"]})))
+        self.assertEqual(no.client.sent, [])
+
+    def test_bot_tokens(self):
+        d = tempfile.mkdtemp()
+        a, made = os.path.join(d, "a.env"), os.path.join(d, "bots")
+        os.makedirs(os.path.join(made, "water"))
+        with open(a, "w") as f:
+            f.write("HUB_TOKEN=111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nX=1\n")
+        with open(os.path.join(made, "water", ".env"), "w") as f:
+            f.write("BOT_TOKEN=222222:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n")
+        self.assertEqual(actions.bot_tokens([a, os.path.join(d, "nope.env")], made),
+                         ["111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "222222:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"])
+
     def test_dates(self):
         d = actions.date("2026-10-10 09:00")
         self.assertEqual(d.astimezone(UTC).hour, 6)
