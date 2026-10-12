@@ -54,7 +54,10 @@ async function login(page) {
 }
 
 async function close({ browser, ctx }) {
-  await ctx.storageState({ path: STATE });
+  // несколько заданий решаются параллельно — пишем сессию атомарно, чтобы соседний процесс не прочитал полфайла
+  const tmp = `${STATE}.${process.pid}`;
+  await ctx.storageState({ path: tmp });
+  fs.renameSync(tmp, STATE);
   await browser.close();
 }
 
