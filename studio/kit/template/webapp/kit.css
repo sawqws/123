@@ -1,7 +1,7 @@
 /* botkit — общий дизайн мини-приложений Студии. Не править под бота: своё — в app.css.
    Цвета — из темы Telegram (--tg-theme-*), запасные — тёмная тема. Сетка 8px, радиусы 12/16, шрифт системный.
    Классы: .top .title .subtitle · .card .card h2 · .section · .list .row (.icon .main .name .meta .end) ·
-   .stat (.value .label) · .grid · .tabs > button(.on) · .btn(.primary .danger .small .ghost) · input textarea select ·
+   .stat (.value .label) · .grid (сетка карточек или кнопок) · .actions (кнопки в ряд) · .tabs > button(.on) · .btn(.primary .danger .small .ghost) · input textarea select ·
    .chips > .chip(.on) · .bar > i · .empty (.emoji) · .skeleton · .toast · .sheet · .badge(.ok .warn .bad) · .muted */
 :root {
   --bg: var(--tg-theme-secondary-bg-color, #0f0f0f);
@@ -78,7 +78,9 @@ button.row:active { background: var(--field); }
 .btn.small { width: auto; min-height: 32px; padding: 0 12px; font-size: 14px; border-radius: 16px; }
 .btn:active { opacity: .7; transform: scale(.98); }
 .btn[disabled] { opacity: .5; }
-.actions { display: flex; gap: 8px; } .actions .btn { margin: 0; }
+.actions { display: flex; gap: 8px; }
+/* в рядах и сетках отступы даёт gap — кнопки друг под другом (.btn + .btn) тут ни при чём */
+.actions > *, .grid > *, .chips > * { margin: 0 !important; }
 
 input, textarea, select { width: 100%; min-width: 0; border: 0; border-radius: 12px; background: var(--field);
   color: var(--text); font: inherit; padding: 12px; outline: none; -webkit-appearance: none; appearance: none; }

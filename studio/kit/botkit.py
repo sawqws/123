@@ -245,8 +245,8 @@ class Bot:
         self.app_url = (app_url if app_url is not None else os.environ.get("APP_URL", "")).strip()
         if self.app_url and not self.app_url.endswith("/"):
             self.app_url += "/"
-        self.dir = os.path.dirname(os.path.abspath(sys.modules["__main__"].__file__)) \
-            if getattr(sys.modules.get("__main__"), "__file__", None) else HERE
+        caller = sys._getframe(1).f_globals.get("__file__")  # папка бота — там, где создан Bot (обычно bot.py)
+        self.dir = os.path.dirname(os.path.abspath(caller)) if caller else HERE
         self.data_dir = data or os.path.join(self.dir, "data")
         self.webapp = webapp or os.path.join(self.dir, "webapp")
         self.db = Store(os.path.join(self.data_dir, "db.json"))
