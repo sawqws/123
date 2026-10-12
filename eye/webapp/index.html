@@ -4,69 +4,85 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
-  <meta name="theme-color" content="#0b0c10">
+  <meta name="theme-color" content="#0b0b0d">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Глаз">
   <title>Глаз</title>
   <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <link rel="stylesheet" href="kit.css?v={{v}}">
   <link rel="stylesheet" href="app.css?v={{v}}">
 </head>
-<body class="off">
+<body data-mode="off">
   <main id="app">
-    <header class="top">
-      <div class="brand">
-        <span class="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><path d="M12 5C6.5 5 2.7 9.4 1.6 11.4a1.3 1.3 0 0 0 0 1.2C2.7 14.6 6.5 19 12 19s9.3-4.4 10.4-6.4a1.3 1.3 0 0 0 0-1.2C21.3 9.4 17.5 5 12 5Zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"/></svg>
-        </span>
-        <span>Глаз</span>
+    <header class="hero">
+      <div class="logo" aria-hidden="true">👁</div>
+      <div class="titles">
+        <h1>Глаз</h1>
+        <div id="place" class="sub">📍 определяю место…</div>
       </div>
-      <div id="place" class="place">📍 определяю место…</div>
-      <button id="new" class="icon-btn" aria-label="Начать заново" title="Начать заново">
-        <svg viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.9 8.2 1 1 0 1 1 2-.4A5 5 0 1 0 8.6 8.4l1.5 1.5H5V4.8l2.2 2.2A7 7 0 0 1 12 5Z"/></svg>
-      </button>
     </header>
 
-    <section class="stage" aria-live="polite">
-      <div class="orb" aria-hidden="true">
-        <span class="glow"></span>
-        <span class="wave"></span><span class="wave"></span><span class="wave"></span>
-        <span class="ring" id="ring"></span>
-        <span class="arc"></span>
-        <span class="core">
-          <svg class="mic" viewBox="0 0 24 24"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V5.5a3.5 3.5 0 0 0-7 0V11a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.9V19H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.1a6 6 0 0 0 5-5.9Z"/></svg>
-          <span class="bars"><i></i><i></i><i></i><i></i><i></i></span>
-          <span class="dots"><i></i><i></i><i></i></span>
-        </span>
+    <!-- ===== Разговор ===== -->
+    <section id="tab-talk">
+      <div class="card feature stage" aria-live="polite">
+        <div class="orb" aria-hidden="true">
+          <span class="halo"></span>
+          <span class="wave"></span><span class="wave"></span><span class="wave"></span>
+          <span class="lvl" id="lvl"></span>
+          <span class="arc"></span>
+          <span class="core">
+            <svg class="mic" viewBox="0 0 24 24"><path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V5.5a3.5 3.5 0 0 0-7 0V11a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.9V19H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.1a6 6 0 0 0 5-5.9Z"/></svg>
+            <span class="bars"><i></i><i></i><i></i><i></i><i></i></span>
+            <span class="dots"><i></i><i></i><i></i></span>
+          </span>
+        </div>
+        <div id="state" class="state">Готов слушать</div>
+        <div id="hint" class="st-hint">Нажми «Говорить» — дальше без рук</div>
+        <div id="heard" class="heard"></div>
+        <div id="say" class="say"></div>
+        <button id="stop" class="btn sm tonal stop">⏹ Тише</button>
+        <div id="notice" class="note err notice" hidden></div>
+        <div class="btns actions">
+          <button id="talk" class="btn primary talk" aria-label="Говорить">
+            <span id="talk-label">🎙 Говорить</span>
+            <small id="talk-sub"></small>
+          </button>
+          <label class="btn tonal pick" for="pick" aria-label="Фото или видео">📷</label>
+        </div>
       </div>
-      <div id="state" class="state">Готов слушать</div>
-      <div id="hint" class="hint">Нажми «Говорить» — дальше без рук</div>
-      <div id="heard" class="heard"></div>
-      <div id="say" class="say"></div>
-      <button id="stop" class="chip">⏹ Тише</button>
+
+      <div class="label">Разговор <button id="new" class="more">Заново</button></div>
+      <div id="chat" class="chat">
+        <div class="sk" style="height:44px;width:62%;margin-left:auto"></div>
+        <div class="sk" style="height:64px;width:78%"></div>
+      </div>
     </section>
 
-    <div id="notice" class="notice" hidden></div>
-
-    <section class="block">
-      <h2>Разговор</h2>
-      <div id="chat" class="chat"><div class="empty">Скажи что-нибудь — отвечу в динамики очков.</div></div>
-    </section>
-
-    <section class="block">
-      <h2>Что видел</h2>
-      <div id="feed" class="feed"><div class="empty">Пришли фото с очков в чат или нажми «Фото».</div></div>
+    <!-- ===== Что видел ===== -->
+    <section id="tab-seen" hidden>
+      <div class="card feature add">
+        <div class="add-row">
+          <div class="add-ic" aria-hidden="true">📷</div>
+          <div class="add-txt">
+            <b>Фото или видео с очков</b>
+            <div class="hint">Скажу вслух, что это: здание, вещь, надпись</div>
+          </div>
+        </div>
+        <label class="btn primary" for="pick">Выбрать в «Фото»</label>
+      </div>
+      <div class="label">Что видел <span id="seen-n" class="count"></span></div>
+      <div id="feed" class="list feed">
+        <div class="row"><div class="sk thumb"></div><div class="main"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:12px;width:85%;margin-top:8px"></div></div></div>
+        <div class="row"><div class="sk thumb"></div><div class="main"><div class="sk" style="height:14px;width:45%"></div><div class="sk" style="height:12px;width:75%;margin-top:8px"></div></div></div>
+      </div>
     </section>
   </main>
 
-  <nav class="dock">
-    <button id="talk" class="btn primary" aria-label="Говорить">
-      <span id="talk-label">🎙 Говорить</span>
-      <small id="talk-sub" class="sub"></small>
-    </button>
-    <label class="btn" for="pick">📷 Фото<input id="pick" type="file" accept="image/*" multiple hidden></label>
-  </nav>
+  <input id="pick" type="file" accept="image/*,video/*" multiple hidden>
+  <nav id="tabs"></nav>
   <div id="toast" class="toast" role="status"></div>
+  <script src="kit.js?v={{v}}"></script>
   <script src="app.js?v={{v}}"></script>
 </body>
 </html>

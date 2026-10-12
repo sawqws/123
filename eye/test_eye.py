@@ -94,7 +94,8 @@ class ChatTest(Base):
         with mock.patch.object(eye, "download", return_value=(JPEG, ".jpg")), \
                 mock.patch.object(eye.ai, "look", return_value=look) as lk:
             eye.on_message(self.msg(photo=[{"file_id": "a"}, {"file_id": "big"}], caption="что это?"))
-        path, place, hist, question = lk.call_args[0]
+        path, place, hist, question, heard = lk.call_args[0]
+        self.assertEqual(heard, "")
         self.assertTrue(os.path.exists(path))
         self.assertIn("Дворцовая площадь", place)
         self.assertEqual(question, "что это?")
@@ -134,6 +135,79 @@ class ChatTest(Base):
                                      {"role": "assistant", "text": "В 1762 году."}])
         eye.on_message(self.msg("/new"))
         self.assertEqual(eye.history(), [])
+
+    def fake_video(self, frames=2, text="что это за мост"):
+        def go(token, msg, folder=None):
+            self.video_dir = folder
+            paths = []
+            for i in range(frames):
+                paths.append(os.path.join(folder, f"frame-{i + 1}.jpg"))
+                with open(paths[-1], "wb") as f:
+                    f.write(JPEG)
+            return {"frames": paths, "text": text, "seconds": 8.0}
+        return go
+
+    def test_video_in_chat(self):
+        look = {"say": "Это Дворцовый мост.", "text": "Дворцовый мост, разводной, 1916 год.", "title": "Дворцовый мост"}
+        with mock.patch.object(eye.media, "video", side_effect=self.fake_video()) as vid, \
+                mock.patch.object(eye.ai, "look", return_value=look) as lk:
+            eye.on_message(self.msg(video={"file_id": "v", "duration": 8}, caption="а это?"))
+        self.assertEqual(vid.call_args[0][0], eye.TOKEN)
+        frames, place, hist, question, heard = lk.call_args[0]
+        self.assertEqual([os.path.basename(f) for f in frames], ["frame-1.jpg", "frame-2.jpg"])
+        self.assertEqual((question, heard), ("а это?", "что это за мост"))
+        self.assertIn("Смотрю видео", self.texts()[-2])
+        self.assertEqual(self.methods()[-2:], ["sendMessage", "editMessageText"])
+        last = self.texts()[-1]
+        self.assertTrue(last.startswith("🎬 <b>Дворцовый мост</b>"))
+        self.assertIn("<blockquote>Дворцовый мост, разводной", last)
+        self.assertIn("«что это за мост»", last)
+        self.assertEqual(eye.events[0]["kind"], "photo_new")
+        self.assertTrue(eye.events[0]["video"])
+        self.assertEqual(eye.events[-1]["kind"], "photo")
+        rec = eye.recent_photos()[-1]
+        self.assertTrue(rec["video"])
+        self.assertEqual(eye.history()[-2]["text"], "[видео Дворцовый мост] а это?")
+        self.assertFalse(os.path.exists(self.video_dir))  # временные кадры убраны
+        self.assertEqual(self.files[-1][0], "sendVoice")
+
+    def test_video_note_is_video_not_voice(self):
+        look = {"say": "Кот.", "text": "Рыжий кот.", "title": "Кот"}
+        with mock.patch.object(eye.media, "video", side_effect=self.fake_video(1, "")) as vid, \
+                mock.patch.object(eye.speech, "hear") as hear, \
+                mock.patch.object(eye.ai, "look", return_value=look) as lk:
+            eye.on_message(self.msg(video_note={"file_id": "n", "duration": 2}))
+        self.assertTrue(vid.called)
+        self.assertFalse(hear.called)
+        self.assertIsInstance(lk.call_args[0][0], list)
+        self.assertIn("<b>Кот</b>", self.texts()[-1])
+        self.assertNotIn("🎙", self.texts()[-1])
+
+    def test_video_errors(self):
+        with mock.patch.object(eye.media, "video", side_effect=eye.media.MediaError("видео больше 20 МБ")):
+            eye.on_message(self.msg(video={"file_id": "v"}))
+        self.assertEqual(self.texts()[-1], "⚠️ Видео больше 20 МБ")
+        self.assertEqual(self.methods()[-1], "editMessageText")
+        # кадров нет, а речь есть — отвечаем как на голосовой вопрос
+        with mock.patch.object(eye.media, "video", side_effect=self.fake_video(0, "привет")), \
+                mock.patch.object(eye.ai, "talk", return_value="Привет!") as talk:
+            eye.on_message(self.msg(video={"file_id": "v"}))
+        self.assertEqual(talk.call_args[0][0], "привет")
+        self.assertIn("Привет!", self.texts()[-1])
+
+    def test_audio_document_and_unknown(self):
+        with mock.patch.object(eye, "download", return_value=(b"mp3", ".mp3")), \
+                mock.patch.object(eye.speech, "hear", return_value="который час"), \
+                mock.patch.object(eye.ai, "talk", return_value="Скоро вечер."):
+            eye.on_message(self.msg(document={"file_id": "d", "mime_type": "audio/mpeg"}))
+        self.assertIn("Скоро вечер.", self.texts()[-1])
+        eye.on_message(self.msg(sticker={"file_id": "s"}))
+        self.assertIn("Это не разберу", self.texts()[-1])
+
+    def test_help_is_short(self):
+        eye.on_message(self.msg("/help"))
+        self.assertLess(len(self.texts()[-1]), 400)
+        self.assertIn("видео", self.texts()[-1])
 
     def test_location_and_status(self):
         eye.on_message(self.msg(location={"latitude": 55.75, "longitude": 37.62}))
@@ -241,6 +315,11 @@ class WebTest(Base):
         self.assertEqual(code, 200)
         self.assertIn(b"app.js?v=", html)
         self.assertNotIn(b"{{v}}", html)
+        self.assertLess(html.index(b'"kit.css'), html.index(b'"app.css'))
+        self.assertLess(html.index(b'"kit.js'), html.index(b'"app.js'))
+        code, css = self.call("/kit.css")  # общий набор — по ссылке из common/webapp
+        self.assertEqual(code, 200)
+        self.assertIn(b"--accent", css)
 
     def test_upload_events_and_photo(self):
         look = {"say": "Это фонтан.", "text": "Фонтан на площади.", "title": "Фонтан"}
@@ -258,6 +337,38 @@ class WebTest(Base):
         st = self.call("/api/state")[1]
         self.assertEqual(st["photos"][0]["title"], "Фонтан")
         self.assertIn("Фонтан", self.texts()[-1])  # и в чат тоже
+
+    def test_upload_video(self):
+        look = {"say": "Это Нева.", "text": "Река Нева у Эрмитажа.", "title": "Нева"}
+
+        def frames(src, folder, n, seconds):
+            with open(src, "rb") as f:
+                self.assertEqual(f.read(), b"MP4DATA")
+            out = []
+            for i in range(n):
+                out.append(os.path.join(folder, f"frame-{i}.jpg"))
+                with open(out[-1], "wb") as f:
+                    f.write(JPEG)
+            return out
+        with mock.patch.object(eye.media, "_seconds", return_value=12.0), \
+                mock.patch.object(eye.media, "_frames", side_effect=frames), \
+                mock.patch.object(eye.media, "transcribe", return_value="красиво"), \
+                mock.patch.object(eye.ai, "look", return_value=look) as lk:
+            code, r = self.call("/api/upload?lat=59.94&lon=30.31", b"MP4DATA", "video/mp4")
+        self.assertEqual((code, r["video"]), (200, True))
+        self.assertEqual(len(lk.call_args[0][0]), 4)
+        self.assertEqual(lk.call_args[0][4], "красиво")
+        ev = self.call("/api/events?after=0")[1]["events"]
+        self.assertEqual([e["kind"] for e in ev], ["photo_new", "photo"])
+        st = self.call("/api/state")[1]
+        self.assertTrue(st["photos"][0]["video"])
+        self.assertEqual(st["photos"][0]["title"], "Нева")
+        with mock.patch.object(eye.media, "_seconds", return_value=0.0), \
+                mock.patch.object(eye.media, "_frames", return_value=[]), \
+                mock.patch.object(eye.media, "transcribe", side_effect=eye.media.MediaError("нет слов")):
+            self.call("/api/upload", b"junk", "video/quicktime")
+        ev = self.call("/api/events?after=0")[1]["events"]
+        self.assertEqual((ev[-1]["kind"], ev[-1]["text"]), ("error", "не получилось открыть видео"))
 
     def test_talk_audio_and_text(self):
         with mock.patch.object(eye.speech, "hear", return_value="что это за здание") as hear, \
@@ -302,6 +413,19 @@ class AITest(unittest.TestCase):
             self.assertEqual(ai.talk("привет"), "Ответ.")
         self.assertEqual(len(calls), 2)
         self.assertIn("haiku", calls[0])
+
+    def test_look_video_prompt(self):
+        seen = {}
+
+        def fake(prompt, tools, model, turns, timeout):
+            seen.update(prompt=prompt, turns=turns)
+            return '{"say": "Мост.", "text": "Мост.", "title": "Мост"}'
+        with mock.patch.object(ai, "run", side_effect=fake):
+            ai.look(["/v/1.jpg", "/v/2.jpg", "/v/3.jpg"], heard="что это")
+        self.assertIn("видео", seen["prompt"])
+        self.assertIn("/v/3.jpg", seen["prompt"])
+        self.assertIn("«что это»", seen["prompt"])
+        self.assertEqual(seen["turns"], 10)
 
     def test_look_json(self):
         out = '```json\n{"say": "Это мост.", "text": "Дворцовый мост.", "title": "Дворцовый мост"}\n```'
