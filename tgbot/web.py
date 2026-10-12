@@ -23,10 +23,11 @@ import jobs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "webapp")
-FILES = ("index.html", "app.css", "app.js")
+FILES = ("index.html", "app.css", "app.js", "kit.css", "kit.js")
 MAX_AGE = 24 * 3600          # initData старше суток не принимаем
 MAX_BODY = 256 * 1024
 MEMORY_LIMIT = 20000
+HUB_ENV = "/etc/hub-bot.env"
 
 
 # ---------- подпись Telegram ----------
@@ -89,6 +90,22 @@ def public_url():
         return os.environ["TG_AGENT_URL"].rstrip("/")
     ip = server_ip()
     return f"https://agent.{ip.replace('.', '-')}.sslip.io" if ip else None
+
+
+def hub_url():
+    """Мини-приложение Главного (там вкладка «Секретарь»): HUB_URL или https://hub.<ip>.sslip.io, плюс /app."""
+    base = os.environ.get("HUB_URL") or ""
+    if not base:
+        try:
+            with open(HUB_ENV) as f:
+                base = dict(re.findall(r"^\s*([A-Z_]+)\s*=\s*(.*?)\s*$", f.read(), re.M)).get("HUB_URL", "")
+        except OSError:
+            pass
+    base = base.strip().rstrip("/")
+    if not base:
+        ip = server_ip()
+        base = f"https://hub.{ip.replace('.', '-')}.sslip.io" if ip else ""
+    return base + "/app" if base.startswith("https://") else None
 
 
 def healthy(url):
@@ -308,6 +325,9 @@ class Web:
         if path == "/api/new":
             a.new_conversation()
             return {"ok": True}
+        if path == "/api/login":  # вход в аккаунт идёт в чате: номер, код с клавиатуры, пароль
+            asyncio.create_task(a.start_login())
+            return {"ok": True, "text": "Продолжите в чате: там кнопка «Войти»"}
         if path == "/api/jobs/delete":
             if not a.jobs.remove(str(b.get("id") or "")):
                 raise ApiError(404, "Такого расписания уже нет")

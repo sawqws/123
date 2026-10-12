@@ -180,19 +180,135 @@ class BotTest(unittest.TestCase):
         self.db.save_task(U, {"title": "Очень-очень длинное название задачи про контрольную по алгебре",
                               "date": today.isoformat(), "time": "18:00"})
         self.db.save_goal(U, {"title": "Спарринг", "emoji": "🥊", "horizon": "week"})
-        for c in ("/today", "/week", "/goals", "/help", "/start"):
+        self.db.save_note(U, {"text": "мысль"})
+        for c in ("/today", "/week", "/month", "/goals", "/notes", "/settings", "/help", "/start"):
             self.msg(c)
+        g = self.db.goals(U)[0]
+        planner.on_callback({"id": "1", "from": {"id": U}, "message": {"chat": {"id": U}, "message_id": 3},
+                             "data": f"g|{g['id']}"})
         for m, p in self.sent:
-            if m != "sendMessage":
+            if m not in ("sendMessage", "editMessageText"):
                 continue
             first = p["text"].split("\n")[0]
             self.assertRegex(first, r"^\S+ <b>.+</b>$")
             self.assertNotIn("  ", p["text"])
+            self.assertLess(len(p["text"]), 1500)  # без простыней
             for row in p.get("reply_markup", {}).get("inline_keyboard", []):
                 self.assertLessEqual(len(row), 3)
                 for b in row:
-                    self.assertLessEqual(len(b["text"]), 28, b["text"])
+                    self.assertLessEqual(len(b["text"]), 24, b["text"])
         self.assertIn("<blockquote", self.texts()[0])
+
+    def cb(self, data):
+        planner.on_callback({"id": "1", "from": {"id": U}, "message": {"chat": {"id": U}, "message_id": 3}, "data": data})
+
+    def test_note_and_goal_by_text(self):
+        self.msg("Заметка: купить подарок маме")
+        n = self.db.notes(U)[0]
+        self.assertEqual((n["text"], n["goal"]), ("Купить подарок маме", None))
+        self.assertEqual(self.db.tasks(U), [])
+        self.assertIn("Заметка сохранена", self.texts()[-1])
+        self.cb(f"un|{n['id']}")
+        self.assertEqual(self.db.notes(U), [])
+        self.msg("цель на неделю: выйти на спарринг")
+        g = self.db.goals(U)[0]
+        self.assertEqual((g["title"], g["horizon"]), ("Выйти на спарринг", "week"))
+        self.assertIn(g, self.db.current_goals(U, planner.today_of(U)))
+        step = self.db.save_task(U, {"title": "Лапы", "goal": g["id"]})
+        self.cb(f"g|{g['id']}")
+        edits = [p for m, p in self.sent if m == "editMessageText"]
+        self.assertIn("Лапы", json.dumps(edits[-1]["reply_markup"], ensure_ascii=False))
+        self.cb(f"gs|{step['id']}|{g['id']}")
+        self.assertEqual(self.db.task(U, step["id"])["done"], 1)
+        self.assertIn("100%", self.texts()[-1])
+        self.cb(f"gd|{g['id']}")
+        self.assertEqual(self.db.goal(U, g["id"])["status"], "done")
+        self.cb("gl")
+        self.assertIn("Целей пока нет", self.texts()[-1])
+        self.msg("цель жизни")  # без двоеточия — просто задача
+        self.assertEqual(self.db.tasks(U)[-1]["title"], "Цель жизни")
+
+    def test_month_notes_settings(self):
+        today = planner.today_of(U)
+        self.db.save_task(U, {"title": "Контрольная", "date": today.isoformat()})
+        self.msg("/month")
+        self.assertIn("Контрольная", self.texts()[-1])
+        self.msg("/notes")
+        self.assertIn("Заметок пока нет", self.texts()[-1])
+        self.msg("/morning 8:05")
+        self.assertEqual(self.db.user(U)["morning"], "08:05")
+        self.msg("/evening off")
+        self.assertEqual(self.db.user(U)["evening"], "")
+        self.msg("/morning утром")
+        self.assertIn("⚠️", self.texts()[-1])
+        self.cb("s|e")
+        self.assertEqual(self.db.user(U)["evening"], "21:30")
+        self.cb("s|r")
+        self.assertEqual(self.db.user(U)["remind"], 30)
+        self.assertIn("за 30 мин", self.texts()[-1])
+
+    def test_morning_quiet_when_empty(self):
+        self.db.update_settings(U, {"morning": "07:30"})
+        now = planner.user_now(self.db.user(U)).replace(hour=7, minute=40)
+        with mock.patch.object(planner, "user_now", return_value=now):
+            planner.tick()
+        self.assertEqual(self.texts(), [])
+
+    def test_unknown_media(self):
+        self.media_msg(sticker={"file_id": "s"})
+        self.assertIn("не разберу", self.texts()[-1])
+
+    def run_video(self, vid=None, claude=None, **msg):
+        fake = lambda m, **p: self.sent.append((m, p)) or {"ok": True, "result": {"message_id": 55}}  # noqa: E731
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), mock.patch.object(planner, "tg", side_effect=fake), \
+                mock.patch.object(planner.media, "video", **vid), mock.patch.object(planner, "claude", **(claude or {})):
+            self.media_msg(**(msg or {"video_note": {"file_id": "c1", "duration": 5}}))
+
+    def test_video_frames_and_speech(self):
+        seen = {}
+
+        def fake_claude(prompt, cwd):
+            seen["prompt"] = prompt
+            return "Купить кроссовки\n17.10 Спарринг!"
+
+        frames = {"side_effect": lambda tok, m, folder: {"frames": [os.path.join(folder, "frame-1.jpg"),
+                                                                    os.path.join(folder, "frame-2.jpg")],
+                                                         "text": "не забыть кроссовки", "seconds": 6}}
+        self.run_video(frames, {"new": fake_claude}, video={"file_id": "v", "duration": 6}, caption="план")
+        self.assertIn("frame-1.jpg", seen["prompt"])
+        self.assertIn("frame-2.jpg", seen["prompt"])
+        self.assertIn("не забыть кроссовки", seen["prompt"])
+        self.assertIn("«план»", seen["prompt"])
+        self.assertEqual({t["title"] for t in self.db.tasks(U)}, {"Купить кроссовки", "Спарринг"})
+        self.assertIn("Смотрю видео", self.texts()[0])
+        self.assertIn("Добавил 2 задачи", self.texts()[-1])
+        self.assertIn("🎙 «не забыть кроссовки»", self.texts()[-1])
+
+    def test_video_note_speech_only(self):
+        """Кружок: Claude недоступен или ничего не нашёл на кадрах — речь работает как голосовое."""
+        res = {"return_value": {"frames": ["/tmp/f.jpg"], "text": "завтра в 18:00 бокс", "seconds": 4}}
+        self.run_video(res, {"side_effect": planner.AIError("Claude не ответил")})
+        t = self.db.tasks(U)[0]
+        self.assertEqual((t["title"], t["time"]), ("Бокс", "18:00"))
+        self.run_video({"return_value": {"frames": ["/tmp/f.jpg"], "text": "заметка: идея для проекта", "seconds": 4}})
+        self.assertEqual(self.db.notes(U)[0]["text"], "Идея для проекта")
+        self.run_video({"return_value": {"frames": ["/tmp/f.jpg"], "text": "", "seconds": 2}}, {"return_value": "НЕТ"})
+        self.assertIn("Не нашёл в видео задач", self.texts()[-1])
+        self.run_video({"side_effect": planner.media.MediaError("видео больше 20 МБ")})
+        self.assertIn("⚠️ Не получилось: видео больше 20 МБ", self.texts()[-1])
+
+    def test_video_kinds_go_to_video(self):
+        for extra in ({"video_note": {"file_id": "c"}}, {"video": {"file_id": "v"}}, {"animation": {"file_id": "a"}}):
+            with mock.patch.object(planner, "spawn") as sp:
+                self.media_msg(**extra)
+            self.assertIs(sp.call_args[0][0], planner.on_video)
+
+    def test_voice_note(self):
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(planner.media, "voice_text", return_value="Заметка. Позвонить Саше про билеты"):
+            self.media_msg(voice={"file_id": "v1"})
+        self.assertEqual(self.db.notes(U)[0]["text"], "Позвонить Саше про билеты")
+        self.assertEqual(self.db.tasks(U), [])
 
     def test_style_fallback(self):
         """Если Telegram не принимает цвет кнопок — те же кнопки уходят без цвета, и дальше без него."""
@@ -385,7 +501,13 @@ class WebTest(unittest.TestCase):
         code, body = self.get("/")
         self.assertEqual(code, 200)
         self.assertIn(f"app.js?v={planner.VERSION}", body)
+        self.assertLess(body.index('"kit.css'), body.index('"app.css'))  # общий вид — до своего
+        self.assertLess(body.index('"kit.js'), body.index('"app.js'))
         self.assertEqual(self.get("/app.css")[0], 200)
+        code, kit = self.get("/kit.css")  # ссылка на common/webapp/kit.css
+        self.assertEqual(code, 200)
+        self.assertIn("--accent", kit)
+        self.assertEqual(self.get("/kit.js")[0], 200)
         self.assertEqual(self.get("/../planner.py")[0], 404)
         self.assertEqual(self.get("/api/all")[0], 401)
         with mock.patch.object(planner, "PUBLIC", True):

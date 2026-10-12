@@ -1301,6 +1301,7 @@ def install_planner(chat, token, msg_id=None, kind="planner"):
 
 
 AGENT_ENV = "/etc/tg-agent.env"
+HUB_ENV = "/etc/hub-bot.env"  # есть Главный — Секретарь живёт в нём (один бот), /agent только подсказывает
 agent = {}  # chat -> {"token", "phone", "site", "hash"} — шаги /agent
 
 
@@ -1328,6 +1329,14 @@ def agent_step(chat, text, msg_id=None):
         send(chat, "👌 Отменил установку секретаря", menu=True)
         return
     m = BOT_TOKEN.search(text)
+    if os.path.exists(HUB_ENV):  # Секретарь теперь часть Главного: свой бот и токен не нужны
+        agent.pop(chat, None); mode.pop(chat, None)
+        if msg_id and m:
+            forget(chat, msg_id)
+        send(chat, card("Секретарь — часть Главного", "Отдельный бот не нужен: пиши Главному что угодно, "
+                        "вход в аккаунт — /login там. Если Секретарь не отвечает, Главный поднимет его сам.",
+                        icon="🤵"), raw_html=True)
+        return
     if msg_id and m:
         forget(chat, msg_id)
     if not m:
