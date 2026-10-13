@@ -180,8 +180,9 @@ def edit(chat, msg_id, text, buttons=None):
                        link_preview_options={"is_disabled": True})
 
 
-def app_button(text="🗓 Открыть планер", path="", style=None):
-    if not public_url:
+def app_button(text="🗓 Открыть планер", path="", style=None, always=False):
+    """Кнопка «открыть планер» (web_app). В режиме «💬 чат» не ставится — кроме явной просьбы (/app, always)."""
+    if not public_url or (ui_mode() == "chat" and not always):
         return None
     # экран передаём в ?p=, а не в #: в # Telegram дописывает свои параметры запуска
     b = {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
@@ -190,8 +191,8 @@ def app_button(text="🗓 Открыть планер", path="", style=None):
     return b
 
 
-def with_app(rows, text="🗓 Открыть планер", path="", style=None):
-    b = app_button(text, path, style)
+def with_app(rows, text="🗓 Открыть планер", path="", style=None, always=False):
+    b = app_button(text, path, style, always)
     return rows + [[b]] if b else rows
 
 
@@ -226,6 +227,7 @@ def setup_bot():
         {"command": "goals", "description": "Мои цели"},
         {"command": "notes", "description": "Заметки"},
         {"command": "app", "description": "Открыть планер"},
+        {"command": "mode", "description": "Чат или приложение"},
         {"command": "settings", "description": "Утро, вечер, напоминания"},
         {"command": "help", "description": "Как пользоваться"},
     ]
@@ -284,6 +286,62 @@ def can_support(uid):
 def sup_row(uid):
     """Ряд с кнопкой «🛠 Поддержка» для главных меню — только тем, кому она доступна."""
     return [support.Support.button()] if can_support(uid) else []
+
+
+# ---------- режим: 💬 чат или 📱 приложение ----------
+# Выбирается при первом /start, меняется по /mode, кнопкой «⚙️ Режим» и из приложения («💬 Перейти в чат»).
+# «чат» — всё кнопками здесь, кнопки «открыть планер» в сообщениях нет (кнопка «Планер» слева от поля ввода
+# остаётся); «приложение» — главная кнопка открывает его, но команды и текст работают всё равно. Хранится в db.meta.
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode():
+    m = db.meta("mode")
+    return m if m in MODES else ""
+
+
+def set_mode(m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    db.meta("mode", m)
+
+
+def mode_note():
+    return f"Режим: {MODES.get(ui_mode(), 'не выбран')} · сменить — /mode"
+
+
+def mode_card():
+    return (card("🧭", "Как удобнее?", ["💬 <b>В чате</b> — всё кнопками и командами здесь",
+                                        "📱 <b>Приложение</b> — день, неделя, цели и заметки экранами"],
+                 "Поменять можно в любой момент: /mode"),
+            [[btn("💬 В чате", "mode|chat", "primary"), btn("📱 Приложение", "mode|app", "primary")]])
+
+
+def menu_rows(uid, today):
+    """Главное меню чата (режим «💬 чат»): всё, что есть в приложении, — кнопками."""
+    tomorrow = today + datetime.timedelta(days=1)
+    rows = [[btn("📅 Сегодня", f"d|{today.isoformat()}"), btn("📆 Завтра", f"d|{tomorrow.isoformat()}")],
+            [btn("🗓 Неделя", "v|week"), btn("📅 Месяц", "v|month")],
+            [btn("🎯 Цели", "v|goals"), btn("📝 Заметки", "v|notes")],
+            [btn("⚙️ Настройки", "v|settings"), btn("⚙️ Режим", "mode|ask")]]
+    return rows + [r for r in [sup_row(uid)] if r]
+
+
+def view_for(uid, name, today):
+    """Экраны чата по имени — для команд и кнопок главного меню одинаково."""
+    if name == "week":
+        return week_text(uid, today), with_app([[btn("📅 Отметить сегодня", f"d|{today.isoformat()}")]],
+                                               "🗓 Неделя в планере", "/week")
+    if name == "month":
+        return month_text(uid, today), with_app([], "📅 Месяц в планере", "/month")
+    if name == "goals":
+        return goals_view(uid)
+    if name == "notes":
+        return notes_view(uid)
+    if name == "settings":
+        return settings_view(uid)
+    raise KeyError(name)
 
 
 def check_init_data(init_data, token=None, max_age=7 * 86400):
@@ -520,7 +578,8 @@ def settings_view(uid):
     rows = [[btn(("☀️ Выключить" if u["morning"] else "☀️ Включить") + " утро", "s|m"),
              btn(("🌙 Выключить" if u["evening"] else "🌙 Включить") + " вечер", "s|e")],
             [btn("⏰ " + remind_text(u["remind"]).capitalize() + " ›", "s|r")]]
-    return (card("⚙️", "Настройки", body, "Время: /morning 08:00, /evening 22:00 · пояс — в планере"),
+    tz = "пояс: /tz Europe/Moscow" if ui_mode() == "chat" else "пояс — в планере"
+    return (card("⚙️", "Настройки", body, f"Время: /morning 08:00, /evening 22:00 · {tz}"),
             with_app(rows, "⚙️ Все настройки", "/settings"))
 
 
@@ -538,15 +597,26 @@ SUP_NOTE = "\n\n🛠 <b>Поддержка</b> — напиши, что слом
 
 
 def welcome(chat, name, today=None):
-    body = ["Пиши задачи как есть: <i>завтра в 18:00 тренировка</i>", "Можно голосом, фото или видео."]
-    if public_url:
-        note = "Приложение — кнопка «Планер» слева от поля ввода"
-        rows = with_app([], "🗓 Открыть планер", style="primary")
+    """Главный экран по режиму. В режиме «📱 приложение» — коротко: открыть планер и пара действий;
+    в режиме «💬 чат» — полное меню кнопками. chat — личный чат, то же, что uid."""
+    today = today or datetime.date.today()
+    title = f"Привет{', ' + esc(name) if name else ''}! Я {NAME}"
+    if ui_mode() == "app":
+        body = ["Всё — в приложении: день, неделя, цели и заметки.",
+                "Задачу можно написать и сюда: <i>завтра в 18:00 тренировка</i> — голосом, фото или видео тоже."]
+        if public_url:
+            note = mode_note()
+            rows = with_app([], "🗓 Открыть планер", style="primary")
+        else:
+            note = "Приложение запускается — пришлю кнопку, как только будет готово"
+            rows = []
+        rows = rows + [[btn("📅 Сегодня", f"d|{today.isoformat()}"), btn("🗓 Неделя", "v|week")],
+                       [btn("⚙️ Режим", "mode|ask")] + sup_row(chat)]
     else:
-        note = "Приложение запускается — пришлю кнопку, как только будет готово"
-        rows = [[btn("📅 План на сегодня", f"d|{(today or datetime.date.today()).isoformat()}")]]
-    rows = rows + [r for r in [sup_row(chat)] if r]
-    send(chat, card("👋", f"Привет{', ' + esc(name) if name else ''}! Я {NAME}", body, note), rows)
+        body = ["Пиши задачи как есть: <i>завтра в 18:00 тренировка</i>", "Можно голосом, фото или видео."]
+        note = mode_note()
+        rows = menu_rows(chat, today)
+    send(chat, card("👋", title, body, note), rows)
 
 
 def add_task(uid, text, today):
@@ -818,24 +888,29 @@ def on_message(msg):
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     today = today_of(uid)
     if cmd == "/start":
-        welcome(chat, frm.get("first_name"), today)
+        if not ui_mode():  # первый раз: сначала выбор, чат или приложение
+            send(chat, *mode_card())
+        else:
+            welcome(chat, frm.get("first_name"), today)
+    elif cmd == "/mode":
+        send(chat, *mode_card())
+    elif cmd == "/tz":
+        arg = text.split()[1] if len(text.split()) > 1 else ""
+        try:
+            if not arg:
+                raise ValueError
+            db.update_settings(uid, {"tz": arg})
+            send(chat, *settings_view(uid))
+        except Exception:
+            send(chat, "⚠️ Напиши пояс: <i>/tz Europe/Moscow</i>")
     elif cmd == "/help":
         send(chat, HELP + SUP_NOTE * can_support(uid), with_app([r for r in [sup_row(uid)] if r]))
     elif cmd == "/today":
         send(chat, *day_view(uid, today))
     elif cmd == "/tomorrow":
         send(chat, *day_view(uid, today + datetime.timedelta(days=1)))
-    elif cmd == "/week":
-        send(chat, week_text(uid, today), with_app([[btn("📅 Отметить сегодня", f"d|{today.isoformat()}")]],
-                                                   "🗓 Неделя в планере", "/week"))
-    elif cmd == "/month":
-        send(chat, month_text(uid, today), with_app([], "📅 Месяц в планере", "/month"))
-    elif cmd == "/goals":
-        send(chat, *goals_view(uid))
-    elif cmd == "/notes":
-        send(chat, *notes_view(uid))
-    elif cmd == "/settings":
-        send(chat, *settings_view(uid))
+    elif cmd in ("/week", "/month", "/goals", "/notes", "/settings"):
+        send(chat, *view_for(uid, cmd[1:], today))
     elif cmd in ("/morning", "/evening"):
         arg = text.split()[1].lower() if len(text.split()) > 1 else ""
         try:
@@ -850,7 +925,7 @@ def on_message(msg):
     elif cmd == "/app":
         if public_url:
             send(chat, card("🗓", "Твой планер", note="Он же — кнопка «Планер» слева от поля ввода"),
-                 with_app([], "🗓 Открыть планер", style="primary"))
+                 with_app([], "🗓 Открыть планер", style="primary", always=True))
         else:
             send(chat, card("⏳", "Приложение запускается", note="Пришлю кнопку, как только будет готово"))
     elif cmd == "/status":
@@ -886,7 +961,16 @@ def on_callback(cq):
     today = today_of(uid)
     kind = data[0]
     try:
-        if kind == "t":  # галочка в плане дня
+        if kind == "mode":  # 💬 чат / 📱 приложение
+            if data[1] in MODES:
+                set_mode(data[1])
+                edit(chat, mid, card("✅", "Режим: " + MODES[data[1]], note="Сменить — /mode или кнопка «⚙️ Режим»"))
+                welcome(chat, cq["from"].get("first_name"), today)
+            else:
+                send(chat, *mode_card())
+        elif kind == "v":  # главное меню чата: экран новым сообщением, меню остаётся выше
+            send(chat, *view_for(uid, data[1], today))
+        elif kind == "t":  # галочка в плане дня
             new = db.toggle(uid, int(data[1]), data[2])
             note = "Сделано ✨" if new else "Снял отметку"
             edit(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[2])))
@@ -1181,7 +1265,14 @@ def route(uid, path, b):
         data = db.everything(uid)
         data["goals"] = [view(uid, "goal", g) for g in data["goals"]]
         data["today"] = today_of(uid).isoformat()
+        data["mode"] = ui_mode()
         return data
+    if path == "/api/mode":  # «💬 Перейти в чат» из приложения (или обратно): в чат сразу приходит главное меню
+        m = str(b.get("mode") or "")
+        set_mode(m)
+        if m == "chat":
+            welcome(uid, db.user(uid).get("name"), today_of(uid))
+        return {"mode": m}
     if path == "/api/task":
         t = db.save_task(uid, b)
         return {"task": t, "goals": [view(uid, "goal", g) for g in db.goals(uid)]}
