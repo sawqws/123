@@ -1,135 +1,238 @@
-/* Форма: только своё — акцент (вольт-лайм), цвета WHOOP и особые блоки. Общий вид — kit.css. */
-:root {
-  --accent: #c6f432;
-  --accent-ink: #172000;
-  --rec-green: #2fe06c;
-  --rec-yellow: #ffd60a;
-  --rec-red: #ff3b4f;
-  --strain: #2f9bff;
-  --sleep: #9a7dff;
-  --water: #38c7ff;
+/* Форма: стиль приложения WHOOP (чёрный фон, плоские карточки, кольца). Общий вид — kit.css, здесь только своё. */
+
+/* ================= Форма в стиле приложения WHOOP (iOS): чёрный фон, плоские карточки, капс-подписи, кольца ================= */
+:root, html[data-scheme="light"] {
+  color-scheme: dark;
+  --bg: #000;
+  --card: #14181c;
+  --card-2: #1b2025;
+  --text: #fff;
+  --hint: #8a939b;
+  --line: #232a30;
+  --sep: #1e252a;
+  --field: #1c2227;
+  --accent: #00f19f;
+  --accent-ink: #00130b;
+  --rec-green: #16ec06;
+  --rec-yellow: #ffde00;
+  --rec-red: #ff0026;
+  --strain: #0093e7;
+  --sleep: #7ba1bb;
+  --water: #3cc6ff;
   --food: #ff9f43;
+  --st-awake: #6b747c;
+  --st-rem: #a98bff;
+  --st-light: #5f88a8;
+  --st-deep: #0093e7;
+  --shadow: none;
+  --glass: rgba(10, 12, 14, .9);
+  --r-xl: 14px; --r-lg: 12px; --r-md: 12px;
+  --num: "DIN Alternate", "Bahnschrift", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
 }
-html[data-scheme="light"] {
-  --accent: #b5e61d;
-  --accent-ink: #172000;
-  --rec-green: #14b552;
-  --rec-yellow: #e0a400;
-  --rec-red: #e5243b;
-  --strain: #1a7fe0;
-  --sleep: #7c5cf0;
-  --water: #0aa5d8;
-  --food: #f07f1a;
-}
-html[data-scheme="light"] .btn.tonal { color: color-mix(in srgb, var(--accent) 35%, #000); }
+html, body { background: #000; }
+body::before { display: none; }
+body { padding-top: calc(var(--top) + 6px); }
+#app { max-width: 560px; }
+@media (min-width: 700px) { #app { max-width: 760px; } body { padding-left: 24px; padding-right: 24px; } }
 
-.small { font-size: 13.5px; line-height: 1.4; }
-.card > p, .card .prose { margin: 10px 0 0; }
-.card > .btn, .card > .btns, .card > .ask { margin-top: 14px; }
-.card > .btn + .btns { margin-top: 6px; }
-.link { background: none; border: 0; padding: 0; color: var(--link); font: inherit; cursor: pointer; }
-.wrap { white-space: normal !important; overflow-wrap: anywhere; }
-.up { color: var(--rec-green); font-weight: 600; }
-.down { color: var(--rec-red); font-weight: 600; }
-.num { font-variant-numeric: tabular-nums; }
-.enter > * { animation: kit-rise .4s var(--ease) both; }
-.enter > *:nth-child(2) { animation-delay: .03s; } .enter > *:nth-child(3) { animation-delay: .06s; }
-.enter > *:nth-child(4) { animation-delay: .09s; } .enter > *:nth-child(n+5) { animation-delay: .12s; }
-.rise { animation: none; }
-.enter .rise { animation: kit-rise .4s var(--ease) both; }
-.hero .end .btn.icon { font-size: 19px; }
+/* карточки: плоские, тонкая линия */
+.card { background: var(--card); border: 1px solid var(--line); box-shadow: none; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+.card.feature, .card.accent { background: var(--card); color: var(--text); border-color: var(--line); }
+.card.outlook { border-left: 3px solid var(--accent); }
+.list { border-radius: 14px; box-shadow: none; background: var(--card); }
+.row .ic { background: var(--field); color: var(--accent); border-radius: 10px; }
+.row .ic .ico { width: 18px; height: 18px; }
+.ico { width: 22px; height: 22px; display: block; }
+.stat { background: var(--card) !important; border: 1px solid var(--line) !important; border-radius: 12px; }
+.card .stat { background: var(--card-2) !important; border: 0 !important; }
+.stat .v { font: 800 26px/1.05 var(--num); letter-spacing: -.3px; }
+.stat .v small { font: 600 12px var(--font); }
+.stat .k, .stat .l { text-transform: uppercase; letter-spacing: 1.1px; font-size: 10.5px; font-weight: 800; color: var(--hint); }
+.stat .d { margin-top: 4px; color: var(--hint); font-size: 12.5px; line-height: 1.3; }
+.label { margin: 22px 4px 10px; font-size: 11.5px; font-weight: 800; letter-spacing: 1.5px; color: var(--hint); }
+.label-in { font-size: 11.5px; font-weight: 800; letter-spacing: 1.5px; color: var(--accent); margin-bottom: 2px; }
+.head h2, .card > h2, .card > .card-title { display: flex; align-items: center; gap: 8px; font: 800 12.5px/1.25 var(--font); letter-spacing: 1.5px; text-transform: uppercase; color: var(--text); }
+.head-r { font-size: 13.5px; }
+.hico { display: inline-flex; color: var(--hint); }
+.hico .ico { width: 17px; height: 17px; }
+.chev::after { color: var(--hint); }
+.btn { border-radius: 999px; min-height: 48px; }
+.btn.primary, .send { background: var(--accent); color: var(--accent-ink); font-weight: 800; letter-spacing: .3px; box-shadow: none; }
+.btn.tonal { background: var(--card-2); color: var(--text); }
+.btn.tonal b { color: var(--accent); }
+.btn.sm { border-radius: 999px; }
+.btn.ghost { color: var(--accent); }
+.link { color: var(--accent); }
+.bar { height: 6px; background: #1f262b; }
+.bar > i { background: var(--accent); }
+.pill { background: var(--card-2); }
+.note { background: var(--card); border: 1px solid var(--line); align-items: flex-start; }
+.note .ico { width: 18px; height: 18px; color: var(--sleep); }
+.empty .e .ico { width: 40px; height: 40px; margin: 0 auto; color: var(--hint); }
+.seg { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+.seg button { border-radius: 999px; font-weight: 700; }
+.seg button.on { background: var(--text); color: #000; box-shadow: none; }
+.chip { background: var(--card); }
+.sheet { background: #0b0e10; border: 1px solid var(--line); border-bottom: 0; }
+.enter > * { animation: kit-rise .35s var(--ease) both; }
+.enter .rise { animation: kit-rise .35s var(--ease) both; }
 
-/* заголовок карточки: слева название, справа цифры */
-.head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
-.head h2 { margin: 0; font: 650 17px/1.25 var(--font-d); letter-spacing: -.2px; white-space: nowrap; }
-.head-r { min-width: 0; color: var(--hint); font-size: 14px; display: flex; align-items: center; gap: 6px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.head-r b { color: var(--text); font-weight: 650; }
-.chev::after { content: "›"; font-size: 22px; line-height: 1; color: var(--hint); opacity: .6; }
-.card.tap { cursor: pointer; transition: transform .16s var(--ease); }
-.card.tap:active { transform: scale(.985); }
-.card .bar { margin-top: 12px; }
-.label-in { color: var(--hint); font-size: 12.5px; font-weight: 650; letter-spacing: .5px; text-transform: uppercase; }
+/* шапки */
+.hero { padding: 6px 2px 14px; gap: 12px; }
+.hero h1 { font: 800 21px/1.1 var(--font); letter-spacing: 1.6px; text-transform: uppercase; }
+.hero .sub { letter-spacing: .3px; margin-top: 4px; }
+.avatar { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid #2c353c; background: var(--card-2);
+  color: var(--text); font: 800 16px var(--font); cursor: pointer; padding: 0; transition: transform .16s var(--ease); }
+.avatar:active { transform: scale(.92); }
+.avatar.ghost { background: transparent; color: var(--text); border-color: var(--line); }
+.avatar .ico { width: 20px; height: 20px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0 12px; }
+.pager { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.pg { width: 36px; height: 40px; display: grid; place-items: center; background: none; border: 0; color: var(--text); cursor: pointer; padding: 0; }
+.pg[disabled] { opacity: .2; pointer-events: none; }
+.pg .ico { width: 20px; height: 20px; }
+.pg-t { display: flex; flex-direction: column; align-items: center; min-width: 108px; line-height: 1.15; }
+.pg-t b { font: 800 15px var(--font); letter-spacing: 2px; text-transform: uppercase; }
+.pg-t span { margin-top: 3px; font-size: 12px; color: var(--hint); letter-spacing: .3px; }
 
-/* ---------- три кольца, как в WHOOP ---------- */
-.dials-card { padding: 12px 12px 18px; }
-.day-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.day-nav span { font-weight: 600; font-size: 14.5px; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.day-nav .btn.icon { width: 34px; height: 34px; min-height: 34px; font-size: 20px; background: transparent; }
-.day-nav .btn.icon[disabled] { opacity: .25; }
-.dials { display: grid; grid-template-columns: 1fr 1.32fr 1fr; align-items: end; gap: 6px; }
-.dial { display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 0; border: 0; background: none;
-  color: inherit; font: inherit; cursor: pointer; transition: transform .16s var(--ease); }
+/* полоса дней */
+.strip { display: flex; justify-content: space-between; gap: 2px; padding: 0 0 8px; }
+.sd { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: 0; padding: 0; color: var(--hint); cursor: pointer; }
+.sd .wd { font-size: 10.5px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+.sd .dn { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font: 800 15px var(--num); color: var(--text);
+  border: 2.5px solid var(--c, var(--line)); transition: background .2s, color .2s; }
+.sd.on .dn { background: var(--text); color: #000; }
+.sd.on .wd { color: var(--text); }
+
+/* кольца */
+.dials-card { background: transparent; border: 0; padding: 10px 0 8px; margin: 0 0 6px; }
+.dials { display: grid; grid-template-columns: 1fr 1.3fr 1fr; align-items: center; gap: 4px; }
+.dial { display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; transition: transform .16s var(--ease); }
 .dial:active { transform: scale(.96); }
-.dial-ring { position: relative; display: block; width: 100%; max-width: 132px; aspect-ratio: 1; }
-.dial.big .dial-ring { max-width: 178px; }
+.dial-ring { position: relative; display: block; width: 100%; max-width: 124px; aspect-ratio: 1; }
+.dial.big .dial-ring { max-width: 168px; }
 .dial svg { display: block; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
-.trk { fill: none; stroke: color-mix(in srgb, var(--c) 16%, var(--field)); }
-.arc { fill: none; stroke: var(--c); stroke-linecap: round; transition: stroke-dashoffset 1.1s var(--ease);
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--c) 45%, transparent)); }
-html[data-scheme="light"] .arc { filter: none; }
+.trk { fill: none; stroke: #1c2328; }
+.band { fill: none; stroke: color-mix(in srgb, var(--c) 34%, #0a0d0f); }
+.arc { fill: none; stroke: var(--c); stroke-linecap: round; transition: stroke-dashoffset 1.2s var(--ease); filter: none; }
 .dial-v { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.dial-v b { font: 750 clamp(19px, 6vw, 28px)/1 var(--font-d); letter-spacing: -.6px; }
-.dial.big .dial-v b { font-size: clamp(30px, 10vw, 46px); letter-spacing: -1.4px; }
-.dial-v small { margin-left: 1px; font-size: .42em; font-weight: 650; letter-spacing: 0; color: var(--hint); }
-.dial-k { margin-top: 8px; font-size: 12px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--c);
-  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dial-s { margin-top: 2px; font-size: 12.5px; color: var(--hint); max-width: 100%; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.dial-v b { font: 800 clamp(24px, 7.4vw, 32px)/1 var(--num); letter-spacing: -.3px; display: flex; align-items: baseline; }
+.dial.big .dial-v b { font-size: clamp(38px, 12vw, 56px); letter-spacing: -1px; color: var(--c); }
+.dial-v small { margin-left: 1px; font: 700 .4em var(--font); color: var(--hint); }
+.dial.big .dial-v small { color: var(--c); opacity: .8; }
+.dial-k { margin-top: 10px; font-size: 11px; font-weight: 800; letter-spacing: 1.3px; text-transform: uppercase; color: var(--hint); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dial.big .dial-k { color: var(--text); }
+.dial-s { margin-top: 3px; font-size: 12px; color: var(--hint); text-align: center; line-height: 1.25; max-width: 100%; white-space: normal; overflow: visible; }
+.dial.big .dial-s { color: var(--c); font-weight: 600; }
+@media (min-width: 700px) { .dial-ring { max-width: 190px; } .dial.big .dial-ring { max-width: 240px; } .dial-v b { font-size: 40px; } .dial.big .dial-v b { font-size: 68px; } .dial-k { font-size: 12.5px; } .dial-s { font-size: 13.5px; } }
+@media (max-width: 380px) { .dial-k { letter-spacing: .6px; font-size: 10px; } .dial-s { font-size: 11px; } }
 .sk-dial { aspect-ratio: 1; border-radius: 50%; }
 .sk.line { height: 14px; margin-top: 10px; }
 
 /* совет на день */
 .advice p { margin: 8px 0 0; font-size: 16px; line-height: 1.42; }
-.card.feature .chips { margin-top: 12px; flex-wrap: wrap; overflow: visible; }
-.card.feature .chips:empty { display: none; }
-.chips .pill { flex: none; }
-.card.feature .chips .pill { background: color-mix(in srgb, var(--text) 8%, transparent); }
-.card.feature .chips .pill.dot { background: color-mix(in srgb, currentColor 14%, transparent); }
+.card.outlook .btn.primary { margin-top: 14px; }
 .btns .btn.sm.ghost { flex: 0 1 auto; padding: 0 6px; }
-.feat-ic { font-size: 34px; line-height: 1; margin-bottom: 10px; }
+.feat-ic .ico { width: 34px; height: 34px; color: var(--accent); }
+.feat-ic { margin-bottom: 10px; }
 
-/* три числа */
-.trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
-.trio .stat, .grid2 .stat { text-align: left; color: inherit; font: inherit; cursor: pointer; padding: 12px; }
-.trio .stat .v { font-size: clamp(20px, 6vw, 25px); }
-.stat .v small { font-size: 12px; }
-.stat .v.sm { font-size: 20px; }
-.stat .d { margin-top: 3px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sheet .stat { cursor: default; }
+/* ключевые показатели */
+.kstats { padding: 2px 16px; }
+.krow { display: grid; grid-template-columns: minmax(96px, 1.05fr) minmax(48px, 1fr) minmax(86px, auto); align-items: center; gap: 12px; width: 100%; padding: 14px 0;
+  border: 0; border-top: 1px solid var(--sep); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.krow:first-child { border-top: 0; }
+.krow:active { opacity: .6; }
+.kname { font-size: 14.5px; font-weight: 700; line-height: 1.2; }
+.kname small { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 500; color: var(--hint); }
+.rtrack { position: relative; height: 2px; border-radius: 1px; background: #2a3238; }
+.rtrack .mid { position: absolute; left: 50%; top: -4px; width: 1px; height: 10px; background: #5a646c; }
+.rtrack .pt { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 3px var(--card); }
+.kval { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 0 3px; text-align: right; }
+.kval b { font: 800 24px/1 var(--num); letter-spacing: -.3px; }
+.kval small { font-size: 11.5px; color: var(--hint); font-weight: 600; }
+.vs { flex-basis: 100%; margin-top: 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .2px; }
+.vs i { font-style: normal; font-size: 8px; margin-right: 3px; vertical-align: 1px; }
+.vs.up { color: var(--rec-green); } .vs.down { color: var(--rec-red); } .vs.flat { color: var(--hint); }
+.up { color: var(--rec-green); font-weight: 700; } .down { color: var(--rec-red); font-weight: 700; }
+.hint-line { margin: 2px 4px 12px; font-size: 12px; color: var(--hint); text-align: center; }
+
+/* парные карточки: на iPad в два столбца */
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 0 12px; align-items: start; }
+.pair > .card { margin-bottom: 12px; }
+
+/* цель нагрузки */
+.scale21 { position: relative; height: 14px; margin: 34px 0 8px; border-radius: 7px; background: #1c2328; }
+.band21 { position: absolute; top: 0; bottom: 0; border-radius: 7px; background: color-mix(in srgb, var(--strain) 38%, #0a0d0f); border: 1px solid var(--strain); }
+.mark21 { position: absolute; top: -4px; width: 4px; height: 22px; margin-left: -2px; border-radius: 2px; background: #fff; }
+.mark21 b { position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); font: 800 16px/1 var(--num); }
+.ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--hint); }
+.card .small { margin: 12px 0 0; }
+
+/* планер сна */
+.planner { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.pico { flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--card-2); color: var(--sleep); }
+.pico .ico { width: 22px; height: 22px; }
+.pbig { font: 800 34px/1 var(--num); letter-spacing: -.5px; }
+.psub { margin-top: 4px; font-size: 12.5px; color: var(--hint); }
+.pneed { margin-left: auto; text-align: right; }
+.pneed b { display: block; font: 800 20px/1 var(--num); color: var(--sleep); }
+.pneed span { font-size: 11px; color: var(--hint); }
+
+/* активности */
+.acts .row { padding: 12px 16px; }
+.acts .row + .row::before { left: 16px; }
+.mini { position: relative; flex: none; width: 46px; height: 46px; }
+.mini svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.mini span { position: absolute; inset: 0; display: grid; place-items: center; font: 800 13.5px var(--num); }
+.sico { color: var(--hint); }
+.acts .title { font-weight: 700; }
 
 /* вода и еда */
-.water-b { flex-direction: column; gap: 0; min-height: 54px; }
-.water-b b { font-size: 17px; }
-.water-b span { font-size: 12px; font-weight: 500; opacity: .8; }
+.water-b { flex-direction: column; gap: 0; min-height: 52px; border-radius: 14px !important; }
+.water-b b { font: 800 17px var(--num); }
+.water-b span { font-size: 11.5px; font-weight: 600; opacity: .8; }
 .logs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .logs .pill { padding-right: 4px; }
 .logs .pill button { border: 0; background: none; color: var(--hint); font-size: 12px; padding: 2px 6px; cursor: pointer; }
 .macros { display: flex; gap: 14px; margin-top: 10px; color: var(--hint); font-size: 14px; flex-wrap: wrap; }
-.macros b { color: var(--text); font-weight: 650; }
+.macros b { color: var(--text); font-weight: 700; }
 .food-top { display: flex; gap: 18px; align-items: center; }
 .macro-list { flex: 1; min-width: 0; }
 .macro + .macro { margin-top: 10px; }
 .macro .mt { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; color: var(--hint); }
 .macro .mt b { color: var(--text); }
-.macro .bar { margin-top: 5px; height: 6px; }
-.kring { position: relative; flex: none; width: var(--size); height: var(--size); }
 .macro .mt span { white-space: nowrap; }
+.macro .bar { margin-top: 5px; height: 6px; }
+.card .bar { margin-top: 12px; }
+.row .ic.time { width: 48px; font-size: 13px; font-weight: 800; border-radius: 10px; color: var(--hint); }
+.row .end b { color: var(--text); font-weight: 800; font-size: 15px; }
+.foot { text-align: center; color: var(--hint); font-size: 12.5px; margin: 16px 0 0; }
+.small { font-size: 13.5px; line-height: 1.4; }
+.card > p, .card .prose { margin: 10px 0 0; }
+.card > .btn, .card > .btns, .card > .ask { margin-top: 14px; }
+.card > .btn + .btns { margin-top: 6px; }
+.wrap { white-space: normal !important; overflow-wrap: anywhere; }
+.num { font-variant-numeric: tabular-nums; }
+.card.tap { cursor: pointer; transition: transform .16s var(--ease); }
+.card.tap:active { transform: scale(.985); }
+
+/* кольцо в питании и на экранах подробностей */
+.kring { position: relative; flex: none; width: var(--size); height: var(--size); }
 .kring svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; }
 .kring-in { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
-.kring-in b { font: 750 25px/1 var(--font-d); letter-spacing: -.6px; }
-.kring-in span { margin-top: 3px; font-size: 11.5px; color: var(--hint); }
-.row .ic.time { width: 46px; font-size: 13px; font-weight: 650; border-radius: 10px; }
-.row .end b { color: var(--text); font-weight: 650; font-size: 15px; }
-.strain-v { font: 700 18px/1 var(--font-d); color: var(--strain) !important; }
-.foot { text-align: center; color: var(--hint); font-size: 13px; margin: 18px 0 0; }
+.kring-in b { display: flex; justify-content: center; align-items: baseline; font: 800 25px/1 var(--num); letter-spacing: -.3px; }
+.kring-in > span { margin-top: 3px; font-size: 11px; color: var(--hint); }
+.kring .arc { filter: none; }
+.kring.xl .kring-in b { font-size: 60px; letter-spacing: -1.5px; color: var(--c); }
+.kring.xl .kring-in b small { font: 700 22px var(--font); margin-left: 2px; opacity: .8; color: var(--c); }
+.kring.xl .kring-in > span { margin-top: 6px; font-size: 10.5px; font-weight: 800; letter-spacing: 1.4px; max-width: 120px; line-height: 1.3; }
+.kring-in b small { font: 700 .5em var(--font); color: var(--hint); }
 
 /* поле с кнопкой отправки */
 .ask { display: flex; gap: 8px; align-items: flex-end; }
-.ask textarea { flex: 1; min-height: 48px; max-height: 140px; padding: 13px 14px; }
-.send { flex: none; width: 48px; height: 48px; border-radius: 14px; border: 0; cursor: pointer; font-size: 20px; font-weight: 700;
-  background: linear-gradient(180deg, var(--accent-2), var(--accent)); color: var(--accent-ink); transition: transform .16s var(--ease); }
-.send.alt { background: var(--field); color: var(--text); }
+.ask textarea { flex: 1; min-height: 48px; max-height: 140px; padding: 13px 16px; border-radius: 24px; background: var(--card); border: 1px solid var(--line); }
+.send { flex: none; width: 48px; height: 48px; border-radius: 50%; border: 0; cursor: pointer; font-size: 20px; font-weight: 800; transition: transform .16s var(--ease); }
+.send.alt { background: var(--card-2); color: var(--text); }
 .send:active { transform: scale(.94); }
 .send[disabled] { opacity: .5; }
 .dots { display: inline-flex; gap: 4px; align-items: center; }
@@ -139,10 +242,8 @@ html[data-scheme="light"] .arc { filter: none; }
 /* подключение WHOOP */
 .steps { margin: 14px 0 0; padding: 0; list-style: none; counter-reset: s; }
 .steps li { position: relative; padding: 0 0 12px 36px; font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; counter-increment: s; }
-.steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 50%;
-  display: grid; place-items: center; font-size: 13px; font-weight: 700; background: var(--accent); color: var(--accent-ink); }
-.code { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 0; border-radius: 10px; background: var(--field);
-  color: var(--text); font: 13px/1.35 var(--mono); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; background: var(--accent); color: var(--accent-ink); }
+.code { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 0; border-radius: 10px; background: var(--field); color: var(--text); font: 13px/1.35 var(--mono); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
 span.code { display: inline-block; width: auto; }
 
 /* текст тренера */
@@ -150,7 +251,6 @@ span.code { display: inline-block; width: auto; }
 .prose ul { margin: 4px 0 6px; padding-left: 18px; }
 .prose li { margin: 3px 0; }
 .prose li::marker { color: var(--accent); }
-html[data-scheme="light"] .prose li::marker { color: color-mix(in srgb, var(--accent) 45%, #000); }
 .clamp { max-height: 9.2em; overflow: hidden; -webkit-mask: linear-gradient(#000 60%, transparent); mask: linear-gradient(#000 60%, transparent); }
 .tips .tip { display: flex; gap: 10px; align-items: flex-start; }
 .tips .tip + .tip { margin-top: 10px; }
@@ -159,38 +259,76 @@ html[data-scheme="light"] .prose li::marker { color: color-mix(in srgb, var(--ac
 .tips .tip.bad i { background: var(--rec-red); }
 .tips p { margin: 0; font-size: 15px; }
 
-/* сон и нагрузка (листы) */
+/* экраны подробностей */
+.dhead { display: flex; align-items: center; gap: 12px; padding: 2px 0 6px; }
+.dhead .titles { min-width: 0; }
+.dhead h1 { margin: 0; font: 800 20px/1.1 var(--font); letter-spacing: 1.8px; text-transform: uppercase; }
+.dhead .sub { margin-top: 3px; font-size: 12.5px; color: var(--hint); }
+.hero-ring { display: flex; flex-direction: column; align-items: center; padding: 18px 0 14px; }
+.hr-sub { margin-top: 14px; font-size: 13.5px; color: var(--hint); text-align: center; }
+.hv { margin-top: 6px; }
+.hv-r { display: flex; justify-content: space-between; align-items: baseline; margin: 12px 0 0; font-size: 13px; color: var(--hint); font-weight: 600; }
+.hv-r b { font: 800 17px var(--num); color: var(--text); }
+.hv .bar { margin-top: 7px; height: 8px; }
+.stagebar { display: flex; height: 12px; gap: 2px; margin: 14px 0 6px; border-radius: 6px; overflow: hidden; }
+.stagebar span { display: block; min-width: 3px; }
+.steps-chart { margin-top: 10px; }
+.stp { display: grid; grid-template-columns: minmax(104px, 128px) 1fr 76px; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--sep); }
+.stp:first-child { border-top: 0; }
+.stn { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; min-width: 0; }
+.stn i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.stbar { display: block; height: 12px; border-radius: 6px; background: #1c2328; overflow: hidden; }
+.stbar span { display: block; height: 100%; border-radius: 6px; transition: width 1s var(--ease); }
+.stv { display: flex; justify-content: flex-end; align-items: baseline; gap: 6px; }
+.stv b { font: 800 16px var(--num); }
+.stv small { font-size: 11.5px; color: var(--hint); min-width: 30px; text-align: right; }
+.metrics { margin-bottom: 12px; }
+.metrics .stat .v small { font-size: 13px; color: var(--hint); }
+.chart-box { margin-top: 12px; }
+.wk-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.wk-n { font: 800 17px var(--font); }
+.wk .meta { margin-top: 3px; font-size: 12.5px; color: var(--hint); }
+.wk-s { font: 800 34px/1 var(--num); color: var(--strain); }
+.zbar { display: flex; height: 10px; gap: 2px; margin-top: 14px; border-radius: 5px; overflow: hidden; }
+.zbar span { display: block; }
+.zleg { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 8px; font-size: 11px; color: var(--hint); }
+.zleg span { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.zleg i { width: 100%; height: 3px; border-radius: 2px; }
+.zleg b { font: 800 14px var(--num); color: var(--text); }
+details.about { margin: 0 0 12px; padding: 12px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); }
+details.about summary { cursor: pointer; font-weight: 700; font-size: 13.5px; color: var(--hint); list-style: none; }
+details.about summary::before { content: "ⓘ "; }
+details.about p { margin: 8px 0 0; font-size: 14px; line-height: 1.45; }
+
+/* сон и нагрузка в сводке (листы) */
 .stages { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 2px; margin: 14px 0 10px; }
 .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 14px; color: var(--hint); margin-bottom: 14px; }
 .legend span { display: flex; align-items: center; gap: 6px; }
 .legend i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
 .legend b { margin-left: auto; color: var(--text); }
-.gauge { position: relative; height: 12px; border-radius: 6px; background: var(--field); margin-top: 16px; overflow: hidden; }
-.gauge .band { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--strain) 28%, transparent); }
-.gauge .fill { position: relative; height: 100%; border-radius: 6px; background: var(--strain); }
-.scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--hint); margin-top: 6px; }
 .sheet .grid2 { margin-top: 4px; }
 .sheet .card { margin-bottom: 8px; }
 .sheet .note { margin-top: 4px; }
+.sheet .stat { cursor: default; }
 
 /* графики */
 .big-line { display: flex; align-items: baseline; gap: 6px; margin: 6px 0 10px; }
-.big-line .v { font: 750 30px/1 var(--font-d); letter-spacing: -.8px; }
+.big-line .v { font: 800 30px/1 var(--num); letter-spacing: -.5px; }
 .big-line .u { color: var(--hint); font-size: 14px; }
 .chart { display: block; max-width: 100%; height: auto; overflow: visible; }
-.chart text { fill: var(--hint); font: 11px var(--font); font-variant-numeric: tabular-nums; }
-.chart .axis { stroke: var(--sep); }
-.chart .ref { stroke: var(--text); stroke-opacity: .55; stroke-width: 2; }
+.chart text { fill: var(--hint); font: 600 11px var(--font); font-variant-numeric: tabular-nums; }
+.chart .axis { stroke: #2a3238; }
+.chart .ref { stroke: var(--text); stroke-opacity: .7; stroke-width: 2; }
 .chart .norm { stroke: var(--hint); stroke-dasharray: 3 4; stroke-opacity: .7; }
 .chart .norm-t { font-size: 10.5px; }
 .chart-empty { padding: 30px 0; text-align: center; color: var(--hint); font-size: 14px; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 4px 0 6px; }
-.tick { display: inline-block; width: 12px; height: 2px; background: var(--text); opacity: .55; vertical-align: middle; margin-right: 5px; }
+.tick { display: inline-block; width: 12px; height: 2px; background: var(--text); opacity: .7; vertical-align: middle; margin-right: 5px; }
 
 /* чат с тренером */
 .chat { display: flex; flex-direction: column; gap: 8px; }
 .msg { max-width: 86%; padding: 10px 14px; border-radius: 20px; font-size: 15.5px; line-height: 1.42; overflow-wrap: anywhere; }
-.msg.me { align-self: flex-end; border-bottom-right-radius: 6px; background: var(--accent); color: var(--accent-ink); white-space: pre-wrap; }
+.msg.me { align-self: flex-end; border-bottom-right-radius: 6px; background: var(--accent); color: var(--accent-ink); white-space: pre-wrap; font-weight: 600; }
 .msg.them { align-self: flex-start; border-bottom-left-radius: 6px; background: var(--card); border: 1px solid var(--line); }
 .msg.them p:last-child, .msg.them ul:last-child { margin-bottom: 0; }
 .msg-sk { height: 54px; width: 70%; border-radius: 20px; }
@@ -211,87 +349,51 @@ html[data-scheme="light"] .prose li::marker { color: color-mix(in srgb, var(--ac
 .sheet .list .btn.sm { flex: none; }
 #goals .ask { margin-top: 10px; }
 
-/* узкий экран: подписи колец без капса, вторая строка может переноситься */
-.dial-s { white-space: normal; text-align: center; line-height: 1.25; overflow: visible; }
+.kring.small-ring { --size: 96px; }
 @media (max-width: 380px) {
-  .dial-k { text-transform: none; letter-spacing: 0; font-size: 12.5px; }
-  .dials-card { padding-left: 8px; padding-right: 8px; }
-  .dial.big .dial-k { max-width: none; overflow: visible; font-size: 12px; }
-  .kring { --size: 96px !important; }
+  .kring:not(.xl) { --size: 96px !important; }
   .kring-in b { font-size: 21px; }
-  .kring-in span { font-size: 10px; }
+  .kring-in > span { font-size: 10px; }
+  .kring.xl { --size: 190px !important; }
+  .kring.xl .kring-in b { font-size: 52px; }
   .food-top { gap: 14px; }
   .macro .mt { font-size: 13px; }
+  .krow { grid-template-columns: minmax(84px, 1fr) minmax(36px, .8fr) minmax(80px, auto); gap: 8px; }
+  .stp { grid-template-columns: minmax(96px, 112px) 1fr 70px; gap: 8px; }
 }
-.kring .arc { filter: none; }
 
 /* расшифровки и сводка */
-.qm { display: inline-grid; place-items: center; width: 15px; height: 15px; margin-left: 2px; border-radius: 50%; font: 700 10px/1 inherit;
-  font-style: normal; background: var(--field); color: var(--hint); vertical-align: 1px; }
-.hint-line { margin: -4px 4px 12px; font-size: 13px; color: var(--hint); text-align: center; }
-.summary-entry { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; color: inherit; font: inherit; cursor: pointer; }
-.summary-entry .se-ic { font-size: 26px; flex: none; }
+.summary-entry { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.summary-entry .se-ic { flex: none; color: var(--accent); }
+.summary-entry .se-ic .ico { width: 24px; height: 24px; }
 .summary-entry .se-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.summary-entry .se-main b { font-weight: 800; }
 .summary-entry .se-main .muted { font-size: 13px; }
-details.about { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: var(--field); }
-details.about summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--link); list-style: none; }
-details.about summary::before { content: "ⓘ "; }
-details.about p { margin: 8px 0 0; font-size: 14px; line-height: 1.45; }
 .zones { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin: 12px 0 6px; }
 .zones span { display: block; }
 .mode-list { margin-top: 10px; }
 
-/* ================= стиль приложения WHOOP: чёрный фон, плоские тёмные карточки, капс-подписи, толстые кольца ================= */
-:root, html[data-scheme="light"] {
-  color-scheme: dark;
-  --bg: #000;
-  --card: #111315;
-  --card-2: #1a1d20;
-  --text: #fff;
-  --hint: #8b9096;
-  --line: #23272b;
-  --sep: #1d2124;
-  --field: #1b1e21;
-  --accent: #00f19f;
-  --accent-ink: #00130b;
-  --rec-green: #16ec06;
-  --rec-yellow: #ffde00;
-  --rec-red: #ff0026;
-  --strain: #0093e7;
-  --sleep: #7ba1bb;
-  --shadow: none;
-  --glass: rgba(10, 11, 12, .86);
-  --r-xl: 16px; --r-lg: 14px; --r-md: 12px;
-}
-html, body { background: #000; }
-body::before { display: none; }
-.card { background: var(--card); border: 1px solid var(--line); box-shadow: none; border-radius: 16px; }
-.card.feature, .card.accent { background: var(--card); color: var(--text); border-color: var(--line); }
-.hero h1 { font: 800 22px/1.1 var(--font-d); letter-spacing: 1.2px; text-transform: uppercase; }
-.hero .sub { letter-spacing: .3px; }
-.head h2, .card > h2, .card > .card-title { font: 800 13px/1.25 var(--font-d); letter-spacing: 1.4px; text-transform: uppercase; }
-.label-in, .dial-k { letter-spacing: 1.2px; font-weight: 800; }
-.dial-k { color: var(--hint); }
-.dial.big .dial-k { color: var(--c); }
-.dials-card { background: #000; border: 0; padding: 4px 0 14px; }
-.day-nav { justify-content: center; gap: 14px; }
-.day-nav span { color: var(--text); font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; font-size: 13px; }
-.dials { gap: 2px; align-items: center; }
-.trk { stroke: #1d2124; }
-.arc { filter: none; stroke-linecap: round; }
-.dial-v b { font: 800 clamp(20px, 6.4vw, 30px)/1 var(--font-d); letter-spacing: -.5px; }
-.dial.big .dial-v b { font-size: clamp(34px, 11vw, 52px); letter-spacing: -1.6px; color: var(--c); }
-.dial-v small { color: var(--hint); }
-.dial-s { letter-spacing: .2px; }
-.stat { background: var(--card) !important; border: 1px solid var(--line) !important; border-radius: 14px; }
-.stat .v { font-weight: 800; letter-spacing: -.4px; }
-.stat .k, .stat .l { text-transform: uppercase; letter-spacing: 1px; font-size: 11px; font-weight: 800; color: var(--hint); }
-.btn.primary, .send { background: var(--accent); color: var(--accent-ink); border-radius: 999px; font-weight: 800; letter-spacing: .4px; }
-.btn.tonal { background: var(--field); color: var(--accent); }
-.bar { background: #1d2124; }
-.tabbar { background: rgba(8, 9, 10, .94); border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
-.tabbar button { border-radius: 10px; font-weight: 700; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; }
-.tabbar button.on { background: transparent; color: var(--accent); }
-.tabbar button.on .i { filter: none; }
-.sheet { background: #0e1012; border: 1px solid var(--line); border-bottom: 0; }
-.sup-fab { background: rgba(17, 19, 21, .94); border-color: var(--line); }
+/* нижняя панель: плоская, чёрная, активная вкладка подсвечена */
+.tabbar { left: 0; right: 0; bottom: 0; transform: none; width: 100%; max-width: none; border-radius: 0; border: 0; border-top: 1px solid var(--line); box-shadow: none;
+  background: rgba(0, 0, 0, .94); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); padding: 6px max(8px, calc((100% - 700px) / 2)) calc(6px + var(--bottom)); gap: 0; }
+.tabbar button { border-radius: 0; padding: 6px 2px 4px; gap: 4px; font: 700 10px/1.1 var(--font); letter-spacing: 1px; text-transform: uppercase; color: var(--hint); position: relative; }
+.tabbar button .i { filter: none; display: block; }
+.tabbar button .ico { width: 24px; height: 24px; }
+.tabbar button.on { background: transparent; color: var(--text); }
+.tabbar button.on .ico { color: var(--accent); }
+.tabbar button.on::before { content: ""; position: absolute; top: -7px; left: 28%; right: 28%; height: 2px; border-radius: 2px; background: var(--accent); }
+body.has-tabbar { padding-bottom: calc(86px + var(--bottom)); }
+body.has-tabbar .sup-fab { bottom: calc(70px + var(--bottom)); }
+.sup-fab { background: rgba(20, 24, 28, .94); border-color: var(--line); }
+@media (prefers-reduced-motion: reduce) { .arc, .stbar span { transition: none; } }
+
+/* заголовок карточки: слева название, справа цифры */
+.head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.head h2 { margin: 0; white-space: nowrap; }
+.head-r { min-width: 0; color: var(--hint); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.head-r b { color: var(--text); font-weight: 800; }
+.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
+/* кнопка поддержки — круглая, без подписи: не перекрывает цифры */
+.sup-fab { width: 38px; padding: 0; justify-content: center; }
+.sup-fab .t { display: none; }
+.sup-fab .i { font-size: 17px; }
