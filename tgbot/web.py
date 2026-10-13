@@ -190,9 +190,13 @@ def run_json(agent):
         return None
     secs = r.get("secs") if r.get("state") != "work" else int(time.time() - r["started"])
     return {"id": r["id"], "q": r["q"], "state": r["state"], "steps": r["steps"][-12:], "secs": secs or 0,
-            "html": r.get("html", ""), "source": r.get("source", "chat"),
+            "html": r.get("html", ""), "source": r.get("source", "chat"), "conv": r.get("conv", ""),
             "ago": int(time.time() - r["ended"]) if r.get("ended") else 0,
             "confirm": agent.confirm_text if r["state"] == "work" and agent.waiting else ""}
+
+
+def queue_json(agent):
+    return [{"id": x["id"], "q": x["q"], "source": x["source"]} for x in agent.queue]
 
 
 def read_memory(path):
@@ -350,14 +354,18 @@ class Web:
         if path == "/api/state":
             return await self.state(fresh=bool(b.get("fresh")), user=user)
         if path == "/api/run":
-            return {"run": run_json(a), "history": a.history[-20:][::-1] if b.get("history") else None}
+            return {"run": run_json(a), "queue": queue_json(a), "conv": a.conv,
+                    "history": a.history[-20:][::-1] if b.get("history") else None}
         if path == "/api/ask":
             text, title = self.task(b)
             run = a.begin(text, title, source="app", kind="psy_all" if b.get("preset") in self.PSY_ALL else None)
-            if run is None:
-                raise ApiError(409, "Ещё занимаюсь прошлым поручением")
+            if run is None:  # Claude думает: вопрос встаёт в очередь и пойдёт следом в том же разговоре
+                n = a.enqueue(text, title, source="app")
+                if n is None:
+                    raise ApiError(409, "Очередь полна — дождитесь ответа или нажмите «Остановить»")
+                return {"run": run_json(a), "queued": n, "queue": queue_json(a)}
             asyncio.create_task(a.work(run))
-            return {"run": run_json(a)}
+            return {"run": run_json(a), "queue": queue_json(a)}
         if path == "/api/stop":
             await a.stop(quiet=True)
             return {"run": run_json(a)}
@@ -433,6 +441,6 @@ class Web:
             "first": (me or {}).get("first") or (user or {}).get("first_name") or "",
             "chats": chats[:40], "unread": len(chats), "mentions": sum(c["mentions"] for c in chats),
             "jobs": [job_json(j) for j in a.jobs.load()],
-            "run": run_json(a), "history": a.history[-20:][::-1],
+            "run": run_json(a), "queue": queue_json(a), "conv": a.conv, "history": a.history[-20:][::-1],
             "session": bool(a.session_active()), "examples": a.EXAMPLE_LIST,
         }

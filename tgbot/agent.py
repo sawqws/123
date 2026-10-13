@@ -67,6 +67,7 @@ CLAUDE_TIMEOUT = 20 * 60
 CONFIRM_TIMEOUT = 10 * 60
 PORT = int(os.environ.get("TG_AGENT_PORT") or 8794)
 HISTORY_KEEP = 30
+QUEUE_MAX = 5
 HUB_ENV = "/etc/hub-bot.env"
 AGENT_ENV = "/etc/tg-agent.env"
 HUB_PREFIX = "s:"  # данные кнопок Секретаря внутри Главного (hub.py отдаёт их сюда по этому префиксу)
@@ -249,6 +250,8 @@ class Agent:
         self.client = self.make_client(api_id, api_hash) if api_id and api_hash else None
         self.proc = None       # запущенный Claude
         self.busy = False
+        self.queue = []        # доп. вопросы, пришедшие пока Claude думает: пойдут следом, в том же разговоре
+        self.conv = uuid.uuid4().hex[:6]  # id текущего разговора — приложение показывает его одной лентой
         self.stopped = False
         self.waiting = {}      # id подтверждения -> Future
         self.trust = False     # «Да на всё» в текущем запросе
@@ -296,7 +299,7 @@ class Agent:
             return []
 
     def remember(self, run):
-        self.history.append({k: run.get(k) for k in ("id", "q", "state", "html", "secs", "source")}
+        self.history.append({k: run.get(k) for k in ("id", "q", "state", "html", "secs", "source", "conv")}
                             | {"steps": len(run.get("steps") or []),
                                "at": datetime.datetime.now(actions.MSK).strftime("%d.%m %H:%M")})
         self.history = self.history[-HISTORY_KEEP:]
@@ -639,13 +642,34 @@ class Agent:
             return None
         self.busy, self.trust = True, False
         self.run = {"id": uuid.uuid4().hex[:8], "q": (title or text).strip()[:300], "text": text, "state": "work",
-                    "steps": [], "started": time.time(), "source": source, "kind": kind}
+                    "steps": [], "started": time.time(), "source": source, "kind": kind, "conv": self.conv}
         return self.run
+
+    def enqueue(self, text, title=None, source="chat"):
+        """Доп. вопрос, пока Claude занят: встаёт в очередь и пойдёт следом в том же разговоре (--resume).
+        Номер в очереди, None — очередь полна."""
+        if len(self.queue) >= QUEUE_MAX:
+            return None
+        self.queue.append({"id": uuid.uuid4().hex[:8], "text": text, "q": (title or text).strip()[:300], "source": source})
+        return len(self.queue)
+
+    async def drain(self):
+        """Взять следующий вопрос из очереди (после ответа на предыдущий)."""
+        if self.busy or not self.queue:
+            return
+        nxt = self.queue.pop(0)
+        run = self.begin(nxt["text"], nxt["q"], nxt["source"])
+        if run:
+            await self.work(run)
 
     async def ask(self, text, title=None, source="chat"):
         run = self.begin(text, title, source)
         if run is None:
-            await self.say(card("⏳ Ещё занимаюсь прошлым поручением", "Дождитесь ответа или нажмите «Остановить» под статусом."))
+            n = self.enqueue(text, title, source)
+            if n is None:
+                await self.say(card("⏳ Очередь полна", f"Уже {QUEUE_MAX} вопросов ждут. Дождитесь ответа или нажмите «Остановить»."))
+            else:
+                await self.say(card(f"➕ Добавил в очередь · №{n}", "Отвечу следом, в этом же разговоре — всё, что было выше, помню."))
             return
         await self.work(run)
 
@@ -707,6 +731,10 @@ class Agent:
             run.update(state="stopped" if run.get("stop") else "error", html=msg)
             self.remember(run)
             await self.say(msg)
+        if run.get("stop"):
+            self.queue.clear()  # «Остановить» — отмена всего, что ждало
+        elif self.queue:
+            asyncio.create_task(self.drain())
 
     async def run_claude(self, text, resume=True, on_step=None):
         now = datetime.datetime.now(actions.MSK).strftime("%d.%m.%Y %H:%M, %A")
@@ -783,6 +811,7 @@ class Agent:
             await self.say(card("Сейчас ничего не делаю"))
 
     def new_conversation(self):
+        self.conv, self.queue = uuid.uuid4().hex[:6], []
         s = load_settings()
         s.pop("session", None)
         save_settings(s)
