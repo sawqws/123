@@ -854,6 +854,73 @@ class ModeTest(Base):
         self.assertEqual([r["mode"] for r in sec.got if r.get("cmd") == "_hub"], ["chat"])
 
 
+class StudioTest(Base):
+    """«Бот, который делает ботов»: видна на главном экране; если её нет, а Секретарь вошёл в аккаунт — ставится сама."""
+
+    def setUp(self):
+        super().setUp()
+        self.sec = FakeSecretary(hub.AGENT_SOCK, {"name": "Глеб Смирнов", "username": "gleb_s"})
+        self.addCleanup(self.sec.close)
+        self.env = mock.patch.object(hub, "STUDIO_ENV", os.path.join(self.dir, "studio-bot.env"))
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.installs = []
+        self.bf = mock.patch.object(hub, "botfather_install", side_effect=lambda chat, kind: self.installs.append(kind))
+        self.bf.start()
+        self.addCleanup(self.bf.stop)
+        hub.setting("studio_try", None)
+
+    def test_home_offers_install_when_missing(self):
+        hub.on_message(self.msg("/start"))
+        text, btns = self.last()
+        self.assertIn("Поставить Студию", btns)
+        self.assertIn('"stu"', btns)
+
+    def test_home_shows_open_button_when_installed(self):
+        self.pm2["studio-bot"] = ("online", 0)
+        hub.setting("studio_user", "my_studio_bot")
+        hub.on_message(self.msg("/start"))
+        _, btns = self.last()
+        self.assertIn("https://t.me/my_studio_bot", btns)
+        self.assertIn("🏗 Студия", btns)
+        self.assertNotIn("Поставить Студию", btns)
+
+    def wait_installs(self, n):
+        for _ in range(100):
+            if len(self.installs) >= n:
+                break
+            time.sleep(0.02)
+        return self.installs
+
+    def test_button_installs_through_secretary(self):
+        with mock.patch.object(hub.maker, "secretary_ready", return_value=True):
+            self.cq("stu")
+        self.assertEqual(self.wait_installs(1), ["studio"])
+
+    def test_button_without_secretary_asks_token(self):
+        with mock.patch.object(hub.maker, "secretary_ready", return_value=False):
+            self.cq("stu")
+        self.assertEqual(hub.setting("wait"), "studio")
+        self.assertIn("токен", self.last()[0].lower())
+
+    def test_auto_install_once_when_account_connected(self):
+        t0 = 1_800_000_000.0
+        self.assertTrue(hub.studio_auto(now=t0))
+        self.assertEqual(self.wait_installs(1), ["studio"])
+        self.assertFalse(hub.studio_auto(now=t0 + 60))  # повторно — не раньше чем через 6 часов
+        self.assertEqual(self.installs, ["studio"])
+        self.assertTrue(hub.studio_auto(now=t0 + hub.STUDIO_RETRY + 1))  # прошло 6 часов, всё ещё нет — ещё раз
+        self.assertEqual(self.wait_installs(2), ["studio", "studio"])
+
+    def test_no_auto_install_without_account_or_when_present(self):
+        self.sec.account = None
+        with mock.patch.object(hub, "secretary_status", return_value={"account": None}):
+            self.assertFalse(hub.studio_auto(now=1_800_000_000.0))
+        self.pm2["studio-bot"] = ("errored", 5)  # стоит, но упала — это не повод ставить заново
+        self.assertFalse(hub.studio_auto(now=1_800_100_000.0))
+        self.assertEqual(self.installs, [])
+
+
 class PsyTest(Base):
     """🧠 Психолог: карточка, «Все чаты» и «Один чат» уходят Секретарю, без входа в аккаунт — честно и кнопка входа."""
 
