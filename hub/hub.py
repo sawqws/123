@@ -510,6 +510,7 @@ def home(chat, mid=None):
     foot = mode_note()
     if m == "app" and not web:
         foot += "\n<i>https-адреса пока нет, поэтому всё здесь</i>"
+    studio = studio_button(rows)
     if web:
         btns = [[web], [bots_btn, b("🧠 Психолог", "psy"), acc_btn], [b("⚙️ Режим", "mode|ask")]]
         foot += "\n<i>💬 Команды и текст работают и здесь.</i>"
@@ -518,6 +519,8 @@ def home(chat, mid=None):
                 [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")],
                 [b("🧠 Психолог", "psy"), b("⚙️ Режим", "mode|ask")]]
         foot += "\n<i>💬 Пиши или говори что угодно — отвечу. Фото и видео тоже.</i>"
+    if studio:  # бот, который делает ботов, — в последний ряд (рядов не прибавляется: экран остаётся коротким)
+        btns[-1].append(studio)
     return show(chat, mid, card("👑 <b>Главный</b>", lines, foot), btns)
 
 
@@ -791,6 +794,69 @@ def botfather_install(chat, kind):
     install(chat, kind, token)
 
 
+STUDIO_ENV = "/etc/studio-bot.env"
+STUDIO_RETRY = 6 * 3600  # автоустановка Студии — не чаще раза в 6 часов
+
+
+def studio_installed(rows=None):
+    """Студия есть на сервере: запущена в pm2 (даже упавшая) или есть её файл с токеном."""
+    rows = apps() if rows is None else rows
+    return any(a["name"] == "studio-bot" for a in rows or []) or os.path.exists(STUDIO_ENV)
+
+
+_studio_ask = [0.0]  # когда последний раз спрашивали Telegram об адресе Студии (не чаще раза в 10 минут)
+
+
+def studio_username():
+    """@username Студии: запоминаем при установке, у уже стоящей — спрашиваем Telegram по её токену."""
+    name = setting("studio_user")
+    if name:
+        return name
+    if time.time() - _studio_ask[0] < 600:
+        return ""
+    _studio_ask[0] = time.time()
+    try:
+        with open(STUDIO_ENV) as f:
+            m = re.search(r"^STUDIO_TOKEN=(\S+)", f.read(), re.M)
+        if m:
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{m.group(1).strip(chr(34) + chr(39))}/getMe",
+                                        timeout=5) as r:
+                name = json.load(r)["result"].get("username") or ""
+            if name:
+                setting("studio_user", name)
+            return name
+    except Exception:
+        pass
+    return ""
+
+
+def studio_button(rows=None):
+    """Кнопка на главном экране: «🏗 Студия» (открыть бота) или «🏗 Поставить Студию» (ещё нет)."""
+    if not studio_installed(rows):
+        return b("🏗 Поставить Студию", "stu", "primary")
+    name = studio_username()
+    return {"text": "🏗 Студия", "url": f"https://t.me/{name}", "style": "primary"} if name else None
+
+
+def studio_auto(now=None):
+    """Студии нет, а Секретарь уже вошёл в аккаунт Глеба — ставим её сами: бот в @BotFather → install.sh.
+    Один раз в 6 часов; не вышло — Главный просит токен, а кнопка «🏗 Поставить Студию» остаётся."""
+    now = now or time.time()
+    chat = owner()
+    if not chat or now - float(setting("studio_try") or 0) < STUDIO_RETRY:
+        return False
+    if studio_installed():
+        return False
+    sec = secretary_status()
+    if not (sec and sec.get("account")):
+        return False
+    setting("studio_try", now)
+    send(chat, card("🏗 <b>Ставлю Студию</b>", ["Это бот, который делает ботов. Создам его сам через Секретаря — "
+                                                 "через пару минут он появится."]))
+    threading.Thread(target=botfather_install, args=(chat, "studio"), daemon=True).start()
+    return True
+
+
 def install(chat, kind, token, msg_id=None):
     var, label, after = INSTALL[kind]
     if msg_id:
@@ -811,6 +877,8 @@ def install(chat, kind, token, msg_id=None):
     code, out = sh("bash", os.path.join(REPO, kind, "install.sh"), timeout=1200, env=env)
     if code != 0:
         return send(chat, f"❌ <b>Не получилось</b>\n<pre>{esc(out.strip()[-1200:])}</pre>")
+    if kind == "studio":
+        setting("studio_user", name)  # кнопка «🏗 Студия» на главном экране
     maker.to_folder(name)  # сразу в папку «Bot» (если Секретарь вошёл в аккаунт)
     send(chat, card(f"✅ <b>{esc(short(label))} запущен</b>", [esc(after.format(name=name))]),
          [[{"text": "▶️ Открыть бота", "url": f"https://t.me/{name}", "style": "success"}], [b("‹ К ботам", "bots")]])
@@ -880,6 +948,7 @@ def watch():
             if owner():
                 for text, btns in watch_once():
                     send(owner(), text, btns)
+                studio_auto()
         except Exception as e:
             print("watch:", e)
             traceback.print_exc()
@@ -1620,6 +1689,15 @@ def on_callback(cq):
              pairs([b(clip(INSTALL[k][1]), f"add|{k}") for k in INSTALL]) + [[b("‹ Назад", "more")]])
     elif data[0] == "add" and arg in INSTALL:
         ask_token(chat, mid, arg)
+    elif data[0] == "stu":  # «🏗 Поставить Студию»: сам создам бота через Секретаря, иначе попрошу токен
+        if studio_installed():
+            note = "Студия уже стоит"
+        elif maker.secretary_ready():
+            setting("wait", None)
+            note = "Ставлю…"
+            threading.Thread(target=botfather_install, args=(chat, "studio"), daemon=True).start()
+        else:
+            ask_token(chat, mid, "studio")
     elif data[0] == "bf" and arg in INSTALL:
         setting("wait", None)
         note = "Создаю…"
