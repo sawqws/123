@@ -72,6 +72,7 @@
   }
 
   // Лист снизу: Kit.sheet('<h2>…</h2>…') -> элемент; закрывается тапом по фону, кнопкой «Назад» Telegram или .close()
+  let lastClose = 0;
   function sheet(html, onClose) {
     const back = document.createElement('div');
     back.className = 'sheet-backdrop';
@@ -87,6 +88,7 @@
     const close = () => {
       if (closed) return;
       closed = true;
+      lastClose = Date.now();
       back.classList.remove('open');
       el.classList.remove('open');
       document.removeEventListener('keydown', esc_);
@@ -219,6 +221,7 @@
     const b = ev.target.closest && ev.target.closest('[data-support]');
     if (!b || !b.dataset.support) return;
     ev.preventDefault();
+    if (Date.now() - lastClose < 700 || document.querySelector('.sup-text')) return;  // «призрачный» тап после закрытия / лист уже открыт
     haptic('tap');
     document.querySelectorAll('.sheet').forEach((x) => { if (x.close) x.close(); });  // лист настроек и т. п. — закрыть
     const o = window.Kit && window.Kit.supportOpts;

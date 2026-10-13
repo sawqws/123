@@ -240,3 +240,58 @@ details.about p { margin: 8px 0 0; font-size: 14px; line-height: 1.45; }
 .zones { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin: 12px 0 6px; }
 .zones span { display: block; }
 .mode-list { margin-top: 10px; }
+
+/* ================= стиль приложения WHOOP: чёрный фон, плоские тёмные карточки, капс-подписи, толстые кольца ================= */
+:root, html[data-scheme="light"] {
+  color-scheme: dark;
+  --bg: #000;
+  --card: #111315;
+  --card-2: #1a1d20;
+  --text: #fff;
+  --hint: #8b9096;
+  --line: #23272b;
+  --sep: #1d2124;
+  --field: #1b1e21;
+  --accent: #00f19f;
+  --accent-ink: #00130b;
+  --rec-green: #16ec06;
+  --rec-yellow: #ffde00;
+  --rec-red: #ff0026;
+  --strain: #0093e7;
+  --sleep: #7ba1bb;
+  --shadow: none;
+  --glass: rgba(10, 11, 12, .86);
+  --r-xl: 16px; --r-lg: 14px; --r-md: 12px;
+}
+html, body { background: #000; }
+body::before { display: none; }
+.card { background: var(--card); border: 1px solid var(--line); box-shadow: none; border-radius: 16px; }
+.card.feature, .card.accent { background: var(--card); color: var(--text); border-color: var(--line); }
+.hero h1 { font: 800 22px/1.1 var(--font-d); letter-spacing: 1.2px; text-transform: uppercase; }
+.hero .sub { letter-spacing: .3px; }
+.head h2, .card > h2, .card > .card-title { font: 800 13px/1.25 var(--font-d); letter-spacing: 1.4px; text-transform: uppercase; }
+.label-in, .dial-k { letter-spacing: 1.2px; font-weight: 800; }
+.dial-k { color: var(--hint); }
+.dial.big .dial-k { color: var(--c); }
+.dials-card { background: #000; border: 0; padding: 4px 0 14px; }
+.day-nav { justify-content: center; gap: 14px; }
+.day-nav span { color: var(--text); font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; font-size: 13px; }
+.dials { gap: 2px; align-items: center; }
+.trk { stroke: #1d2124; }
+.arc { filter: none; stroke-linecap: round; }
+.dial-v b { font: 800 clamp(20px, 6.4vw, 30px)/1 var(--font-d); letter-spacing: -.5px; }
+.dial.big .dial-v b { font-size: clamp(34px, 11vw, 52px); letter-spacing: -1.6px; color: var(--c); }
+.dial-v small { color: var(--hint); }
+.dial-s { letter-spacing: .2px; }
+.stat { background: var(--card) !important; border: 1px solid var(--line) !important; border-radius: 14px; }
+.stat .v { font-weight: 800; letter-spacing: -.4px; }
+.stat .k, .stat .l { text-transform: uppercase; letter-spacing: 1px; font-size: 11px; font-weight: 800; color: var(--hint); }
+.btn.primary, .send { background: var(--accent); color: var(--accent-ink); border-radius: 999px; font-weight: 800; letter-spacing: .4px; }
+.btn.tonal { background: var(--field); color: var(--accent); }
+.bar { background: #1d2124; }
+.tabbar { background: rgba(8, 9, 10, .94); border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+.tabbar button { border-radius: 10px; font-weight: 700; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; }
+.tabbar button.on { background: transparent; color: var(--accent); }
+.tabbar button.on .i { filter: none; }
+.sheet { background: #0e1012; border: 1px solid var(--line); border-bottom: 0; }
+.sup-fab { background: rgba(17, 19, 21, .94); border-color: var(--line); }
