@@ -503,6 +503,18 @@ class Misc(unittest.TestCase):
         self.assertIn("{NOW}", p)
         self.assertIn("{MEMORY}", p)
 
+    def test_prompt_handles_search_tasks(self):
+        """«Найди билеты в Китай» — работа Секретаря: правило есть в промпте, а у claude -p есть поиск."""
+        with open(os.path.join(agent.HERE, "prompt.md")) as f:
+            p = f.read()
+        self.assertIn("найди билеты в Китай", p)
+        self.assertIn("3–5 вариантов", p)
+        self.assertIn("купить или забронировать сам ты не можешь", p)
+        with open(os.path.join(agent.HERE, "agent.py")) as f:
+            src = f.read()
+        self.assertIn('"WebSearch", "WebFetch"', src)
+        self.assertTrue(any("билет" in e for e in agent.EXAMPLE_LIST))
+
 
 class FakeConv:
     """Разговор с @BotFather: на каждое наше сообщение — следующий заготовленный ответ."""

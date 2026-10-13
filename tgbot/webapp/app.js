@@ -395,6 +395,8 @@
         tile('📬', 'Что я пропустил', 'сводка непрочитанного', () => ask({ preset: 'missed' })),
         tile('🗂', 'Навести порядок', 'папки и архив', () => ask({ preset: 'sort' })),
         tile('🧠', 'Разбор чата', 'как психолог', () => { if (!isBusy()) psySheet(); })),
+      h('button', { class: 'btn primary', style: 'margin-top:10px;width:100%', onclick: () => go('ask') },
+        '✨ Поручить своё задание'),
     ];
     if (me) {
       out.push(h('div', { class: 'section' }, h('h2', { text: 'Непрочитанное' }), st.chats.length ? h('span', { class: 'count num', text: st.unread }) : null));
@@ -426,7 +428,7 @@
 
   function askView() {
     const st = S.state || {};
-    const ta = h('textarea', { rows: '3', maxlength: '4000', placeholder: 'Например: ответьте Пете, что буду в 6', 'aria-label': 'Поручение' });
+    const ta = h('textarea', { rows: '3', maxlength: '4000', placeholder: 'Поручите: «найдите билеты в Китай на ноябрь», «ответьте Пете, что буду в 6», «что я пропустил»…', 'aria-label': 'Поручение' });
     ta.value = S.draft;
     const send = h('button', { class: 'send', 'aria-label': 'Выполнить', disabled: !S.draft.trim() || busy() ? true : null }, icon('send'));
     const sync = () => { S.draft = ta.value; send.disabled = !ta.value.trim() || busy(); autosize(ta); };

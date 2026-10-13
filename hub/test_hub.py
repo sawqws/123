@@ -596,6 +596,84 @@ class SecretaryTest(Base):
         self.sec = FakeSecretary(hub.AGENT_SOCK, {"name": "Глеб Смирнов", "username": "gleb_s"})
         self.addCleanup(self.sec.close)
 
+    def test_task_button_everywhere_and_next_message_goes_to_secretary(self):
+        """Жалоба «секретарю не могу написать задачу»: кнопка на /start в обоих режимах, дальше любое сообщение — Секретарю."""
+        for mode in ("chat", "app"):
+            hub.set_mode(mode)
+            with mock.patch.dict(os.environ, {"HUB_URL": "https://hub.1-2-3-4.sslip.io"}):
+                hub.on_message(self.msg("/start"))
+            text, btns = self.last()
+            self.assertIn("✨ Поручить Секретарю", btns, mode)
+            self.assertIn('"task"', btns)
+            self.assertIn("напишите", text.lower())
+            for row in json.loads(btns)["inline_keyboard"]:
+                self.assertLessEqual(len(row), 3)
+                for btn in row:
+                    self.assertLessEqual(len(btn["text"]), 24)
+        self.assertIn("Просто напишите задачу", hub.HELP)
+        hub.set_mode("chat")
+        n = len(self.sec.updates())
+        self.cq("task")
+        text, btns = self.last()
+        self.assertEqual(hub.setting("wait"), "task")
+        for ex in ("найди билеты в Китай на ноябрь", "забронируй стол", "что я пропустил"):
+            self.assertIn(ex, text)
+        self.assertIn('"home"', btns)  # отмена
+        hub.on_message(self.msg("найди билеты в Китай на ноябрь"))
+        self.assertEqual(self.sec.updates()[-1]["message"]["text"], "найди билеты в Китай на ноябрь")
+        self.assertEqual(len(self.sec.updates()), n + 1)
+        self.assertIsNone(hub.setting("wait"))  # одно сообщение — одно поручение
+        hub.on_message(self.msg("а ещё отель"))  # и дальше обычный текст уходит Секретарю как раньше
+        self.assertEqual(self.sec.updates()[-1]["message"]["text"], "а ещё отель")
+
+    def test_task_voice_photo_command_and_cancel(self):
+        n = len(self.sec.updates())
+        self.cq("task")
+        with sync_threads(), mock.patch.object(hub.media, "voice_text", return_value="найди билеты в Пекин"):
+            hub.on_message({**self.msg(""), "voice": {"file_id": "v"}})
+        self.assertEqual(self.sec.updates()[-1]["message"]["text"], "найди билеты в Пекин")
+        self.assertIsNone(hub.setting("wait"))
+        self.cq("task")
+        hub.on_message({**self.msg(""), "photo": [{"file_id": "p"}], "caption": "найди такой же билет"})
+        self.assertIn("photo", self.sec.updates()[-1]["message"])
+        self.assertIsNone(hub.setting("wait"))
+        hub.on_message(self.msg("/task найди отель в Шанхае"))  # сразу с текстом
+        self.assertEqual(self.sec.updates()[-1]["message"]["text"], "найди отель в Шанхае")
+        self.assertEqual(len(self.sec.updates()), n + 3)
+        hub.on_message(self.msg("/task"))  # без текста — подсказка и ожидание
+        self.assertIn("Поручение Секретарю", self.last()[0])
+        self.assertEqual(hub.setting("wait"), "task")
+        hub.on_message(self.msg("/bots"))  # команда Главного снимает ожидание
+        self.assertIsNone(hub.setting("wait"))
+        self.cq("task")
+        self.cq("home")  # «Отмена»
+        self.assertIsNone(hub.setting("wait"))
+        hub.on_message(self.msg("привет"))
+        self.assertEqual(self.sec.updates()[-1]["message"]["text"], "привет")
+
+    def test_task_when_secretary_down_revives(self):
+        self.sec.close()
+        os.remove(hub.AGENT_SOCK)
+        self.cq("task")
+        with mock.patch.object(hub, "revive") as rv, sync_threads():
+            hub.on_message(self.msg("найди билеты в Китай"))
+        self.assertIn("Секретарь не отвечает", self.last()[0])
+        rv.assert_called_once()
+        self.assertIsNone(hub.setting("wait"))
+
+    def test_webapp_composer_always_visible(self):
+        """Поле поручения не прячется, когда Секретарь лежит: подсказки, поднятие и повтор отправки есть в app.js."""
+        with open(os.path.join(HERE, "webapp", "app.js"), encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("Поручите:", js)
+        for chip in ("✈️ Найти билеты", "🔎 Найти в интернете", "📬 Что я пропустил"):
+            self.assertIn(chip, js)
+        view = js[js.index("function secView()"):js.index("// 🧠 Психолог")]
+        self.assertNotIn("return out + `<section", view)  # раньше при ошибке возвращался экран без поля
+        self.assertIn('id="composer"', view)
+        self.assertIn("action: 'secretary'", js)  # отправка при ошибке поднимает Секретаря…
+        self.assertIn("retryQueued", js)          # …и повторяет запрос
+
     def test_home_shows_account(self):
         hub.on_message(self.msg("/start"))
         text, btns = self.last()
@@ -802,8 +880,9 @@ class ModeTest(Base):
             self.assertIn("Режим: 📱 приложение", text)
             self.assertEqual(self.web_apps()[0]["web_app"]["url"], "https://hub.1-2-3-4.sslip.io/app")
             rows = [kw.get("reply_markup") for k, kw in self.sent if k == "sendMessage"][-1]["inline_keyboard"]
-            self.assertEqual(len(rows), 3)
+            self.assertEqual(len(rows), 4)  # приложение, «Поручить Секретарю», действия, режим
             self.assertTrue(all(len(r) <= 3 for r in rows))
+            self.assertIn("✨ Поручить Секретарю", btns)
             self.assertIn("🧠 Психолог", btns)
             self.assertNotIn("Сделать бота", btns)  # коротко: главное — приложение
             hub.on_message(self.msg("/bots"))
