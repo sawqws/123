@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Ловец</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <link rel="stylesheet" href="kit.css?v={{v}}">
+  <link rel="stylesheet" href="app.css?v={{v}}">
+</head>
+<body>
+  <main id="app">
+    <header class="top"><h1 class="title">🎯 Ловец</h1><span id="acc" class="badge"></span></header>
+    <p class="subtitle" id="sub">Ловлю юзернеймы на твои каналы.</p>
+
+    <div class="tabs" id="tabs">
+      <button data-tab="names" class="on">Имена</button>
+      <button data-tab="wish">🎲 Пожелания</button>
+      <button data-tab="ideas">✨ Идеи</button>
+    </div>
+
+    <section id="tab-names">
+      <div class="card">
+        <input id="text" placeholder="@имя или несколько через пробел" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button id="add" class="btn primary">Проверить и ловить</button>
+      </div>
+      <div id="hunt-line" hidden></div>
+      <h3 class="section">Список</h3>
+      <div id="list"><div class="skeleton"></div></div>
+      <h3 class="section">Как ловить</h3>
+      <div class="card">
+        <label class="field"><span>Проверять раз в</span><div class="chips" id="intervals"></div></label>
+        <label class="field"><span>Куда ставить имя</span><div class="chips" id="targets"></div></label>
+        <p class="muted small">Пойманное имя — это канал: потом переименуешь или переставишь имя куда нужно. Лимит Telegram — 10 публичных каналов на аккаунт.</p>
+      </div>
+    </section>
+
+    <section id="tab-wish" hidden>
+      <div class="card">
+        <h2 id="wish-text">…</h2>
+        <label class="field"><span>Длина</span><div class="chips" id="w-len"></div></label>
+        <label class="field"><span>Стиль</span><div class="chips" id="w-style"></div></label>
+        <label class="field"><span>Тема (необязательно)</span><input id="w-theme" placeholder="космос, крипта, мемы…"></label>
+        <label class="field"><span>Сколько поймать</span><div class="chips" id="w-count"></div></label>
+        <div class="chips"><button class="chip" id="w-letters">🔤 Только буквы</button></div>
+        <button id="hunt" class="btn primary">🚀 Ловить</button>
+      </div>
+      <div id="hunt-status"></div>
+      <p class="muted small">Сам придумываю имена под пожелания, проверяю по кругу и занимаю свободные, пока не наберу нужное число. О каждом пойманном напишу в чат.</p>
+    </section>
+
+    <section id="tab-ideas" hidden>
+      <div class="card">
+        <input id="theme" placeholder="Тема: космос, финансы, мемы… (можно пусто)">
+        <button id="think" class="btn primary">Придумать и проверить</button>
+      </div>
+      <div id="ideas"><div class="empty"><span class="emoji">✨</span>Нажми — покажу имена и что из них свободно</div></div>
+    </section>
+  </main>
+  <script src="kit.js?v={{v}}"></script>
+  <script src="app.js?v={{v}}"></script>
+</body>
+</html>
