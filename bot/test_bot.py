@@ -484,6 +484,23 @@ class BotTest(unittest.TestCase):
             bot.on_callback({"id": "1", "data": "all:yes", "message": {"chat": {"id": CHAT}, "message_id": 5}})
         self.assertIn("🏆 <b>7/7</b> · Тест &lt;1&gt;", self.last()[0])
 
+    def test_auto_tests_include_reworking(self):
+        """«Сдать все автотесты» берёт и «На доработке» (порог не добит), а не только «Пора начать»."""
+        rows = [{"auto": True, "rawStatus": "appointed", "url": URL, "title": "Новый", "subj": "Информатика"},
+                {"auto": True, "rawStatus": "reworking", "url": URL + "2", "title": "Пароли", "subj": "Информатика"},
+                {"auto": True, "rawStatus": "failed", "url": URL + "3", "title": "Старый", "subj": "Информатика"},
+                {"auto": False, "rawStatus": "reworking", "url": URL + "4", "title": "Конспект", "subj": "Биология"}]
+        with mock.patch.object(bot, "node", return_value=(True, json.dumps(rows))):
+            bot.find_auto_tests(CHAT)
+        text = self.last()[0]
+        self.assertIn("Нашёл автотесты: 2", text)
+        self.assertIn("🔁 доработка", text)
+        self.assertEqual([t["title"] for t in bot.pending[CHAT]], ["Новый", "Пароли"])
+        with mock.patch.object(bot, "overview", return_value={"tasks": rows}), mock.patch.object(bot, "busy_check"), \
+                mock.patch.object(bot.threading, "Thread") as th:
+            self.assertEqual(bot.app_auto({})["n"], 2)
+            self.assertEqual([t["title"] for t in th.call_args.kwargs["args"][1]], ["Новый", "Пароли"])
+
     def test_old_button_names_still_work(self):
         self.say("📊 Мои оценки")
         self.assertEqual(self.nodes[-1], ("horo/grades.js", "--html"))
