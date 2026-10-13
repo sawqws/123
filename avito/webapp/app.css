@@ -171,3 +171,4 @@ html[data-scheme="light"] .ph.add { color: color-mix(in srgb, var(--accent) 62%,
   .btns.two > .btn { padding: 0 10px; font-size: 15px; }
   .hero h1 { font-size: 23px; }
 }
+.mode-list { margin-top: 8px; }  /* «💬 Перейти в чат» — под строкой поддержки */

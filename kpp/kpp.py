@@ -198,6 +198,7 @@ def fail(text):
 def setup_bot():
     commands = [
         {"command": "app", "description": "Приложение"},
+        {"command": "mode", "description": "Чат или приложение"},
         {"command": "passes", "description": "Мои пропуска"},
         {"command": "auto", "description": "Автопропуск в Домиленде"},
         {"command": "place", "description": "Адрес"},
@@ -281,30 +282,97 @@ LOGIN_TEXT = fmt("🔑 Вход через Яндекс", LOGIN_STEPS, LOGIN_NOT
 
 HELP_BODY = "Пришли номер такси — сразу закажу пропуск.\nТекстом, скриншотом, видео или голосом."
 HELP_NOTE = " · ".join(c + NBSP + w for c, w in (("/passes", "пропуска"), ("/place", "адрес"),
-                                                   ("/auto", "автопропуск")))
-HELP = fmt("🚕 КПП", HELP_BODY, HELP_NOTE)
+                                                   ("/auto", "автопропуск"), ("/mode", "режим")))
+APP_BODY = "Номер, скриншот и пропуска — в приложении. Номер можно прислать и сюда."
+
+
+# ---------- Режим: 💬 чат или 📱 приложение ----------
+# Выбирается при первом /start, меняется по /mode, кнопкой «⚙️ Режим» и из приложения («💬 Перейти в чат»).
+# «чат» — всё кнопками здесь, приложение не предлагается (web_app только по /app); «приложение» — главная кнопка
+# открывает его, но команды и номера в чате работают всё равно. Хранится в state.json («mode»). Как в HDP и планере.
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode():
+    m = st.get("mode")
+    return m if m in MODES else ""
+
+
+def set_mode(m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    st["mode"] = m
+    save(st)
+
+
+def mode_note():
+    """Подпись режима для карточки /start (одной строкой, курсивом)."""
+    return f"Режим: {MODES.get(ui_mode(), 'не выбран')} · сменить — /mode"
+
+
+def mode_card():
+    return fmt("🧭 Как удобнее?", "💬 <b>В чате</b> — всё кнопками и командами здесь\n"
+               "📱 <b>Приложение</b> — номер, скриншот и пропуска в одном окне",
+               "Поменять можно в любой момент: /mode")
+
+
+def mode_kb():
+    return [[btn("💬 В чате", "mode:chat", "primary"), btn("📱 Приложение", "mode:app", "primary")]]
+
+
+def ask_mode(chat, mid=None):
+    return edit(chat, mid, mode_card(), mode_kb()) if mid else send(chat, mode_card(), mode_kb())
+
+
+def on_mode(chat, mid, key):
+    """Выбор в карточке: карточка становится «✅ Режим: …», следом — главный экран по режиму."""
+    set_mode(key)
+    edit(chat, mid, fmt("✅ Режим: " + MODES[key], note="Сменить — /mode или кнопка «⚙️ Режим»"), [])
+    welcome(chat, "")
+
+
+def home_text(hi=""):
+    """Главный экран: в чате — подсказка и команды, в приложении — коротко."""
+    if ui_mode() == "app":
+        body = APP_BODY if public_url else f"{APP_BODY}\nПриложение ещё настраивается: {esc(https_note)}"
+        return fmt("🚕 КПП", hi + body, mode_note())
+    return fmt("🚕 КПП", hi + HELP_BODY, HELP_NOTE + "\n" + mode_note())
 
 
 def menu_buttons():
-    rows = app_buttons()
+    """Главное меню. Чат: без web_app. Приложение: открыть приложение + 2–3 нужных действия."""
+    rows = []
     last = st.get("last")
+    if ui_mode() == "app":
+        rows += app_buttons()
+        if last and st.get("jwt"):
+            rows.append([btn(f"🔁 {dl.pretty(last)}", f"rp|{last}")])
+        rows.append([btn("🗂 Пропуска", "m|passes"), btn("⚙️ Режим", "mode")])
+        return rows
     if last and st.get("jwt"):
         rows.append([btn(f"🔁 {dl.pretty(last)}", f"rp|{last}")])
-    return rows + [[btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place"), support.Support.button()]]
+    rows.append([btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place"), support.Support.button()])
+    rows.append([btn("🤖 Автопропуск", "m|auto"), btn("⚙️ Режим", "mode")])
+    return rows
 
 
-def app_buttons():
-    return [[{"text": "📱 Открыть приложение", "web_app": {"url": public_url + "/"}}]] if public_url else []
+def app_buttons(always=False):
+    """Кнопка открыть приложение; в режиме «чат» её нет (always=True — всё равно, для /app)."""
+    if not public_url or (ui_mode() == "chat" and not always):
+        return []
+    return [[{"text": "📱 Открыть приложение", "web_app": {"url": public_url + "/"}}]]
 
 
-def welcome(chat, name):
+def welcome(chat, name, mid=None):
     hi = f"Привет, {esc(name)}! " if name else ""
     if st.get("jwt"):
-        send(chat, fmt("🚕 КПП", hi + HELP_BODY, HELP_NOTE), menu_buttons())
+        text, rows = home_text(hi), menu_buttons()
+        edit(chat, mid, text, rows) if mid else send(chat, text, rows)
     else:
-        send(chat, fmt("🔑 Вход через Яндекс",
-                       (f"{hi}Сначала один раз войди в Домиленд.\n" if hi else "") + LOGIN_STEPS, LOGIN_NOTE),
-             login_buttons())
+        text = fmt("🔑 Вход через Яндекс",
+                   (f"{hi}Сначала один раз войди в Домиленд.\n" if hi else "") + LOGIN_STEPS, LOGIN_NOTE)
+        edit(chat, mid, text, login_buttons()) if mid else send(chat, text, login_buttons())
 
 
 def need_login(chat, msg_id=None):
@@ -610,13 +678,18 @@ def on_message(msg):
         send(chat, "🔒 Это личный бот.")
         return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd == "/start":
+    if cmd == "/start" and not ui_mode():
+        ask_mode(chat)  # первый раз: сначала выбор, чат или приложение
+    elif cmd == "/start":
         welcome(chat, frm.get("first_name"))
     elif cmd == "/help":
-        send(chat, HELP, menu_buttons())
+        send(chat, home_text(), menu_buttons())
+    elif cmd == "/mode":
+        ask_mode(chat)
     elif cmd == "/app":
         if public_url:
-            send(chat, fmt("📱 Приложение", note="Номер, скриншот, пропуска — на одном экране."), app_buttons())
+            send(chat, fmt("📱 Приложение", note="Номер, скриншот, пропуска — на одном экране."),
+                 app_buttons(always=True))
         else:
             send(chat, fail(f"Приложение ещё настраивается: {esc(https_note)}"))
     elif cmd == "/login":
@@ -695,6 +768,13 @@ def on_callback(cq):
             toggle_autopass(data[1])
             edit(chat, mid, *autopass_view())
             note = "Сохранил"
+        elif data[0].startswith("mode"):  # «⚙️ Режим» → карточка на месте; mode:chat / mode:app — выбор
+            key = data[0].partition(":")[2]
+            if key in MODES:
+                on_mode(chat, mid, key)
+                note = "Режим: " + MODES[key]
+            else:
+                ask_mode(chat, mid)
         elif data[0] == "m":  # меню: правка сообщения на месте
             if not st.get("jwt"):
                 need_login(chat, mid)
@@ -705,7 +785,7 @@ def on_callback(cq):
             elif data[1] == "auto":
                 edit(chat, mid, *autopass_view())
             else:
-                edit(chat, mid, HELP, menu_buttons())
+                edit(chat, mid, home_text(), menu_buttons())
     except dl.AuthError:
         send(chat, fail("Вход в Домиленд устарел — войди ещё раз."), login_buttons())
     except Exception as e:
@@ -773,7 +853,7 @@ def app_state():
     recent = sorted(((k, v) for k, v in (st.get("recent") or {}).items() if now - v["ts"] < 86400),
                     key=lambda kv: -kv[1]["ts"])
     res = {"login": bool(st.get("jwt")), "name": st.get("name") or "", "address": st.get("address") or "",
-           "place_id": st.get("place_id"), "login_url": dl.LOGIN_URL,
+           "place_id": st.get("place_id"), "login_url": dl.LOGIN_URL, "mode": ui_mode(),
            "places": [{"id": p["id"], "title": p["title"]} for p in st.get("places") or []],
            "recent": [{"plate": k, "pretty": dl.pretty(k), "when": when_text(v["ts"]), "id": v.get("id"),
                        "fresh": now - v["ts"] < REPEAT_WINDOW} for k, v in recent[:6]],
@@ -869,6 +949,18 @@ def api_post(chat, path, body):
             return 404, {"error": "Нет такого адреса"}
         apply_place(p)
         return 200, app_state()
+    if path == "/api/mode":  # «💬 Перейти в чат» из приложения (или обратно): в чат сразу приходит главное меню
+        m = str(body.get("mode") or "")
+        if m not in MODES:
+            return 400, {"error": "Режим — chat или app"}
+        set_mode(m)
+        if m == "chat":
+            try:
+                send(chat, fmt("✅ Режим: " + MODES[m], "Всё, что было в приложении, есть и здесь.",
+                               "Вернуть приложение — /mode"), menu_buttons())
+            except Exception as e:
+                print("режим → чат:", e)
+        return 200, {"mode": m}
     return 404, {"error": "Нет такого метода"}
 
 
