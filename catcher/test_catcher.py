@@ -73,7 +73,7 @@ class Base(unittest.TestCase):
 class Chat(Base):
     def test_start(self):
         self.t.send("/start")
-        self.assertIn("Ловец", self.t.last)
+        self.assertIn("Catcher", self.t.last)
         self.assertIn("Аккаунт: Глеб", self.t.last)
         for btn in ("🎲 По пожеланиям", "📋 Список", "🛠 Поддержка"):
             self.assertIn(btn, self.t.buttons)
@@ -169,8 +169,10 @@ class WatcherTest(Base):
         self.t.send("@busyname")
         self.agent.names["busyname"] = "flood"
         w = app.watcher
+        before = len(self.t.messages)
         self.assertEqual(w.tick(1000), 60)
-        self.assertIn("подождать", self.t.last)
+        self.assertIn("подождать", w.last)  # статус виден в приложении, а в чат — ни слова
+        self.assertEqual(len(self.t.messages), before)
         self.assertEqual(w.tick(1100), 60)  # пауза держится без запросов
         self.assertEqual(sum(1 for c, _ in self.agent.calls if c == "username"), 2)
 
@@ -197,16 +199,19 @@ class WatcherTest(Base):
         self.t.press("resume")
         self.assertEqual(app.find("busyname")["status"], "watch")
 
-    def test_agent_down_says_once_an_hour(self):
+    def test_agent_down_is_silent_in_chat(self):
+        """Секретарь недоступен — в чат не пишем (было: «Не могу проверять имена…» раз в час)."""
         self.t.send("@busyname")
         self.agent.down = True
         w = app.watcher
         before = len(self.t.messages)
         w.tick(1000)
-        w.tick(1100)
-        self.assertEqual(len(self.t.messages), before + 1)
         w.tick(1000 + 3700)
-        self.assertEqual(len(self.t.messages), before + 2)
+        self.assertEqual(len(self.t.messages), before)
+        self.assertIn("недоступен", w.last)
+
+    def test_bot_name_is_english(self):
+        self.assertEqual((app.bot.name, app.bot.tg_name), ("Catcher", "Catcher"))
 
 
 class Wish(Base):
