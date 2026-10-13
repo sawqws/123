@@ -532,6 +532,41 @@ class Api(unittest.TestCase):
 
 # ---------- чат: кнопка приложения, отказ разметки, нарезка длинных ответов ----------
 
+class FeedFront(unittest.TestCase):
+    """Лента «Поручение» в приложении Секретаря (tgbot/webapp): очередь, поле ввода всегда активно."""
+
+    def setUp(self):
+        self.base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+        with open(os.path.join(self.base, "app.js"), encoding="utf-8") as f:
+            self.js = f.read()
+        with open(os.path.join(self.base, "index.html"), encoding="utf-8") as f:
+            self.html = f.read()
+
+    def test_syntax(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("нет node")
+        r = subprocess.run([node, "--check", os.path.join(self.base, "app.js")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_dock_and_queue(self):
+        self.assertIn('id="dock"', self.html)
+        for need in ("S.queue", "r.queue", "S.conv", "sameConv", "followFeed", "в очереди №", "Добавил в очередь",
+                     "Раньше", "Новый разговор", "QUEUE_MAX"):
+            self.assertIn(need, self.js, need)
+
+    def test_send_never_blocked_while_working(self):
+        self.assertNotIn("Ещё занимаюсь прошлым поручением", self.js)
+        self.assertNotIn("isBusy()", self.js)  # старый запрет на отправку
+        self.assertIn("dockSend.disabled = !S.draft.trim() || queueFull()", self.js)  # только пустой текст и полная очередь
+
+    def test_new_conversation_confirms(self):
+        i = self.js.index("function newConversation")
+        self.assertIn("showConfirm", self.js[i:i + 900])
+
+
 class Chat(unittest.TestCase):
     def test_web_app_button_markup(self):
         m = botapi.markup([[botapi.Button.web_app("📱 Приложение", "https://agent.1-2-3-4.sslip.io/")]])

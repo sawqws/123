@@ -665,12 +665,14 @@ class SecretaryTest(Base):
         """Поле поручения не прячется, когда Секретарь лежит: подсказки, поднятие и повтор отправки есть в app.js."""
         with open(os.path.join(HERE, "webapp", "app.js"), encoding="utf-8") as f:
             js = f.read()
-        self.assertIn("Поручите:", js)
+        self.assertIn("Поручение или уточнение", js)  # поле — в закреплённом #dock, его строит buildDock() независимо от состояния Секретаря
+        self.assertIn("const on = S.tab === 'sec' && !S.gate;", js)
         for chip in ("✈️ Найти билеты", "🔎 Найти в интернете", "📬 Что я пропустил"):
             self.assertIn(chip, js)
         view = js[js.index("function secView()"):js.index("// 🧠 Психолог")]
         self.assertNotIn("return out + `<section", view)  # раньше при ошибке возвращался экран без поля
-        self.assertIn('id="composer"', view)
+        self.assertIn('id="convo"', view)
+        self.assertIn('id="ask"', js)
         self.assertIn("action: 'secretary'", js)  # отправка при ошибке поднимает Секретаря…
         self.assertIn("retryQueued", js)          # …и повторяет запрос
 
@@ -931,6 +933,42 @@ class ModeTest(Base):
         self.addCleanup(sec.close)
         hub.on_message(self.msg("привет"))
         self.assertEqual([r["mode"] for r in sec.got if r.get("cmd") == "_hub"], ["chat"])
+
+
+class FeedFrontTest(unittest.TestCase):
+    """Лента разговора «Секретарь» в приложении (hub/webapp): уточнения во время работы встают в очередь."""
+
+    def setUp(self):
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp")
+        with open(os.path.join(base, "app.js"), encoding="utf-8") as f:
+            self.js = f.read()
+        with open(os.path.join(base, "index.html"), encoding="utf-8") as f:
+            self.html = f.read()
+
+    def test_syntax(self):
+        import shutil
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("нет node")
+        r = subprocess.run([node, "--check", os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp", "app.js")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_dock_and_queue(self):
+        self.assertIn('id="dock"', self.html)  # закреплённое поле ввода
+        for need in ("S.sec.queue", "r.queue", "sec.conv", "sameConv", "followFeed", "в очереди №", "Добавил в очередь",
+                     "Раньше", "Новый разговор"):
+            self.assertIn(need, self.js, need)
+
+    def test_send_never_blocked_while_working(self):
+        # прежняя блокировка «Ещё занимаюсь прошлым поручением» и disabled от isWork() убраны
+        self.assertNotIn("Ещё занимаюсь прошлым поручением", self.js)
+        self.assertNotIn("|| isWork();", self.js)
+        self.assertIn("isBusy()", self.js)
+
+    def test_new_conversation_confirms(self):
+        i = self.js.index("act === 'new'")
+        self.assertIn("confirmBox(", self.js[i:i + 400])
 
 
 class StudioTest(Base):

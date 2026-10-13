@@ -7,11 +7,14 @@
   const tabsEl = document.getElementById('tabs');
   const sheetRoot = document.getElementById('sheet');
   const toastEl = document.getElementById('toast');
+  const dockEl = document.getElementById('dock');
 
   const S = {
     tab: 'home', state: null, run: null, history: [], memory: null, memDirty: false,
     error: '', gate: '', draft: '', open: {}, refreshing: false, timer: 0, seen: {}, hidden: {},
+    queue: [], conv: '', pending: [], older: false, feedSig: null,
   };
+  const QUEUE_MAX = 5;  // как в tgbot/agent.py
 
   // ---------- мелочи ----------
   function h(tag, props, ...kids) {
@@ -131,11 +134,11 @@
     return out;
   }
 
-  function answerBlock(html, key) {
+  function answerBlock(html, key, clip) {
     const box = h('div', { class: 'answer' }, safeHtml(html));
     const wrap = h('div', null, box);
     const long = (html || '').length > 420 || (html || '').split('\n').length > 8;
-    if (long && !S.open[key]) {
+    if (long && clip !== false && !S.open[key]) {
       box.classList.add('clip');
       wrap.appendChild(h('button', {
         class: 'text-btn expand', text: 'Показать полностью',
@@ -165,7 +168,8 @@
 
   // ---------- поручения ----------
   const busy = () => !!(S.run && S.run.state === 'work');
-  const isBusy = () => { if (!busy()) return false; toast('Ещё занимаюсь прошлым поручением'); haptic('warning'); return true; };
+  const queueFull = () => S.queue.length >= QUEUE_MAX;
+  const working = () => busy() || S.queue.length > 0;   // Секретарь занят: новые вопросы встают в очередь
   // законченное поручение показываем, пока его не скрыли и если оно свежее (или мы видели, как оно шло)
   const shownRun = () => {
     const r = S.run;
@@ -174,18 +178,29 @@
     if (S.hidden[r.id] || (!S.seen[r.id] && (r.ago || 0) > 600)) return null;
     return r;
   };
+  const PRESET_LABEL = { missed: 'Что я пропустил', sort: 'Навести порядок', psy_week: 'Разбор чатов за неделю',
+    psy_month: 'Разбор чатов за месяц', psy: 'Разбор чата', brief: 'Что пишут' };
 
   async function ask(body) {
-    if (isBusy()) return false;
+    if (queueFull()) { toast(`В очереди уже ${QUEUE_MAX} — дождитесь ответа`, true); haptic('warning'); return false; }
     haptic('medium');
+    const mine = { q: body.text || ((PRESET_LABEL[body.preset] || 'Поручение') + (body.chat && body.preset !== 'brief' ? ': ' + body.chat : '')) };
+    S.pending.push(mine);
+    paintLive();
     try {
       const r = await api('/api/ask', body);
+      S.pending = S.pending.filter((x) => x !== mine);
       S.run = r.run;
+      if (r.queue) S.queue = r.queue;
+      if (r.queued) { toast(`Добавил в очередь · №${r.queued}`); haptic('success'); }
       closeSheet();
-      paint();
+      paintLive();
+      followFeed(true);
       poll(800);
       return true;
     } catch (e) {
+      S.pending = S.pending.filter((x) => x !== mine);
+      paintLive();
       toast(e.message, true);
       haptic('error');
       return false;
@@ -194,7 +209,7 @@
 
   async function stop() {
     haptic('rigid');
-    try { const r = await api('/api/stop'); S.run = r.run || S.run; paint(); } catch (e) { toast(e.message, true); }
+    try { const r = await api('/api/stop'); S.run = r.run || S.run; S.queue = []; paintLive(); } catch (e) { toast(e.message, true); }
   }
 
   function closeToChat() {
@@ -292,45 +307,103 @@
   }
 
   // ---------- блоки ----------
-  function runCard(r) {
-    if (!r) return null;
-    const work = r.state === 'work';
-    const label = { work: 'Работаю', done: 'Готово', error: 'Не получилось', stopped: 'Остановлено' }[r.state] || '';
+  // ---------- разговор: одна лента, как в мессенджере ----------
+  const sameConv = (it) => (it.conv || '') === (S.conv || '');
+  // вопросы и ответы текущего разговора по порядку (старые сверху)
+  function convItems() {
+    const items = (S.history || []).filter(sameConv).slice().reverse();
+    const r = S.run;
+    if (r && r.state !== 'work' && sameConv(r) && !items.some((it) => it.id === r.id)) items.push(r);  // ответ пришёл раньше истории
+    return items;
+  }
+  const bubbleMe = (q, meta, cls) => h('div', { class: 'msg me ' + (cls || '') },
+    h('div', { class: 'txt', text: q }), meta ? h('div', { class: 'msg-meta', text: meta }) : null);
+  function bubbleAi(it, last) {
+    const bits = [it.at, it.secs != null ? mmss(it.secs) : ''].filter(Boolean).join(' · ');
+    return h('div', { class: 'msg ai' },
+      it.state && it.state !== 'done' ? h('span', { class: 'tag err', text: it.state === 'stopped' ? 'остановлено' : 'ошибка' }) : null,
+      answerBlock(it.html, 'h-' + it.id, !last),
+      bits ? h('div', { class: 'msg-meta num', text: bits }) : null);
+  }
+  function bubbleWork(r) {
     const steps = r.steps || [];
-    const card = h('section', { class: `card run ${r.state}` },
-      h('div', { class: 'run-head' }, star('spark'), h('b', { text: label }),
+    const shown = steps.slice(-5);
+    const box = h('div', { class: 'msg ai work' },
+      h('div', { class: 'run-head' }, star('spark'), h('b', { text: 'Работаю' }),
         h('span', { class: 't num', text: mmss(r.secs || 0) + (steps.length ? ` · ${plural(steps.length, 'шаг', 'шага', 'шагов')}` : '') })),
-      h('p', { class: 'run-q clamp2', text: r.q }));
-    if (work) {
-      const shown = steps.slice(-5);
-      card.appendChild(h('ul', { class: 'steps' },
-        shown.map((s, i) => h('li', { class: i === shown.length - 1 ? 'now' : '' }, h('i', { text: i === shown.length - 1 ? '◐' : '✓' }), h('span', { text: s }))),
+      h('ul', { class: 'steps' },
+        shown.map((x, i) => h('li', { class: i === shown.length - 1 ? 'now' : '' }, h('i', { text: i === shown.length - 1 ? '◐' : '✓' }), h('span', { text: x }))),
         shown.length ? null : h('li', { class: 'now' }, h('i', { text: '◐' }), h('span', { text: 'Думаю' }))));
-      if (r.confirm) {
-        card.appendChild(h('div', { class: 'confirm' },
-          h('b', null, h('i', { class: 'wait' }), 'Ждёт подтверждения в чате'),
-          h('p', { text: r.confirm.replace(/\n{2,}/g, '\n') }),
-          h('button', { class: 'btn sm soft', onclick: closeToChat }, icon('chat'), 'Перейти в чат')));
-      }
-      card.appendChild(h('div', { class: 'run-foot' },
-        h('span', { class: 'hint small grow', text: 'Статус и ответ — и здесь, и в чате' }),
-        h('button', { class: 'btn sm danger', onclick: stop }, 'Остановить')));
-    } else {
-      card.appendChild(answerBlock(r.html, 'run-' + r.id));
-      card.appendChild(h('div', { class: 'run-foot' }, h('span', { class: 'hint small grow', text: 'Ответ продублирован в чат' }),
-        h('button', { class: 'btn sm soft', onclick: () => { S.hidden[r.id] = true; haptic('select'); paintLive(); } }, 'Скрыть')));
+    if (r.confirm) {
+      box.appendChild(h('div', { class: 'confirm' },
+        h('b', null, h('i', { class: 'wait' }), 'Ждёт подтверждения в чате'),
+        h('p', { text: r.confirm.replace(/\n{2,}/g, '\n') }),
+        h('button', { class: 'btn sm soft', onclick: closeToChat }, icon('chat'), 'Перейти в чат')));
     }
-    return card;
+    box.appendChild(h('div', { class: 'run-foot' }, h('button', { class: 'btn sm danger', onclick: stop }, S.queue.length ? 'Остановить всё' : 'Остановить')));
+    return box;
   }
 
-  function historyItem(it) {
-    return h('article', { class: 'card h-item' },
-      h('div', { class: 'h-head' },
-        h('span', { class: 'src', title: it.source === 'app' ? 'из приложения' : 'из чата', text: it.source === 'app' ? '📱' : '💬' }),
-        h('div', { class: 'grow' },
-          h('div', { class: 'q clamp2' }, it.q, it.state !== 'done' ? h('span', { class: 'tag err', text: it.state === 'stopped' ? 'стоп' : 'ошибка' }) : null),
-          h('div', { class: 'h-meta num', text: [it.at, it.secs != null ? mmss(it.secs) : '', it.steps ? plural(it.steps, 'шаг', 'шага', 'шагов') : ''].filter(Boolean).join(' · ') }))),
-      answerBlock(it.html, 'h-' + it.id));
+  // сама лента: пузыри текущего разговора, «работаю», очередь; «Раньше» — свёрнутый блок прежних разговоров
+  function convoView() {
+    const items = convItems();
+    const run = busy() ? S.run : null;
+    const out = [h('div', { class: 'section' }, h('h2', { text: 'Разговор' }),
+      h('button', { class: 'text-btn', onclick: newConversation }, icon('plus'), 'Новый разговор'))];
+    if (!items.length && !run && !S.queue.length && !S.pending.length) {
+      out.push(h('div', { class: 'card empty' }, h('div', { class: 'big' }, star()), h('h3', { text: 'Поручите что угодно' }),
+        h('p', { text: 'Уточнять можно, пока я думаю — вопросы встанут в очередь и пойдут следом, в этом же разговоре.' })));
+    } else {
+      const feed = h('div', { class: 'convo' });
+      items.forEach((it, i) => feed.append(bubbleMe(it.q, it.source === 'app' ? '' : 'из чата'), bubbleAi(it, i === items.length - 1 && !run)));
+      if (run) feed.append(bubbleMe(run.q), bubbleWork(run));
+      S.queue.forEach((x, i) => feed.append(bubbleMe(x.q, `в очереди №${i + 1}`, 'wait')));
+      S.pending.forEach((x) => feed.append(bubbleMe(x.q, 'отправляю…', 'wait')));
+      out.push(feed);
+    }
+    const old = (S.history || []).filter((it) => !sameConv(it)).slice(0, 8);
+    if (old.length) {
+      out.push(h('button', { class: 'text-btn older', onclick: () => { S.older = !S.older; haptic('select'); paintLive(); } },
+        S.older ? 'Скрыть прежние разговоры' : `Раньше · ${old.length}`));
+      if (S.older) old.forEach((it) => out.push(h('article', { class: 'card h-item' },
+        h('div', { class: 'h-head' }, h('span', { class: 'src', text: it.source === 'app' ? '📱' : '💬' }),
+          h('div', { class: 'grow' }, h('div', { class: 'q clamp2' }, it.q, it.state !== 'done' ? h('span', { class: 'tag err', text: it.state === 'stopped' ? 'стоп' : 'ошибка' }) : null),
+            h('div', { class: 'h-meta num', text: [it.at, it.secs != null ? mmss(it.secs) : ''].filter(Boolean).join(' · ') }))),
+        answerBlock(it.html, 'o-' + it.id))));
+    }
+    return out;
+  }
+
+  // «Новый разговор»: контекст Claude сбрасывается, очередь чистится — спрашиваем явно
+  function newConversation() {
+    haptic('warning');
+    const doit = async (ok) => {
+      if (!ok) return;
+      try {
+        await api('/api/new');
+        S.queue = []; S.older = false;
+        haptic('success'); toast('Начинаем с чистого листа ✦');
+        load(true);
+      } catch (e) { toast(e.message, true); haptic('error'); }
+    };
+    const text = 'Начать новый разговор? Секретарь забудет, о чём вы говорили выше, а вопросы в очереди пропадут.';
+    if (tg && tg.showConfirm && tg.platform !== 'unknown') tg.showConfirm(text, doit); else doit(window.confirm(text));
+  }
+
+  // автопрокрутка к новому пузырю — только когда в ленте что-то изменилось, не на каждый опрос
+  function followFeed(force) {
+    if (S.tab !== 'ask') return;
+    const r = S.run;
+    const sig = [convItems().length, r ? r.id + r.state : '', S.queue.length, S.pending.length].join('|');
+    const first = S.feedSig === null;
+    const changed = sig !== S.feedSig;
+    S.feedSig = sig;
+    if (!force && (first || !changed)) return;
+    requestAnimationFrame(() => {
+      const bubbles = view.querySelectorAll('.convo > .msg');
+      const last = bubbles[bubbles.length - 1];
+      if (last) last.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    });
   }
 
   function chatRow(c) {
@@ -355,6 +428,16 @@
   function stat(n, one, few, many) {
     const word = plural(n, one, few, many).replace(/^\d+ /, '');
     return h('div', { class: 'stat' }, h('b', { class: 'num', text: n }), h('span', { text: word }));
+  }
+
+  // на главной — только строка «Секретарь работает», ответ и разговор — на вкладке «Поручение»
+  function workNote() {
+    if (!working()) return null;
+    const n = S.queue.length;
+    return h('button', { class: 'card note work-note', onclick: () => go('ask') }, star('spark'),
+      h('div', { class: 'grow' }, h('b', { text: busy() ? 'Секретарь работает' : 'Секретарь берёт следующий вопрос' }),
+        h('div', { class: 'hint small', text: (busy() ? S.run.q : '') + (n ? ` · в очереди ${n}` : '') })),
+      h('span', { class: 'text-btn', text: 'Открыть' }));
   }
 
   function homeView() {
@@ -384,17 +467,17 @@
         h('div', { class: 'hero-sub', text: 'Чтобы я вёл ваши чаты, нажмите /login в чате. На вопросы отвечаю и без этого.' }),
         h('button', { class: 'btn glass', onclick: closeToChat }, icon('chat'), 'Открыть чат'));
     }
-    const tile = (em, title, sub, fn) => h('button', { class: 'tile' + (busy() ? ' busy' : ''), onclick: fn },
+    const tile = (em, title, sub, fn) => h('button', { class: 'tile', onclick: fn },
       h('span', { class: 'em', text: em }), h('b', { text: title }), h('span', { text: sub }));
     const out = [
       top('Секретарь', st.first ? `${st.hello}, ${st.first}` : st.hello, refresh),
       hero,
-      h('div', { id: 'runbox' }, runCard(shownRun())),
+      h('div', { id: 'runbox' }, workNote()),
       h('div', { class: 'section' }, h('h2', { text: 'Быстрые поручения' })),
       h('div', { class: 'quick' },
-        tile('📬', 'Что я пропустил', 'сводка непрочитанного', () => ask({ preset: 'missed' })),
-        tile('🗂', 'Навести порядок', 'папки и архив', () => ask({ preset: 'sort' })),
-        tile('🧠', 'Разбор чата', 'как психолог', () => { if (!isBusy()) psySheet(); })),
+        tile('📬', 'Что я пропустил', 'сводка непрочитанного', () => ask({ preset: 'missed' }).then((ok) => ok && go('ask'))),
+        tile('🗂', 'Навести порядок', 'папки и архив', () => ask({ preset: 'sort' }).then((ok) => ok && go('ask'))),
+        tile('🧠', 'Разбор чата', 'как психолог', () => psySheet())),
       h('button', { class: 'btn primary', style: 'margin-top:10px;width:100%', onclick: () => go('ask') },
         '✨ Поручить своё задание'),
     ];
@@ -427,48 +510,54 @@
   }
 
   function askView() {
+    buildDock();
+    return [top('Секретарь', 'Поручение'), h('div', { id: 'convo' }, convoView())];
+  }
+
+  // поле поручения закреплено над вкладками (#dock) и всегда активно: пока Секретарь думает, вопрос встаёт в очередь
+  let dockHint = null;
+  let dockSend = null;
+  function buildDock() {
     const st = S.state || {};
-    const ta = h('textarea', { rows: '3', maxlength: '4000', placeholder: 'Поручите: «найдите билеты в Китай на ноябрь», «ответьте Пете, что буду в 6», «что я пропустил»…', 'aria-label': 'Поручение' });
+    const ta = h('textarea', { rows: '1', maxlength: '4000', placeholder: 'Поручение или уточнение…', 'aria-label': 'Поручение' });
     ta.value = S.draft;
-    const send = h('button', { class: 'send', 'aria-label': 'Выполнить', disabled: !S.draft.trim() || busy() ? true : null }, icon('send'));
-    const sync = () => { S.draft = ta.value; send.disabled = !ta.value.trim() || busy(); autosize(ta); };
+    dockSend = h('button', { class: 'send', 'aria-label': 'Отправить' }, icon('send'));
+    dockHint = h('div', { class: 'hint small dock-hint' });
+    const sync = () => { S.draft = ta.value; syncDock(); autosize(ta); padDock(); };
     ta.addEventListener('input', sync);
     ta.addEventListener('focus', () => document.body.classList.add('typing'));
     ta.addEventListener('blur', () => document.body.classList.remove('typing'));
-    send.addEventListener('click', async () => {
+    // тап по «Отправить» не должен снимать фокус с поля: иначе вкладки возвращаются, раскладка прыгает и тап теряется
+    dockSend.addEventListener('mousedown', (ev) => ev.preventDefault());
+    dockSend.addEventListener('click', async () => {
       const text = ta.value.trim();
       if (!text) return;
       ta.blur();
-      if (await ask({ text })) { S.draft = ''; ta.value = ''; sync(); }
+      S.draft = ''; ta.value = ''; sync();  // пузырь уже в ленте; не ушло — вернём текст
+      if (!(await ask({ text })) && !S.draft) { S.draft = text; ta.value = text; sync(); }
     });
-    requestAnimationFrame(() => autosize(ta));
-    const newChat = h('button', {
-      class: 'text-btn', onclick: async () => {
-        try { await api('/api/new'); haptic('success'); toast('Начинаем с чистого листа ✦'); if (S.state) S.state.session = false; } catch (e) { toast(e.message, true); }
-      },
-    }, icon('plus'), 'Новый');
     const examples = (st.examples || []).slice(0, 4);
-    return [
-      top('Секретарь', 'Поручение', newChat),
-      h('section', { class: 'card composer' }, ta,
-        h('div', { class: 'composer-bar' }, h('span', { class: 'hint', text: 'Как сообщение в чате. «Да/Нет» — в чате.' }), send)),
-      examples.length && !S.draft ? h('div', { class: 'chips' }, examples.map((e) => h('button', {
+    dockEl.replaceChildren(h('div', { class: 'dock-in' },
+      examples.length ? h('div', { class: 'chips' }, examples.map((e) => h('button', {
         class: 'chip', text: e, onclick: () => { S.draft = e; ta.value = e; sync(); ta.focus(); haptic('select'); },
       }))) : null,
-      h('div', { id: 'runbox' }, runCard(shownRun())),
-      h('div', { class: 'section' }, h('h2', { text: 'Последние ответы' })),
-      h('div', { id: 'hist' }, histList()),
-    ];
+      h('div', { class: 'dock-bar' }, ta, dockSend), dockHint));
+    document.body.classList.add('has-dock');
+    requestAnimationFrame(() => { autosize(ta); syncDock(); padDock(); });
   }
-
-  function histList() {
-    const r = shownRun();
-    const items = (S.history || []).filter((it) => !(r && it.id === r.id));
-    if (!items.length) {
-      return h('div', { class: 'card empty' }, h('div', { class: 'big' }, star()), h('h3', { text: 'Пока пусто' }),
-        h('p', { text: 'Здесь будут ответы на поручения — и из чата, и отсюда.' }));
+  function syncDock() {
+    if (!dockSend) return;
+    dockSend.disabled = !S.draft.trim() || queueFull();
+    if (dockHint) {
+      dockHint.textContent = queueFull() ? `В очереди уже ${QUEUE_MAX} — дождитесь ответа или остановите` : working() ? 'Добавлю в очередь — отвечу следом' : '';
+      dockHint.classList.toggle('hidden', !dockHint.textContent);
     }
-    return items.map(historyItem);
+  }
+  function padDock() { document.body.style.setProperty('--dock-h', dockEl.firstChild ? dockEl.offsetHeight + 'px' : '0px'); }
+  function clearDock() {
+    dockEl.replaceChildren();
+    dockSend = dockHint = null;
+    document.body.classList.remove('has-dock', 'typing');
   }
 
   function jobsView() {
@@ -569,9 +658,11 @@
       view.replaceChildren(h('div', { class: 'gate' }, h('div', { class: 'empty' }, h('div', { class: 'big' }, star()),
         h('h3', { text: 'Секретарь' }), h('p', { text: S.gate }))));
       tabsEl.classList.add('hidden');
+      clearDock();
       return;
     }
     const make = { home: homeView, ask: askView, jobs: jobsView, memory: memoryView }[S.tab];
+    if (S.tab !== 'ask') clearDock();
     view.replaceChildren(...[].concat(make()).filter(Boolean));
     view.classList.toggle('enter', !!animate);
     paintTabs();
@@ -580,20 +671,19 @@
   // часть экрана без перерисовки поля ввода (чтобы не сбить набор текста)
   function paintLive() {
     if (S.tab === 'ask') {
-      const rb = document.getElementById('runbox');
-      const hb = document.getElementById('hist');
-      if (rb) rb.replaceChildren(...[runCard(shownRun())].filter(Boolean));
-      if (hb) hb.replaceChildren(...[].concat(histList()));
-      const send = view.querySelector('.send');
-      if (send) send.disabled = !S.draft.trim() || busy();
+      const cb = document.getElementById('convo');
+      if (cb) cb.replaceChildren(...convoView());
+      syncDock();
+      padDock();
       paintTabs();
+      followFeed();
     } else if (S.tab === 'memory') {
       paintTabs();
     } else if (!sheetRoot.classList.contains('open')) {
       paint();
     } else {
       const rb = document.getElementById('runbox');
-      if (rb) rb.replaceChildren(...[runCard(shownRun())].filter(Boolean));
+      if (rb) rb.replaceChildren(...[workNote()].filter(Boolean));
       paintTabs();
     }
   }
@@ -605,6 +695,7 @@
     try { sessionStorage.setItem('tab', tab); } catch (e) { /* */ }
     window.scrollTo(0, 0);
     paint(true);
+    if (tab === 'ask') followFeed(true);  // как в мессенджере: открыли — видим последнее сообщение
   }
 
   // ---------- данные ----------
@@ -616,6 +707,8 @@
       S.state = st;
       S.history = st.history || [];
       S.run = st.run;
+      S.queue = st.queue || [];
+      S.conv = st.conv || '';
       S.gate = '';
     } catch (e) {
       if (e.status === 401 || e.status === 403) S.gate = e.status === 401 ? 'Откройте приложение из чата с Секретарём.' : e.message;
@@ -628,25 +721,29 @@
 
   async function poll(delay) {
     clearTimeout(S.timer);
-    const working = busy();
+    const live = working();
     S.timer = setTimeout(async () => {
       if (document.hidden) { poll(); return; }
-      if (!working) { load(false); return; }
+      if (!live) { load(false); return; }
       try {
         const r = await api('/api/run', { history: true });
         const was = S.run;
         S.run = r.run;
+        S.queue = r.queue || [];
+        if (r.conv) S.conv = r.conv;
         if (r.history) S.history = r.history;
-        if (was && r.run && r.run.state !== 'work') {
-          haptic(r.run.state === 'done' ? 'success' : 'error');
-          if (r.run.state === 'done') toast('Готово ✦ Ответ и в чате');
-          load(false);
-          return;
+        // закончился шаг: тот же run стал done/error, либо очередь уже запустила следующий вопрос
+        if (was && was.state === 'work' && (!r.run || r.run.id !== was.id || r.run.state !== 'work')) {
+          const fin = (r.history || []).find((x) => x.id === was.id) || (r.run && r.run.id === was.id ? r.run : null);
+          const ok = !fin || fin.state === 'done';
+          haptic(ok ? 'success' : 'error');
+          if (ok) toast('Готово ✦ Ответ и в чате');
+          if (!working()) { load(false); return; }
         }
         paintLive();
       } catch (e) { /* сеть моргнула — попробуем снова */ }
       poll();
-    }, delay != null ? delay : working ? 1500 : 30000);
+    }, delay != null ? delay : live ? 1500 : 30000);
   }
 
   // ---------- запуск ----------
