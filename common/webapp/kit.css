@@ -279,6 +279,18 @@ body.has-tabbar { padding-bottom: calc(100px + var(--bottom)); }
 
 /* ---------- 🛠 поддержка (Kit.support, Kit.supportRow) ---------- */
 .sup-list { margin-top: 16px; }
+/* плавающая кнопка поддержки — на каждом экране, над вкладками */
+.sup-fab {
+  position: fixed; z-index: 19; right: 14px; bottom: calc(14px + var(--bottom));
+  display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px 0 10px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--glass); -webkit-backdrop-filter: blur(18px) saturate(1.6); backdrop-filter: blur(18px) saturate(1.6);
+  color: var(--text); font: 600 13px/1 var(--font); box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); cursor: pointer;
+  transition: transform .16s var(--ease), opacity .2s;
+}
+.sup-fab .i { font-size: 16px; line-height: 1; }
+.sup-fab:active { transform: scale(.95); }
+body.has-tabbar .sup-fab { bottom: calc(82px + var(--bottom)); }
+.sheet-backdrop.open ~ .sup-fab, body.sheet-open .sup-fab { opacity: 0; pointer-events: none; }
 .sheet .sup-lead { margin: -6px 2px 12px; }
 .sheet .sup-targets { margin-bottom: 10px; }
 .sup-shot { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; min-height: 36px; }
