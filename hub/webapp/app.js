@@ -8,7 +8,7 @@
   const view = $('view');
   const S = {
     tab: 'sec', hub: null, sec: null, secErr: null, gate: null, draft: '', open: {}, seen: {}, hidden: {},
-    updating: null, logs: null, memory: null,
+    updating: null, logs: null, memory: null, queued: null,
   };
 
   // ---------- мелочи ----------
@@ -98,8 +98,9 @@
 
   // часть экрана Секретаря без перерисовки поля ввода (чтобы не сбить набор)
   function paintLive() {
-    if (S.tab !== 'sec' || !$('composer') === !S.secErr) return render();  // Секретарь пропал или вернулся
-    for (const [id, fn] of [['sechero', secHero], ['runbox', runCard], ['psybox', psyCard], ['acc', accountCard], ['chats', chatsBlock], ['hist', histBlock]]) {
+    const box = $('composer');
+    if (S.tab !== 'sec' || !box || (box.dataset.down === '1') !== !!S.secErr) return render();  // Секретарь пропал или вернулся
+    for (const [id, fn] of [['sechero', secHero], ['downbox', downBox], ['runbox', runCard], ['psybox', psyCard], ['acc', accountCard], ['chats', chatsBlock], ['hist', histBlock]]) {
       const el = $(id);
       if (el) { el.innerHTML = fn(); fillAnswers(el); }
     }
@@ -120,7 +121,7 @@
   }
 
   // ---------- Секретарь ----------
-  const isWork = () => !!(S.sec && S.sec.run && S.sec.run.state === 'work');
+  const isWork = () => !!(!S.secErr && S.sec && S.sec.run && S.sec.run.state === 'work');
   const shownRun = () => {
     const r = S.sec && S.sec.run;
     if (!r) return null;
@@ -133,20 +134,34 @@
     const st = S.sec;
     const hello = st ? (st.first ? `${st.hello}, ${st.first}` : st.hello) : 'Секретарь';
     const sub = S.secErr ? 'Секретарь не отвечает' : st && st.me ? `${st.me.name}${st.me.username ? ' · @' + st.me.username : ''}`
-      : 'Пишите или говорите — отвечу';
+      : 'Поручите что угодно — найду, отвечу, сделаю';
     return hero('👑', hello, sub, `<button class="btn icon" data-act="refresh" aria-label="Обновить">↻</button>`);
   }
 
-  function secView() {
-    let out = `<div id="sechero">${secHero()}</div>`;
-    if (S.secErr) {
-      return out + `<section class="card feature rise"><div class="empty"><span class="e">😴</span><b>Секретарь не отвечает</b>
-        ${esc(S.secErr)}</div><button class="btn primary" data-act="revive">Поднять Секретаря</button>
-        <p class="hint center">Боты и дела работают — они на соседних вкладках.</p></section>`;
+  // Подсказки-примеры: «заготовки» (data-fill) вставляются в поле и ждут дописки, пресеты (data-preset) уходят сразу
+  const FILLS = [['✈️ Найти билеты', 'Найди билеты в Китай на '], ['🔎 Найти в интернете', 'Найди в интернете: ']];
+
+  // Секретарь не отвечает (или поручение ждёт, пока он поднимется) — поле поручения при этом остаётся
+  function downBox() {
+    if (S.queued) {
+      return `<section class="card down-note"><div class="row-flat"><span class="ava-ic">⏳</span><div class="main">
+        <b>Жду Секретаря — отправлю сам</b><div class="hint clip-2">${esc(S.queued.text || '')}</div>
+        <div class="hint">Не закрывайте приложение: как только он поднимется, поручение уйдёт.</div></div></div>
+        <button class="btn ghost sm" data-act="unqueue">Отменить</button></section>`;
     }
-    out += `<section class="card feature composer rise" id="composer">
-        <textarea id="ask" rows="2" maxlength="4000" placeholder="Спросите или поручите…" aria-label="Поручение">${esc(S.draft)}</textarea>
+    if (!S.secErr) return '';
+    return `<section class="card down-note"><div class="row-flat"><span class="ava-ic">😴</span><div class="main">
+      <b>Секретарь не отвечает</b><div class="hint">Всё равно пишите: отправка сама его поднимет и повторится.${S.secErr === 'down' ? '' : ' ' + esc(S.secErr)}</div></div></div>
+      <button class="btn primary sm" data-act="revive">Поднять Секретаря</button></section>`;
+  }
+
+  function secView() {
+    const down = !!S.secErr;
+    let out = `<div id="sechero">${secHero()}</div>
+      <section class="card feature composer rise" id="composer" data-down="${down ? 1 : 0}">
+        <textarea id="ask" rows="2" maxlength="4000" placeholder="Поручите: «найди билеты в Китай на ноябрь», «забронируй стол», «что я пропустил»…" aria-label="Поручение">${esc(S.draft)}</textarea>
         <div class="chips quick">
+          ${FILLS.map(([t, v], i) => `<button class="chip" data-fill="${i}">${t}</button>`).join('')}
           <button class="chip" data-preset="missed">📬 Что я пропустил</button>
           <button class="chip" data-preset="sort">🗂 Навести порядок</button>
           <button class="chip" data-act="psy">🧠 Разбор чата</button>
@@ -154,15 +169,19 @@
         <div class="composer-bar"><button class="btn ghost sm" data-act="new">Новый разговор</button>
           <button class="btn primary sm send" data-act="send">Отправить</button></div>
       </section>
-      <div id="runbox">${runCard()}</div>
-      <div id="psybox">${psyCard()}</div>
+      <div id="downbox">${downBox()}</div>
+      <div id="runbox">${runCard()}</div>`;
+    if (!down) {
+      out += `<div id="psybox">${psyCard()}</div>
       <div id="acc">${accountCard()}</div>
       <div id="chats">${chatsBlock()}</div>
-      <div id="hist">${histBlock()}</div>
-      <div class="list mode-list"><button class="row tap" data-act="tochat"><span class="ic">💬</span><div class="main">
+      <div id="hist">${histBlock()}</div>`;
+    } else {
+      out += `<p class="hint center">Боты и дела работают — они на соседних вкладках.</p>`;
+    }
+    return out + `<div class="list mode-list"><button class="row tap" data-act="tochat"><span class="ic">💬</span><div class="main">
         <div class="title">Перейти в чат</div><div class="meta">Всё кнопками в чате; вернуть приложение — /mode</div></div>
         <span class="end chev"></span></button></div>`;
-    return out;
   }
 
   // 🧠 Психолог: все чаты за неделю или месяц (ответ — как обычное поручение, и в чате с кнопками «Подробнее про …»)
@@ -269,21 +288,67 @@
 
   async function ask(body, btn) {
     if (isWork()) { toast('Ещё занимаюсь прошлым поручением', 'err'); haptic('warning'); return false; }
+    if (S.queued) { toast('Уже жду Секретаря с одним поручением', 'err'); haptic('warning'); return false; }
     haptic('tap');
     try {
       const r = await busy(btn, () => sec('ask', body));
-      S.sec.run = r.run;
-      paintLive();
-      pollSoon(900);
+      started(r);
       return true;
-    } catch (e) { toast(e.message, 'err'); haptic('error'); return false; }
+    } catch (e) {
+      if (e.status === 502 || (e.data && e.data.down)) return queue(body);  // Секретарь не отвечает — поднимем и повторим
+      toast(e.message, 'err'); haptic('error'); return false;
+    }
+  }
+  function started(r) {
+    S.secErr = null;
+    if (S.sec) S.sec.run = r.run; else loadSec();
+    paintLive();
+    pollSoon(900);
+  }
+  // Секретарь лежит: просим Главного поднять его и повторяем отправку, пока не ответит (до ~6 минут: установка долгая)
+  async function queue(body) {
+    S.queued = { body, text: body.text || body.chat || body.preset || '', left: 90 };
+    S.secErr = S.secErr || 'down';
+    haptic('warning');
+    toast('Секретарь не отвечает — поднимаю и отправлю поручение', 'ok');
+    paintLive();
+    try { await api('action', { action: 'secretary' }); } catch (e) { /* Главный напишет в чат, что вышло */ }
+    retryQueued();
+    return true;
+  }
+  function retryQueued() {
+    const q = S.queued;
+    if (!q) return;
+    setTimeout(async () => {
+      if (S.queued !== q) return;
+      try {
+        const r = await sec('ask', q.body);
+        S.queued = null;
+        started(r);
+        toast('Секретарь поднялся — поручение отправлено', 'ok');
+        haptic('success');
+      } catch (e) {
+        const down = e.status === 502 || (e.data && e.data.down);
+        if (down && --q.left > 0) return retryQueued();
+        S.queued = null;
+        if (q.body.text && !S.draft) S.draft = q.body.text;
+        toast(down ? 'Секретарь так и не поднялся — проверьте чат с Главным' : e.message, 'err');
+        haptic('error');
+        render();
+      }
+    }, 4000);
   }
   async function send(btn) {
     const text = S.draft.trim();
     if (!text) return;
     const ta = $('ask');
     if (ta) ta.blur();
-    if (await ask({ text }, btn)) { S.draft = ''; if (ta) { ta.value = ''; ta.style.height = 'auto'; } syncSend(); }
+    if (await ask({ text }, btn)) {
+      S.draft = '';
+      const now = $('ask');  // поле могли перерисовать (Секретарь не отвечал), поэтому берём заново
+      if (now) { now.value = ''; now.style.height = 'auto'; }
+      syncSend();
+    }
   }
 
   function psySheet() {
@@ -555,6 +620,14 @@
     const t = e.target;
     const b = t.closest('[data-bot]');
     if (b) return botSheet(b.dataset.bot);
+    const f = t.closest('[data-fill]');
+    if (f) {  // заготовка поручения: вставляем в поле и ждём дописки (город, даты…)
+      const ta = $('ask');
+      S.draft = FILLS[+f.dataset.fill][1];
+      if (ta) { ta.value = S.draft; ta.focus(); ta.setSelectionRange(S.draft.length, S.draft.length); ta.dispatchEvent(new Event('input')); }
+      haptic('select');
+      return;
+    }
     const p = t.closest('[data-preset]');
     if (p) return ask({ preset: p.dataset.preset }, p);
     const c = t.closest('[data-chat]');
@@ -586,6 +659,7 @@
     if (act === 'refresh') { haptic('tap'); a.classList.add('busy'); await Promise.all([loadSec(true), loadHub()]); a.classList.remove('busy'); return; }
     if (act === 'allchats') { S.open.allChats = true; return paintLive(); }
     if (act === 'revive') return revive(a);
+    if (act === 'unqueue') { S.queued = null; haptic('select'); return paintLive(); }
     if (act === 'update') return updateAll(a);
     if (act === 'support') return support();
     if (act === 'memory') return memorySheet();
@@ -612,7 +686,7 @@
       S.secErr = null;
     } catch (e) {
       if (e.status === 401 || e.status === 403) S.gate = e.message;
-      else S.secErr = e.status === 502 ? 'Подниму его сам — или нажмите кнопку.' : e.message;
+      else S.secErr = e.status === 502 ? 'down' : e.message;
     }
     if (S.tab === 'sec') paintLive(); else if (S.tab === 'more') render();
   }
