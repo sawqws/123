@@ -60,6 +60,7 @@ AVITO_PORT = 8793  # avito/avito.py
 AGENT_PORT = 8794  # tgbot/agent.py
 STUDIO_PORT = 8795  # studio/studio.py: приложение Студии и мини-приложения сделанных ею ботов
 CATCHER_PORT = 8796  # catcher/catcher.py: «Ловец» юзернеймов
+HDP_PORT = 8788  # bot/web.py: сайт HDP в браузере (/site/) и мини-приложение HDP-бота
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
 REPO = os.path.dirname(HERE)
@@ -1424,6 +1425,10 @@ def caddyfile(ip):
         # «Ловец» (catcher/): юзернеймы на каналы
         f"https://catcher.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{CATCHER_PORT}\n"
+        "}\n"
+        # HDP-бот (bot/): сайт в браузере — «как платформа» с кнопками «Сделать» и «Подготовь меня»
+        f"https://hdp.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{HDP_PORT}\n"
         "}\n"
     )
     return conf, [f"https://{host}", f"https://{ip}"]

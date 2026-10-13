@@ -159,11 +159,13 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Фото, скриншот</b> — найду задание и решу; при черновике — фото в него\n"
     "<b>Видео</b> — кадры как фото, речь как текст\n"
     "<b>Ещё</b> — просрочки, почерк, проверка\n"
-    "/style — почерк · /update — обновиться · /emoji — премиум-эмодзи</blockquote>\n"
+    "/style — почерк · /update — обновиться · /emoji — премиум-эмодзи\n"
+    "/site — сайт как HDP, с кнопками «Сделать» и «Подготовь меня»</blockquote>\n"
     "<i>Всё то же — в приложении: кнопка «HDP» слева от поля ввода</i>"
 )
 COMMANDS = [  # меню команд у поля ввода
     ("start", "Главное меню"), ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
+    ("site", "Сайт HDP в браузере"),
     ("mode", "Чат или приложение"),
     ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
@@ -1768,6 +1770,9 @@ def handle(msg):
     text = ALIASES.get(text, text)
     name = msg.get("from", {}).get("first_name") or ""
 
+    if text in ("/start site", "/site") or text.startswith("/site "):  # ссылка t.me/<бот>?start=site со страницы входа
+        send_site(chat)
+        return
     if text.startswith("/start"):
         if APP_URL:
             on_app_url(APP_URL)  # кнопка приложения — новому владельцу
@@ -2371,6 +2376,49 @@ ROUTES.update({"/api/prep/subjects": app_prep_subjects, "/api/prep/run": app_pre
                "/api/prep/state": app_prep_state})
 
 
+# ---------- 🌐 Сайт в браузере (bot/site/) ----------
+# То же API, что у приложения; здесь только то, чего приложению не надо: теория темы целиком.
+SITE_DIR = os.path.join(REPO, "horo", "tmp", "site")
+THEORY_FRESH = 12 * 3600
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def app_site_theory(b):
+    """Теория темы с сайта HDP (раздел «Материалы», только чтение) — с кэшем на 12 часов."""
+    uid = str(b.get("uuid") or "")
+    if not UUID.fullmatch(uid):
+        raise ValueError("Нет такой темы")
+    path = os.path.join(SITE_DIR, f"theory-{uid}.json")
+    try:
+        if time.time() - os.path.getmtime(path) < THEORY_FRESH and not b.get("fresh"):
+            with open(path) as f:
+                return {"items": json.load(f)}
+    except (OSError, ValueError):
+        pass
+    ok, out = node("horo/prep.js", "--theory", uid, timeout=180)
+    try:
+        items = json.loads(out) if ok else None
+    except ValueError:
+        items = None
+    if not isinstance(items, list):
+        raise ValueError(plain(out) if not ok else "Не разобрал теорию с сайта")
+    os.makedirs(SITE_DIR, exist_ok=True)
+    with open(path + ".part", "w") as f:
+        json.dump(items, f, ensure_ascii=False)
+    os.replace(path + ".part", path)
+    return {"items": items}
+
+
+def app_site_running(_):
+    """Какие задания решаются и ждут очереди — чтобы сайт показал «решаю» прямо на карточке."""
+    with running_lock:
+        now = list(running)
+    return {"running": now, "busy": lock.locked()}
+
+
+ROUTES.update({"/api/site/theory": app_site_theory, "/api/site/running": app_site_running})
+
+
 def app_kb(text="✨ Открыть приложение"):
     return kb([(text, {"web_app": {"url": APP_URL + "/"}}, "primary")]) if APP_URL else None
 
@@ -2394,6 +2442,18 @@ def send_app(chat):
     else:
         send(chat, err("Приложение ещё запускается — попробуй через минуту", "Пока всё то же — кнопками внизу"),
              menu=True, raw_html=True)
+
+
+def send_site(chat):
+    """Сайт HDP в браузере: одноразовая ссылка входа (15 минут, один раз), дальше браузер помнит вход 30 дней."""
+    link = web.site_link()
+    if not link:
+        send(chat, err("Сайт ещё запускается — попробуй через минуту"), menu=True, raw_html=True)
+        return
+    send(chat, card("Сайт HDP", "Как платформа, но у каждого задания — «⚡ Сделать» и «👁 Ответы», "
+                    "у каждой темы — «📖 Подготовь меня».",
+                    "Ссылка входа одноразовая, живёт 15 минут. Браузер запомнит вход на 30 дней", "🌐"),
+         markup=kb([("🌐 Открыть сайт", {"url": link}, "primary")]), raw_html=True)
 
 
 def setup_profile():

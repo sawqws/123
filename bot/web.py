@@ -4,9 +4,14 @@
 {"/api/…": функция(тело запроса) -> dict}. Здесь только сервер, проверка подписи Telegram и туннель.
 Пускает только владельца бота (по подписанным данным Telegram, их не подделать без токена).
 
+Сайт в браузере (/site/, bot/site/): то же API, вход без Telegram — одноразовой ссылкой из бота (/site):
+ссылка живёт 15 минут и срабатывает один раз, дальше браузер помнит вход 30 дней (cookie hdp_site).
+Постоянный адрес — https://hdp.<ip-через-дефисы>.sslip.io (его держит Caddy планера), иначе адрес туннеля.
+
 Переменные окружения:
   HORO_WEB_PORT  порт на 127.0.0.1 (по умолчанию 8788; у планера 8787)
   HORO_WEB_URL   свой https-адрес; если пусто — бот поднимает туннель cloudflared (адрес …trycloudflare.com)
+  HORO_SITE_URL  адрес сайта; если пусто — https://hdp.<ip>.sslip.io, когда он отвечает, иначе адрес приложения
 """
 import hashlib
 import hmac
@@ -14,6 +19,7 @@ import json
 import mimetypes
 import os
 import platform
+import secrets
 import re
 import shutil
 import subprocess
@@ -26,6 +32,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "webapp")
+SITE = os.path.join(HERE, "site")
+SESSIONS = os.path.join(os.path.dirname(HERE), "horo", "tmp", "site_sessions.json")
+COOKIE = "hdp_site"
+CODE_TTL = 15 * 60          # одноразовая ссылка входа
+SESSION_TTL = 30 * 86400    # сколько браузер помнит вход
 PORT = int(os.environ.get("HORO_WEB_PORT") or 8788)
 BIN = os.path.join(os.path.dirname(HERE), "horo", "tmp", "bin", "cloudflared")  # если cloudflared не установлен
 
@@ -58,13 +69,109 @@ def check_init_data(init_data, token, max_age=2 * 86400):
         return None
 
 
-def version():
+def version(folder=WEB):
     """Метка файлов приложения: меняется при обновлении, чтобы Telegram не показывал старые из кэша."""
     h = hashlib.sha1()
-    for name in sorted(os.listdir(WEB)):
-        with open(os.path.join(WEB, name), "rb") as f:
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        with open(os.path.join(folder, name), "rb") as f:
             h.update(f.read())
     return h.hexdigest()[:10]
+
+
+# ---------- вход на сайт без Telegram ----------
+# Храним только sha256 от кодов и сессий: файл не даёт войти, даже если его прочитать.
+_slock = threading.Lock()
+_digest = lambda x: hashlib.sha256(x.encode()).hexdigest()
+
+
+def _sessions():
+    try:
+        with open(SESSIONS) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    now = time.time()
+    return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("exp", 0) > now}
+
+
+def _save_sessions(data):
+    os.makedirs(os.path.dirname(SESSIONS), exist_ok=True)
+    tmp = SESSIONS + ".part"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, SESSIONS)
+
+
+def site_code():
+    """Новый одноразовый код входа (для ссылки из бота)."""
+    code = secrets.token_urlsafe(24)
+    with _slock:
+        data = _sessions()
+        data[_digest(code)] = {"kind": "code", "exp": time.time() + CODE_TTL}
+        _save_sessions(data)
+    return code
+
+
+def site_login(code):
+    """Код из ссылки -> токен сессии (код сгорает). None — код неверный, просрочен или уже использован."""
+    with _slock:
+        data = _sessions()
+        rec = data.pop(_digest(code or ""), None)
+        if not rec or rec.get("kind") != "code":
+            return None
+        token = secrets.token_urlsafe(32)
+        data[_digest(token)] = {"kind": "session", "exp": time.time() + SESSION_TTL, "at": int(time.time())}
+        _save_sessions(data)
+    return token
+
+
+def site_check(token):
+    if not token:
+        return False
+    rec = _sessions().get(_digest(token))
+    return bool(rec and rec.get("kind") == "session")
+
+
+def site_logout(token):
+    with _slock:
+        data = _sessions()
+        if data.pop(_digest(token or ""), None):
+            _save_sessions(data)
+
+
+def site_url():
+    """Адрес сайта для ссылки входа (без / в конце) или пусто, если ещё не готов."""
+    return os.environ.get("HORO_SITE_URL", "").rstrip("/") or _cfg.get("site") or url
+
+
+def site_link():
+    base = site_url()
+    return f"{base}/site/login?c={site_code()}" if base else ""
+
+
+def server_ip():
+    for src in ("https://api.ipify.org", "https://ipv4.icanhazip.com", "https://ifconfig.me/ip"):
+        try:
+            with urllib.request.urlopen(src, timeout=15) as r:
+                ip = r.read().decode().strip()
+            if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip):
+                return ip
+        except Exception:
+            pass
+    return None
+
+
+def watch_site():
+    """Постоянный адрес сайта hdp.<ip>.sslip.io: им пользуемся, как только Caddy планера на него отвечает."""
+    if os.environ.get("HORO_SITE_URL"):
+        return
+    ip = None
+    while True:
+        ip = ip or server_ip()
+        if ip:
+            base = "https://hdp." + ip.replace(".", "-") + ".sslip.io"
+            _cfg["site"] = base if healthy(base) else ""
+        time.sleep(600 if _cfg.get("site") else 120)
 
 
 class Web(BaseHTTPRequestHandler):
@@ -86,18 +193,41 @@ class Web(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
-        if path == "/health":
-            return self.reply(200, "ok", "text/plain")
-        if path.startswith("/api/"):
-            return self.api(path, {})
-        if path in ("/", "/index.html"):
-            with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
-                page = f.read().replace("{{v}}", _cfg.get("version", "0"))
+    def cookie(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == COOKIE:
+                return v
+        return ""
+
+    def redirect(self, to, cookie=None):
+        self.send_response(302)
+        self.send_header("Location", to)
+        self.send_header("Cache-Control", "no-store")
+        if cookie is not None:
+            age = SESSION_TTL if cookie else 0
+            self.send_header("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={age}; HttpOnly; Secure; SameSite=Lax")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def site(self, path):
+        """Сайт в браузере: /site/ и его файлы, вход по одноразовой ссылке, выход."""
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if path == "/site/login":
+            token = site_login((q.get("c") or [""])[0])
+            return self.redirect("/site/" if token else "/site/#login-expired", token or None)
+        if path == "/site/logout":
+            site_logout(self.cookie())
+            return self.redirect("/site/", "")
+        if path in ("/site", "/site/", "/site/index.html"):
+            with open(os.path.join(SITE, "index.html"), encoding="utf-8") as f:
+                page = f.read().replace("{{v}}", _cfg.get("site_version", "0"))
             return self.reply(200, page, "text/html; charset=utf-8")
-        name = os.path.basename(path)  # только файлы из webapp/, без подпапок
-        file = os.path.join(WEB, name)
+        return self.static(SITE, path)
+
+    def static(self, folder, path):
+        name = os.path.basename(path)  # только файлы из папки, без подпапок
+        file = os.path.join(folder, name)
         if name and name != "index.html" and os.path.isfile(file):
             with open(file, "rb") as f:
                 ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -105,6 +235,22 @@ class Web(BaseHTTPRequestHandler):
                     ctype += "; charset=utf-8"
                 return self.reply(200, f.read(), ctype, "public, max-age=31536000, immutable")
         self.reply(404, {"error": "not found"})
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/health":
+            return self.reply(200, "ok", "text/plain")
+        if path.startswith("/api/"):
+            return self.api(path, {})
+        if path == "/site" or path.startswith("/site/"):
+            return self.site(path)
+        if path == "/" and (self.headers.get("Host") or "").startswith("hdp."):
+            return self.redirect("/site/")  # постоянный адрес — это сайт, мини-приложение живёт по адресу туннеля
+        if path in ("/", "/index.html"):
+            with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
+                page = f.read().replace("{{v}}", _cfg.get("version", "0"))
+            return self.reply(200, page, "text/html; charset=utf-8")
+        self.static(WEB, path)
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
@@ -118,8 +264,13 @@ class Web(BaseHTTPRequestHandler):
 
     def api(self, path, body):
         user = check_init_data(self.headers.get("X-Init-Data") or "", _cfg["token"])
+        # сайт: вход по cookie. Свой заголовок X-Site браузер не пошлёт с чужого сайта без разрешения (CORS),
+        # поэтому чужая страница не сможет нажать «Сделать» от имени Глеба
+        if not user and self.headers.get("X-Site") == "1" and site_check(self.cookie()):
+            user = {"id": _cfg["owner"]()}
         if not user:
-            return self.reply(401, {"error": "Открой приложение через Telegram"})
+            return self.reply(401, {"error": "Открой приложение через Telegram" if not self.headers.get("X-Site")
+                                    else "Нужен вход: напиши боту /site — пришлю ссылку"})
         if user.get("id") != _cfg["owner"]():
             return self.reply(403, {"error": "Это личный бот"})
         fn = _cfg["routes"].get(path)
@@ -167,9 +318,9 @@ def cloudflared():
         return None
 
 
-def healthy():
+def healthy(base=None):
     try:
-        with urllib.request.urlopen(url + "/health", timeout=20) as r:
+        with urllib.request.urlopen((base or url) + "/health", timeout=20) as r:
             return r.read() == b"ok"
     except Exception:
         return False
@@ -217,8 +368,10 @@ def tunnel():
 
 def start(token, owner, routes, on_url):
     """Запускает сервер и (если нет HORO_WEB_URL) туннель. on_url(адрес) зовётся, когда адрес готов или сменился."""
-    _cfg.update(token=token, owner=owner, routes=routes, on_url=on_url, version=version())
+    _cfg.update(token=token, owner=owner, routes=routes, on_url=on_url, version=version(),
+                site_version=version(SITE))
     threading.Thread(target=serve, daemon=True).start()
+    threading.Thread(target=watch_site, daemon=True).start()
     if url:
         on_url(url)
     else:
