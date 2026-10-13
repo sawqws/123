@@ -355,9 +355,10 @@ class BotTest(unittest.TestCase):
              mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
             self.say(photo=[{"file_id": "p"}])  # фото без черновика — подсказка
             self.voice("Что <это> & то")        # эхо голосового
-            for t in ("/start", bot.BTN_HELP, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
+            for t in ("/start", "/mode", bot.BTN_HELP, bot.BTN_CHECK, bot.BTN_DO, bot.BTN_SHOW,
                       "что-то непонятное", bot.BTN_MORE, bot.BTN_APP, "/kpp", "/emoji", bot.BTN_HAND):
                 self.say(t)
+            bot.on_callback({"id": "1", "data": "mode:chat", "message": {"chat": {"id": CHAT}, "message_id": 5}})
             self.say(photo=[{"file_id": "a"}])
             self.say("готово")
             self.say(URL)                      # черновик
@@ -483,13 +484,31 @@ class BotTest(unittest.TestCase):
             bot.on_callback({"id": "1", "data": "all:yes", "message": {"chat": {"id": CHAT}, "message_id": 5}})
         self.assertIn("🏆 <b>7/7</b> · Тест &lt;1&gt;", self.last()[0])
 
+    def test_auto_tests_include_reworking(self):
+        """«Сдать все автотесты» берёт и «На доработке» (порог не добит), а не только «Пора начать»."""
+        rows = [{"auto": True, "rawStatus": "appointed", "url": URL, "title": "Новый", "subj": "Информатика"},
+                {"auto": True, "rawStatus": "reworking", "url": URL + "2", "title": "Пароли", "subj": "Информатика"},
+                {"auto": True, "rawStatus": "failed", "url": URL + "3", "title": "Старый", "subj": "Информатика"},
+                {"auto": False, "rawStatus": "reworking", "url": URL + "4", "title": "Конспект", "subj": "Биология"}]
+        with mock.patch.object(bot, "node", return_value=(True, json.dumps(rows))):
+            bot.find_auto_tests(CHAT)
+        text = self.last()[0]
+        self.assertIn("Нашёл автотесты: 2", text)
+        self.assertIn("🔁 доработка", text)
+        self.assertEqual([t["title"] for t in bot.pending[CHAT]], ["Новый", "Пароли"])
+        with mock.patch.object(bot, "overview", return_value={"tasks": rows}), mock.patch.object(bot, "busy_check"), \
+                mock.patch.object(bot.threading, "Thread") as th:
+            self.assertEqual(bot.app_auto({})["n"], 2)
+            self.assertEqual([t["title"] for t in th.call_args.kwargs["args"][1]], ["Новый", "Пароли"])
+
     def test_old_button_names_still_work(self):
         self.say("📊 Мои оценки")
         self.assertEqual(self.nodes[-1], ("horo/grades.js", "--html"))
         kb = json.loads(bot.menu_kb())
         shown = [b["text"] for b in sum(kb["keyboard"], [])]
         self.assertIn(bot.BTN_GRADES, shown)
-        self.assertIn(bot.BTN_APP, shown)  # приложение открывается и из меню
+        self.assertIn(bot.BTN_MODE, shown)     # чат или приложение — из меню
+        self.assertNotIn(bot.BTN_APP, shown)   # в режиме чата приложение не предлагается
         self.assertLessEqual(max(map(len, kb["keyboard"])), 3)  # не больше 3 кнопок в ряд
         self.assertTrue(all(len(t) <= 24 for t in shown))
         for old in (bot.BTN_HELP, bot.BTN_CHECK, "🔕 Сводка", bot.BTN_LATE):  # кнопки старой клавиатуры работают
@@ -517,6 +536,86 @@ class BotTest(unittest.TestCase):
             self.assertIn("Что я умею", [p for m, p in calls if m == "editMessageText"][-1]["text"])
             cb("m:late")
         self.assertEqual(self.nodes[-1], ("horo/status.js", "--late", "--html"))
+
+    # ---- 💬 чат / 📱 приложение ----
+    def cb(self, data, mid=8):
+        bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": mid}})
+
+    def test_mode_choice_on_first_start(self):
+        """Первый /start — «Как удобнее?»: 💬 В чате / 📱 Приложение. Выбор запоминается; /mode и «⚙️ Режим» меняют."""
+        self.say("/start")
+        text, markup = self.last()
+        self.assertIn("Как удобнее?", text)
+        self.assertIn("mode:chat", markup)
+        self.assertIn("mode:app", markup)
+        self.assertEqual(bot.ui_mode(), "")
+        edits = []
+        real = self.fake_tg
+        with mock.patch.object(bot, "tg", lambda m, **p: edits.append(p) if m == "editMessageText" else real(m, **p)):
+            self.cb("mode:chat")
+        self.assertEqual(bot.ui_mode(), "chat")
+        self.assertIn("Режим: 💬 чат", edits[-1]["text"])      # карточка выбора правится на месте
+        text, markup = self.last()                              # и сразу главное меню чата
+        self.assertIn("Режим: 💬 чат", text)
+        self.assertIn(bot.BTN_DO, markup)
+        self.assertNotIn("web_app", markup)
+        self.say("/start")
+        self.assertIn("Режим: 💬 чат", self.last()[0])
+        for t in ("/mode", bot.BTN_MODE):
+            self.say(t)
+            self.assertIn("Как удобнее?", self.last()[0])
+        self.cb("mode:app")
+        self.assertEqual(bot.ui_mode(), "app")
+        self.cb("mode:xxx")  # неизвестное — ничего не меняет
+        self.assertEqual(bot.ui_mode(), "app")
+
+    def test_chat_mode_has_no_app_buttons(self):
+        """В режиме «чат» ни одной web_app-кнопки в сообщениях — кроме явной по /app и старой кнопке «✨ Приложение»."""
+        bot.set_mode("chat")
+        with mock.patch.object(bot, "APP_URL", "https://abc.trycloudflare.com"):
+            for t in ("/start", bot.BTN_MORE, bot.BTN_LIST, bot.BTN_HELP, "что-то непонятное", "/prep"):
+                self.say(t)
+            self.assertFalse(any("web_app" in (m or "") for _, m in self.msgs), self.msgs)
+            self.say(bot.BTN_MORE)
+            self.assertIn("m:mode", self.last()[1])
+            self.say("/app")
+            self.assertIn("web_app", self.last()[1])
+            self.say(bot.BTN_APP)
+            self.assertIn("web_app", self.last()[1])
+
+    def test_app_mode_offers_app(self):
+        """В режиме «приложение» главная кнопка — открыть приложение (web_app) и 2–3 действия; нет адреса — клавиатура чата."""
+        bot.set_mode("app")
+        with mock.patch.object(bot, "APP_URL", "https://abc.trycloudflare.com"):
+            self.say("/start")
+            text, markup = self.last()
+            self.assertIn("Режим: 📱 приложение", text)
+            k = json.loads(markup)["keyboard"]
+            self.assertEqual(k[0][0]["web_app"]["url"], "https://abc.trycloudflare.com/")
+            self.assertLessEqual(len(sum(k, [])), 6)
+            self.assertIn(bot.BTN_MODE, markup)
+            self.say(bot.BTN_MORE)
+            self.assertIn("web_app", self.last()[1])
+        with mock.patch.object(bot, "APP_URL", ""):
+            self.say("/start")
+            self.assertNotIn("web_app", self.last()[1])
+            self.assertIn(bot.BTN_DO, self.last()[1])
+
+    def test_mode_from_app(self):
+        """«💬 Перейти в чат» в приложении: POST /api/mode -> режим «чат», в чат приходит главное меню."""
+        bot.save_settings({"owner": CHAT, "mode": "app"})
+        r = bot.ROUTES["/api/mode"]({"mode": "chat"})
+        self.assertEqual((r, bot.ui_mode()), ({"mode": "chat"}, "chat"))
+        text, markup = self.last()
+        self.assertIn("Режим: 💬 чат", text)
+        self.assertIn(bot.BTN_DO, markup)
+        self.assertNotIn("web_app", markup)
+        self.assertEqual(bot.app_me({})["mode"], "chat")
+        with self.assertRaises(ValueError):
+            bot.ROUTES["/api/mode"]({"mode": "x"})
+        n = len(self.msgs)
+        bot.ROUTES["/api/mode"]({"mode": "app"})
+        self.assertEqual((bot.ui_mode(), len(self.msgs)), ("app", n))  # обратно — молча
 
     def test_colors_fall_back(self):
         """Telegram не принял цветные кнопки (style) — то же сообщение уходит без цвета, и дальше без него."""

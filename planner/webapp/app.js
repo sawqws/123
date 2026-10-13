@@ -81,6 +81,7 @@ const S = {
 function load(data) {
   S.user = data.user;
   S.today = data.today;
+  S.mode = data.mode || "";
   S.tasks = new Map(data.tasks.map(t => [t.id, t]));
   S.comp = new Set(data.completions.map(c => c.task + '|' + c.date));
   S.goals = new Map(data.goals.map(g => [g.id, g]));
@@ -853,7 +854,9 @@ function settingsSheet() {
     <select id="s-tz">${tzs.map(([v, l]) => `<option value="${v}"${v === f.tz ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
     <div class="note tip-note"><span>💬</span><span>Задачи можно добавлять сообщением боту — текстом, голосом, фото или видео: <i>завтра в 18:00 тренировка</i>, <i>по пн и ср английский в 19:00</i>. «Заметка: …» — сохранит заметку.</span></div>
     <div class="actions"><button class="btn primary" id="s-save">Сохранить</button></div>
-    ${Kit.supportRow('api/support')}`, sh => {
+    ${Kit.supportRow('api/support')}
+    <div class="list mode-list"><button class="row tap" data-a="tochat"><span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>
+      <div class="meta">${S.mode === 'chat' ? 'режим чата уже включён' : 'бот перейдёт в режим чата: всё кнопками там'}</div></span><span class="end chev"></span></button></div>`, sh => {
     $('[data-support]', sh).addEventListener('click', () => closeSheet());  // лист поддержки откроет kit.js
     for (const k of ['morning', 'evening']) {
       $(`#s-${k}`, sh).addEventListener('click', e => {
@@ -945,6 +948,11 @@ const A = {
   },
   'edit-note': (el, e) => { if (e.target.closest('a')) return; const n = S.notes.get(+el.dataset.id); if (n) noteSheet(n); },
   settings: () => settingsSheet(),
+  tochat: async el => {  // режим «💬 чат»: бот запомнит и пришлёт главное меню в чат, приложение закрывается
+    try { await Kit.busy(el, () => api('mode', { mode: 'chat' })); } catch (e) { toast(e.message); return; }
+    S.mode = 'chat';
+    if (Kit.tg) Kit.tg.close();
+  },
 };
 // эти действия сами дают отклик (выбор, галочка, успех) — общий «тап» им не нужен
 const OWN_HAPTIC = new Set(['tab', 'pick-day', 'open-day', 'cal-day', 'go-today', 'shift', 'toggle', 'open-goal', 'goals-tab', 'to-today', 'back']);

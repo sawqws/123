@@ -256,6 +256,7 @@ def send_album(chat, paths, caption=""):
 def setup_bot():
     commands = [
         {"command": "app", "description": "Приложение"},
+        {"command": "mode", "description": "Чат или приложение"},
         {"command": "new", "description": "Новое объявление"},
         {"command": "ad", "description": "Текущее объявление"},
         {"command": "ads", "description": "Все объявления"},
@@ -755,22 +756,85 @@ HELP_STEPS = (
     "• Голосовые тоже понимаю.\n"
     "• /region moskva — цены по городу, /region all — по России."
 )
-HELP_NOTE = " · ".join(c + " " + w for c, w in (("/new", "новое"), ("/ad", "текущее"), ("/ads", "все"), ("/price", "цена"),
-                                                      ("/app", "приложение")))
+HELP_NOTE = " · ".join(c + "\u00a0" + w for c, w in (("/new", "новое"), ("/ad", "текущее"), ("/ads", "все"),
+                                                       ("/price", "цена"), ("/mode", "режим")))
+APP_BODY = "Фото, описание и цена — в приложении. Фото и текст можно прислать и сюда."
+
+
+# ---------- Режим: 💬 чат или 📱 приложение ----------
+# Выбирается при первом /start, меняется по /mode, кнопкой «⚙️ Режим» и из приложения («💬 Перейти в чат»).
+# «чат» — всё кнопками здесь, приложение не предлагается (web_app только по /app); «приложение» — главная кнопка
+# открывает его, но команды, фото и текст в чате работают всё равно. Хранится в state.json («mode»). Как в HDP.
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode():
+    m = st.get("mode")
+    return m if m in MODES else ""
+
+
+def set_mode(m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    with lock:
+        st["mode"] = m
+        save()
+
+
+def mode_note():
+    """Подпись режима для карточки /start (одной строкой, курсивом)."""
+    return f"Режим: {MODES.get(ui_mode(), 'не выбран')} · сменить — /mode"
+
+
+def mode_card():
+    return fmt("🧭 Как удобнее?", "💬 <b>В чате</b> — всё кнопками и командами здесь\n"
+               "📱 <b>Приложение</b> — фото, описание и цена в одном окне",
+               "Поменять можно в любой момент: /mode")
+
+
+def mode_kb():
+    return [[b("💬 В чате", "mode:chat", "primary"), b("📱 Приложение", "mode:app", "primary")]]
+
+
+def ask_mode(chat, mid=None):
+    return show(chat, mid, mode_card(), mode_kb())
+
+
+def on_mode(chat, mid, key):
+    """Выбор в карточке: карточка становится «✅ Режим: …», следом — главный экран по режиму."""
+    set_mode(key)
+    show(chat, mid, fmt("✅ Режим: " + MODES[key], note="Сменить — /mode или кнопка «⚙️ Режим»"))
+    home(chat)
 
 
 def help_text(name=""):
+    """Главный экран: в чате — подсказка и команды, в приложении — коротко."""
     hi = f"Привет, {esc(name)}! " if name else ""
+    if ui_mode() == "app":
+        body = APP_BODY if public_url else f"{APP_BODY}\nПриложение ещё настраивается: {esc(https_note)}"
+        return fmt("🛍 Авито-помощник", hi + body, mode_note())
     return "\n".join(["<b>🛍 Авито-помощник</b>", quote(hi + HELP_BODY), quote(HELP_STEPS, True),
-                      f"<i>{HELP_NOTE}</i>"])
+                      f"<i>{HELP_NOTE}\n{mode_note()}</i>"])
 
 
 def help_buttons():
-    rows = app_buttons()
-    rows.append([b("💬 Чаты Авито", "avl"), support.Support.button()])
+    """Главное меню. Чат: без web_app. Приложение: открыть приложение + 2–3 нужных действия."""
+    rows = []
+    if ui_mode() == "app":
+        rows += app_buttons()
+        rows.append(([b("📝 Объявление", "card")] if draft() else []) + [b("💬 Чаты Авито", "avl")])
+        rows.append([b("⚙️ Режим", "mode"), support.Support.button()])
+        return rows
     if draft():
         rows.append([b("📝 Текущее объявление", "card")])
+    rows.append([b("🆕 Новое", "new"), b("🗂 Все объявления", "ads"), b("💬 Чаты Авито", "avl")])
+    rows.append([b("⚙️ Режим", "mode"), support.Support.button()])
     return rows
+
+
+def home(chat, name="", mid=None):
+    return show(chat, mid, help_text(name), help_buttons())
 
 
 def run(chat, fn, *args, later=None):
@@ -1077,11 +1141,16 @@ def on_message(msg):
         run(chat, from_video, chat, msg)
         return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd in ("/start", "/help"):
-        send(chat, help_text(frm.get("first_name") if cmd == "/start" else ""), help_buttons() or None)
+    if cmd == "/start" and not ui_mode():
+        ask_mode(chat)  # первый раз: сначала выбор, чат или приложение
+    elif cmd in ("/start", "/help"):
+        home(chat, frm.get("first_name") if cmd == "/start" else "")
+    elif cmd == "/mode":
+        ask_mode(chat)
     elif cmd == "/app":
         if public_url:
-            send(chat, fmt("📱 Приложение", note="Объявления, описания и цены — на одном экране."), app_buttons())
+            send(chat, fmt("📱 Приложение", note="Объявления, описания и цены — на одном экране."),
+                 app_buttons(always=True))
         else:
             send(chat, fail(f"Приложение ещё настраивается: {esc(https_note)}"))
     elif cmd == "/new":
@@ -1185,7 +1254,14 @@ def on_callback(cq):
             except Exception:
                 pass
             return
-    if data[0] == "gen":
+    if data[0].startswith("mode"):  # «⚙️ Режим» → карточка на месте; mode:chat / mode:app — выбор
+        key = data[0].partition(":")[2]
+        if key in MODES:
+            on_mode(chat, mid, key)
+            note = "Режим: " + MODES[key]
+        else:
+            ask_mode(chat, mid)
+    elif data[0] == "gen":
         run(chat, write, chat, "", mid)
     elif data[0] == "re":
         run(chat, write, chat, "Напиши другой вариант: живее и убедительнее, факты те же.", mid)
@@ -1257,8 +1333,11 @@ def update(chat):
 
 # ---------- мини-приложение ----------
 
-def app_buttons():
-    return [[{"text": "📱 Приложение", "web_app": {"url": public_url + "/"}}]] if public_url else []
+def app_buttons(always=False):
+    """Кнопка открыть приложение; в режиме «чат» её нет (always=True — всё равно, для /app)."""
+    if not public_url or (ui_mode() == "chat" and not always):
+        return []
+    return [[{"text": "📱 Приложение", "web_app": {"url": public_url + "/"}}]]
 
 
 def check_init_data(init_data, max_age=86400):
@@ -1345,7 +1424,8 @@ def photo_state(p):
 
 def app_state():
     region = st.get("region") or "all"
-    return {"region": region, "region_name": region_name(region), "ads": [ad_view(a) for a in all_ads()]}
+    return {"region": region, "region_name": region_name(region), "mode": ui_mode(),
+            "ads": [ad_view(a) for a in all_ads()]}
 
 
 def spawn(fn):
@@ -1457,6 +1537,19 @@ def api_post(path, body, user=None):
         if not set_region(str(body.get("region") or "")):
             return 400, {"error": "Регион — как в адресе avito.ru/moskva, или all"}
         return 200, app_state()
+    if path == "/api/mode":  # «💬 Перейти в чат» из приложения (или обратно): в чат сразу приходит главное меню
+        m = str(body.get("mode") or "")
+        if m not in MODES:
+            return 400, {"error": "Режим — chat или app"}
+        set_mode(m)
+        chat = (user or {}).get("id")
+        if m == "chat" and chat:
+            try:
+                send(chat, fmt("✅ Режим: " + MODES[m], "Всё, что было в приложении, есть и здесь.",
+                               "Вернуть приложение — /mode"), help_buttons())
+            except Exception as e:
+                print("режим → чат:", e)
+        return 200, {"mode": m}
     if path == "/api/send":  # фото на белом — в чат, чтобы сохранить на телефон
         d = find_ad(str(body.get("id") or ""))
         chat = (user or {}).get("id")
