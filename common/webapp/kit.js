@@ -219,7 +219,7 @@
   }
   document.addEventListener('click', (ev) => {
     const b = ev.target.closest && ev.target.closest('[data-support]');
-    if (!b || !b.dataset.support) return;
+    if (!b || b === document.body || !b.dataset.support) return;  // <body data-support> — адрес для плавающей кнопки, а не кнопка
     ev.preventDefault();
     if (Date.now() - lastClose < 700 || document.querySelector('.sup-text')) return;  // «призрачный» тап после закрытия / лист уже открыт
     haptic('tap');

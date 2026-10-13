@@ -125,6 +125,11 @@ class SupportTest(unittest.TestCase):
         log = subprocess.run(["git", "-C", self.cwd, "log", "--format=%s"], capture_output=True, text=True).stdout
         self.assertNotIn("Поддержка", log)
 
+    def test_body_data_support_is_not_a_button(self):
+        """<body data-support> — только адрес для плавающей кнопки: тап по любому месту не должен открывать лист."""
+        with open(os.path.join(HERE, "webapp", "kit.js"), encoding="utf-8") as f:
+            self.assertIn("b === document.body", f.read())
+
     def test_not_ours(self):
         self.assertFalse(self.sup.intercept(self.msg("/fix", uid=99)))  # чужой — бот разберётся сам
         self.assertFalse(self.sup.intercept(self.msg("привет")))  # не ждали — не наше
