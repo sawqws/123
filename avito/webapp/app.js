@@ -242,15 +242,34 @@ function priceCard(a) {
   return `<div class="card rise">${head}<div class="sep"></div>${body}</div>`;
 }
 
+// «💬 Перейти в чат»: бот переключается в режим «чат» (POST /api/mode), приложение закрывается,
+// в чат приходит главное меню. Обратно — /mode или «⚙️ Режим» в чате.
+function chatRow() {
+  return '<div class="list mode-list"><button class="row tap" type="button" data-chat>' +
+    '<span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>' +
+    '<div class="meta">Всё то же кнопками в Telegram</div></span><span class="end chev"></span></button></div>';
+}
+
+async function toChat(btn) {
+  haptic('tap');
+  await busy(btn, async () => {
+    try {
+      await api('/api/mode', { mode: 'chat' });
+      haptic('success');
+      if (tg && tg.close) tg.close(); else toast('Режим: чат — продолжай в Telegram', 'ok');
+    } catch (e) { haptic('error'); toast(e.message, true); }
+  });
+}
+
 function renderAd() {
   const a = current();
   const box = $('tab-ad');
   if (!a || (!a.photos.length && !a.title && !a.info && !a.job)) {
-    box.innerHTML = steps(null) + startCard() + Kit.supportRow('/api/support');
+    box.innerHTML = steps(null) + startCard() + Kit.supportRow('/api/support') + chatRow();
     return;
   }
   box.innerHTML = steps(a) + photosCard(a) + descCard(a) + priceCard(a) +
-    '<button class="btn ghost new" data-act="new">🆕 Новое объявление</button>' + Kit.supportRow('/api/support');
+    '<button class="btn ghost new" data-act="new">🆕 Новое объявление</button>' + Kit.supportRow('/api/support') + chatRow();
   loadImages(box);
 }
 
@@ -481,7 +500,7 @@ const tabs = Kit.tabbar($('tabs'), [
   { id: 'hist', icon: '🗂', label: 'Все' },
 ], tab, (t) => switchTab(t, true));
 
-$('tab-hist').insertAdjacentHTML('beforeend', Kit.supportRow('/api/support'));  // 🛠 и во вкладке «Все»
+$('tab-hist').insertAdjacentHTML('beforeend', Kit.supportRow('/api/support') + chatRow());  // 🛠 и 💬 во вкладке «Все»
 
 function switchTab(t, fromBar) {
   tab = t;
@@ -509,8 +528,9 @@ $('q-form').addEventListener('submit', (ev) => {
 $('region').addEventListener('click', () => { haptic('tap'); setRegionSheet(); });
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-act],[data-copy],[data-market],[data-price],[data-link],[data-open],[data-q],[data-view],[data-query]');
+  const t = ev.target.closest('[data-act],[data-copy],[data-market],[data-price],[data-link],[data-open],[data-q],[data-view],[data-query],[data-chat]');
   if (!t || t.disabled) return;
+  if (t.dataset.chat !== undefined) { toChat(t); return; }
   const a = current();
   if (t.dataset.query) { $('q').value = t.dataset.query; haptic('tap'); findPrice({ query: t.dataset.query }, $('q-go')); return; }
   if (t.dataset.link) { ev.preventDefault(); openLink(t.dataset.link); return; }

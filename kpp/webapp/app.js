@@ -64,6 +64,25 @@ let result = null;     // {kind: 'ok'|'repeat'|'err', ...} — карточка 
 
 const canPaste = () => !!((navigator.clipboard && navigator.clipboard.readText) || (tg && tg.readTextFromClipboard));
 
+// «💬 Перейти в чат»: бот переключается в режим «чат» (POST /api/mode), приложение закрывается,
+// в чат приходит главное меню. Обратно — /mode или «⚙️ Режим» в чате.
+function chatRow() {
+  return '<div class="list mode-list"><button class="row tap" type="button" data-chat>' +
+    '<span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>' +
+    '<div class="meta">Всё то же кнопками в Telegram</div></span><span class="end chev"></span></button></div>';
+}
+
+async function toChat(btn) {
+  haptic('tap');
+  await busy(btn, async () => {
+    try {
+      await api('/api/mode', { mode: 'chat' });
+      haptic('success');
+      if (tg && tg.close) tg.close(); else toast('Режим: чат — продолжай в Telegram', 'ok');
+    } catch (e) { haptic('error'); toast(e.message, true); }
+  });
+}
+
 function readClipboard() {
   if (navigator.clipboard && navigator.clipboard.readText) {
     return navigator.clipboard.readText().catch(() => (tg && tg.readTextFromClipboard ? tgClipboard() : ''));
@@ -104,7 +123,7 @@ function loginView() {
       </ol>
     </section>
     <p class="hint center">Лучше с iPad или компьютера: телефон может открыть приложение Домиленд вместо страницы.</p>
-    ${Kit.supportRow('/api/support', 'Не входит или что-то не так — напиши')}`;
+    ${Kit.supportRow('/api/support', 'Не входит или что-то не так — напиши')}${chatRow()}`;
   $('open-yandex').onclick = () => {
     haptic('tap');
     if (tg && tg.openLink) tg.openLink(S.login_url); else window.open(S.login_url, '_blank');
@@ -243,7 +262,7 @@ function passesHtml() {
 
 function mainView() {
   $('view').innerHTML = orderCard() + '<div class="label">Последние пропуска</div><div id="passes">' + passesHtml() + '</div>' +
-    Kit.supportRow('/api/support');
+    Kit.supportRow('/api/support') + chatRow();
   bindOrder();
 }
 
@@ -358,8 +377,9 @@ $('file').addEventListener('change', async () => {
 
 // ---------- общие нажатия ----------
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-cancel],[data-place],[data-force],[data-new]');
+  const t = ev.target.closest('[data-cancel],[data-place],[data-force],[data-new],[data-chat]');
   if (!t) return;
+  if (t.dataset.chat !== undefined) { toChat(t); return; }
   if (t.dataset.new !== undefined) { haptic('tap'); result = null; mainView(); return; }
   if (t.dataset.force) { haptic('tap'); order(t.dataset.force, true, t); return; }
   if (t.dataset.place) {
