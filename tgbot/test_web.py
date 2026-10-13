@@ -291,6 +291,7 @@ class Api(unittest.TestCase):
             self.assertEqual(s["history"][0]["q"], "вопрос")
             self.assertIsNone(s["run"])
             self.assertTrue(s["examples"])
+            self.assertTrue(any("билет" in e for e in s["examples"][:4]))  # пример поручения виден в приложении
         self.go(a, scenario)
 
     def test_state_without_account(self):

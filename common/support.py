@@ -281,6 +281,10 @@ class Support:
         except subprocess.TimeoutExpired:
             return 124, "не уложилось по времени"
 
+    def pathspec(self):
+        """Только код этого бота: данные (data/, tmp/) и чужие папки — не «правка» и в коммит не попадают."""
+        return [*self.folders, *(f":(exclude,glob)**/{d}/**" for d in ("data", "tmp", ".venv", "__pycache__"))]
+
     def logs(self):
         code, out = self.sh("pm2", "logs", self.pm2, "--lines", "40", "--nostream", "--raw", timeout=30)
         return out.strip()[-3000:] if code == 0 else ""
@@ -314,7 +318,7 @@ class Support:
         ok, out = claude(prompt, self.cwd, st.step)
         if not ok:
             return st.done(f"😕 <b>Не получилось</b>\n<blockquote>{esc(out)}</blockquote>", [[self.button("🔁 Ещё раз")]])
-        code, diff = self.git("status", "--porcelain")
+        code, diff = self.git("status", "--porcelain", "--", *self.pathspec())
         if not diff.strip():
             return st.done(f"ℹ️ <b>{esc(self.name)}</b> — код не менялся\n<blockquote expandable>{esc(out[-1500:])}"
                            "</blockquote>", [[self.button("🛠 Ещё просьба")]])
@@ -326,12 +330,12 @@ class Support:
                    + log[-3000:], self.cwd, st.step)
             good, log = self.check()
         if not good:
-            self.git("checkout", "--", ".")
-            self.git("clean", "-fdq", "--", *self.folders)
+            self.git("checkout", "--", *self.pathspec())
+            self.git("clean", "-fdq", "--", *self.pathspec())
             return st.done(f"😕 <b>Правка не прошла тесты — ничего не менял</b>\n<blockquote expandable>{esc(log[-1200:])}"
                            "</blockquote>\n<i>Опиши подробнее или по-другому — попробую ещё.</i>",
                            [[self.button("🛠 Ещё раз")]])
-        self.git("add", "-A")
+        self.git("add", "-A", "--", *self.pathspec())
         code, _ = self.git("-c", "user.name=Поддержка", "-c", "user.email=support@localhost", "commit", "-q",
                            "-m", f"Поддержка ({self.name}): {text[:200]}")
         sha = self.git("rev-parse", "--short=10", "HEAD")[1].strip() if code == 0 else ""

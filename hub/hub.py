@@ -459,6 +459,21 @@ def mode_card(chat, mid=None):
                 [[b("💬 В чате", "mode|chat", "primary"), b("📱 Приложение", "mode|app", "primary")]])
 
 
+TASK_BTN = "✨ Поручить Секретарю"
+TASK_EXAMPLES = ["найди билеты в Китай на ноябрь", "забронируй стол на пятницу", "найди часы работы Декатлона",
+                 "что я пропустил", "ответь Пете, что буду в 6"]
+
+
+def task_card(chat, mid=None):
+    """«✨ Поручить Секретарю»: ждём одно сообщение (текст, голос или фото) — оно уйдёт Секретарю как обычный запрос."""
+    setting("wait", "task")
+    lines = ["Напишите или надиктуйте одним сообщением, что сделать. Можно приложить фото.", ""]
+    lines += [f"• {esc(x)}" for x in TASK_EXAMPLES]
+    return show(chat, mid, card("✨ <b>Поручение Секретарю</b>", lines,
+                                "<i>Ищет в интернете, ведёт ваш Telegram, отвечает на вопросы. Купить и оплатить за вас не может — это за вами.</i>"),
+                [[b("‹ Отмена", "home")]])
+
+
 def on_mode(chat, mid, key):
     """Кнопка на карточке «Как удобнее?»: запомнить и показать главный экран по режиму."""
     set_mode(key)
@@ -511,14 +526,16 @@ def home(chat, mid=None):
     if m == "app" and not web:
         foot += "\n<i>https-адреса пока нет, поэтому всё здесь</i>"
     studio = studio_button(rows)
+    task_btn = b(TASK_BTN, "task", "primary")  # поручение Секретарю — первой кнопкой, в обоих режимах
     if web:
-        btns = [[web], [bots_btn, b("🧠 Психолог", "psy"), acc_btn], [b("⚙️ Режим", "mode|ask")]]
-        foot += "\n<i>💬 Команды и текст работают и здесь.</i>"
+        btns = [[web], [task_btn], [bots_btn, b("🧠 Психолог", "psy"), acc_btn], [b("⚙️ Режим", "mode|ask")]]
+        foot += "\n<i>💬 Просто напишите задачу — Секретарь выполнит. Команды тоже работают.</i>"
     else:
-        btns = [[bots_btn, acc_btn, b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
+        btns = [[task_btn],
+                [bots_btn, acc_btn, b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
                 [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")],
                 [b("🧠 Психолог", "psy"), b("⚙️ Режим", "mode|ask")]]
-        foot += "\n<i>💬 Пиши или говори что угодно — отвечу. Фото и видео тоже.</i>"
+        foot += "\n<i>💬 Просто напишите или надиктуйте задачу — Секретарь выполнит. Фото и видео тоже.</i>"
     if studio:  # бот, который делает ботов, — в последний ряд (рядов не прибавляется: экран остаётся коротким)
         btns[-1].append(studio)
     return show(chat, mid, card("👑 <b>Главный</b>", lines, foot), btns)
@@ -1461,6 +1478,7 @@ def parse_paid(text, today=None):
 
 
 HELP = card("👑 <b>Главный</b> — боты и секретарь в одном", [
+    "• ✨ Просто напишите задачу текстом или голосом — Секретарь выполнит: «найди билеты в Китай», «что я пропустил». Кнопка — «✨ Поручить Секретарю» (/task).",
     "• 💬 Пиши или говори что угодно — отвечу: вопросы, учёба, поиск в интернете. Фото и видео тоже разберу.",
     "• 👤 Твой Telegram: что пропустил, ответы, папки, сообщения по расписанию — /login, /jobs, /new, /stop.",
     "• 🤖 /bots — боты: упадёт — напишу сам; перезапуск, логи, /update — обновить всех.",
@@ -1495,6 +1513,8 @@ def on_message(msg):
     if kind == "voice":  # сначала текст — дальше как обычное сообщение (Главному или Секретарю)
         return threading.Thread(target=hear, args=(msg,), daemon=True).start()
     if kind in ("photo", "video"):
+        if setting("wait") == "task":  # «Поручить Секретарю»: фото с подписью — задача
+            setting("wait", None)
         if maker_wait():
             return threading.Thread(target=on_photo if kind == "photo" else on_video, args=(msg,), daemon=True).start()
         return to_secretary({"message": msg}, chat)
@@ -1512,6 +1532,16 @@ def on_message(msg):
     elif not cmd and wait == "psy" and text:  # имя чата или человека для «Один чат»
         setting("wait", None)
         threading.Thread(target=psy_run, args=(chat, "chat", text), daemon=True).start()
+    elif not cmd and wait == "task" and text:  # поручение Секретарю: следующее сообщение — задача
+        setting("wait", None)
+        to_secretary({"message": msg}, chat)
+    elif cmd == "/task":  # «/task найди билеты в Китай» — сразу Секретарю; просто «/task» — подсказка
+        rest = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+        if rest:
+            setting("wait", None)
+            to_secretary({"message": {**msg, "text": rest}}, chat)
+        else:
+            task_card(chat)
     elif cmd == "/help":
         send(chat, HELP)
     elif cmd == "/app":
@@ -1648,6 +1678,8 @@ def on_callback(cq):
     elif data[0] == "mode":  # 💬 чат / 📱 приложение
         setting("wait", None)
         on_mode(chat, mid, arg) if arg in MODES else mode_card(chat, mid)
+    elif data[0] == "task":
+        task_card(chat, mid)
     elif data[0] == "psy" and not arg:
         setting("wait", None)
         psy_card(chat, mid)
@@ -1721,7 +1753,7 @@ def on_callback(cq):
         pass
 
 
-COMMANDS = [("start", "Главная"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
+COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
             ("bots", "Боты и сервер"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]

@@ -130,3 +130,51 @@ label.field { display: block; margin-bottom: 12px; } label.field > span { displa
 .sup-fab .i { font-size: 16px; line-height: 1; }
 .sup-fab:active { transform: scale(.95); }
 body.has-tabbar .sup-fab, body.has-tabs .sup-fab { bottom: calc(82px + env(safe-area-inset-bottom, 0px)); }
+
+/* ========== Стекло (как в iOS): полупрозрачные поверхности, размытие фона, блики по краю ========== */
+:root {
+  --g-base: color-mix(in srgb, var(--card) 42%, transparent);
+  --g-fill: linear-gradient(150deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .035) 52%, rgba(255, 255, 255, .08));
+  --g-edge: color-mix(in srgb, var(--text) 13%, transparent);
+  --g-hl: rgba(255, 255, 255, .26);
+  --g-blur: blur(26px) saturate(1.9);
+  --g-shadow: 0 20px 44px -24px rgba(0, 0, 0, .75), 0 2px 8px -3px rgba(0, 0, 0, .4);
+  --radius: 22px;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --g-base: color-mix(in srgb, var(--card) 90%, transparent); }
+}
+/* фон — на html: иначе «капли» (z-index -1) прячутся под фоном body */
+body { background: transparent; }
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .6;
+  background:
+    radial-gradient(46% 30% at 6% 8%, color-mix(in srgb, var(--accent) 60%, #7c5cff 40%), transparent 70%),
+    radial-gradient(44% 30% at 100% 62%, color-mix(in srgb, var(--accent) 45%, #ff5fa2 55%), transparent 72%),
+    radial-gradient(40% 26% at 0% 96%, color-mix(in srgb, var(--accent) 40%, #22d3ee 60%), transparent 70%);
+}
+.card, .list, .tabs, .chip, .toast, .sup-fab, .sheet > div {
+  -webkit-backdrop-filter: var(--g-blur); backdrop-filter: var(--g-blur);
+}
+.card, .list { background: var(--g-fill), var(--g-base); border: 1px solid var(--g-edge);
+  box-shadow: var(--g-shadow), inset 0 1px 0 var(--g-hl); }
+.card .list { background: transparent; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.tabs { background: var(--g-fill), var(--g-base); border: 1px solid var(--g-edge); border-radius: 14px; }
+.tabs button { border-radius: 11px; }
+.tabs button.on { background: var(--g-fill), color-mix(in srgb, var(--text) 16%, transparent); box-shadow: 0 3px 10px -3px rgba(0, 0, 0, .35), inset 0 1px 0 var(--g-hl); }
+.btn { background: var(--g-fill), var(--field); border: 1px solid var(--g-edge); box-shadow: inset 0 1px 0 var(--g-hl); border-radius: 16px; }
+.btn.primary { border-color: rgba(255, 255, 255, .28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, 0) 52%), var(--accent);
+  box-shadow: 0 12px 26px -12px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .12); }
+.btn.ghost, .btn.danger { background: transparent; border-color: transparent; box-shadow: none; }
+input, textarea, select { border: 1px solid var(--g-edge); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .16);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.chip { background: var(--g-fill), var(--g-base); border: 1px solid var(--g-edge); box-shadow: inset 0 1px 0 var(--g-hl); }
+.chip.on { background: linear-gradient(180deg, rgba(255, 255, 255, .3), transparent 55%), var(--accent); border-color: transparent; }
+.toast { background: var(--g-fill), var(--g-base); color: var(--text); border: 1px solid var(--g-edge); border-radius: 20px; }
+.toast.err { background: var(--g-fill), rgba(150, 40, 32, .55); }
+.sheet { background: rgba(0, 0, 0, .32); }
+.sheet > div { background: var(--g-fill), color-mix(in srgb, var(--bg) 66%, transparent); border: 1px solid var(--g-edge);
+  border-bottom: 0; border-radius: 32px 32px 0 0; box-shadow: 0 -16px 50px rgba(0, 0, 0, .4), inset 0 1px 0 var(--g-hl); }
+.sup-fab { background: var(--g-fill), var(--g-base); border-color: var(--g-edge); box-shadow: var(--g-shadow), inset 0 1px 0 var(--g-hl); }
+.row .icon { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22); }

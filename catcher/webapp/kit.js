@@ -143,7 +143,8 @@ function support() {
 }
 
 document.addEventListener('click', (ev) => {
-  if (ev.target.closest && ev.target.closest('[data-support]')) { haptic('tap'); support(); }
+  const el = ev.target.closest && ev.target.closest('[data-support]');
+  if (el && el !== document.body) { haptic('tap'); support(); }  // <body data-support> — адрес кнопки, не кнопка
 });
 if (!document.body.hasAttribute('data-no-support')) {
   (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',

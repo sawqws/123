@@ -111,6 +111,25 @@ class SupportTest(unittest.TestCase):
         self.assertIn("код не менялся", self.texts()[-1])
         self.assertEqual(self.restarts, [])
 
+    def test_data_files_are_not_a_code_change(self):
+        """Живые данные бота (data/, tmp/) и чужие папки — не правка кода: ни «готово», ни коммита, ни перезапуска."""
+        os.makedirs(os.path.join(self.cwd, "demo", "data"))
+        os.makedirs(os.path.join(self.cwd, "other", "data"))
+        for rel in ("demo/data/db.json", "other/data/db.json", "other/x.py"):
+            with open(os.path.join(self.cwd, rel), "w") as f:
+                f.write("{}")
+        with self.fake_claude(None):
+            self.sup.intercept(self.msg("/fix что делает кнопка?"))
+        self.assertIn("код не менялся", self.texts()[-1])
+        self.assertEqual(self.restarts, [])
+        log = subprocess.run(["git", "-C", self.cwd, "log", "--format=%s"], capture_output=True, text=True).stdout
+        self.assertNotIn("Поддержка", log)
+
+    def test_body_data_support_is_not_a_button(self):
+        """<body data-support> — только адрес для плавающей кнопки: тап по любому месту не должен открывать лист."""
+        with open(os.path.join(HERE, "webapp", "kit.js"), encoding="utf-8") as f:
+            self.assertIn("b === document.body", f.read())
+
     def test_not_ours(self):
         self.assertFalse(self.sup.intercept(self.msg("/fix", uid=99)))  # чужой — бот разберётся сам
         self.assertFalse(self.sup.intercept(self.msg("привет")))  # не ждали — не наше

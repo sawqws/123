@@ -24,10 +24,14 @@ code { font: 13px/1.3 var(--mono); padding: 1px 5px; border-radius: 6px; backgro
 .composer-bar .btn.ghost { padding: 0 6px; color: var(--hint); }
 .composer-bar .send { min-width: 130px; }
 .btn[disabled] { opacity: .45; }
+.down-note { padding: 14px; margin-top: 12px; }
+.down-note .btn { margin-top: 10px; }
+.down-note .clip-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 
 /* 🧠 Психолог и «Перейти в чат» */
 .psy { padding: 14px; }
 .psy-btns { flex-wrap: wrap; margin-top: 12px; }
+.psy-btns > .btn { flex: 1 1 auto; min-width: max-content; }
 .psy .note { margin-top: 10px; }
 .psy .note + .btn { margin-top: 10px; }
 .mode-list { margin-top: 18px; }
