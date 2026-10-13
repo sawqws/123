@@ -795,7 +795,8 @@ def botfather_install(chat, kind):
 
 
 STUDIO_ENV = "/etc/studio-bot.env"
-STUDIO_RETRY = 6 * 3600  # автоустановка Студии — не чаще раза в 6 часов
+STUDIO_RETRY = 2 * 3600  # автоустановка Студии — не чаще раза в 2 часа
+STUDIO_SEC_AGE = 120     # и только когда Секретарь проработал минуты две (сразу после рестарта аккаунт ещё подключается)
 
 
 def studio_installed(rows=None):
@@ -840,12 +841,17 @@ def studio_button(rows=None):
 
 def studio_auto(now=None):
     """Студии нет, а Секретарь уже вошёл в аккаунт Глеба — ставим её сами: бот в @BotFather → install.sh.
-    Один раз в 6 часов; не вышло — Главный просит токен, а кнопка «🏗 Поставить Студию» остаётся."""
+    Не чаще раза в 2 часа; не вышло — Главный просит токен, а кнопка «🏗 Поставить Студию» остаётся."""
     now = now or time.time()
     chat = owner()
     if not chat or now - float(setting("studio_try") or 0) < STUDIO_RETRY:
         return False
     if studio_installed():
+        return False
+    try:
+        if now - os.path.getmtime(AGENT_SOCK) < STUDIO_SEC_AGE:
+            return False
+    except OSError:
         return False
     sec = secretary_status()
     if not (sec and sec.get("account")):

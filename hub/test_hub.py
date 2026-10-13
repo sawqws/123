@@ -912,6 +912,13 @@ class StudioTest(Base):
         self.assertTrue(hub.studio_auto(now=t0 + hub.STUDIO_RETRY + 1))  # прошло 6 часов, всё ещё нет — ещё раз
         self.assertEqual(self.wait_installs(2), ["studio", "studio"])
 
+    def test_no_auto_install_right_after_secretary_start(self):
+        """Сразу после рестарта Секретаря (сокет свежий) аккаунт ещё подключается — ждём пару минут."""
+        t_now = os.path.getmtime(hub.AGENT_SOCK) + 30
+        self.assertFalse(hub.studio_auto(now=t_now))
+        self.assertEqual(self.installs, [])
+        self.assertTrue(hub.studio_auto(now=t_now + hub.STUDIO_SEC_AGE))
+
     def test_no_auto_install_without_account_or_when_present(self):
         self.sec.account = None
         with mock.patch.object(hub, "secretary_status", return_value={"account": None}):
