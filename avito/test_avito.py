@@ -136,7 +136,7 @@ class Flow(unittest.TestCase):
 
     def setUp(self):
         avito.st.clear()
-        avito.st["owner"] = 7
+        avito.st.update(owner=7, mode="chat")
         avito.busy.clear()
         self.sent = []
         self.albums = []
@@ -533,6 +533,91 @@ class Flow(unittest.TestCase):
         code, res = avito.api_post("/api/market", {"id": avito.draft()["id"]})
         self.assertEqual(res["market"]["prices"], [35000, 37000])
         self.assertEqual(res["market"]["sample"][0]["p"], 35000)
+
+
+class Mode(Flow):
+    """💬 Чат / 📱 Приложение: выбор на первом /start, /mode, кнопки, переключение из приложения."""
+
+    def setUp(self):
+        super().setUp()
+        self.patches.append(mock.patch.object(avito, "public_url", "https://avito.test"))
+        self.patches[-1].start()
+
+    def buttons(self, i=-1):
+        return [x for row in self.sent[i][1].get("reply_markup", {}).get("inline_keyboard", []) for x in row]
+
+    def web_apps(self, i=-1):
+        return [x for x in self.buttons(i) if "web_app" in x]
+
+    def test_first_start_asks(self):
+        avito.st.pop("mode")
+        avito.on_message(self.msg(text="/start"))
+        self.assertIn("Как удобнее?", self.texts()[0])
+        self.assertEqual([x["callback_data"] for x in self.buttons()], ["mode:chat", "mode:app"])
+        self.assertEqual(self.web_apps(), [])
+        self.cb("mode:app")  # выбрал приложение: карточка → «✅ Режим», следом главный экран с кнопкой приложения
+        self.assertEqual(avito.st["mode"], "app")
+        m, p = self.sent[-3]
+        self.assertEqual((m, p["message_id"]), ("editMessageText", 9))
+        self.assertIn("✅ Режим: 📱 приложение", p["text"])
+        self.assertEqual(self.sent[-2][0], "sendMessage")
+        self.assertIn("Режим: 📱 приложение", self.sent[-2][1]["text"])
+        self.assertEqual(self.web_apps(-2)[0]["web_app"]["url"], "https://avito.test/")
+        avito.on_message(self.msg(text="/start"))  # второй раз не спрашивает
+        self.assertNotIn("Как удобнее?", self.texts()[-1])
+
+    def test_chat_mode_no_web_app(self):
+        self.make_ad()
+        for cmd in ("/start", "/help"):
+            avito.on_message(self.msg(text=cmd))
+            self.assertEqual(self.web_apps(), [], cmd)
+            self.assertIn("Режим: 💬 чат", self.texts()[-1])
+            data = [x.get("callback_data") for x in self.buttons()]
+            for want in ("mode", "card", "ads", "new", "avl", "sup|ask"):
+                self.assertIn(want, data)
+            rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+            self.assertTrue(all(len(r) <= 3 for r in rows))
+            self.assertTrue(all(len(x["text"]) <= 24 for x in self.buttons()))
+        avito.on_message(self.msg(text="/app"))  # явная просьба — кнопка приложения есть
+        self.assertEqual(self.web_apps()[0]["web_app"]["url"], "https://avito.test/")
+
+    def test_app_mode_short(self):
+        avito.st["mode"] = "app"
+        self.make_ad()
+        avito.on_message(self.msg(text="/start"))
+        self.assertEqual(self.web_apps()[0]["text"], "📱 Приложение")
+        self.assertIn("Режим: 📱 приложение", self.texts()[-1])
+        self.assertNotIn("/region", self.texts()[-1])  # коротко
+        rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+        self.assertLessEqual(len(rows), 3)
+        self.assertIn("mode", [x.get("callback_data") for x in self.buttons()])
+        avito.on_message(self.msg(text="4000"))  # чат отвечает и в режиме приложения
+        self.assertEqual(avito.draft()["price"], 4000)
+
+    def test_mode_command_and_button(self):
+        avito.on_message(self.msg(text="/mode"))
+        self.assertIn("🧭 Как удобнее?", self.texts()[-1])
+        self.cb("mode")  # «⚙️ Режим» из меню — карточка на месте
+        self.assertEqual(self.sent[-2][0], "editMessageText")
+        self.assertIn("Как удобнее?", self.sent[-2][1]["text"])
+        avito.st["mode"] = "app"
+        self.cb("mode:chat")
+        self.assertEqual(avito.st["mode"], "chat")
+        self.assertIn("✅ Режим: 💬 чат", self.sent[-3][1]["text"])
+        self.assertIn("Режим: 💬 чат · сменить — /mode", self.sent[-2][1]["text"])
+        self.assertEqual(self.web_apps(-2), [])
+        with self.assertRaises(ValueError):
+            avito.set_mode("x")
+
+    def test_switch_from_app(self):
+        avito.st["mode"] = "app"
+        code, res = avito.api_post("/api/mode", {"mode": "chat"}, {"id": 7})
+        self.assertEqual((code, res["mode"], avito.st["mode"]), (200, "chat", "chat"))
+        self.assertIn("✅ Режим: 💬 чат", self.texts()[-1])  # в чат пришло главное меню
+        self.assertIn("ads", [x.get("callback_data") for x in self.buttons()])
+        self.assertEqual(self.web_apps(), [])
+        self.assertEqual(avito.api_post("/api/mode", {"mode": "x"}, {"id": 7})[0], 400)
+        self.assertEqual(avito.app_state()["mode"], "chat")
 
 
 def init_data(token, uid=7, age=0):

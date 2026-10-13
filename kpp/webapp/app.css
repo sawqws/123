@@ -12,6 +12,7 @@ html[data-scheme="light"] .btn.tonal { color: #6b4b00; }
 .hero .where .sub.pin::before { content: "📍 "; }
 .hero .where.tap .sub::after { content: " ›"; color: var(--hint); }
 .gap8 { height: 8px; }
+.mode-list { margin-top: 8px; }  /* «💬 Перейти в чат» — под строкой поддержки */
 .gap16 { height: 16px; }
 .center { text-align: center; }
 .hint.lead { margin: 6px 0 16px; font-size: 14.5px; }

@@ -194,7 +194,7 @@ function tasksView() {
   const late = tasks.filter(t => left(t.deadline) < 0);
   const week = tasks.filter(t => left(t.deadline) >= 0 && left(t.deadline) <= 7);
   const later = tasks.filter(t => left(t.deadline) > 7);
-  const auto = tasks.filter(t => t.auto && t.rawStatus === 'appointed');
+  const auto = tasks.filter(t => t.auto && (t.rawStatus === 'appointed' || t.rawStatus === 'reworking'));  // новые и на доработке
   let out = solveCard();
   if (tasks.length) {
     out += `<div class="stats3 rise">
@@ -322,10 +322,10 @@ function settingsSheet() {
         <div class="meta">${me.alphabet ? 'алфавит заполнен · прислать заново' : 'не заполнен — листы придут в чат'}</div></span><span class="chev"></span></button>
       <button class="row" data-support="/api/support"><span class="ic">🛠</span><span class="main"><div class="title">Поддержка и пожелания</div>
         <div class="meta">ошибка или идея — починю/добавлю</div></span><span class="chev"></span></button>
-      <button class="row" data-a="chat"><span class="ic">💬</span><span class="main"><div class="title">Вернуться в чат</div>
-        <div class="meta">кнопки бота там тоже работают</div></span><span class="chev"></span></button>
+      <button class="row" data-a="chat"><span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>
+        <div class="meta">${me.mode === 'chat' ? 'режим чата уже включён' : 'бот перейдёт в режим чата: всё кнопками там'}</div></span><span class="chev"></span></button>
     </div>
-    <div class="hint c">HDP · версия ${esc(me.version || '—')}</div>`, 'settings');
+    <div class="hint c">HDP · версия ${esc(me.version || '—')} · режим: ${me.mode === 'chat' ? '💬 чат' : me.mode === 'app' ? '📱 приложение' : '—'}</div>`, 'settings');
 }
 
 /* ---------- действия ---------- */
@@ -404,7 +404,10 @@ const ACT = {
   }),
   check: async () => { try { await api('/api/check', {}); closeSheet(); toast('Проверяю — ответ придёт в чат', 'ok'); } catch (e) { toast(e.message, 'err'); } },
   alphabet: async () => { try { await api('/api/alphabet', {}); closeSheet(); toast('Листы алфавита — в чате', 'ok'); } catch (e) { toast(e.message, 'err'); } },
-  chat: () => { if (tg) tg.close(); },
+  chat: async el => {  // режим «💬 чат»: бот запомнит и пришлёт главное меню в чат, приложение закрывается
+    try { await Kit.busy(el, () => api('/api/mode', { mode: 'chat' })); } catch (e) { toast(e.message, 'err'); return; }
+    if (tg) tg.close();
+  },
 };
 Object.assign(ACT, Prep.act);  // 📖 подготовка — prep.js
 

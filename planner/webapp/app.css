@@ -299,3 +299,6 @@ body.kb .tabbar { transform: translate(-50%, 160%); opacity: 0; }
 .tabbar button .i { filter: none; display: grid; place-items: center; height: 24px; }
 .tabbar button .i svg { width: 23px; height: 23px; stroke-width: 1.9; }
 .tabbar button.on { color: var(--accent-text); }
+
+/* настройки: «💬 Перейти в чат» под поддержкой */
+.mode-list { margin-top: 10px; }
