@@ -12,7 +12,9 @@ https-адрес, необязательно), STUDIO_PORT (8795), STUDIO_BOTS_D
 вопросов и плана, по умолчанию sonnet; пусто — модель по умолчанию).
 """
 import http.client
+import hmac
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,6 +37,8 @@ REGISTRY = os.path.join(BOTS, "registry.json")
 PORT = int(os.environ.get("STUDIO_PORT") or 8795)
 FIRST_BOT_PORT = 8800
 TALK_MODEL = os.environ.get("STUDIO_TALK_MODEL", "sonnet")
+SITES = os.environ.get("STUDIO_SITES_DIR") or "/root/sites"
+SITES_REG = os.path.join(BOTS, "sites.json")  # сайты — отдельный файл: Главный читает registry.json только про ботов
 BUILD_TIMEOUT = 40 * 60
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 
@@ -140,7 +145,9 @@ def app_url_of(slug):
 
 
 def proxy(h, method):
-    """/b/<slug>/… → мини-приложение бота на его порту (127.0.0.1)."""
+    """/b/<slug>/… → мини-приложение бота на его порту (127.0.0.1); /s/<slug>/… → сайт (с проверкой доступа)."""
+    if h.path.startswith("/s/"):
+        return serve_site(h, method)
     m = re.match(r"^/b/([a-z0-9-]+)(/.*)?$", h.path.split("?")[0])
     if not m:
         return False
@@ -287,7 +294,9 @@ INTERVIEW = """Ты — «Студия»: делаешь личных Telegram-�
 Не спрашивай про оформление, технику, хранение данных и мини-приложение (оно будет у каждого бота) — это решаем сами.
 Если идея и так ясна — вопросов нет. У каждого вопроса 2–4 варианта ответа, каждый до 22 символов, первый — самый
 вероятный. Предложи 3 коротких имени для бота (по-русски, 1–2 слова, без слова «бот») и один подходящий эмодзи.
-Ответь только JSON: {{"questions": [{{"q": "вопрос", "options": ["…", "…"]}}], "names": ["…", "…", "…"], "emoji": "💧"}}"""
+Определи вид: "site" — если Глеб просит сайт, лендинг, страницу, визитку, портфолио, интернет-магазин; иначе "bot".
+Для сайта вопросы — про содержание и стиль (для кого, какие разделы, настроение), имена — названия сайта.
+Ответь только JSON: {{"kind": "bot", "questions": [{{"q": "вопрос", "options": ["…", "…"]}}], "names": ["…", "…", "…"], "emoji": "💧"}}"""
 
 PLAN = """Ты — «Студия»: делаешь личных Telegram-ботов для Глеба: простых, красивых и понятных.
 Идея: «{idea}»
@@ -345,6 +354,49 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
 - Не запускай bot.run(), не трогай .env и data/.
 В конце ответь 2–4 строками по-русски для Глеба: что умеет бот (без кода)."""
 
+PLAN_SITE = """Ты — «Студия»: делаешь личные сайты для Глеба: красивые, быстрые, понятные с телефона.
+Идея: «{idea}»
+Уточнения:
+{qa}
+Название: «{name}» {emoji}{fixes}{shots}
+
+Составь короткий план сайта. Только статика (HTML, CSS, JS без сборки и серверной части). Делай минимум,
+который закрывает идею целиком.
+Ответь только JSON:
+{{"summary": "одна строка: что за сайт",
+"pages": ["разделы/страницы — 3–6 коротких пунктов"],
+"style": ["стиль: цвета, шрифты, настроение — 2–3 пункта"],
+"features": ["что умеет: форма, галерея, анимации… ; пустой список, если ничего"],
+"slug": "латиница-через-дефис, 3–20 символов"}}"""
+
+BUILD_SITE = """Ты делаешь сайт «{name}» {emoji} для Глеба в текущей папке ({dir}).
+
+Идея Глеба: «{idea}»
+Уточнения:
+{qa}
+План (Глеб его подтвердил):
+{plan}{fixes}{shots}
+
+Как делать:
+- Статический сайт: index.html (+ style.css, script.js и при необходимости другие страницы и картинки в этой папке).
+  Никакой сборки, серверной части и внешних зависимостей, кроме шрифтов Google Fonts и (если нужно) cdnjs.cloudflare.com.
+  Все пути относительные (сайт открывается не из корня, а из /s/<имя>/).
+- Красиво и просто: сначала мобильная версия (viewport, адаптивная сетка), потом большой экран. Свой характер:
+  выразительная типографика, продуманная палитра, отступы, аккуратные анимации без перегруза. Не шаблонный вид.
+- Тексты — настоящие, по-русски, по теме идеи (не lorem ipsum). Картинки — свои SVG/градиенты, внешние фото не подставляй.
+- Заголовок <title>, описание, favicon (SVG в виде data: или файла), lang="ru".
+- Проверь, что HTML валиден и ссылки на файлы существуют. Не запускай серверы.
+В конце ответь 2–4 строками по-русски для Глеба: что на сайте (без кода)."""
+
+FIX_SITE = """Ты дорабатываешь сайт «{name}» Глеба в текущей папке ({dir}). Статика: index.html, css, js.
+Сначала прочитай файлы.
+
+Что поменять (слова Глеба):
+{text}{shots}
+
+Сохрани стиль и мобильную версию, пути относительные. Если просьба непонятна — ничего не меняй и объясни, что уточнить.
+В конце ответь 2–4 строками по-русски: что сделано."""
+
 FIX = """Ты дорабатываешь Telegram-бота «{name}» Глеба в текущей папке ({dir}). Он сделан Студией на botkit.py
 (не меняй botkit.py и webapp/kit.css, webapp/kit.js). Сначала прочитай README.md и bot.py.
 
@@ -377,7 +429,10 @@ def home(c):
     if not bot.app_url and bot.db.get("app_wait"):
         foot += "\n<i>📱 Приложение появится, когда заработает https (нужен Планер).</i>"
     mine = [[b(f"🧩 Мои боты · {n}", "bots")]] if n else []
-    bot.menu(c, "🏗 <b>Студия</b>", ["Напиши, какой бот нужен — текстом или голосом.",
+    ns = len(sites())
+    if ns:
+        mine += [[b(f"🌐 Мои сайты · {ns}", "sites")]]
+    bot.menu(c, "🏗 <b>Студия</b>", ["Напиши, какой бот или сайт нужен — текстом или голосом.",
                                     "Уточню, покажу план, сделаю сам."], buttons=mine, quick=mine, foot=foot)
 
 
@@ -532,7 +587,8 @@ def interview(chat):
     qs = [{"q": str(q.get("q"))[:300], "options": [kit.clip(o, 30) for o in (q.get("options") or [])][:4]}
           for q in (res.get("questions") or [])[:3] if isinstance(q, dict) and q.get("q")]
     d.update(qs=qs, qi=0, names=[str(n)[:40] for n in (res.get("names") or [])][:3],
-             emoji=str(res.get("emoji") or "✨")[:4], stage="ask" if qs else "name")
+             emoji=str(res.get("emoji") or "✨")[:4], stage="ask" if qs else "name",
+             kind="site" if res.get("kind") == "site" else "bot")
     put(d)
     lead = "👌 <b>Понял идею.</b> " + (f"{kit.plural(len(qs), 'вопрос', 'вопроса', 'вопросов')} — и начну."
                                        if qs else "Всё ясно — осталось имя.")
@@ -648,8 +704,9 @@ def make_plan(chat):
              if d.get("fixes") else "")
     if d.get("plan") and fixes:
         fixes += "\nПрошлый план: " + json.dumps(d["plan"], ensure_ascii=False)
-    res, err = talk(PLAN.format(idea=d["idea"], qa=qa_text(d) or "— нет", name=d["name"], emoji=d.get("emoji", ""),
-                                fixes=fixes, shots=shots_note(d)))
+    res, err = talk((PLAN_SITE if d.get("kind") == "site" else PLAN).format(
+        idea=d["idea"], qa=qa_text(d) or "— нет", name=d["name"], emoji=d.get("emoji", ""),
+        fixes=fixes, shots=shots_note(d)))
     d = draft()
     if d.get("stage") != "plan_wait":
         return
@@ -665,6 +722,8 @@ def make_plan(chat):
         return bot.edit(chat, d.get("mid"), card("😕 <b>План не получился</b>", [esc(err or "")]),
                         [[b("🔁 Ещё раз", "replan", "primary"), b("Отмена", "cancel")]])
     res["username"] = re.sub(r"[^A-Za-z0-9_]", "", str(res.get("username") or ""))[:24] or "my_helper"
+    if d.get("kind") == "site":
+        res["slug"] = res.get("slug") or d["name"]
     res["colors"] = [x for x in res.get("colors") or [] if re.fullmatch(r"#[0-9a-fA-F]{6}", str(x))][:2] or \
         ["#7c5cff", "#22d3ee"]
     d.update(plan=res, stage="plan")
@@ -674,6 +733,13 @@ def make_plan(chat):
 
 def plan_card(d):
     p = d.get("plan") or {}
+    if d.get("kind") == "site":
+        lines = [f"<i>{esc(p.get('summary', ''))}</i>", "", "📄 <b>Страницы</b>"] + [f"• {esc(x)}" for x in p.get("pages") or []]
+        lines += ["", "🎨 <b>Стиль</b>"] + [f"• {esc(x)}" for x in p.get("style") or []]
+        if p.get("features"):
+            lines += ["", "⚙️ <b>Умеет</b>"] + [f"• {esc(x)}" for x in p["features"]]
+        return card(f"{d.get('emoji', '🌐')} <b>{esc(d.get('name', ''))}</b> — сайт", lines,
+                    "<i>Всё так? «Создать» — и через несколько минут сайт готов. Потом предложу защитить его или выпустить для всех.</i>")
     lines = [f"<i>{esc(p.get('summary', ''))}</i>", "", "💬 <b>В чате</b>"]
     lines += [f"• {esc(x)}" for x in p.get("chat") or []]
     lines += ["", "📱 <b>Мини-приложение</b>"] + [f"• {esc(x)}" for x in p.get("app") or []]
@@ -839,6 +905,8 @@ def plan_text(d):
 
 def _build(chat):
     d = draft()
+    if d.get("kind") == "site":
+        return build_site(chat, d)
     st = Status(chat, f"Создаю «{d['name']}»")
     st.step("готовлю папку", force=True)
     old = registry().get(d.get("slug") or "")
@@ -1103,7 +1171,7 @@ def logs(pm2, lines=30):
 
 @bot.button("fix")
 def on_fix(c):
-    info = registry().get(c.args[0] if c.args else "")
+    info = registry().get(c.args[0] if c.args else "") or sites().get(c.args[0] if c.args else "")
     if not info:
         return c.toast("Бота уже нет")
     c.ask("fix", card(f"✏️ <b>{esc(info['name'])}</b>", ["Что поменять? Пиши как есть: что не так и как надо. "
@@ -1115,7 +1183,34 @@ def got_fix(c):
     bot.later(fix, c.chat, c.data, c.text)
 
 
+def fix_site(chat, info, text):
+    slug = info["slug"]
+    if not job.acquire(blocking=False):
+        return bot.send(chat, "⏳ Claude занят — пришли правку чуть позже.")
+    try:
+        bot.db.set("busy", {"slug": slug, "text": text[:300], "at": time.time()})
+        st = Status(chat, f"Дорабатываю сайт «{info['name']}»", track=False)
+        st.step("читаю файлы", force=True)
+        d = {"shots": bot.db.get("fix_shots") or []}
+        bot.db.delete("fix_shots")
+        ok, out = claude(FIX_SITE.format(name=info["name"], dir=info["dir"], text=text, shots=shots_note(d)),
+                         info["dir"], on_step=st.step)
+        if not ok:
+            return st.done(card("😕 <b>Не получилось</b>", [esc(out)]), [[b("✏️ Ещё раз", f"fix|{slug}")]])
+        sha = commit(info["dir"], "Правка: " + text[:200])
+        if not sha:
+            return st.done(card("ℹ️ <b>Сайт не менялся</b>", [esc(out[-1200:])]), [[b("✏️ Ещё правка", f"fix|{slug}")]])
+        st.done(card(f"✅ <b>{esc(info['name'])} — готово</b>", [esc(out[-1200:])]),
+                ([[kit.url("🌐 Открыть сайт", site_url(info), "success")]] if site_url(info) else [])
+                + [[b("✏️ Ещё правка", f"fix|{slug}"), b("↩️ Откатить", f"undo|{slug}|{sha}", "danger")]])
+    finally:
+        bot.db.delete("busy")
+        job.release()
+
+
 def fix(chat, slug, text):
+    if slug in sites():
+        return fix_site(chat, sites()[slug], text)
     info = registry().get(slug)
     if not info:
         return bot.send(chat, "Этого бота уже нет.")
@@ -1150,7 +1245,8 @@ def fix(chat, slug, text):
 
 @bot.button("undo")
 def on_undo(c):
-    info = registry().get(c.args[0] if c.args else "")
+    slug = c.args[0] if c.args else ""
+    info = registry().get(slug) or sites().get(slug)
     if not info:
         return c.toast("Бота уже нет")
     code, out = git(info["dir"], "-c", "user.name=Студия", "-c", "user.email=studio@localhost", "revert", "--no-edit",
@@ -1158,6 +1254,9 @@ def on_undo(c):
     if code != 0:
         git(info["dir"], "revert", "--abort")
         return c.say(kit.error(f"Не откатилось: <code>{esc(out[-300:])}</code>"))
+    if info.get("kind") == "site":
+        c.toast("Откатил")
+        return c.say(card("↩️ <b>Правка отменена</b>", [f"Сайт «{esc(info['name'])}» вернулся к прошлой версии."]))
     sh("pm2", "restart", info["pm2"], timeout=60)
     c.toast("Откатил")
     c.say(card("↩️ <b>Правка отменена</b>", [f"«{esc(info['name'])}» перезапущен."]))
@@ -1172,6 +1271,12 @@ def bots_list():
         res.append({"slug": slug, "name": info.get("name"), "emoji": info.get("emoji", "🧩"),
                     "username": info.get("username"), "summary": info.get("summary", ""),
                     "status": status.get(info.get("pm2")), "created": info.get("created")})
+    for slug, info in sites().items():
+        res.append({"slug": slug, "name": info.get("name"), "emoji": info.get("emoji", "🌐"), "kind": "site",
+                    "username": None, "summary": info.get("summary", ""), "status": "online",
+                    "created": info.get("created"), "access": info.get("access", "private"),
+                    "url": site_url(info), "public_url": site_url(info, False),
+                    "password": info.get("password") if info.get("access") == "password" else None})
     return sorted(res, key=lambda x: -(x["created"] or 0))
 
 
@@ -1256,18 +1361,306 @@ def remove(slug):
     return True
 
 
+# ---------- сайты ----------
+# Сайт — статика в /root/sites/<slug>/, отдаётся этим же сервером: https://apps.<ip>.sslip.io/s/<slug>/.
+# Доступ (info["access"]): "private" — только по ссылке с ключом (?k=…, дальше cookie), "password" — пароль
+# (окно браузера), "public" — открыт всем. После сборки сайт закрыт; Глеб сам решает, защищать или выпускать.
+
+ACCESS_NAMES = {"private": "🔑 по ссылке-ключу", "password": "🔒 по паролю", "public": "🌍 открыт всем"}
+
+
+def sites():
+    try:
+        with open(SITES_REG) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def site_set(slug, info=None):
+    with reg_lock:
+        r = sites()
+        if info is None:
+            r.pop(slug, None)
+        else:
+            r[slug] = info
+        os.makedirs(BOTS, exist_ok=True)
+        tmp = SITES_REG + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(r, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, SITES_REG)
+
+
+def new_site_slug(want):
+    slug = re.sub(r"[^a-z0-9-]", "", str(want or "").lower().replace("_", "-"))[:20].strip("-") or "site"
+    while slug in sites() or slug in registry() or os.path.exists(os.path.join(SITES, slug)):
+        slug = f"{slug[:16]}-{secrets.randbelow(90) + 10}"
+    return slug
+
+
+def site_url(info, private_key=True):
+    base = bot.db.get("base_url") or ""
+    if not base:
+        return ""
+    u = f"{base}s/{info['slug']}/"
+    return u + f"?k={info['key']}" if private_key and info.get("access") == "private" else u
+
+
+def _eq(a, b):
+    return hmac.compare_digest(str(a).encode(), str(b).encode())
+
+
+def _site_page(h, code, title, text, headers=None):
+    body = (f'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{esc(title)}</title><body style="font:18px system-ui;display:grid;place-items:center;min-height:90vh;'
+            f'text-align:center;color:#444;background:#fafafa"><div><div style="font-size:48px">🔒</div>'
+            f'<h1 style="font-size:22px">{esc(title)}</h1><p>{esc(text)}</p></div>').encode()
+    h.send_response(code)
+    for k, v in (headers or {}).items():
+        h.send_header(k, v)
+    h.send_header("Content-Type", "text/html; charset=utf-8")
+    h.send_header("Content-Length", str(len(body)))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(body)
+
+
+def serve_site(h, method):
+    u = urllib.parse.urlsplit(h.path)
+    m = re.match(r"^/s/([a-z0-9-]+)(/.*)?$", u.path)
+    info = sites().get(m.group(1)) if m else None
+    if not info:
+        _site_page(h, 404, "Такого сайта нет", "Проверь ссылку.")
+        return True
+    slug = info["slug"]
+    if method not in ("GET", "HEAD"):
+        h.reply(405, b"method not allowed", "text/plain")
+        return True
+    if not m.group(2):
+        h.send_response(301)
+        h.send_header("Location", f"/s/{slug}/" + (f"?{u.query}" if u.query else ""))
+        h.end_headers()
+        return True
+    access = info.get("access", "private")
+    if access == "private":
+        cookies = {}
+        for part in (h.headers.get("Cookie") or "").split(";"):
+            if "=" in part:
+                k, v = part.strip().split("=", 1)
+                cookies[k] = v
+        k = (urllib.parse.parse_qs(u.query).get("k") or [""])[0]
+        if k and _eq(k, info["key"]):  # ссылка с ключом: запоминаем в cookie и убираем ключ из адреса
+            h.send_response(302)
+            h.send_header("Set-Cookie", f"sk_{slug}={info['key']}; Path=/s/{slug}/; Max-Age=31536000; "
+                                        "HttpOnly; Secure; SameSite=Lax")
+            h.send_header("Location", u.path)
+            h.send_header("Cache-Control", "no-store")
+            h.end_headers()
+            return True
+        if not _eq(cookies.get(f"sk_{slug}", ""), info["key"]):
+            _site_page(h, 403, "Сайт закрыт", "Открой его по ссылке от владельца.")
+            return True
+    elif access == "password":
+        import base64
+        auth = h.headers.get("Authorization") or ""
+        pw = ""
+        if auth.startswith("Basic "):
+            try:
+                pw = base64.b64decode(auth[6:]).decode("utf-8", "replace").partition(":")[2]
+            except ValueError:
+                pass
+        if not pw or not _eq(pw, info.get("password", "")):
+            _site_page(h, 401, "Нужен пароль", "Введи пароль, который тебе дал владелец сайта.",
+                       {"WWW-Authenticate": 'Basic realm="Сайт", charset="UTF-8"'})
+            return True
+    rel = urllib.parse.unquote(m.group(2))
+    if rel.endswith("/"):
+        rel += "index.html"
+    root = os.path.realpath(os.path.join(SITES, slug))
+    full = os.path.realpath(os.path.join(root, rel.lstrip("/")))
+    parts = [x for x in rel.split("/") if x]
+    if not (full.startswith(root + os.sep) and os.path.isfile(full)) or any(x.startswith(".") for x in parts):
+        _site_page(h, 404, "Страницы нет", "Такой страницы на сайте нет.")
+        return True
+    with open(full, "rb") as f:
+        data = f.read()
+    ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+    if ctype.startswith("text/") or ctype in ("application/javascript", "application/json", "image/svg+xml"):
+        ctype += "; charset=utf-8" if "charset" not in ctype else ""
+    h.send_response(200)
+    h.send_header("Content-Type", ctype)
+    h.send_header("Content-Length", str(len(data)))
+    h.send_header("Cache-Control", "public, max-age=300" if access == "public" else "no-store")
+    if access != "public":
+        h.send_header("X-Robots-Tag", "noindex, nofollow")
+    h.end_headers()
+    if method == "GET":
+        h.wfile.write(data)
+    return True
+
+
+def build_site(chat, d):
+    st = Status(chat, f"Создаю сайт «{d['name']}»")
+    st.step("готовлю папку", force=True)
+    slug = new_site_slug((d.get("plan") or {}).get("slug") or d["name"])
+    path = os.path.join(SITES, slug)
+    os.makedirs(path, exist_ok=True)
+    git(path, "init", "-q")
+    info = {"kind": "site", "name": d["name"], "emoji": d.get("emoji") or "🌐", "slug": slug, "dir": path,
+            "summary": (d.get("plan") or {}).get("summary", "")[:200], "idea": d["idea"], "plan": d.get("plan"),
+            "access": "private", "key": secrets.token_urlsafe(12), "created": time.time(), "by": "studio"}
+    site_set(slug, info)
+    d.update(slug=slug)
+    put(d)
+    st.step("пишу сайт", force=True)
+    ok, out = claude(BUILD_SITE.format(name=d["name"], emoji=d.get("emoji", ""), dir=path, idea=d["idea"],
+                                       qa=qa_text(d) or "— нет", plan=plan_text(d), shots=shots_note(d),
+                                       fixes="\nПравки к плану: " + "; ".join(d["fixes"]) if d.get("fixes") else ""),
+                     path, on_step=st.step)
+    if not ok:
+        site_set(slug, None)
+        shutil.rmtree(path, ignore_errors=True)
+        return fail(chat, out, st)
+    if not os.path.isfile(os.path.join(path, "index.html")):
+        site_set(slug, None)
+        shutil.rmtree(path, ignore_errors=True)
+        return fail(chat, "Сайт не получился: нет index.html", st)
+    commit(path, "Первая версия: " + d["idea"][:200])
+    info["about"] = brief(out)
+    site_set(slug, info)
+    put({"stage": "done", "result": {"slug": slug, "kind": "site"}})
+    st.done(site_done_card(info), site_buttons(info))
+
+
+def site_done_card(info):
+    link = site_url(info)
+    lines = [esc(info.get("about") or info.get("summary", "")), "", f"{ACCESS_NAMES[info.get('access', 'private')]}"]
+    if link:
+        lines.append(esc(link))
+    return card(f"🌐 <b>Сайт «{esc(info['name'])}» готов</b>", lines,
+                "<i>Пока он закрыт — видишь только ты (и тот, кому дашь ссылку). Защитить паролем или выпустить для всех?</i>")
+
+
+def site_buttons(info):
+    slug = info["slug"]
+    link = site_url(info)
+    rows = [[kit.url("🌐 Открыть сайт", link, "success")]] if link else []
+    access = info.get("access", "private")
+    row = []
+    if access != "password":
+        row.append(b("🔒 Защитить паролем", f"smode|{slug}|password"))
+    if access != "public":
+        row.append(b("🌍 Выпустить для всех", f"spub?|{slug}", "primary"))
+    if access == "public":
+        row.append(b("🔑 Закрыть снова", f"smode|{slug}|private"))
+    return rows + [row, [b("✏️ Правки", f"fix|{slug}"), b("🌐 Мои сайты", "sites")]]
+
+
+def site_card(info):
+    link = site_url(info)
+    lines = [ACCESS_NAMES[info.get("access", "private")], f"<i>{esc(info.get('summary', ''))}</i>"]
+    if info.get("access") == "password":
+        lines.append(f"Пароль: <code>{esc(info.get('password', ''))}</code>")
+    if link:
+        lines.append(esc(link))
+    return card(f"{info.get('emoji', '🌐')} <b>{esc(info['name'])}</b>", lines)
+
+
+@bot.command("sites")
+@bot.button("sites")
+def show_sites(c):
+    rows = sorted(sites().values(), key=lambda x: -(x.get("created") or 0))
+    if not rows:
+        return c.show(card("🌐 <b>Мои сайты</b>", ["Пока ни одного — напиши «сделай сайт …»."]), [[b("‹ Главное", "home")]])
+    lines = [f"{info.get('emoji', '🌐')} <b>{esc(info['name'])}</b> · {ACCESS_NAMES[info.get('access', 'private')]}"
+             for info in rows]
+    c.show(card(f"🌐 <b>Мои сайты</b> · {len(rows)}", lines),
+           kit.rows([b(f"{i.get('emoji', '🌐')} {i['name']}", f"site|{i['slug']}") for i in rows]) + [[b("‹ Главное", "home")]])
+
+
+@bot.button("site")
+def show_site(c):
+    info = sites().get(c.args[0] if c.args else "")
+    if not info:
+        return c.toast("Сайта уже нет")
+    c.show(site_card(info), site_buttons(info) + [[b("🗑 Удалить", f"sdel?|{info['slug']}")]])
+
+
+def set_access(slug, mode):
+    info = sites().get(slug)
+    if not info or mode not in ACCESS_NAMES:
+        return None
+    info["access"] = mode
+    if mode == "password":
+        info["password"] = "".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(8))
+    if mode == "private":
+        info["key"] = secrets.token_urlsafe(12)  # старая ссылка перестаёт работать
+    site_set(slug, info)
+    return info
+
+
+@bot.button("smode")
+def on_smode(c):
+    if len(c.args) < 2:
+        return
+    info = set_access(c.args[0], c.args[1])
+    if not info:
+        return c.toast("Сайта уже нет")
+    c.toast({"password": "Закрыл паролем", "private": "Закрыл ключом", "public": "Открыт всем"}[c.args[1]])
+    c.show(site_card(info), site_buttons(info))
+
+
+@bot.button("spub?")
+def on_spub_ask(c):
+    info = sites().get(c.args[0] if c.args else "")
+    if not info:
+        return c.toast("Сайта уже нет")
+    c.show(card(f"🌍 <b>Выпустить «{esc(info['name'])}» для всех?</b>",
+                ["Любой, у кого есть адрес, сможет открыть сайт без пароля, и его могут найти поисковики.",
+                 esc(site_url(info, False))],
+                "<i>Свой домен вроде name.ru — отдельная покупка; скажи, подключу, когда он будет.</i>"),
+           [[b("🌍 Да, выпустить", f"smode|{info['slug']}|public", "success"), b("Отмена", f"site|{info['slug']}")]])
+
+
+@bot.button("sdel?")
+def on_sdel_ask(c):
+    info = sites().get(c.args[0] if c.args else "")
+    if info:
+        c.show(card(f"🗑 <b>Удалить сайт «{esc(info['name'])}»?</b>", ["Файлы сайта сотрутся, ссылка перестанет работать."]),
+               [[b("Да, удалить", f"sdel|{info['slug']}", "danger"), b("Нет", f"site|{info['slug']}")]])
+
+
+@bot.button("sdel")
+def on_sdel(c):
+    remove_site(c.args[0] if c.args else "")
+    c.toast("Удалил")
+    show_sites(c)
+
+
+def remove_site(slug):
+    info = sites().get(slug)
+    if not info:
+        return False
+    if os.path.realpath(info["dir"]).startswith(os.path.realpath(SITES) + os.sep):
+        shutil.rmtree(info["dir"], ignore_errors=True)
+    site_set(slug, None)
+    return True
+
+
 # ---------- мини-приложение Студии ----------
 
 @bot.api("state")
 def api_state(r):
     d = draft()
     pub = {k: d.get(k) for k in ("id", "idea", "stage", "qi", "names", "emoji", "name", "plan", "fixes", "steps",
-                                  "error", "started", "result", "queued", "newbot")}  # токен — не отдаём
+                                  "error", "started", "result", "queued", "newbot", "kind")}  # токен — не отдаём
     pub["qs"] = [{"q": q["q"], "options": q["options"], "a": q.get("a")} for q in d.get("qs") or []]
     if pub.get("result"):
-        info = registry().get(pub["result"].get("slug")) or {}
+        slug = pub["result"].get("slug")
+        info = registry().get(slug) or sites().get(slug) or {}
         pub["result"] = {"slug": info.get("slug"), "name": info.get("name"), "username": info.get("username"),
-                         "about": info.get("about") or info.get("summary")}
+                         "about": info.get("about") or info.get("summary"), "kind": info.get("kind", "bot"),
+                         "url": site_url(info) if info.get("kind") == "site" else None}
     return {"draft": pub, "bots": bots_list(), "busy": bot.db.get("busy"), "examples": EXAMPLES,
             "secretary": secretary_ready()}
 
@@ -1346,7 +1739,7 @@ def api_cancel(r):
 @bot.api("fix")
 def api_fix(r):
     slug, text = str(r.body.get("slug") or ""), str(r.body.get("text") or "").strip()
-    if slug not in registry() or not text:
+    if (slug not in registry() and slug not in sites()) or not text:
         raise kit.Fail("Напиши, что поменять")
     if job.locked():
         raise kit.Fail("Claude занят — попробуй через пару минут")
@@ -1365,8 +1758,17 @@ def api_restart(r):
 
 @bot.api("delete")
 def api_delete(r):
-    if not remove(str(r.body.get("slug") or "")):
+    slug = str(r.body.get("slug") or "")
+    if not (remove_site(slug) if slug in sites() else remove(slug)):
         raise kit.Fail("Бота нет")
+    return api_state(r)
+
+
+@bot.api("access")
+def api_access(r):
+    slug, mode = str(r.body.get("slug") or ""), str(r.body.get("mode") or "")
+    if not set_access(slug, mode):
+        raise kit.Fail("Сайта нет или режим не тот")
     return api_state(r)
 
 
