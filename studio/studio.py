@@ -1471,7 +1471,7 @@ def serve_site(h, method):
                 pass
         if not pw or not _eq(pw, info.get("password", "")):
             _site_page(h, 401, "Нужен пароль", "Введи пароль, который тебе дал владелец сайта.",
-                       {"WWW-Authenticate": 'Basic realm="Сайт", charset="UTF-8"'})
+                       {"WWW-Authenticate": 'Basic realm="Site", charset="UTF-8"'})  # заголовки — только latin-1, иначе 502
             return True
     rel = urllib.parse.unquote(m.group(2))
     if rel.endswith("/"):
