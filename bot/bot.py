@@ -110,25 +110,36 @@ BTN_HELP = "❓ Помощь"
 BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
 BTN_PREP = "📖 Подготовка"
+BTN_MODE = "⚙️ Режим"
 ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением)
     "📋 Что надо сделать": BTN_LIST, "⚡ Сдать все автотесты": BTN_ALL, "💬 Комментарии учителя": BTN_COMM,
     "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
 BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
-           BTN_APP, BTN_MORE, BTN_PREP}
+           BTN_APP, BTN_MORE, BTN_PREP, BTN_MODE}
 
 
 def menu_kb():
     """Клавиатура у поля ввода: главное действие первым, редкое — в «Ещё» (там же просрочки, почерк,
-    проверка и помощь). Старые кнопки (❗ Просрочки…) по-прежнему понимаются текстом. Сам бот не пишет (сводку убрали)."""
+    проверка и помощь). Старые кнопки (❗ Просрочки…) по-прежнему понимаются текстом. Сам бот не пишет (сводку убрали).
+    В режиме «📱 приложение» главная кнопка — открыть приложение (web_app) и 2–3 самых нужных действия;
+    в режиме «💬 чат» приложение не предлагается (кнопка «HDP» слева от поля ввода остаётся)."""
     b = lambda text, style=None: {"text": text, **({"style": style} if style else {})}
-    return json.dumps({
-        "keyboard": [
+    if ui_mode() == "app" and APP_URL:
+        rows = [
+            [{"text": "📱 Приложение", "web_app": {"url": APP_URL + "/"}, "style": "primary"}],
+            [b(BTN_DO), b(BTN_LIST), b(BTN_PREP)],
+            [b(BTN_MODE), b(BTN_MORE)],
+        ]
+    else:
+        rows = [
             [b(BTN_DO, "primary"), b(BTN_SHOW)],
             [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
             [b(BTN_PREP), b(BTN_ALL)],
-            [b(BTN_APP), b(BTN_MORE)],
-        ],
+            [b(BTN_MODE), b(BTN_MORE)],
+        ]
+    return json.dumps({
+        "keyboard": rows,
         "resize_keyboard": True,
         "is_persistent": True,
         "input_field_placeholder": "Ссылка на задание…",
@@ -152,6 +163,7 @@ HELP = (  # HTML: отправляется с raw_html=True
 )
 COMMANDS = [  # меню команд у поля ввода
     ("start", "Главное меню"), ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
+    ("mode", "Чат или приложение"),
     ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
@@ -532,6 +544,61 @@ def save_settings(s):
 
 def owner():
     return ALLOWED or int(load_settings().get("owner") or 0)
+
+
+# ---------- Режим: 💬 чат или 📱 приложение ----------
+# Выбирается при первом /start, меняется по /mode, кнопкой «⚙️ Режим» и из приложения («💬 Перейти в чат»).
+# «чат» — всё кнопками здесь, приложение не предлагается; «приложение» — главная кнопка открывает его,
+# но команды и текст в чате работают всё равно. Хранится в settings.json («mode»).
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode():
+    m = load_settings().get("mode")
+    return m if m in MODES else ""
+
+
+def set_mode(m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    s = load_settings(); s["mode"] = m; save_settings(s)
+
+
+def mode_note():
+    """Подпись режима для карточки /start (одной строкой, курсивом — card() сам ставит <i>)."""
+    return f"Режим: {MODES.get(ui_mode(), 'не выбран')} · сменить — /mode"
+
+
+def mode_card():
+    return card("Как удобнее?", "💬 <b>В чате</b> — всё кнопками и командами здесь\n"
+                "📱 <b>Приложение</b> — задания, оценки и учителя в одном окне",
+                "Поменять можно в любой момент: /mode", "🧭")
+
+
+def mode_kb():
+    return kb([("💬 В чате", "mode:chat", "primary"), ("📱 Приложение", "mode:app", "primary")])
+
+
+def start_card(chat, name=""):
+    """Главный экран по режиму: в чате — приветствие с полной клавиатурой, в приложении — коротко и кнопка
+    открыть приложение (в клавиатуре у поля ввода, menu_kb)."""
+    hi = f"Привет{', ' + esc(name) if name else ''}!"
+    if ui_mode() == "app" and APP_URL:
+        send(chat, card(hi, "Всё — в приложении: задания, оценки, учителя, подготовка. "
+                        "Ссылку на задание можно прислать и сюда.", mode_note(), "👋"), menu=True, raw_html=True)
+    else:
+        send(chat, card(hi, "Пришли ссылку на задание — решу и сдам. Можно голосом или скриншотом.",
+                        mode_note(), "👋"), menu=True, raw_html=True)
+
+
+def on_mode(chat, mid, cq_id, key):
+    quiet("answerCallbackQuery", callback_query_id=cq_id)
+    if key not in MODES:
+        return
+    set_mode(key)
+    edit(chat, mid, card("Режим: " + MODES[key], note="Сменить — /mode или кнопка «⚙️ Режим»", icon="✅"))
+    start_card(chat)
 
 
 # ---------- Работа ----------
@@ -973,6 +1040,9 @@ def on_callback(cq):
     if data.startswith("m:"):  # меню «Ещё»: правится на месте
         on_more(chat, mid, cq["id"], data[2:])
         return
+    if data.startswith("mode:"):  # 💬 чат / 📱 приложение
+        on_mode(chat, mid, cq["id"], data[5:])
+        return
     if data.startswith("pp:"):  # 📖 подготовка: шаги правятся на месте
         on_prep_button(chat, mid, cq["id"], data[3:])
         return
@@ -1024,10 +1094,11 @@ def more_text():
 
 
 def more_kb():
+    app = [("✨ Приложение", {"web_app": {"url": APP_URL + "/"}})] if APP_URL and ui_mode() == "app" else []
     rows = [
         [("❗ Просрочки", "m:late"), ("🛠 Поддержка", "sup|ask")],  # sup|… ловит support.Support
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
-        [("❓ Помощь", "m:help")] + ([("✨ Приложение", {"web_app": {"url": APP_URL + "/"}})] if APP_URL else []),
+        [("❓ Помощь", "m:help"), ("⚙️ Режим", "m:mode")] + app,
     ]
     return kb(*rows)
 
@@ -1038,6 +1109,8 @@ def on_more(chat, mid, cq_id, key):
         edit(chat, mid, more_text(), more_kb())
     elif key == "help":
         edit(chat, mid, HELP, kb([("‹ Назад", "m:more")]))
+    elif key == "mode":
+        edit(chat, mid, mode_card(), mode_kb())
     elif key == "late":
         threading.Thread(target=run_script, args=(chat, "horo/status.js", "--late", "--html"), daemon=True).start()
     elif key == "hand":
@@ -1694,12 +1767,15 @@ def handle(msg):
     name = msg.get("from", {}).get("first_name") or ""
 
     if text.startswith("/start"):
-        send(chat, card(f"Привет{', ' + esc(name) if name else ''}!",
-                        "Пришли ссылку на задание — решу и сдам. Можно голосом или скриншотом.",
-                        "Всё то же — в приложении: кнопка «HDP» слева", "👋"),
-             menu=True, raw_html=True)
         if APP_URL:
             on_app_url(APP_URL)  # кнопка приложения — новому владельцу
+        if not ui_mode():  # первый раз: сначала выбор, чат или приложение
+            send(chat, mode_card(), markup=mode_kb(), raw_html=True)
+        else:
+            start_card(chat, name)
+        return
+    if text.startswith("/mode") or text == BTN_MODE:
+        send(chat, mode_card(), markup=mode_kb(), raw_html=True)
         return
     if text.startswith("/help"):
         send(chat, HELP, menu=True, raw_html=True)
@@ -1943,7 +2019,7 @@ def app_overview(b):
 
 def app_me(_):
     git = lambda *a: subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
-    return {"alphabet": os.path.exists(GLEB_EXTRA),
+    return {"alphabet": os.path.exists(GLEB_EXTRA), "mode": ui_mode(),
             "version": git("rev-parse", "--short", "HEAD")}
 
 
@@ -2001,6 +2077,16 @@ def app_chat(fn):
     return run
 
 
+def app_mode(b):
+    """«💬 Перейти в чат» из приложения (или обратно): запоминает режим; в чате сразу приходит главное меню."""
+    m = str(b.get("mode") or "")
+    set_mode(m)
+    if m == "chat":
+        send(owner(), card("Режим: " + MODES[m], "Всё, что было в приложении, есть и здесь — кнопки внизу.",
+                           "Вернуть приложение — /mode", "✅"), menu=True, raw_html=True)
+    return {"mode": m}
+
+
 def app_support(body):
     """🛠 Поддержка из приложения — та же, что /fix в чате (web.py уже проверил, что это владелец)."""
     if not SUP:
@@ -2009,7 +2095,7 @@ def app_support(body):
 
 
 ROUTES = {
-    "/api/support": app_support,
+    "/api/support": app_support, "/api/mode": app_mode,
     "/api/state": app_state, "/api/overview": app_overview, "/api/me": app_me,
     "/api/solve": app_solve, "/api/auto": app_auto,
     "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),

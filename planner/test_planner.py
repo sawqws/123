@@ -119,6 +119,12 @@ class BotTest(unittest.TestCase):
         ]
         for p in self.patches:
             p.start()
+        self.db.meta("mode", "app")  # режим выбран (иначе /start — карточка выбора); чат — в test_mode_*
+
+    def has_app(self, p=None):
+        """Есть ли в сообщении кнопка web_app."""
+        p = p if p is not None else self.sent[-1][1]
+        return any("web_app" in b for row in p.get("reply_markup", {}).get("inline_keyboard", []) for b in row)
 
     def tearDown(self):
         for p in self.patches:
@@ -464,8 +470,73 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(planner, "public_url", ""):
             self.msg("/start")
         self.assertIn("пришлю кнопку", self.texts()[-1])
+        self.assertFalse(self.has_app())
         self.msg("/start")
-        self.assertIn("кнопка «Планер»", self.texts()[-1])
+        self.assertIn("Режим: 📱 приложение", self.texts()[-1])
+        self.assertTrue(self.has_app())
+
+    # ---- 💬 чат / 📱 приложение ----
+    def test_mode_choice_on_first_start(self):
+        """Первый /start — «Как удобнее?»; выбор запоминается, /mode и «⚙️ Режим» меняют, /start подписан режимом."""
+        self.db.meta("mode", "")
+        self.msg("/start")
+        self.assertIn("Как удобнее?", self.texts()[-1])
+        datas = [b["callback_data"] for row in self.sent[-1][1]["reply_markup"]["inline_keyboard"] for b in row]
+        self.assertEqual(datas, ["mode|chat", "mode|app"])
+        self.cb("mode|chat")
+        self.assertEqual(planner.ui_mode(), "chat")
+        edits = [p for m, p in self.sent if m == "editMessageText"]
+        self.assertIn("Режим: 💬 чат", edits[-1]["text"])
+        m, p = [x for x in self.sent if x[0] == "sendMessage"][-1]  # сразу главное меню чата
+        self.assertIn("Режим: 💬 чат", p["text"])
+        datas = [b.get("callback_data") for row in p["reply_markup"]["inline_keyboard"] for b in row]
+        for d in ("v|week", "v|month", "v|goals", "v|notes", "v|settings", "mode|ask"):
+            self.assertIn(d, datas)
+        self.assertFalse(self.has_app(p))
+        self.msg("/mode")
+        self.assertIn("Как удобнее?", self.texts()[-1])
+        self.cb("mode|ask")
+        self.assertIn("Как удобнее?", self.texts()[-1])
+        self.cb("mode|app")
+        self.assertEqual(planner.ui_mode(), "app")
+        self.msg("/start")
+        self.assertIn("Режим: 📱 приложение", self.texts()[-1])
+        self.assertTrue(self.has_app())
+        with self.assertRaises(ValueError):
+            planner.set_mode("x")
+
+    def test_chat_mode_has_no_app_buttons(self):
+        """В режиме «чат» кнопки «открыть планер» нет нигде, кроме явного /app; меню чата открывает все экраны."""
+        self.db.meta("mode", "chat")
+        self.db.save_task(U, {"title": "Бокс", "date": planner.today_of(U).isoformat(), "time": "18:00"})
+        for c in ("/start", "/today", "/week", "/month", "/goals", "/notes", "/settings", "/help", "завтра кино"):
+            self.msg(c)
+        for d in ("v|week", "v|month", "v|goals", "v|notes", "v|settings"):
+            self.cb(d)
+        self.assertFalse(any(self.has_app(p) for m, p in self.sent if m in ("sendMessage", "editMessageText")))
+        self.assertIn("/tz", [p["text"] for m, p in self.sent if "Настройки" in p.get("text", "")][-1])
+        self.assertIn("Неделя", self.texts()[-5] + self.texts()[-4])  # кнопки меню присылают экраны
+        self.msg("/app")
+        self.assertTrue(self.has_app())
+        self.msg("/tz Asia/Tokyo")
+        self.assertEqual(self.db.user(U)["tz"], "Asia/Tokyo")
+        self.msg("/tz Nowhere/Nope")
+        self.assertIn("⚠️", self.texts()[-1])
+
+    def test_mode_from_app(self):
+        """«💬 Перейти в чат» в приложении: POST /api/mode -> режим «чат», в чат приходит главное меню."""
+        r = planner.route(U, "/api/mode", {"mode": "chat"})
+        self.assertEqual((r, planner.ui_mode()), ({"mode": "chat"}, "chat"))
+        m, p = self.sent[-1]
+        self.assertEqual((m, p["chat_id"]), ("sendMessage", U))
+        self.assertIn("Режим: 💬 чат", p["text"])
+        self.assertFalse(self.has_app(p))
+        self.assertEqual(planner.route(U, "/api/all", {})["mode"], "chat")
+        with self.assertRaises(ValueError):
+            planner.route(U, "/api/mode", {"mode": "x"})
+        n = len(self.sent)
+        planner.route(U, "/api/mode", {"mode": "app"})
+        self.assertEqual((planner.ui_mode(), len(self.sent)), ("app", n))  # обратно — молча
 
     def test_support_button_in_menus(self):
         with mock.patch.object(planner, "owner", lambda: U):
