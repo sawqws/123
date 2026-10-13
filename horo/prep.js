@@ -2,6 +2,7 @@
 // «Начать» не нажимает, страницы вопросов не открывает.
 // usage: node horo/prep.js                  -> JSON: все темы [{uuid, subj, icon, title, start, deadline, tasks}]
 //        node horo/prep.js <uuid темы>...   -> JSON: материалы тем [{uuid, title, materials, checks, questions}]
+//        node horo/prep.js --theory <uuid>  -> JSON: теория темы целиком для сайта [{title, text}]
 //   materials — теория темы с сайта (раздел «Материалы»), checks — условия итоговых/проверочных заданий темы,
 //   questions — вопросы уже сданных тестов темы (как спрашивают на проверочной).
 const { open, close, api, htmlToText, subjIcon, EDU } = require('./lib');
@@ -32,8 +33,18 @@ async function topics(page, disc) {
       title: (tp.title || '').trim(),
       start: tp.studyPeriod.startDate,
       deadline: tp.studyPeriod.deadlineDate,
+      achieved: tp.achievedLevel,  // итоговый уровень темы (для сайта)
       tasks: tp.tasks.filter(t => !t.hidden).sort((a, b) => (a.order || 0) - (b.order || 0))
-        .map(t => ({ uuid: t.uuid, title: t.title.trim(), type: t.type, status: t.progress.status.type })),
+        .map(t => {
+          const g = (t.progress && t.progress.grade) || {};
+          return {
+            uuid: t.uuid, title: t.title.trim(), type: t.type, status: t.progress.status.type,
+            // для сайта: уровень задания, обязательное ли, баллы и попытки
+            lvl: t.levelId, req: t.requirementType === 'mandatory',
+            score: g.resultScoreValue ?? null, max: g.maximumValue ?? t.maximumScoreValue ?? null,
+            used: g.usedAttemptsCount || 0, left: g.remainingAttemptsCount ?? null,
+          };
+        }),
     };
   });
 }
@@ -79,13 +90,25 @@ async function details(page, uuids) {
   return out;
 }
 
-module.exports = { topics, details };
+// Теория темы целиком (раздел «Материалы») — для сайта. Только GET.
+async function theory(page, uuid) {
+  const out = [];
+  const list = (await api(page, `${EDU}/topics/${uuid}/materials`)).sort((a, b) => a.order - b.order);
+  for (const m of list) {
+    const d = await api(page, `${EDU}/topics/${uuid}/materials/${m.uuid}`);
+    out.push({ title: (m.title || '').trim(), text: cut(clean(d.content && d.content.htmlText), 20000) });
+  }
+  return out;
+}
+
+module.exports = { topics, details, theory };
 
 if (require.main === module) (async () => {
   const uuids = process.argv.slice(2).filter(a => /^[0-9a-f-]{36}$/.test(a));
   const s = await open();
   try {
-    if (uuids.length) console.log(JSON.stringify(await details(s.page, uuids)));
+    if (process.argv.includes('--theory')) console.log(JSON.stringify(await theory(s.page, uuids[0])));
+    else if (uuids.length) console.log(JSON.stringify(await details(s.page, uuids)));
     else {
       const { disciplines } = require('./status');
       console.log(JSON.stringify(await topics(s.page, await disciplines(s.page))));

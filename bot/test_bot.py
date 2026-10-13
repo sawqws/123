@@ -859,6 +859,98 @@ for _name in dir(BotTest):  # AppTest берёт у BotTest только заг�
     if _name.startswith("test_") and _name not in AppTest.__dict__:
         setattr(AppTest, _name, None)
 
+class SiteTest(BotTest):
+    """🌐 Сайт в браузере: вход по одноразовой ссылке из бота, cookie, то же API, теория темы."""
+
+    def setUp(self):
+        super().setUp()
+        self.sp = mock.patch.object(web, "SESSIONS", os.path.join(self.tmp.name, "site_sessions.json"))
+        self.sp.start()
+        bot.save_settings({"owner": CHAT})
+
+    def tearDown(self):
+        self.sp.stop()
+        super().tearDown()
+
+    def test_link_works_once_and_session_remembered(self):
+        code = web.site_code()
+        token = web.site_login(code)
+        self.assertTrue(token and web.site_check(token))
+        self.assertIsNone(web.site_login(code))            # ссылка одноразовая
+        self.assertFalse(web.site_check(code))              # код — не сессия
+        self.assertFalse(web.site_check("") or web.site_check("chuzhoy"))
+        self.assertNotIn(token, pathlib.Path(web.SESSIONS).read_text())  # в файле только хэши
+        with mock.patch.object(web.time, "time", lambda: 10 ** 12):
+            self.assertFalse(web.site_check(token))         # через 30 дней вход забыт
+        web.site_logout(token)
+        self.assertFalse(web.site_check(token))
+        late = web.site_code()
+        with mock.patch.object(web.time, "time", lambda: 10 ** 12):
+            self.assertIsNone(web.site_login(late))          # ссылка живёт 15 минут
+
+    def test_server_site_login_and_api(self):
+        import http.client
+        from http.server import ThreadingHTTPServer
+        web._cfg.update(token="test", owner=bot.owner, routes=bot.ROUTES, version="t", site_version="s")
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), web.Web)
+        bot.REAL_THREAD(target=srv.serve_forever, daemon=True).start()
+        try:
+            def req(method, path, headers=None, body=None):
+                c = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=10)
+                c.request(method, path, body, headers or {})
+                r = c.getresponse()
+                return r.status, r.getheader("Location"), r.getheader("Set-Cookie"), r.read()
+            self.assertEqual(req("GET", "/site/")[0], 200)
+            self.assertEqual(req("GET", "/site/site.js")[0], 200)
+            self.assertEqual(req("GET", "/site/../bot.py")[0], 404)
+            self.assertEqual(req("GET", "/", {"Host": "hdp.1-2-3-4.sslip.io"})[1], "/site/")
+            self.assertEqual(req("GET", "/api/state", {"X-Site": "1"})[0], 401)
+            # плохая ссылка — без входа
+            st, loc, cookie, _ = req("GET", "/site/login?c=nope")
+            self.assertEqual((st, loc, cookie), (302, "/site/#login-expired", None))
+            st, loc, cookie, _ = req("GET", "/site/login?c=" + web.site_code())
+            self.assertEqual((st, loc), (302, "/site/"))
+            self.assertIn("HttpOnly", cookie)
+            self.assertIn("Secure", cookie)
+            self.assertIn("SameSite=Lax", cookie)
+            jar = cookie.split(";")[0]
+            code, _, _, body = req("GET", "/api/state", {"Cookie": jar, "X-Site": "1"})
+            self.assertEqual((code, json.loads(body)["busy"]), (200, False))
+            # без X-Site cookie не действует: чужая страница не может нажать «Сделать» от имени Глеба
+            self.assertEqual(req("POST", "/api/solve", {"Cookie": jar}, json.dumps({"url": URL}))[0], 401)
+            self.assertEqual(req("GET", "/api/state", {"Cookie": "hdp_site=forged", "X-Site": "1"})[0], 401)
+            st, _, cookie, _ = req("GET", "/site/logout", {"Cookie": jar})
+            self.assertIn("Max-Age=0", cookie)
+            self.assertEqual(req("GET", "/api/state", {"Cookie": jar, "X-Site": "1"})[0], 401)
+        finally:
+            srv.shutdown()
+
+    def test_site_command_sends_one_time_link(self):
+        with mock.patch.dict(os.environ, {"HORO_SITE_URL": "https://hdp.example"}):
+            self.say("/site")
+            self.say("/start site")
+        links = [m for m in self.msgs if "hdp.example/site/login?c=" in json.dumps(m, ensure_ascii=False)]
+        self.assertEqual(len(links), 2)
+
+    def test_theory_cached_and_uuid_checked(self):
+        calls = []
+        items = [{"title": "Pretérito perfecto", "text": "haber + participio"}]
+        with mock.patch.object(bot, "SITE_DIR", os.path.join(self.tmp.name, "site")), \
+                mock.patch.object(bot, "node", lambda *a, timeout=0: (calls.append(a), (True, json.dumps(items)))[1]):
+            with self.assertRaises(ValueError):
+                bot.app_site_theory({"uuid": "../../etc"})
+            self.assertEqual(bot.app_site_theory({"uuid": TASK}), {"items": items})
+            self.assertEqual(bot.app_site_theory({"uuid": TASK}), {"items": items})
+            self.assertEqual(calls, [("horo/prep.js", "--theory", TASK)])  # второй раз — из кэша
+
+    def test_running_shows_tasks_in_work(self):
+        bot.running.add(TASK)
+        try:
+            self.assertEqual(bot.app_site_running({})["running"], [TASK])
+        finally:
+            bot.running.discard(TASK)
+
+
 class AgentTest(BotTest):
     """/agent ТОКЕН -> /etc/tg-agent.env (только токен, старые ключи сохраняются) -> tgbot/install.sh."""
 
