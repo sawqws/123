@@ -95,6 +95,7 @@ settings_lock = threading.RLock()  # настройки правят парал�
 offset = 0    # следующий update_id из Telegram
 mode = {}     # chat -> "show" | "confirm_all" | "emoji" | "alphabet" | "hand_tune"
 pending = {}  # chat -> список ссылок для «Сдать все автотесты»
+AUTO_STATUSES = ("appointed", "reworking")  # «Пора начать» и «На доработке» (порог не добит — сайт даёт «Попробовать ещё раз»)
 SUP = None    # 🛠 поддержка (common/support.py) — ставит main(), ей же пользуется приложение
 
 BTN_DO = "📝 Решить и сдать"
@@ -1303,13 +1304,14 @@ def find_auto_tests(chat):
         if not ok:
             send(chat, err(out), menu=True, raw_html=True)
             return
-        tests = [r for r in json.loads(out) if r["auto"] and r["rawStatus"] == "appointed"]
+        tests = [r for r in json.loads(out) if r["auto"] and r["rawStatus"] in AUTO_STATUSES]
         if not tests:
             send(chat, card("Новых автотестов нет", note="Всё, что могу сдать сам, уже сдано", icon="🎉"), menu=True, raw_html=True)
             return
         pending[chat] = tests
         mode[chat] = "confirm_all"
-        lines = "\n".join(f"{r.get('icon', '📘')} <b>{esc(r['subj'])}</b> — {esc(r['title'])}" for r in tests)
+        lines = "\n".join(f"{r.get('icon', '📘')} <b>{esc(r['subj'])}</b> — {esc(r['title'])}"
+                          + (" · 🔁 доработка" if r["rawStatus"] == "reworking" else "") for r in tests)
         send(chat, card(f"Нашёл автотесты: {len(tests)}", lines,
                         f"Сдам по очереди, это примерно {len(tests) * 2}–{len(tests) * 3} мин", "⚡"),
              markup=kb([(f"Сдать все ({len(tests)})", "all:yes", "success"), ("Не надо", "all:no")]), raw_html=True)
@@ -2038,7 +2040,7 @@ def app_solve(b):
 
 def app_auto(_):
     busy_check()
-    tests = [r for r in (overview() or {}).get("tasks", []) if r.get("auto") and r.get("rawStatus") == "appointed"]
+    tests = [r for r in (overview() or {}).get("tasks", []) if r.get("auto") and r.get("rawStatus") in AUTO_STATUSES]
     if not tests:
         raise ValueError("Новых автотестов нет")
     threading.Thread(target=run_all, args=(owner(), tests), daemon=True).start()

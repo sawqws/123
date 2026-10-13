@@ -194,7 +194,7 @@ function tasksView() {
   const late = tasks.filter(t => left(t.deadline) < 0);
   const week = tasks.filter(t => left(t.deadline) >= 0 && left(t.deadline) <= 7);
   const later = tasks.filter(t => left(t.deadline) > 7);
-  const auto = tasks.filter(t => t.auto && t.rawStatus === 'appointed');
+  const auto = tasks.filter(t => t.auto && (t.rawStatus === 'appointed' || t.rawStatus === 'reworking'));  // новые и на доработке
   let out = solveCard();
   if (tasks.length) {
     out += `<div class="stats3 rise">
