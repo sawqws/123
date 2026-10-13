@@ -238,6 +238,14 @@
       rd.readAsDataURL(file);
     });
   }
+  // плавающая кнопка «🛠 Поддержка» на каждом экране (как Kit.supportFab у остальных ботов)
+  function supportFab() {
+    if (document.querySelector('.sup-fab')) return;
+    const b = h('button', { class: 'sup-fab', type: 'button', onclick: supportSheet, 'aria-label': 'Поддержка и пожелания' },
+      h('span', { class: 'i', text: '🛠' }), h('span', { class: 't', text: 'Поддержка' }));
+    document.body.appendChild(b);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', supportFab); else supportFab();
   function supportSheet() {
     let photo = null;
     const ta = h('textarea', { class: 'field sup-text', rows: '5', maxlength: '4000',

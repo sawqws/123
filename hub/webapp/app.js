@@ -386,6 +386,7 @@
     Kit.support('/app/api/support', { targets, target: name || targets[0].id,
       hint: 'Выбери бота и напиши, что сломалось или чего не хватает — починю/добавлю.' });
   }
+  Kit.supportOpts = { open: () => support() };  // плавающая кнопка 🛠 на всех вкладках — тот же лист с выбором бота
 
   function botSheet(name) {
     const b = S.hub && S.hub.bots.find((x) => x.name === name);

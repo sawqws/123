@@ -215,8 +215,24 @@
     ev.preventDefault();
     haptic('tap');
     document.querySelectorAll('.sheet').forEach((x) => { if (x.close) x.close(); });  // лист настроек и т. п. — закрыть
+    const o = window.Kit && window.Kit.supportOpts;
+    if (o && o.open) return o.open();  // у приложения свой лист (Главный — с выбором бота)
     support(b.dataset.support);
   });
+  // Плавающая кнопка «🛠 Поддержка» на каждом экране: <body data-support="/api/support">.
+  // Стоит над нижними вкладками, не зависит от того, что сейчас нарисовано.
+  function supportFab() {
+    const path = document.body.dataset.support;
+    if (!path || document.querySelector('.sup-fab')) return;
+    const b = document.createElement('button');
+    b.className = 'sup-fab';
+    b.type = 'button';
+    b.dataset.support = path;
+    b.setAttribute('aria-label', 'Поддержка и пожелания');
+    b.innerHTML = '<span class="i">🛠</span><span class="t">Поддержка</span>';
+    document.body.appendChild(b);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', supportFab); else supportFab();
 
-  window.Kit = { tg, $, esc, api, toast, haptic, sheet, busy, tabbar, scheme, support, supportRow, shrink };
+  window.Kit = { tg, $, esc, api, toast, haptic, sheet, busy, tabbar, scheme, support, supportRow, supportFab, shrink };
 })();

@@ -146,6 +146,9 @@ document.addEventListener('click', (ev) => {
   if (ev.target.closest && ev.target.closest('[data-support]')) { haptic('tap'); support(); }
 });
 if (!document.body.hasAttribute('data-no-support')) {
+  // плавающая кнопка — видна на любом экране, над вкладками
+  document.body.insertAdjacentHTML('beforeend',
+    '<button class="sup-fab" type="button" data-support aria-label="Поддержка и пожелания"><span class="i">🛠</span><span class="t">Поддержка</span></button>');
   (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',
     '<div class="list sup-list"><button class="row" data-support><span class="icon">🛠</span><span class="main">' +
     '<span class="name">Поддержка и пожелания</span><span class="meta">Ошибка или идея — починю/добавлю</span></span>' +

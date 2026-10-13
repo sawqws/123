@@ -152,5 +152,20 @@ class SupportTest(unittest.TestCase):
         self.assertFalse(self.sup.intercept(self.msg("текст")))
 
 
+class FabTest(unittest.TestCase):
+    """Плавающая кнопка «🛠 Поддержка» есть у каждого мини-приложения: body data-support + Kit.supportFab."""
+
+    def test_every_webapp_has_support_fab(self):
+        root = os.path.dirname(HERE)
+        kit = open(os.path.join(HERE, "webapp", "kit.js"), encoding="utf-8").read()
+        self.assertIn("sup-fab", kit)
+        self.assertIn("supportFab", kit)
+        for d in ("bot", "planner", "coach", "eye", "hub", "kpp", "avito", "studio"):
+            html = open(os.path.join(root, d, "webapp", "index.html"), encoding="utf-8").read()
+            self.assertRegex(html, r'<body[^>]*data-support="[^"]+"', d)
+        for f in ("tgbot/webapp/app.js", "studio/kit/template/webapp/kit.js"):  # свои наборы — своя кнопка
+            self.assertIn("sup-fab", open(os.path.join(root, f), encoding="utf-8").read(), f)
+
+
 if __name__ == "__main__":
     unittest.main()
