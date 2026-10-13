@@ -3,9 +3,15 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/brain.sh\"", "timeout": 180 }
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/brain.sh\"",
+            "timeout": 180
+          }
         ]
       }
     ]
-  }
+  },
+  "model": "sonnet",
+  "effortLevel": "high"
 }
