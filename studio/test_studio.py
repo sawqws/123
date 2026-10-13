@@ -419,6 +419,7 @@ class FakeReq:
         self.code = code
 
     def send_header(self, k, v):
+        (k + v).encode("latin-1")  # как настоящий http.server: не-latin-1 в заголовке роняет ответ (был 502 на пароле)
         self.sent[k] = v
 
     def end_headers(self):
