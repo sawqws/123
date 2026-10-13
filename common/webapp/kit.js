@@ -78,6 +78,9 @@
     const el = document.createElement('div');
     el.className = 'sheet';
     el.innerHTML = html;
+    const x = document.createElement('button');  // явный выход: на iPad кнопки «Назад» и тапа по фону мало
+    x.type = 'button'; x.className = 'sheet-x'; x.setAttribute('aria-label', 'Закрыть'); x.textContent = '✕';
+    el.prepend(x);
     document.body.append(back, el);
     requestAnimationFrame(() => { back.classList.add('open'); el.classList.add('open'); });
     let closed = false;
@@ -86,11 +89,15 @@
       closed = true;
       back.classList.remove('open');
       el.classList.remove('open');
+      document.removeEventListener('keydown', esc_);
       if (tg && tg.BackButton) { tg.BackButton.offClick(close); tg.BackButton.hide(); }
       setTimeout(() => { back.remove(); el.remove(); }, 320);
       if (onClose) onClose();
     };
     back.addEventListener('click', close);
+    x.addEventListener('click', close);
+    const esc_ = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', esc_);
     if (tg && tg.BackButton) { tg.BackButton.onClick(close); tg.BackButton.show(); }
     el.close = close;
     return el;
@@ -201,7 +208,6 @@
         toast(e.message, true);
       }
     }));
-    setTimeout(() => { try { q('.sup-text').focus(); } catch (e) { /* нет фокуса */ } }, 350);
     return el;
   }
   function supportRow(apiPath, sub) {

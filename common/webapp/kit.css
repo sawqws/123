@@ -275,6 +275,9 @@ body.has-tabbar { padding-bottom: calc(100px + var(--bottom)); }
   opacity: .4; margin: 0 auto 12px; }
 .sheet.open { transform: none; }
 .sheet-backdrop.open { opacity: 1; }
+.sheet-x { position: absolute; top: 10px; right: 12px; width: 34px; height: 34px; border-radius: 50%; border: 0;
+  background: var(--line); color: var(--text); font-size: 15px; line-height: 1; cursor: pointer; z-index: 1; }
+.sheet h2 { padding-right: 40px; }
 .sheet h2 { margin: 4px 2px 14px; font: 700 21px/1.2 var(--font-d); letter-spacing: -.3px; }
 
 /* ---------- 🛠 поддержка (Kit.support, Kit.supportRow) ---------- */
@@ -290,7 +293,7 @@ body.has-tabbar { padding-bottom: calc(100px + var(--bottom)); }
 .sup-fab .i { font-size: 16px; line-height: 1; }
 .sup-fab:active { transform: scale(.95); }
 body.has-tabbar .sup-fab { bottom: calc(82px + var(--bottom)); }
-.sheet-backdrop.open ~ .sup-fab, body.sheet-open .sup-fab { opacity: 0; pointer-events: none; }
+.sheet-backdrop.open ~ .sup-fab, body:has(textarea:not(.sheet textarea)) .sup-fab, body.sheet-open .sup-fab { opacity: 0; pointer-events: none; }
 .sheet .sup-lead { margin: -6px 2px 12px; }
 .sheet .sup-targets { margin-bottom: 10px; }
 .sup-shot { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; min-height: 36px; }
