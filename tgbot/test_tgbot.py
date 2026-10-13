@@ -576,7 +576,7 @@ class NewBot(unittest.TestCase):
         self.assertEqual(c.conv.sent, ["/token", "@Taxii111bot"])
         bad = self.ctx(["Choose a bot", "Invalid bot selected."])
         with self.assertRaises(actions.Fail):
-            run(actions.run(bad, "bottoken", {"username": "nope", "auto": True}))
+            run(actions.run(bad, "bottoken", {"username": "nopeone", "auto": True}))
         self.assertEqual(bad.conv.sent[-1], "/cancel")
 
     def test_confirm_without_auto(self):
@@ -584,6 +584,98 @@ class NewBot(unittest.TestCase):
         out = run(actions.run(c, "newbot", {"name": "Вода", "username": "water"}))
         self.assertIn("не подтвердил", out)
         self.assertEqual(len(c.asked), 1)
+
+
+class Usernames(unittest.TestCase):
+    """Юзернеймы для Ловца (catcher/): проверить, занять на канал, запасной канал."""
+
+    def ctx(self, free=True, error=None, answer=True):
+        from telethon import errors
+        c = Ctx(answer)
+        taken = {"nopeone"}
+
+        async def call(req):
+            c.client.calls.append(req)
+            n = type(req).__name__
+            if n == "CheckUsernameRequest":
+                if error:
+                    raise error
+                return req.username not in taken
+            if n == "CreateChannelRequest":
+                ch = types.Channel(id=777, title=req.title, photo=types.ChatPhotoEmpty(), date=None, broadcast=True,
+                                   creator=True, access_hash=1)
+                c.client.dialogs.append(dialog(ch))
+                return pytypes.SimpleNamespace(chats=[ch])
+            if n == "UpdateUsernameRequest":
+                if error:
+                    raise error
+                if req.username in taken:
+                    raise errors.UsernameOccupiedError(request=req)
+                return True
+        c.client.__call__ = call
+        c.client.__class__ = type("Client", (FakeClient,), {"__call__": staticmethod(call)})
+        return c
+
+    def test_check(self):
+        c = self.ctx()
+        self.assertEqual(run(actions.run(c, "username", {"username": "@Cool_Name"})),
+                         {"username": "cool_name", "status": "free"})
+        self.assertEqual(run(actions.run(c, "username", {"username": "https://t.me/nopeone"}))["status"], "taken")
+        req = c.client.calls[0]
+        self.assertEqual((type(req).__name__, req.username), ("CheckUsernameRequest", "cool_name"))
+        self.assertIsInstance(req.channel, types.InputChannelEmpty)
+        for bad in ("ab", "abcd", "1abcde", "a__bcd"):
+            with self.assertRaises(actions.Fail):
+                run(actions.run(c, "username", {"username": bad}))
+
+    def test_check_fragment_and_flood(self):
+        from telethon import errors
+        c = self.ctx(error=errors.UsernamePurchaseAvailableError(request=None))
+        self.assertEqual(run(actions.run(c, "username", {"username": "golden"}))["status"], "fragment")
+        c = self.ctx(error=errors.FloodWaitError(request=None, capture=42))
+        self.assertEqual(run(actions.run(c, "username", {"username": "golden"})), {"username": "golden", "status": "flood", "wait": 42})
+
+    def test_grab_new_channel_auto(self):
+        c = self.ctx()
+        out = run(actions.run(c, "grab", {"username": "cool_name", "auto": True}))
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["link"], "https://t.me/cool_name")
+        self.assertTrue(out["created"])
+        self.assertEqual(out["title"], "cool_name")
+        self.assertEqual(c.asked, [])  # auto — без вопроса
+        kinds = [type(r).__name__ for r in c.client.calls]
+        self.assertEqual(kinds, ["CreateChannelRequest", "UpdateUsernameRequest"])
+
+    def test_grab_taken_keeps_channel(self):
+        """Кто-то успел раньше: канал создан, статус taken и его id — Ловец оставит канал про запас."""
+        c = self.ctx()
+        out = run(actions.run(c, "grab", {"username": "nopeone", "auto": True}))
+        self.assertEqual(out["status"], "taken")
+        self.assertEqual(out["channel"], -1000000000777)
+
+    def test_grab_on_reserve_channel(self):
+        c = self.ctx()
+        r = run(actions.run(c, "reserve", {"auto": True}))
+        self.assertEqual(r, {"id": -1000000000777, "title": "Ловец"})
+        out = run(actions.run(c, "grab", {"username": "cool_name", "channel": r["id"], "auto": True}))
+        self.assertEqual((out["status"], out["created"], out["channel"]), ("ok", False, r["id"]))
+        self.assertEqual([type(x).__name__ for x in c.client.calls], ["CreateChannelRequest", "UpdateUsernameRequest"])
+        chans = run(actions.run(c, "mychannels", {}))
+        self.assertEqual(chans, [{"id": -1000000000777, "title": "Ловец", "username": ""}])
+
+    def test_grab_asks_without_auto(self):
+        c = self.ctx(answer=False)
+        out = run(actions.run(c, "grab", {"username": "cool_name"}))
+        self.assertIn("не подтвердил", out)
+        self.assertEqual(c.client.calls, [])
+
+    def test_too_many_public(self):
+        from telethon import errors
+        c = self.ctx(error=errors.ChannelsAdminPublicTooMuchError(request=None))
+        self.assertEqual(run(actions.run(c, "grab", {"username": "cool_name", "auto": True}))["status"], "too_many")
+
+    def test_cli_prints_json(self):
+        self.assertIn('"status": "free"', tg.show({"status": "free"}))
 
 
 if __name__ == "__main__":

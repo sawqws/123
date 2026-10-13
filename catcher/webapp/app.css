@@ -1,0 +1,19 @@
+/* Своё оформление Ловца (общее — в kit.css). Акцент — янтарный «прицел». */
+:root { --accent: #f2a93b; --accent-text: #1a1200; }
+.small { font-size: 13px; margin: 8px 0 0; }
+.row .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
+.row .end .btn { margin: 0; }
+.st-watch .icon { background: rgba(242, 169, 59, .18); }
+.st-caught .icon { background: rgba(53, 196, 106, .18); }
+.st-fragment .icon, .st-invalid .icon { background: rgba(235, 85, 69, .14); }
+.hunt { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; margin-bottom: 12px;
+  background: rgba(242, 169, 59, .14); }
+.hunt .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); flex: none; animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.hunt .txt { flex: 1; font-size: 14px; }
+.idea { display: flex; align-items: center; gap: 10px; }
+.idea .mark { flex: none; width: 110px; font-size: 13px; color: var(--hint); }
+.btn.success { background: var(--ok); color: #fff; }
+a { color: var(--link); text-decoration: none; }
+.meta a { overflow-wrap: anywhere; }
+#hunt-status + .muted { margin-bottom: 16px; }

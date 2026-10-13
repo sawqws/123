@@ -125,6 +125,18 @@ def parser():
     c.add_argument("--bots", nargs="+", help="только эти боты (username); без — все боты с сервера")
     c.add_argument("--auto", action="store_true", help="без подтверждения (Главный после создания бота)")
 
+    c = cmd("username", "свободен ли юзернейм (для канала): free, taken, fragment — продаётся на Fragment")
+    c.add_argument("username")
+    cmd("mychannels", "мои каналы (где я создатель): id, название, юзернейм")
+    c = cmd("reserve", "⚠ закрытый канал про запас — на него потом ставится пойманный юзернейм")
+    c.add_argument("--title", default="Ловец")
+    c.add_argument("--auto", action="store_true", help="без подтверждения (так зовёт Ловец)")
+    c = cmd("grab", "⚠ занять юзернейм на канал: свой (--channel id) или новый")
+    c.add_argument("username")
+    c.add_argument("--channel", type=int, help="id своего канала (из mychannels или reserve)")
+    c.add_argument("--title", help="название нового канала (по умолчанию — сам юзернейм)")
+    c.add_argument("--auto", action="store_true", help="без подтверждения (так зовёт Ловец)")
+
     cmd("folders", "папки Telegram и чаты в них")
     c = cmd("folder", "⚠ создать папку или добавить/убрать в ней чаты")
     c.add_argument("name", help="название папки")
@@ -180,6 +192,8 @@ def call(cmd, args, timeout=20 * 60):
 
 
 def show(out):
+    if not isinstance(out, str):  # username, mychannels, grab… отвечают JSON
+        out = json.dumps(out, ensure_ascii=False, indent=1)
     if len(out) <= BIG:
         return out
     os.makedirs(os.path.join(HERE, "tmp", "out"), exist_ok=True)
