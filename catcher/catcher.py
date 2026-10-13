@@ -36,7 +36,6 @@ import botkit as kit  # noqa: E402
 PORT = int(os.environ.get("CATCHER_PORT") or 8796)
 SOCK = os.environ.get("TG_AGENT_SOCK") or os.path.join(REPO, "tgbot", "tmp", "agent.sock")
 INTERVALS = [3, 5, 10, 30, 60]  # секунд между проверками
-FLOOD_NOTE = 120  # о паузе дольше этой — пишем в чат
 MAX_NAMES = 50
 NAME = re.compile(r"(?<![\w/])@?([A-Za-z][A-Za-z0-9_]{3,30}[A-Za-z0-9])\b")  # Telegram: от 5 символов
 STATUS = {  # статус имени -> значок, подпись
@@ -49,14 +48,14 @@ STYLES = [("word", "одно слово"), ("two", "два слова"), ("digit
 COUNTS = [1, 3, 5, 10]
 DEFAULT_WISH = {"len": "6-7", "style": "any", "theme": "", "letters": True, "count": 1}
 
-bot = kit.Bot("Ловец", emoji="🎯", about="Ловлю крутые юзернеймы Telegram на твои каналы: пришли имя или выбери "
+bot = kit.Bot("Catcher", emoji="🎯", tg_name="Catcher", about="Ловлю крутые юзернеймы Telegram на твои каналы: пришли имя или выбери "
                                         "пожелания — займу, как только найду свободное.",
               short="Ловит юзернеймы на каналы",
               commands=[("start", "Главное"), ("wish", "Ловить по пожеланиям"), ("list", "Список имён"),
                         ("ideas", "Идеи крутых имён"), ("settings", "Как ловить"), ("help", "Что умею")],
-              app_text="Ловец", token=os.environ.get("CATCHER_TOKEN", ""), port=PORT,
+              app_text="Catcher", token=os.environ.get("CATCHER_TOKEN", ""), port=PORT,
               app_url=os.environ.get("CATCHER_URL", ""),
-              support={"name": "Ловец", "folders": ["catcher", "tgbot"], "pm2": "catcher-bot", "cwd": REPO,
+              support={"name": "Catcher", "folders": ["catcher", "tgbot"], "pm2": "catcher-bot", "cwd": REPO,
                        "tests": ["python3 catcher/test_catcher.py", "python3 tgbot/test_tgbot.py"]})
 
 
@@ -489,19 +488,13 @@ class Watcher:
         return settings()["interval"]
 
     def agent_down(self, out, now):
-        self.last = f"Секретарь недоступен: {out}"
-        if now - self.agent_down_said > 3600:
-            self.agent_down_said = now
-            bot.notify(kit.error(f"Не могу проверять имена: {kit.esc(out)}. Войди в аккаунт в Главном (/login) — "
-                                 "продолжу сам."))
+        self.last = f"Секретарь недоступен: {out}"  # в чат не пишем: статус виден на главном экране и в приложении
         return 60
 
     def flood(self, out, now):
         wait = int(out.get("wait") or 60)
         self.pause_until = now + wait
-        self.last = f"Telegram просит подождать {wait} с"
-        if wait >= FLOOD_NOTE:
-            bot.notify(f"⏸ Telegram просит подождать {wait // 60} мин — проверки продолжу сам.")
+        self.last = f"Telegram просит подождать {wait} с"  # молча: пауза и так видна в статусе, проверки продолжатся сами
         return min(wait, 60)
 
     def loop(self):
@@ -550,7 +543,7 @@ def home_text():
              f"⏱ Проверка раз в {s['interval']} с · куда: " + (kit.esc(s["target_title"]) if s["target"] else "новый канал")]
     if watcher.last:
         lines.append(f"<i>Последнее: {kit.esc(watcher.last)}</i>")
-    return kit.card("🎯 <b>Ловец</b>", lines, "<i>Пришли @имя (можно списком) — проверю и займу или буду следить.</i>")
+    return kit.card("🎯 <b>Catcher</b>", lines, "<i>Пришли @имя (можно списком) — проверю и займу или буду следить.</i>")
 
 
 def home_rows():

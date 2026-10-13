@@ -245,8 +245,9 @@ class Request:
 
 class Bot:
     def __init__(self, name, emoji="✨", about="", short="", commands=None, public=False, app_text=None,
-                 token=None, port=None, app_url=None, data=None, webapp=None, support=None):
+                 token=None, port=None, app_url=None, data=None, webapp=None, support=None, tg_name=None):
         self.name, self.emoji, self.about, self.short = name, emoji, about, short
+        self.tg_name = tg_name  # имя бота в Telegram (setMyName); None — не трогаем, оно задано в BotFather
         self.commands = commands or [("start", "Главное"), ("help", "Что умею")]
         self.public = public  # True — ботом пользуются все; иначе только владелец (первый /start или BOT_OWNER)
         self.app_text = app_text or name
@@ -792,6 +793,7 @@ class Bot:
         """Имя для ссылок, команды, описание, кнопка приложения, аватар (data/avatar.png или avatar.png)."""
         steps = [
             ("getMe", {}),
+            *([("setMyName", {"name": self.tg_name[:64]})] if self.tg_name else []),
             ("setMyCommands", {"commands": [{"command": c, "description": d[:256]} for c, d in self.commands]}),
             ("setMyDescription", {"description": (self.about or "")[:512]}),
             ("setMyShortDescription", {"short_description": (self.short or self.about or "")[:120]}),

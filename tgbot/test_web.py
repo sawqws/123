@@ -305,6 +305,54 @@ class Api(unittest.TestCase):
 
     # ---------- поручения ----------
 
+    def test_chat_followup_while_busy_is_queued(self):
+        a = self.make()
+        gate = asyncio.Event()
+        seen = []
+
+        async def fake_claude(text, resume=True, on_step=None):
+            seen.append(text)
+            await gate.wait()
+            return True, "ok"
+        a.run_claude = fake_claude
+
+        async def scenario():
+            first = asyncio.create_task(a.ask("первый"))
+            await self.until(lambda: seen)
+            await a.ask("а ещё вот что")  # из чата, пока думает
+            self.assertTrue(any("Добавил в очередь" in m["text"] for m in a.bot.sent))
+            self.assertEqual([x["q"] for x in a.queue], ["а ещё вот что"])
+            gate.set()
+            await first
+            await self.until(lambda: len(seen) == 2 and not a.busy)
+        self.go(a, scenario)
+        self.assertEqual(seen, ["первый", "а ещё вот что"])
+
+    def test_queue_limit_stop_clears_and_new_conversation(self):
+        a = self.make()
+        gate = asyncio.Event()
+
+        async def fake_claude(text, resume=True, on_step=None):
+            await gate.wait()
+            return True, "ok"
+        a.run_claude = fake_claude
+
+        async def scenario():
+            await self.req("/api/ask", {"text": "первый"})
+            for i in range(5):
+                code, r = await self.req("/api/ask", {"text": f"доп {i}"})
+                self.assertEqual((code, r["queued"]), (200, i + 1))
+            code, full = await self.req("/api/ask", {"text": "лишний"})
+            self.assertEqual(code, 409)
+            self.assertIn("Очередь полна", full["error"])
+            old = a.conv
+            await self.req("/api/new")
+            _, r = await self.req("/api/run")
+            self.assertEqual((r["queue"], r["conv"] != old), ([], True))  # новый разговор — очередь пуста
+            gate.set()
+            await self.until(lambda: not a.busy)
+        self.go(a, scenario)
+
     def test_ask_runs_like_chat_and_lands_in_both(self):
         a = self.make()
         gate = asyncio.Event()
@@ -321,8 +369,9 @@ class Api(unittest.TestCase):
             code, r = await self.req("/api/ask", {"text": "  ответь Пете  "})
             self.assertEqual((code, r["run"]["state"], r["run"]["source"]), (200, "work", "app"))
             await self.until(lambda: seen)
-            code, busy = await self.req("/api/ask", {"preset": "missed"})
-            self.assertEqual((code, busy["error"]), (409, "Ещё занимаюсь прошлым поручением"))
+            code, q = await self.req("/api/ask", {"text": "и ещё уточни время"})  # пока думает — встаёт в очередь
+            self.assertEqual((code, q["queued"], [x["q"] for x in q["queue"]]), (200, 1, ["и ещё уточни время"]))
+            conv = a.conv
             # действие ждёт «Да/Нет» — в чате; приложение это показывает
             confirm = asyncio.create_task(a.confirm("📤 Написать в «Петя»:\n\nбуду в 6"))
             await self.until(lambda: a.waiting)
@@ -334,14 +383,15 @@ class Api(unittest.TestCase):
             _, r = await self.req("/api/run")
             self.assertEqual(r["run"]["confirm"], "")
             gate.set()
-            await self.until(lambda: a.run["state"] == "done")
+            await self.until(lambda: len(seen) == 2 and a.run["state"] == "done" and not a.busy)  # очередь доиграна
             _, r = await self.req("/api/run", {"history": True})
             self.assertIn("<b>Готово</b>", r["run"]["html"])
-            self.assertEqual(r["history"][0]["source"], "app")
-            self.assertEqual(r["history"][0]["q"], "ответь Пете")
+            self.assertEqual([h["q"] for h in r["history"]], ["и ещё уточни время", "ответь Пете"])
+            self.assertEqual({h["conv"] for h in r["history"]}, {conv})  # один разговор
+            self.assertEqual((r["history"][1]["source"], r["queue"], r["conv"]), ("app", [], conv))
             self.assertFalse(a.busy)
         self.go(a, scenario)
-        self.assertEqual(seen, ["ответь Пете"])
+        self.assertEqual(seen, ["ответь Пете", "и ещё уточни время"])
         texts = [m["text"] for m in a.bot.sent]
         self.assertTrue(any("Работаю" in t for t in texts))  # живой статус — и в чате
         self.assertTrue(any("<b>Готово</b>: написал Пете" in t for t in texts))  # ответ продублирован в чат
