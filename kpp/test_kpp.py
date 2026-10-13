@@ -92,7 +92,8 @@ class Request(unittest.TestCase):
 class BotBase(unittest.TestCase):
     def setUp(self):
         self.sent = []
-        kpp.st = {"owner": 1, "jwt": "j", "yandex_token": "y", "place_id": 5, "building_id": 6, "address": "ЖК"}
+        kpp.st = {"owner": 1, "jwt": "j", "yandex_token": "y", "place_id": 5, "building_id": 6, "address": "ЖК",
+                  "mode": "chat"}
 
         def tg(method, **p):
             self.sent.append((method, p))
@@ -307,9 +308,106 @@ class Bot(BotBase):
         self.assertEqual([b["callback_data"] for r in rows for b in r], ["x|5", "m|home"])
 
     def test_needs_login(self):
-        kpp.st = {"owner": 1}
+        kpp.st = {"owner": 1, "mode": "chat"}
         self.msg("А123ВС777")
         self.assertIn("войди", self.texts()[0])
+
+
+class Mode(BotBase):
+    """💬 Чат / 📱 Приложение: выбор на первом /start, /mode, кнопки, переключение из приложения."""
+
+    def setUp(self):
+        super().setUp()
+        self.p.append(mock.patch.object(kpp, "public_url", "https://kpp.test"))
+        self.p[-1].start()
+
+    def buttons(self, i=-1):
+        return [b for row in self.sent[i][1].get("reply_markup", {}).get("inline_keyboard", []) for b in row]
+
+    def web_apps(self, i=-1):
+        return [b for b in self.buttons(i) if "web_app" in b]
+
+    def cb(self, data, mid=3):
+        kpp.on_callback({"id": "c", "from": {"id": 1}, "data": data, "message": {"chat": {"id": 1}, "message_id": mid}})
+
+    def test_first_start_asks(self):
+        kpp.st.pop("mode")
+        self.msg("/start")
+        self.assertIn("Как удобнее?", self.texts()[0])
+        self.assertEqual([b["callback_data"] for b in self.buttons()], ["mode:chat", "mode:app"])
+        self.assertEqual(self.web_apps(), [])
+        self.cb("mode:app")  # выбрал приложение: карточка → «✅ Режим», следом главный экран с кнопкой приложения
+        self.assertEqual(kpp.st["mode"], "app")
+        m, p = self.sent[-3]
+        self.assertEqual((m, p["message_id"]), ("editMessageText", 3))
+        self.assertIn("✅ Режим: 📱 приложение", p["text"])
+        self.assertEqual(self.sent[-2][0], "sendMessage")
+        self.assertIn("Режим: 📱 приложение", self.sent[-2][1]["text"])
+        self.assertEqual(self.web_apps(-2)[0]["web_app"]["url"], "https://kpp.test/")
+        self.msg("/start")  # второй раз не спрашивает
+        self.assertNotIn("Как удобнее?", self.texts()[-1])
+
+    def test_chat_mode_no_web_app(self):
+        kpp.st["last"] = "А123ВС777"
+        for cmd in ("/start", "/help"):
+            self.msg(cmd)
+            self.assertEqual(self.web_apps(), [], cmd)
+            self.assertIn("Режим: 💬 чат", self.texts()[-1])
+            data = [b.get("callback_data") for b in self.buttons()]
+            self.assertIn("mode", data)
+            self.assertIn("m|passes", data)
+            self.assertIn("sup|ask", data)
+            self.assertTrue(all(len(r) <= 3 for r in self.sent[-1][1]["reply_markup"]["inline_keyboard"]))
+        self.cb("m|home")
+        self.assertEqual(self.web_apps(), [])
+        self.msg("/app")  # явная просьба — кнопка приложения есть
+        self.assertEqual(self.web_apps()[0]["web_app"]["url"], "https://kpp.test/")
+
+    def test_app_mode_short(self):
+        kpp.st["mode"] = "app"
+        self.msg("/start")
+        self.assertEqual(self.web_apps()[0]["text"], "📱 Открыть приложение")
+        self.assertIn("Режим: 📱 приложение", self.texts()[-1])
+        self.assertNotIn("/passes", self.texts()[-1])  # коротко
+        rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+        self.assertLessEqual(len(rows), 3)
+        self.assertIn("mode", [b.get("callback_data") for b in self.buttons()])
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}):
+            self.msg("М456ОР50")  # чат отвечает и в режиме приложения
+        self.assertIn("Пропуск заказан", self.texts()[-1])
+
+    def test_mode_command_and_button(self):
+        self.msg("/mode")
+        self.assertIn("🧭 Как удобнее?", self.texts()[-1])
+        self.cb("mode")  # «⚙️ Режим» из меню — карточка на месте
+        self.assertEqual(self.sent[-2][0], "editMessageText")
+        self.assertIn("Как удобнее?", self.sent[-2][1]["text"])
+        kpp.st["mode"] = "app"
+        self.cb("mode:chat")
+        self.assertEqual(kpp.st["mode"], "chat")
+        self.assertIn("✅ Режим: 💬 чат", self.sent[-3][1]["text"])
+        self.assertIn("Режим: 💬 чат · сменить — /mode", self.sent[-2][1]["text"])
+        self.assertEqual(self.web_apps(-2), [])
+        with self.assertRaises(ValueError):
+            kpp.set_mode("x")
+
+    def test_not_logged_in_after_choice(self):
+        kpp.st = {"owner": 1}
+        self.msg("/start")
+        self.assertIn("Как удобнее?", self.texts()[0])
+        self.cb("mode:chat")
+        self.assertIn("Вход через Яндекс", self.sent[-2][1]["text"])
+
+    def test_switch_from_app(self):
+        kpp.st["mode"] = "app"
+        code, res = kpp.api_post(1, "/api/mode", {"mode": "chat"})
+        self.assertEqual((code, res["mode"], kpp.st["mode"]), (200, "chat", "chat"))
+        self.assertIn("✅ Режим: 💬 чат", self.texts()[-1])  # в чат пришло главное меню
+        self.assertIn("m|passes", [b.get("callback_data") for b in self.buttons()])
+        self.assertEqual(self.web_apps(), [])
+        self.assertEqual(kpp.api_post(1, "/api/mode", {"mode": "x"})[0], 400)
+        with mock.patch.object(dl.Client, "passes", return_value=[]):
+            self.assertEqual(kpp.app_state()["mode"], "chat")
 
 
 def init_data(token, uid=1, age=0, **extra):
