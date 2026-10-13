@@ -155,6 +155,27 @@ class HubTest(Base):
         self.assertEqual(env["EYE_TOKEN"], tok)
         self.assertIn("t.me/glaz_eye_bot", self.last()[1])
 
+    def test_studio_install_by_token(self):
+        """/studio <токен> → studio/install.sh с STUDIO_TOKEN; «🛠 Сделать бота» ведёт в Студию, если она есть."""
+        tok = "8750000000:AAH" + "s" * 32
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"ok":true,"result":{"username":"bot_studio_bot"}}'
+        with mock.patch.object(hub.urllib.request, "urlopen", lambda *a, **k: Resp()), \
+                mock.patch.object(hub.threading, "Thread", lambda target, args, daemon: mock.Mock(start=lambda: target(*args))):
+            hub.on_message(self.msg("/studio " + tok, mid=7))
+        cmd, env = [r for r in self.runs if r[0][0] == "bash"][0]
+        self.assertTrue(cmd[1].endswith("studio/install.sh"))
+        self.assertEqual(env["STUDIO_TOKEN"], tok)
+        self.assertIn(("deleteMessage", {"chat_id": U, "message_id": 7}), self.sent)
+        self.assertIn("Студия", self.last()[0])
+        self.assertIn("t.me/bot_studio_bot", self.last()[1])
+        with mock.patch.object(hub.maker, "studio_link", lambda: "bot_studio_bot"):
+            hub.maker.ask_make(U)
+        self.assertIn("t.me/bot_studio_bot", self.last()[1])
+
     def test_eye_without_secretary(self):
         with mock.patch.object(hub.maker, "secretary_ready", return_value=False):
             hub.on_message(self.msg("/eye"))
