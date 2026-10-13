@@ -440,6 +440,7 @@ class BotTest(unittest.TestCase):
     def setUp(self):
         self.db, _ = seeded(os.path.join(tempfile.mkdtemp(), "bot.db"))
         self.db.meta("owner", U)
+        self.db.meta(f"mode:{U}", "app")  # режим выбран (📱): кнопки приложения в сообщениях есть
         self.sent = []
         self.p = [mock.patch.object(coach, "db", self.db),
                   mock.patch.object(coach, "tg", side_effect=self.fake_tg),
@@ -988,6 +989,132 @@ class BotTest(unittest.TestCase):
         self.assertEqual(edits[-1]["message_id"], 3)
         self.assertIn("+250 мл", edits[-1]["text"])
         self.assertEqual(self.texts(), [])
+
+    def msg(self, t):
+        return {"chat": {"id": U, "type": "private"}, "from": {"id": U, "first_name": "Глеб"}, "text": t}
+
+    def markups(self):
+        return [kw.get("reply_markup") or {} for m, kw in self.sent if m in ("sendMessage", "editMessageText")]
+
+    @staticmethod
+    def has_webapp(markup):
+        return any("web_app" in b for row in markup.get("inline_keyboard", []) for b in row)
+
+    @staticmethod
+    def datas(markup):
+        return [b.get("callback_data") for row in markup.get("inline_keyboard", []) for b in row]
+
+    def test_mode_choice_on_first_start(self):
+        """Первый /start — карточка «Как удобнее?»; выбор запоминается, /mode показывает её снова."""
+        self.db.meta(f"mode:{U}", "")
+        with mock.patch.object(coach, "public_url", "https://coach.example"):
+            coach.on_message(self.msg("/start"))
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            self.assertEqual(self.datas(self.markups()[-1]), ["mode|chat", "mode|app"])
+            self.assertFalse(self.has_webapp(self.markups()[-1]))
+            coach.on_callback({"id": "1", "from": {"id": U, "first_name": "Глеб"}, "data": "mode|chat",
+                               "message": {"chat": {"id": U}, "message_id": 3}})
+            self.assertEqual(coach.ui_mode(U), "chat")
+            edits = [kw for m, kw in self.sent if m == "editMessageText"]
+            self.assertEqual(edits[-1]["message_id"], 3)
+            self.assertIn("Режим: 💬 чат", edits[-1]["text"])
+            self.assertNotIn("reply_markup", edits[-1])
+            self.assertIn("Привет, Глеб", self.texts()[-1])  # и сразу главное меню чата
+            self.assertIn("<i>", self.texts()[-1].split("Режим: 💬 чат")[0][-40:])
+            menu = self.markups()[-1]
+            self.assertFalse(self.has_webapp(menu))
+            for d in ("b|now", "p|", "food|", "water|", "goals|", "sum|week", "pf|", "morning|", "mode|ask", "sup|ask"):
+                self.assertIn(d, self.datas(menu))
+            self.assertTrue(all(len(r) <= 3 for r in menu["inline_keyboard"]))
+            self.sent.clear()
+            coach.on_message(self.msg("/start"))  # режим выбран — сразу меню, без карточки
+            self.assertIn("Привет", self.texts()[-1])
+            self.assertNotIn("Как удобнее?", "".join(self.texts()))
+            coach.on_message(self.msg("/mode"))
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            coach.on_callback({"id": "2", "from": {"id": U}, "data": "mode|ask", "message": {"chat": {"id": U}, "message_id": 4}})
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            coach.on_callback({"id": "3", "from": {"id": U}, "data": "mode|app", "message": {"chat": {"id": U}, "message_id": 5}})
+            self.assertEqual(coach.ui_mode(U), "app")
+            self.assertIn("Режим: 📱 приложение", self.texts()[-1])
+            menu = self.markups()[-1]
+            self.assertTrue(self.has_webapp(menu))
+            self.assertEqual(menu["inline_keyboard"][0][0]["web_app"]["url"], "https://coach.example/")
+            self.assertLessEqual(sum(len(r) for r in menu["inline_keyboard"]), 6)  # коротко: открыть + 2–3 действия
+            self.assertIn("mode|ask", self.datas(menu))
+
+    def test_chat_mode_has_no_webapp_buttons(self):
+        """В режиме «чат» кнопок web_app нет нигде, кроме явного /app; длинное — кнопкой «📄 Полностью» сюда же."""
+        self.db.meta(f"mode:{U}", "chat")
+        long = "\n".join(f"- пункт {i} " + "слово " * 40 for i in range(30))
+        inline = lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args))  # noqa: E731
+        with mock.patch.object(coach, "public_url", "https://coach.example"), \
+                mock.patch.object(coach.threading, "Thread", inline), \
+                mock.patch.object(ai, "claude", return_value=long), \
+                mock.patch.object(ai, "summary", return_value="**Итог** — неделя лучше.\n" + long):
+            for t in ("/start", "/help", "/food", "/water", "/goals", "/profile", "/morning", "выпил 300 мл", "/progress"):
+                coach.on_message(self.msg(t))
+            coach.morning_brief(U)
+            coach.answer(U, U, "план?")
+            coach.summary_report(U, U, "week")
+            coach.on_callback({"id": "1", "from": {"id": U}, "data": "wa|add|250", "message": {"chat": {"id": U}, "message_id": 3}})
+            coach.first_sync(U)
+            coach.use_url("https://coach.example")
+            for m in self.markups():
+                self.assertFalse(self.has_webapp(m), m)
+            self.assertTrue(any("full|answer" in self.datas(m) for m in self.markups()))  # обрезано → «📄 Полностью»
+            self.assertIn("Режим: 💬 чат", self.texts()[0])
+            n = len(self.texts())
+            coach.on_callback({"id": "2", "from": {"id": U}, "data": "full|answer", "message": {"chat": {"id": U}, "message_id": 3}})
+            self.assertGreater(len(self.texts()), n + 1)  # целиком — несколькими сообщениями
+            self.assertIn("пункт 29", self.texts()[-1])
+            coach.on_callback({"id": "3", "from": {"id": U}, "data": "full|progress", "message": {"chat": {"id": U}, "message_id": 3}})
+            self.assertIn("пункт 29", self.texts()[-1])
+            coach.on_callback({"id": "4", "from": {"id": U}, "data": "full|sum-week", "message": {"chat": {"id": U}, "message_id": 3}})
+            self.assertTrue(any("Сводка · полностью" in t for t in self.texts()[-3:]), self.texts()[-1][:80])
+            self.sent.clear()
+            coach.on_message(self.msg("/app"))  # явная просьба — кнопка есть и в режиме «чат»
+            self.assertTrue(self.has_webapp(self.markups()[-1]))
+            self.db.meta(f"mode:{U}", "app")
+            self.sent.clear()
+            coach.answer(U, U, "план?")
+            self.assertTrue(self.has_webapp(self.markups()[-1]))  # в режиме «приложение» — «📱 Полностью»
+
+    def test_profile_in_chat(self):
+        coach.on_message(self.msg("/profile"))
+        self.assertIn("Пока пусто", self.texts()[-1])
+        coach.on_callback({"id": "1", "from": {"id": U}, "data": "pf|edit", "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertTrue((self.db.meta(f"await:{U}") or "").startswith("profile"))
+        coach.on_message(self.msg("вес 61,5, рост 172 см, спорт бокс, цель масса, пол парень, возраст 14 лет"))
+        p = self.db.user(U)["profile"]
+        self.assertEqual((p["weight"], p["height"], p["sport"], p["goal"], p["sex"], p["age"]), (61.5, 172, "бокс", "mass", "m", 14))
+        self.assertIn("Профиль обновлён", self.texts()[-1])
+        self.assertIsNone(coach.awaiting(U))
+        coach.on_message(self.msg("/profile утро выкл"))
+        self.assertEqual(self.db.user(U)["profile"]["morning"], "off")
+        self.assertIn("выключен", self.texts()[-1])
+        coach.on_callback({"id": "2", "from": {"id": U}, "data": "pf|edit", "message": {"chat": {"id": U}, "message_id": 3}})
+        coach.on_message(self.msg("ничего не понятно"))
+        self.assertTrue(self.texts()[-1].startswith("⚠️"))
+        self.assertTrue((self.db.meta(f"await:{U}") or "").startswith("profile"))  # можно сразу повторить
+        coach.on_message(self.msg("возраст 3"))
+        self.assertIn("от 8 до 100", self.texts()[-1])
+
+    def test_mode_api(self):
+        """«💬 Перейти в чат» в приложении: POST /api/mode → режим «чат» и главное меню чата в сообщениях."""
+        self.assertEqual(call("/api/all").json["mode"], "app")
+        r = call("/api/mode", {"mode": "chat"})
+        self.assertEqual((r.code, r.json), (200, {"mode": "chat"}))
+        self.assertEqual(coach.ui_mode(U), "chat")
+        self.assertIn("Режим: 💬 чат", self.texts()[-1])
+        self.assertFalse(self.has_webapp(self.markups()[-1]))
+        self.assertIn("mode|ask", self.datas(self.markups()[-1]))
+        self.assertEqual(call("/api/all").json["mode"], "chat")
+        self.assertEqual(call("/api/mode", {"mode": "pdf"}).code, 400)
+        n = len(self.texts())
+        self.assertEqual(call("/api/mode", {"mode": "app"}).json, {"mode": "app"})
+        self.assertEqual(len(self.texts()), n)  # обратно в приложение — без сообщения в чат
+        self.assertEqual(call("/api/mode", {"mode": "chat"}, user={"id": 99}).code, 403)
 
     def test_static(self):
         r = call("/", method="GET", init="")

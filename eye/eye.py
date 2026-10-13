@@ -230,20 +230,72 @@ def safari_link():
     return f"{public_url}/#k={web_key()}" if public_url else ""
 
 
-def app_buttons():
-    if not public_url:
+# ---------- режим: 💬 чат или 📱 приложение ----------
+# Выбирается при первом /start, меняется по /mode, кнопкой «⚙️ Режим» и со страницы («💬 Перейти в чат»).
+# «чат» — фото, видео и голос в чате, ответы текстом и голосом, кнопок страницы (web_app, Safari) в сообщениях
+# нет (кнопка «Глаз» слева от поля ввода остаётся); «приложение» — главная кнопка открывает страницу разговора,
+# но чат отвечает всё равно. Хранится в state.json («mode»).
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode():
+    m = setting("mode")
+    return m if m in MODES else ""
+
+
+def set_mode(m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    setting("mode", m)
+
+
+def mode_note():
+    return f"Режим: {MODES.get(ui_mode(), 'не выбран')} · сменить — /mode"
+
+
+def mode_card():
+    return (card("🧭", "Как удобнее?", "💬 <b>В чате</b> — фото, видео и голос сюда, отвечу текстом и голосом\n"
+                                        "📱 <b>Приложение</b> — страница разговора без рук и лента «Что видел»",
+                 "Поменять можно в любой момент: /mode"),
+            [[{"text": "💬 В чате", "callback_data": "mode|chat", "style": "primary"},
+              {"text": "📱 Приложение", "callback_data": "mode|app", "style": "primary"}]])
+
+
+def app_buttons(always=False):
+    """Кнопки страницы (web_app и Safari). В режиме «💬 чат» их нет — кроме явной просьбы (/app, always)."""
+    if not public_url or (ui_mode() == "chat" and not always):
         return []
     return [[{"text": "👁 Открыть «Глаз»", "web_app": {"url": public_url + "/"}, "style": "primary"}],
             [{"text": "🧭 Открыть в Safari", "url": safari_link()}]]
 
 
 def menu_buttons():
-    """Под /start и /help: главное — открыть страницу; ниже — Safari и «Заново»."""
-    rows = app_buttons()[:1]
-    rows.append(([{"text": "🧭 В Safari", "url": safari_link()}] if public_url else []) +
-                [{"text": "🧹 Заново", "callback_data": "new"}])
-    rows.append([support.Support.button()])
+    """Главное меню под /start и /help. «📱 приложение»: открыть страницу, Safari, «Заново»;
+    «💬 чат»: всё, что есть на странице, — кнопками (разговор — просто пиши, говори, присылай фото)."""
+    if ui_mode() == "app" and public_url:
+        rows = app_buttons()[:1]
+        rows.append([{"text": "🧭 В Safari", "url": safari_link()}, {"text": "🧹 Заново", "callback_data": "new"},
+                     {"text": "⚙️ Режим", "callback_data": "mode|ask"}])
+        rows.append([support.Support.button()])
+    else:
+        rows = [[{"text": "🧹 Заново", "callback_data": "new"}, {"text": "👁 Что видел", "callback_data": "seen"},
+                 {"text": "🩺 Проверка", "callback_data": "status"}],
+                [{"text": "⚙️ Режим", "callback_data": "mode|ask"}, support.Support.button()]]
     return rows
+
+
+def seen_text(n=8):
+    """«👁 Что видел» в чате: последние фото и видео с очков — время, что это и что сказал."""
+    items = photo_list(n)
+    if not items:
+        return card("👁", "Что видел", note="Пока ничего — пришли фото или видео с очков.")
+    lines = []
+    for p in items:
+        when = time.strftime("%d.%m %H:%M", time.localtime(p["t"])) if isinstance(p["t"], (int, float)) else ""
+        what = p["title"] or p["say"][:60] or ("видео" if p["video"] else "фото")
+        lines.append(f"• {esc(when)} — {'🎬 ' if p['video'] else ''}{esc(what)}" + (f" · {esc(p['place'])}" if p["place"] else ""))
+    return card("👁", "Что видел", "\n".join(lines), "Спроси про любое — помню последние три часа.")
 
 
 def status_buttons():
@@ -253,6 +305,7 @@ def status_buttons():
 def setup_bot():
     commands = [
         {"command": "app", "description": "Разговор и фото"},
+        {"command": "mode", "description": "Чат или приложение"},
         {"command": "link", "description": "Ссылка для Safari"},
         {"command": "new", "description": "Начать разговор заново"},
         {"command": "status", "description": "Проверка"},
@@ -283,11 +336,12 @@ def set_menu():
         return False
 
 
-HELP = card("👁", "Глаз", (
-    "📷 Фото или 🎬 видео с очков — скажу, что это.\n"
-    "🎙 Голосовое или текст — отвечу.\n"
-    "👁 «Глаз» слева от поля ввода — разговор без рук."
-), "/link — для Safari · /new — заново · /status — проверка")
+def help_text():
+    """Под /start и /help: что умею, команды и подпись режима (одной строкой, курсивом)."""
+    page = ("👁 «Глаз» слева от поля ввода — разговор без рук." if ui_mode() == "app"
+            else "👁 Страница разговора без рук — /app.")
+    return card("👁", "Глаз", "📷 Фото или 🎬 видео с очков — скажу, что это.\n🎙 Голосовое или текст — отвечу.\n" + page,
+                f"/link — для Safari · /new — заново · /status — проверка\n{mode_note()}")
 
 UNKNOWN = card("🤷", "Это не разберу", note="Пришли фото, видео, голосовое или просто напиши.")
 
@@ -655,11 +709,15 @@ def on_message(msg):
         return send(chat, card("📍", "Запомнил, где ты", esc(place_now() or "координаты получил"),
                                "Верю месту 20 минут — на прогулке лучше трансляция геопозиции."))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd in ("/start", "/help"):
-        send(chat, HELP, menu_buttons())
+    if cmd == "/start" and not ui_mode():  # первый раз: сначала выбор, чат или приложение
+        send(chat, *mode_card())
+    elif cmd in ("/start", "/help"):
+        send(chat, help_text(), menu_buttons())
+    elif cmd == "/mode":
+        send(chat, *mode_card())
     elif cmd == "/app":
         if public_url:
-            send(chat, card("👁", "Глаз", note="Открой и нажми «Говорить» — дальше без рук."), app_buttons())
+            send(chat, card("👁", "Глаз", note="Открой и нажми «Говорить» — дальше без рук."), app_buttons(always=True))
         else:
             send(chat, not_ready())
     elif cmd == "/link":
@@ -678,22 +736,34 @@ def on_message(msg):
     elif not text:
         send(chat, UNKNOWN)
     else:
-        send(chat, HELP, menu_buttons())
+        send(chat, help_text(), menu_buttons())
 
 
 def on_callback(cb):
-    """Кнопки под сообщениями: «🧹 Заново» — всплывашка без нового сообщения, «🔄 Обновить» — правка на месте."""
+    """Кнопки под сообщениями: «🧹 Заново» — всплывашка без нового сообщения, «🔄 Обновить» — правка на месте,
+    «⚙️ Режим» / выбор режима — карточка правится на месте и приходит главное меню."""
     msg = cb.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
+    data = cb.get("data") or ""
     note = ""
     if not allowed((cb.get("from") or {}).get("id")):
         note = "🔒 Это личный бот."
-    elif cb.get("data") == "new":
+    elif data == "new":
         setting("history", [])
         note = "🧹 Начали заново. Фото помню."
-    elif cb.get("data") == "status" and chat:
+    elif data == "status" and chat:
         put(chat, status_text(), msg.get("message_id"), status_buttons())
         note = "Обновлено"
+    elif data == "seen" and chat:
+        send(chat, seen_text())
+    elif data == "mode|ask" and chat:
+        send(chat, *mode_card())
+    elif data in ("mode|chat", "mode|app") and chat:
+        set_mode(data.split("|")[1])
+        put(chat, card("✅", "Режим: " + MODES[ui_mode()], note="Сменить — /mode или кнопка «⚙️ Режим»"),
+            msg.get("message_id"))
+        send(chat, help_text(), menu_buttons())
+        note = MODES[ui_mode()]
     try:
         tg("answerCallbackQuery", callback_query_id=cb["id"], text=note)
     except Exception as e:
@@ -808,7 +878,8 @@ class Web(BaseHTTPRequestHandler):
             if speech.media.whisper_python():
                 speech.whisper.warm()
             return self.reply(200, {"photos": photo_list(), "history": history(20), "last": last_event_id(),
-                                    "place": place_now(), "tts": _has("edge_tts"), "safari": safari_link()})
+                                    "place": place_now(), "tts": _has("edge_tts"), "safari": safari_link(),
+                                    "mode": ui_mode()})
         if path == "/api/events":
             page_seen[0] = time.time()
             after = int(q.get("after") or 0)
@@ -861,6 +932,12 @@ class Web(BaseHTTPRequestHandler):
             if path == "/api/new":
                 setting("history", [])
                 return self.reply(200, {"ok": True})
+            if path == "/api/mode":  # «💬 Перейти в чат» со страницы (или обратно): в чат сразу приходит главное меню
+                m = str((json.loads(raw or b"{}") or {}).get("mode") or "")
+                set_mode(m)
+                if m == "chat" and chat_id():
+                    send(chat_id(), help_text(), menu_buttons())
+                return self.reply(200, {"mode": m})
             if path == "/api/where":
                 return self.reply(200, {"place": place_now()})
             if path == "/api/support":  # 🛠 со страницы — та же поддержка, что /fix в чате

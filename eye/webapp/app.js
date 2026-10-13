@@ -39,6 +39,23 @@ Kit.supportOpts = { api: (path, body) => api(path, { method: 'POST', headers: { 
   body: JSON.stringify(body) }) };
 $('tab-seen').insertAdjacentHTML('beforeend', Kit.supportRow('/api/support'));
 
+// «💬 Перейти в чат» внизу главного экрана: режим «чат» — бот пришлёт главное меню в чат, страница закрывается
+let uiMode = '';
+function chatRow() {
+  return '<div class="list mode-list"><button class="row tap" id="tochat"><span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>' +
+    `<div class="meta" id="tochat-meta">${uiMode === 'chat' ? 'режим чата уже включён' : 'бот перейдёт в режим чата: фото и голос туда, ответы там же'}</div></span><span class="end chev"></span></button></div>`;
+}
+$('tab-talk').insertAdjacentHTML('beforeend', chatRow());
+$('tochat').addEventListener('click', async (ev) => {
+  const b = ev.currentTarget;
+  try {
+    await Kit.busy(b, () => api('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'chat' }) }));
+  } catch (e) { toast(e.message, 'error'); return; }
+  uiMode = 'chat';
+  $('tochat-meta').textContent = 'режим чата уже включён';
+  if (tg && tg.close) tg.close(); else toast('Режим чата включён — главное меню в Telegram', 'success');
+});
+
 function haptic(kind) { Kit.haptic(kind); }
 function toast(text, kind) {
   Kit.toast(text, kind === 'error' ? 'err' : kind === 'success' ? 'ok' : '');
@@ -471,6 +488,8 @@ async function load() {
     const s = await api('/api/state');
     if (!last) last = s.last;
     safari = s.safari || '';
+    uiMode = s.mode || '';
+    $('tochat-meta').textContent = uiMode === 'chat' ? 'режим чата уже включён' : 'бот перейдёт в режим чата: фото и голос туда, ответы там же';
     if (s.place) $('place').textContent = '📍 ' + s.place;
     renderChat(s.history);
     renderFeed(s.photos || []);
