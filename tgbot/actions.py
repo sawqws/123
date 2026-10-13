@@ -760,7 +760,7 @@ async def newbot(ctx, a):
 # ---------- все боты Глеба: «Начать» и папка ----------
 
 ENV_FILES = ["/etc/horo-bot.env", "/etc/hub-bot.env", "/etc/planner-bot.env", "/etc/coach-bot.env", "/etc/kpp-bot.env",
-             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env"]
+             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env", "/etc/catcher-bot.env"]
 MADE_BOTS = "/root/bots"  # боты, которые сделал Главный (hub/maker.py): /root/bots/<slug>/.env
 
 
@@ -838,3 +838,98 @@ async def bottoken(ctx, a):
             await conv.send_message("/cancel")
             raise Fail("BotFather не дал токен: " + cut(r.raw_text, 200))
     return f"TOKEN {m.group(0)} @{u}"
+
+
+# ---------- юзернеймы: проверить и занять на канал (бот «Ловец», catcher/) ----------
+
+USERNAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{3,30}[A-Za-z0-9]")  # Telegram: 5–32 символа
+
+
+def uname(s):
+    """Юзернейм из «@name», «t.me/name» или «name» (строчными). Не похоже на юзернейм — Fail."""
+    u = str(s or "").strip().split("t.me/")[-1].strip("/ @")
+    if not USERNAME.fullmatch(u) or "__" in u:
+        raise Fail(f"«{u}» — не юзернейм: 5–32 символа, латиница, цифры и _, начинается с буквы")
+    return u.lower()
+
+
+def ustatus(e):
+    """Ответ Telegram про юзернейм → статус для Ловца: fragment (продаётся на Fragment), invalid, taken,
+    too_many (лимит публичных каналов, обычно 10), channels_limit (слишком много каналов), flood (+wait), error."""
+    if isinstance(e, errors.FloodWaitError):
+        return {"status": "flood", "wait": e.seconds}
+    # у известных Telethon ошибок имя — в классе (UsernameOccupiedError), у неизвестных — в message (USERNAME_OCCUPIED)
+    m = (type(e).__name__ + " " + str(getattr(e, "message", "") or "")).replace("_", "").lower()
+    for key, st in (("purchaseavailable", "fragment"), ("usernameinvalid", "invalid"), ("usernameoccupied", "taken"),
+                    ("adminpublictoomuch", "too_many"), ("channelstoomuch", "channels_limit")):
+        if key in m:
+            return {"status": st}
+    return {"status": "error", "error": f"{type(e).__name__}: {e}"[:200]}
+
+
+@command("username")
+async def username_check(ctx, a):
+    """Свободен ли юзернейм для канала (ничего не меняет): {"username", "status": free|taken|fragment|invalid|flood}."""
+    u = uname(a.get("username"))
+    try:
+        free = await ctx.client(functions.channels.CheckUsernameRequest(types.InputChannelEmpty(), u))
+    except errors.RPCError as e:
+        return {"username": u, **ustatus(e)}
+    return {"username": u, "status": "free" if free else "taken"}
+
+
+@command("mychannels")
+async def my_channels(ctx, a):
+    """Каналы, где Глеб создатель: [{"id", "title", "username"}] — на какой из них ловить юзернейм."""
+    out = []
+    for d in await dialogs(ctx, fresh=bool(a.get("fresh"))):
+        e = d.entity
+        if isinstance(e, types.Channel) and e.broadcast and getattr(e, "creator", False):
+            out.append({"id": utils.get_peer_id(e), "title": e.title, "username": e.username or ""})
+    return out
+
+
+@command("reserve", write=True)
+async def reserve(ctx, a):
+    """Новый закрытый канал без юзернейма — про запас, чтобы в момент, когда имя освободилось, был один запрос.
+    auto — без вопроса (так зовёт Ловец: Глеб уже дал ему список имён). → {"id", "title"}."""
+    title = (a.get("title") or "Ловец").strip()[:128]
+    if not a.get("auto"):
+        await ctx.confirm(f"🆕 Создать канал «{title}» про запас для юзернейма")
+    r = await ctx.client(functions.channels.CreateChannelRequest(title=title, about=a.get("about") or "",
+                                                                 megagroup=False, broadcast=True))
+    c = r.chats[0]
+    _dialogs.pop(id(ctx.client), None)
+    return {"id": utils.get_peer_id(c), "title": c.title}
+
+
+@command("grab", write=True)
+async def grab(ctx, a):
+    """Занять юзернейм на канал: channel — id своего канала (без него — создаётся новый с названием title).
+    auto — без вопроса (Ловец: список имён — и есть согласие Глеба; спросить в момент освобождения — опоздать).
+    → {"status": "ok", "link", "channel", "title"} или {"status": taken|fragment|too_many|flood|…, "channel": id
+    канала, если он создан, но имя не досталось — Ловец оставит его про запас}."""
+    u = uname(a.get("username"))
+    created = False
+    if a.get("channel"):
+        try:
+            c = await ctx.client.get_entity(int(a["channel"]))
+        except (ValueError, TypeError, errors.RPCError):
+            raise Fail(f"канал {a['channel']} не найден")
+        if not a.get("auto"):
+            await ctx.confirm(f"🎯 Занять @{u} на канал «{name(c)}»")
+    else:
+        title = (a.get("title") or u)[:128]
+        if not a.get("auto"):
+            await ctx.confirm(f"🎯 Занять @{u}: новый канал «{title}»")
+        r = await ctx.client(functions.channels.CreateChannelRequest(title=title, about="", megagroup=False,
+                                                                     broadcast=True))
+        c, created = r.chats[0], True
+        _dialogs.pop(id(ctx.client), None)
+    out = {"username": u, "channel": utils.get_peer_id(c), "title": name(c), "created": created}
+    try:
+        await ctx.client(functions.channels.UpdateUsernameRequest(c, u))
+    except errors.RPCError as e:
+        return {**out, **ustatus(e)}
+    _dialogs.pop(id(ctx.client), None)
+    return {**out, "status": "ok", "link": f"https://t.me/{u}"}

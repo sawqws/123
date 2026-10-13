@@ -40,6 +40,8 @@ CATALOG = {
     "tg-agent": ("🤖 Секретарь", ["tgbot"], "", "", None, "часть Главного: вопросы, голос, фото, твой Telegram"),
     "studio-bot": ("🏗 Студия", ["studio"], "/etc/studio-bot.env", "STUDIO_TOKEN", "studio",
                    "делает новых ботов по идее: вопросы, план, код, мини-приложение"),
+    "catcher-bot": ("🎯 Ловец", ["catcher"], "/etc/catcher-bot.env", "CATCHER_TOKEN", "catcher",
+                    "ловит крутые юзернеймы на каналы: имена и пожелания"),
     "hub-bot": ("👑 Главный", ["hub"], "/etc/hub-bot.env", "HUB_TOKEN", None, "следит за ботами, делает новых"),
 }
 
