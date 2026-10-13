@@ -365,7 +365,7 @@ def secretary_status():
 def to_secretary(update, chat):
     """Обновление Telegram — Секретарю. Не отвечает — объясняем и поднимаем его сами."""
     try:
-        secretary({"cmd": "_hub", "update": update, "owner": owner()})
+        secretary({"cmd": "_hub", "update": update, "owner": owner(), "mode": ui_mode()})
         return True
     except SecretaryDown as e:
         print("secretary:", e)
@@ -427,10 +427,62 @@ def check_secretary():
     revive(owner(), force=True)
 
 
-# ---------- экраны ----------
+# ---------- экраны. Режим: 💬 чат или 📱 приложение (как в bot/bot.py и planner/planner.py) ----------
+# Выбирается при первом /start, меняется по /mode, кнопкой «⚙️ Режим» и из приложения («💬 Перейти в чат»).
+# «чат» — всё кнопками здесь, приложение не предлагается; «приложение» — главная кнопка открывает его,
+# но команды и текст в чате работают всё равно. Хранится в hub/data/state.json («mode»).
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode():
+    m = setting("mode")
+    return m if m in MODES else ""
+
+
+def set_mode(m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    setting("mode", m)
+
+
+def mode_note():
+    """Подпись режима для /start — одной строкой, курсивом."""
+    return f"<i>Режим: {MODES.get(ui_mode(), 'не выбран')} · сменить — /mode</i>"
+
+
+def mode_card(chat, mid=None):
+    return show(chat, mid, card("🧭 <b>Как удобнее?</b>",
+                                ["💬 <b>В чате</b> — всё кнопками и командами здесь",
+                                 "📱 <b>Приложение</b> — Секретарь, боты и дела в одном окне"],
+                                "<i>Поменять можно в любой момент: /mode</i>"),
+                [[b("💬 В чате", "mode|chat", "primary"), b("📱 Приложение", "mode|app", "primary")]])
+
+
+def on_mode(chat, mid, key):
+    """Кнопка на карточке «Как удобнее?»: запомнить и показать главный экран по режиму."""
+    set_mode(key)
+    edit(chat, mid, card("✅ <b>Режим: " + MODES[key] + "</b>", [], "<i>Сменить — /mode или кнопка «⚙️ Режим»</i>"))
+    home(chat)
+
+
+def app_mode(body):
+    """«💬 Перейти в чат» из приложения (или обратно): запоминает режим; в чате сразу приходит главное меню."""
+    m = str(body.get("mode") or "")
+    set_mode(m)
+    if m == "chat":
+        send(owner(), card("✅ <b>Режим: " + MODES[m] + "</b>", ["Всё, что было в приложении, есть и здесь."],
+                           "<i>Вернуть приложение — /mode</i>"))
+        threading.Thread(target=home, args=(owner(),), daemon=True).start()
+    return {"mode": m}
+
 
 def home(chat, mid=None):
-    """Главный экран (/start): коротко, как дела у ботов и у Секретаря, и главные кнопки."""
+    """Главный экран (/start): коротко, как дела у ботов и у Секретаря, и главные кнопки.
+    Режим «📱 приложение» — короче: главная кнопка открывает приложение, плюс 2–3 действия."""
+    m = ui_mode()
+    if not m:  # первый /start — сначала выбор, чат или приложение
+        return mode_card(chat, mid)
     rows = apps()
     sec = secretary_status()
     lines = []
@@ -452,16 +504,21 @@ def home(chat, mid=None):
         lines.append("👤 Аккаунт не подключён")
     if sec and sec.get("busy"):
         lines.append("⏳ Секретарь занят поручением")
-    btns = []
-    web = app_button()
+    bots_btn = b("🤖 Боты", "bots", "danger" if rows and any(a["status"] != "online" for a in rows) else None)
+    acc_btn = b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary")
+    web = app_button() if m == "app" else None
+    foot = mode_note()
+    if m == "app" and not web:
+        foot += "\n<i>https-адреса пока нет, поэтому всё здесь</i>"
     if web:
-        btns.append([web])
-    btns += [[b("🤖 Боты", "bots", "danger" if rows and any(a["status"] != "online" for a in rows) else None),
-              b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary"),
-              b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
-             [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")]]
-    return show(chat, mid, card("👑 <b>Главный</b>", lines,
-                                "<i>💬 Пиши или говори что угодно — отвечу. Фото и видео тоже.</i>"), btns)
+        btns = [[web], [bots_btn, b("🧠 Психолог", "psy"), acc_btn], [b("⚙️ Режим", "mode|ask")]]
+        foot += "\n<i>💬 Команды и текст работают и здесь.</i>"
+    else:
+        btns = [[bots_btn, acc_btn, b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
+                [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")],
+                [b("🧠 Психолог", "psy"), b("⚙️ Режим", "mode|ask")]]
+        foot += "\n<i>💬 Пиши или говори что угодно — отвечу. Фото и видео тоже.</i>"
+    return show(chat, mid, card("👑 <b>Главный</b>", lines, foot), btns)
 
 
 def bots_screen(chat, mid=None):
@@ -476,7 +533,7 @@ def bots_screen(chat, mid=None):
         lines.append(f"{'🟢' if ok else '🔴'} {esc(short(a['label']))} — "
                      + (f"{ago(a['uptime'])} · {a['mem']} МБ" if ok else f"<b>{esc(a['status'])}</b>"))
     btns = []
-    web = app_button()
+    web = app_button() if ui_mode() == "app" else None  # в режиме «чат» приложение не навязываем
     if web:
         btns.append([web])
     btns += pairs([b(clip(a["label"]), f"app|{a['name']}", None if a["status"] == "online" else "danger")
@@ -508,6 +565,65 @@ def app_card(chat, mid, name):
     return show(chat, mid, card(f"<b>{esc(a['label'])}</b>", lines),
                 [[b("🔄 Перезапустить", f"rs|{name}", "primary"), b("📜 Логи", f"lg|{name}")],
                  [b("‹ Назад", "bots")]])
+
+
+# ---------- 🧠 Психолог (разбор переписок делает Секретарь через аккаунт Глеба) ----------
+
+PSY_TEXTS = {"🧠 Разбор чата"}  # кнопка клавиатуры Секретаря — та же карточка
+PSY_SCOPES = {"week": "Все чаты · неделя", "month": "Все чаты · месяц"}
+
+
+def psy_card(chat, mid=None):
+    """/psy и кнопка «🧠 Психолог»: все чаты за неделю или месяц, один чат. Без входа в аккаунт — честно сказать."""
+    sec = secretary_status()
+    back = [b("‹ Главная", "home")]
+    if sec is None:
+        return show(chat, mid, card("🧠 <b>Психолог</b>", ["Разбор переписок делает Секретарь, а он не отвечает. "
+                                                           "Поднимаю его — попробуй через минуту."]),
+                    [[b("🔄 Перезапустить", "srst", "primary")], back])
+    if not sec.get("account"):
+        return show(chat, mid, card("🧠 <b>Психолог</b>",
+                                    ["Разбираю переписки из твоего Telegram, а аккаунт пока не подключён.",
+                                     "Войди — это минута — и разбор заработает: все чаты за неделю или месяц, или один чат."]),
+                    [[b("🔑 Войти в аккаунт", SEC_PREFIX + "login:", "primary")],
+                     [b("👤 Аккаунт", SEC_PREFIX + "m:home")] + back])
+    lines = ["Разберу переписки как сильный практикующий психолог: отношения и роли, тон, скрытые конфликты "
+             "и манипуляции, на кого уходят силы — и 3–5 конкретных советов.",
+             "• Все чаты — общий разбор за период, с кнопками «Подробнее про …» по людям",
+             "• Один чат — человек или группа"]
+    if sec.get("busy"):
+        lines.append("⏳ Секретарь сейчас занят поручением — дождись ответа.")
+    return show(chat, mid, card("🧠 <b>Психолог</b>", lines, "<i>Это несколько минут, ответ придёт сюда.</i>"),
+                [[b("📅 " + PSY_SCOPES["week"], "psy|week"), b("📆 " + PSY_SCOPES["month"], "psy|month")],
+                 [b("💬 Один чат", "psy|one")], back])
+
+
+def psy_one(chat, mid=None):
+    """Выбор чата: последние диалоги кнопками (по 3 в ряд) или написать имя."""
+    try:
+        r = secretary({"cmd": "_dialogs", "args": {"limit": 9}}, timeout=20)
+        ds = r.get("out") if r.get("ok") and isinstance(r.get("out"), list) else []
+    except SecretaryDown:
+        return secretary_down(chat)
+    setting("wait", "psy")
+    btns = pairs([b(clip(d.get("name") or "?", 24), f"psy|c|{d.get('id')}") for d in ds if d.get("id") is not None], 3)
+    return show(chat, mid, card("🧠 <b>Один чат</b>", ["Выбери из последних или напиши имя человека или чата — "
+                                                        "можно с уточнением: «8Б за месяц, как ко мне относятся»."],
+                                "<i>/cancel — отмена</i>"), btns + [[b("‹ Назад", "psy")]])
+
+
+def psy_run(chat, scope, target=None, mid=None):
+    """Запустить разбор у Секретаря: он сам пишет живой статус и ответ в чат. Мы — только подтверждение."""
+    try:
+        r = secretary({"cmd": "_psy", "args": {"scope": scope, "chat": target}}, timeout=20)
+    except SecretaryDown:
+        return secretary_down(chat)
+    if not r.get("ok"):
+        why = str(r.get("out") or "не получилось")
+        btns = [[b("🔑 Войти в аккаунт", SEC_PREFIX + "login:", "primary")]] if "аккаунт" in why else []
+        return show(chat, mid, card("⚠️ <b>Разбор не запустился</b>", [esc(why)]), btns + [[b("‹ Назад", "psy")]])
+    what = PSY_SCOPES.get(scope) or f"разбор: {esc(str((r.get('out') or {}).get('q') or target or ''))[:60]}"
+    show(chat, mid, card("🧠 <b>Разбираю</b>", [esc(what), "Статус и ответ придут сюда — это несколько минут."]), [])
 
 
 def log_text(name, lines=30, limit=3500):
@@ -908,6 +1024,7 @@ def app_state():
             "reminders": [{"id": r["id"], "time": r["time"], "when": digest.describe(r), "text": r["text"]} for r in rs],
             "digest": st.get("digest_time") or digest.DEFAULT_TIME,
             "secretary": {"running": (run_all.get(SECRETARY) or {}).get("status") == "online"},
+            "mode": ui_mode(),
             "support": [{"id": pm2, "name": short(lbl)} for pm2, lbl in maker.targets(rows or [])],
             "live": dict(live), "boot": BOOT, "now": time.time()}
 
@@ -932,6 +1049,8 @@ def app_action(action, arg):
         progress("Скачиваю свежий код из main…", kind="update")
         threading.Thread(target=update_all, args=(owner(),), daemon=True).start()
         return {"ok": True, "text": "Обновляю…", "at": live["at"]}
+    if action == "mode":  # то же, что POST /app/api/mode {mode}
+        return app_mode({"mode": arg})
     if action == "secretary":  # поднять Секретаря (перезапуск или установка) — в фоне, итог придёт в чат
         threading.Thread(target=revive, args=(owner(), True), daemon=True).start()
         return {"ok": True, "text": "Поднимаю Секретаря…"}
@@ -1159,6 +1278,14 @@ class Web(BaseHTTPRequestHandler):
             except ValueError:
                 return self.reply(400, {"error": "bad json"})
             return self.app_api(app_support, body if isinstance(body, dict) else {})
+        if path == "/app/api/mode":  # {mode: chat|app} — то же, что action=mode
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 10_000)) or b"{}") if n else {}
+            except ValueError:
+                return self.reply(400, {"error": "bad json"})
+            body = body if isinstance(body, dict) else {}
+            return self.app_api(app_mode, body)
         if path == "/app/api/action":  # мини-приложение: вход по подписи Telegram
             try:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -1263,7 +1390,8 @@ HELP = card("👑 <b>Главный</b> — боты и секретарь в о
     "• 👤 Твой Telegram: что пропустил, ответы, папки, сообщения по расписанию — /login, /jobs, /new, /stop.",
     "• 🤖 /bots — боты: упадёт — напишу сам; перезапуск, логи, /update — обновить всех.",
     "• 🛠 /make — новый бот по ТЗ, ✏️ /fix — доработать любого, 📂 /all — все со ссылками.",
-    "• 📱 /app — приложение: секретарь, боты, дела (кнопка «Приложение» у поля ввода).",
+    "• 🧠 /psy — психолог: разбор всех чатов за неделю или месяц, или одного чата.",
+    "• 📱 /app — приложение: секретарь, боты, дела (кнопка «Приложение» у поля ввода); ⚙️ /mode — чат или приложение.",
     "• /paid 07.11 — срок оплаты сервера, /server — сервер, /claude — вход для Claude.",
     digest.HELP_LINES.rstrip("\n")], expand=True)
 
@@ -1300,6 +1428,15 @@ def on_message(msg):
     if cmd in ("/start", "/bots", "/menu") or text in MENU_TEXTS:
         setting("wait", None)
         bots_screen(chat) if cmd == "/bots" else home(chat)
+    elif cmd == "/mode":
+        setting("wait", None)
+        mode_card(chat)
+    elif cmd == "/psy" or text in PSY_TEXTS:
+        setting("wait", None)
+        psy_card(chat)
+    elif not cmd and wait == "psy" and text:  # имя чата или человека для «Один чат»
+        setting("wait", None)
+        threading.Thread(target=psy_run, args=(chat, "chat", text), daemon=True).start()
     elif cmd == "/help":
         send(chat, HELP)
     elif cmd == "/app":
@@ -1433,6 +1570,21 @@ def on_callback(cq):
     elif data[0] == "bots":
         setting("wait", None)
         bots_screen(chat, mid)
+    elif data[0] == "mode":  # 💬 чат / 📱 приложение
+        setting("wait", None)
+        on_mode(chat, mid, arg) if arg in MODES else mode_card(chat, mid)
+    elif data[0] == "psy" and not arg:
+        setting("wait", None)
+        psy_card(chat, mid)
+    elif data[0] == "psy" and arg == "one":
+        threading.Thread(target=psy_one, args=(chat, mid), daemon=True).start()
+    elif data[0] == "psy" and arg in PSY_SCOPES:
+        note = "Запускаю разбор…"
+        threading.Thread(target=psy_run, args=(chat, arg, None, mid), daemon=True).start()
+    elif data[0] == "psy" and arg == "c" and len(data) > 2:
+        setting("wait", None)
+        note = "Запускаю разбор…"
+        threading.Thread(target=psy_run, args=(chat, "chat", data[2], mid), daemon=True).start()
     elif data[0] == "srst":
         note = "Поднимаю Секретаря…"
         threading.Thread(target=revive, args=(chat, True), daemon=True).start()
@@ -1485,7 +1637,8 @@ def on_callback(cq):
         pass
 
 
-COMMANDS = [("start", "Главная"), ("app", "Приложение"), ("bots", "Боты и сервер"), ("login", "Войти в аккаунт"),
+COMMANDS = [("start", "Главная"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
+            ("bots", "Боты и сервер"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
 ABOUT = "Боты на сервере и личный секретарь: пишите или говорите что угодно."

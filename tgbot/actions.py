@@ -271,6 +271,42 @@ async def history(ctx, a):
     return head + "\n" + "\n".join(line(m) for m in msgs)
 
 
+@command("period")
+async def period(ctx, a):
+    """Все чаты с сообщениями за период (для разбора «всех чатов» как психолог): по каждому чату — кто это,
+    сколько сообщений (и моих), сами сообщения от старых к новым. Каналы и боты пропускаются.
+    --days N (по умолчанию 7) или --since дата; --limit — сообщений на чат; --chats — не больше стольких чатов."""
+    since = date(a["since"]) if a.get("since") else \
+        datetime.datetime.now(MSK) - datetime.timedelta(days=max(1, int(a.get("days") or 7)))
+    per_chat = max(10, min(int(a.get("limit") or 150), 1000))
+    max_chats = max(1, min(int(a.get("chats") or 25), 100))
+    ds = await dialogs(ctx, fresh=True)
+    blocks, total = [], 0
+    for d in ds:
+        if len(blocks) >= max_chats:
+            break
+        e = d.entity
+        if d.archived or kind(e) in ("канал", "бот") or (d.date and d.date < since):
+            continue
+        msgs = []
+        async for m in ctx.client.iter_messages(e, limit=per_chat):
+            if m.date < since:
+                break
+            msgs.append(m)
+        if not msgs:
+            continue
+        msgs.reverse()
+        mine = sum(1 for m in msgs if m.out)
+        total += len(msgs)
+        blocks.append(f"=== {who(e)} · {kind(e)} · сообщений {len(msgs)} (моих {mine}) ===\n"
+                      + "\n".join(line(m) for m in msgs))
+    if not blocks:
+        return f"С {since.astimezone(MSK):%d.%m.%Y} переписок не было"
+    head = (f"Чаты с {since.astimezone(MSK):%d.%m.%Y %H:%M} по {datetime.datetime.now(MSK):%d.%m.%Y %H:%M} "
+            f"(время московское): чатов {len(blocks)}, сообщений {total}")
+    return head + "\n\n" + "\n\n".join(blocks)
+
+
 @command("search")
 async def search(ctx, a):
     msgs = [m async for m in ctx.client.iter_messages(None, search=a["query"], limit=min(a.get("limit") or 30, 200))]

@@ -6,6 +6,8 @@
 // fmt(число) — «1 234,5» · poll(fn, сек) — обновлять, пока приложение видно.
 // 🛠 support() — лист «Поддержка и пожелания» (текст + скриншот → api('support') → Claude правит бота, ответ в чат);
 // строка с ним сама встаёт внизу main (не нужна — <body data-no-support>), своя кнопка — data-support.
+// 💬 toChat() — «Перейти в чат»: режим «чат» (api('mode')) и закрыть приложение; строка сама встаёт внизу main
+// (не нужна — <body data-no-mode>), своя кнопка — data-mode.
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
   tg.ready(); tg.expand();
@@ -142,9 +144,29 @@ function support() {
   return s;
 }
 
-document.addEventListener('click', (ev) => {
-  if (ev.target.closest && ev.target.closest('[data-support]')) { haptic('tap'); support(); }
+document.addEventListener('click', (ev) => {  // <body data-support="…"> — не кнопка, а признак приложения
+  const el = ev.target.closest && ev.target.closest('[data-support]');
+  if (el && el !== document.body) { haptic('tap'); support(); }
 });
+
+// ---------- 💬 перейти в чат (режим «чат»: бот не предлагает приложение, всё кнопками в чате) ----------
+async function toChat() {
+  try {
+    await api('mode', { mode: 'chat' });
+    haptic('success');
+    toast('Теперь в чате — бот прислал меню');
+    setTimeout(() => { if (tg && tg.close) tg.close(); }, 600);
+  } catch (e) { toast(e.message, true); }
+}
+document.addEventListener('click', (ev) => {
+  if (ev.target.closest && ev.target.closest('[data-mode]')) { haptic('tap'); toChat(); }
+});
+if (!document.body.hasAttribute('data-no-mode')) {
+  (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',
+    '<div class="list mode-list"><button class="row" data-mode><span class="icon">💬</span><span class="main">' +
+    '<span class="name">Перейти в чат</span><span class="meta">Всё то же кнопками в чате; вернуться — /mode</span></span>' +
+    '<span class="end">›</span></button></div>');
+}
 if (!document.body.hasAttribute('data-no-support')) {
   // плавающая кнопка — видна на любом экране, над вкладками
   document.body.insertAdjacentHTML('beforeend',

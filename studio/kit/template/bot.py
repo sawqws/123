@@ -15,17 +15,17 @@ def notes():
 def home(c):
     items = notes()
     lines = [f"• {kit.esc(n['text'][:60])}" for n in items[-5:][::-1]] or ["<i>Пока пусто — просто напиши что-нибудь.</i>"]
-    c.show(kit.card(f"📝 <b>Заметки</b> · {kit.plural(len(items), 'штука', 'штуки', 'штук')}", lines),
-           [[bot.app_button("📱 Все заметки")],
-            [kit.b("➕ Новая", "new", "primary"), kit.b("🗑 Очистить", "clear?")] if items else
-            [kit.b("➕ Новая", "new", "primary")],
-            [kit.support_button()]])  # 🛠 Поддержка — у каждого бота на главном экране
+    # bot.menu сам добавляет кнопку приложения (кроме режима «чат»), «⚙️ Режим» и «🛠 Поддержка»
+    bot.menu(c, f"📝 <b>Заметки</b> · {kit.plural(len(items), 'штука', 'штуки', 'штук')}", lines,
+             buttons=[[kit.b("➕ Новая", "new", "primary"), kit.b("🗑 Очистить", "clear?") if items else None]],
+             quick=[[kit.b("➕ Новая", "new", "primary")]])
 
 
 @bot.command("help")
 def help_(c):
     c.say(kit.card("💡 <b>Что я умею</b>", ["Пиши текстом или голосом — сохраню заметку.",
-                                          "Все заметки — в приложении (кнопка слева от поля ввода)."]))
+                                          "Все заметки — в приложении (/app) или кнопками здесь (/mode).",
+                                          "🛠 Что-то не так или хочется улучшить — /fix"]))
 
 
 def add(text):

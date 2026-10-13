@@ -45,16 +45,15 @@ else
   echo "Уже есть $ENV — не трогаю (поменять: nano $ENV, потом pm2 restart studio-bot --update-env)"
 fi
 
-# голосовые (faster-whisper в common/.venv); без них бот работает, просто не слушает голосовые
-bash "$DIR/common/setup.sh" || echo "Голосовые не установились — бот работает без них"
-
 echo "== 4/4 Запуск"
+mkdir -p /root/bots
 pm2 delete studio-bot >/dev/null 2>&1 || true
 pm2 start "$DIR/studio/ecosystem.config.js"
 pm2 save
 pm2 startup systemd -u root --hp /root >/dev/null || true
 
-mkdir -p /root/bots
+# голосовые (faster-whisper в common/.venv) — после запуска: долго качается, а бот уже работает и без них
+bash "$DIR/common/setup.sh" || echo "Голосовые не установились — бот работает без них"
 cat <<'EOT'
 
 Готово, «Студия» запущена.

@@ -170,6 +170,22 @@ class Actions(unittest.TestCase):
         self.assertTrue(lines[1].startswith("[1] 09.10.26 14:30 Я: ок"))  # от старых к новым, время московское
         self.assertIn("(ответ на 1)", lines[3])
 
+    def test_period_collects_all_chats(self):
+        """period: все чаты с сообщениями с даты одним выводом — по чату заголовок с числом сообщений и сами сообщения."""
+        ctx = Ctx()
+        out = run(actions.run(ctx, "period", {"since": "2026-10-01", "limit": 50}))
+        self.assertTrue(out.startswith("Чаты с 01.10.2026"))
+        self.assertIn("=== Петя (@petya, id 7) · личка · сообщений 3 (моих 1) ===", out)
+        self.assertIn("=== 8Б класс (id -1000000000100) · группа · сообщений 3 (моих 1) ===", out)
+        self.assertEqual(out.count("==="), 2 * 5)  # все 5 диалогов — лички и группы
+        self.assertIn("[1] 09.10.26 14:30 Я: ок", out)
+        self.assertEqual(ctx.asked, [])
+        self.assertIn("переписок не было", run(actions.run(ctx, "period", {"since": "2026-10-10"})))
+        ctx.client.dialogs[0].archived = True
+        out = run(actions.run(ctx, "period", {"since": "2026-10-01", "chats": 2}))
+        self.assertNotIn("Петя (@petya", out)  # архив пропускаем, не больше --chats чатов
+        self.assertEqual(out.count("==="), 4)
+
     def test_read_only_commands_never_ask(self):
         ctx = Ctx()
         run(actions.run(ctx, "chats", {"unread": True}))
@@ -449,6 +465,34 @@ class Voice(unittest.TestCase):
         self.assertEqual(routed, ["ответьте Пете что буду в шесть"])
         self.assertFalse(os.path.exists(src))  # файл голосового удалён
         self.assertIn("Расшифровка", status.edit.call_args[0][0])
+
+
+class Psy(unittest.TestCase):
+    """🧠 Психолог: последняя строка «Подробнее: …» ответа «Все чаты» становится кнопками по людям."""
+
+    def test_people_line_becomes_buttons(self):
+        out = "**🧠 Все чаты за неделю**\n### Саша\n- тепло\n\n### Советы\n- меньше спорить\n\n**Подробнее:** Саша Иванов; 8Б класс; Мама; Петя; Дима; Лишний"
+        text, people = agent.Agent.psy_people(out)
+        self.assertEqual(people, ["Саша Иванов", "8Б класс", "Мама", "Петя", "Дима"])  # не больше пяти
+        self.assertTrue(text.endswith("- меньше спорить"))
+        self.assertNotIn("Подробнее", text)
+        rows = agent.Agent.psy_buttons(people)
+        self.assertTrue(all(len(r) <= 2 for r in rows))
+        flat = [b for r in rows for b in r]
+        self.assertEqual([b["text"] for b in flat], ["Подробнее про Саша", "Подробнее про 8Б класс", "Подробнее про Мама",
+                                                     "Подробнее про Петя", "Подробнее про Дима"])
+        self.assertEqual(flat[0]["callback_data"], "psy:n:Саша Иванов")
+        self.assertTrue(all(len(b["text"]) <= 24 and len(b["callback_data"].encode()) <= 64 for b in flat))
+        self.assertEqual(agent.Agent.psy_people("просто ответ"), ("просто ответ", []))
+        self.assertIsNone(agent.Agent.psy_buttons([]))
+
+    def test_prompts(self):
+        text = agent.ASK_PSY_ALL.format(period="неделю", days=7)
+        self.assertIn("period --days 7", text)
+        self.assertIn("Подробнее:", text)
+        self.assertEqual(agent.PSY_PERIODS["month"], (30, "месяц"))
+        with open(os.path.join(os.path.dirname(agent.__file__), "prompt.md")) as f:
+            self.assertIn("## Разбор всех чатов за период", f.read())
 
 
 class Misc(unittest.TestCase):

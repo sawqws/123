@@ -82,6 +82,7 @@ class StudioFlow(unittest.TestCase):
         getme = io.BytesIO(json.dumps({"result": {"username": "voda_test_bot"}}).encode())
         self.patches = [mock.patch.object(studio, "claude", self.f.claude), mock.patch.object(studio, "sh", self.f.sh),
                         mock.patch.object(studio, "botfather", lambda n, w: (self.f.token, None)),
+                        mock.patch.object(studio, "secretary_ready", lambda: True),  # есть Секретарь — @BotFather сам
                         mock.patch.object(studio, "avatar", lambda p, d: None),
                         mock.patch.object(studio.time, "sleep", lambda s: None),
                         mock.patch.object(studio.urllib.request, "urlopen", lambda *a, **k: getme)]
@@ -154,17 +155,107 @@ class StudioFlow(unittest.TestCase):
         self.assertEqual(len(s["bots"]), 1)
         self.assertEqual(s["bots"][0]["status"], "online")
 
-    def test_no_secretary_asks_token(self):
-        with mock.patch.object(studio, "botfather", lambda n, w: (None, "Секретарь не вошёл в аккаунт")):
+    def test_secretary_failed_asks_token(self):
+        with mock.patch.object(studio, "botfather", lambda n, w: (None, "Секретарь не смог: BotFather молчит")):
             self.t.api("idea", {"text": "дневник"})
             self.t.api("enough")
             self.t.api("name", {"text": "Дневник"})
             self.t.api("confirm")
         self.assertEqual(studio.draft()["stage"], "token")
-        self.assertIn("токен", self.t.last)
+        self.assertIn("нужен токен", self.t.last)
+        self.assertIn("BotFather молчит", self.t.last)
+        self.assertIn("voda_test_bot", self.t.last)  # желаемый адрес — одним шагом
         self.t.send("вот: " + self.f.token)
         self.assertEqual(studio.draft()["stage"], "done")
         self.assertTrue(any(m == "deleteMessage" for m, _ in self.t.calls))  # токен стёрт из чата
+
+    def test_no_secretary_no_onetap_token_during_build(self):
+        """Ни Секретаря, ни Managed Bots: Студия сразу (пока пишет код) просит создать бота в @BotFather одним
+        шагом; токен, присланный во время сборки, — не правка, а токен; дальше запуск сама."""
+        with mock.patch.object(studio, "secretary_ready", lambda: False), \
+                mock.patch.object(studio, "botfather", lambda n, w: self.fail("Секретаря нет")):
+            self.t.api("idea", {"text": "дневник"})
+            self.t.api("enough")
+            self.t.api("name", {"text": "Дневник"})
+            orig = studio.claude
+
+            def build_and_token(prompt, cwd, **k):
+                self.assertIn("Пока пишу код — создай бота", self.texts())
+                self.assertIn("Открыть @BotFather", [x["text"] for p in self.t.messages for row in
+                                                      (p.get("reply_markup") or {}).get("inline_keyboard", []) for x in row])
+                self.t.send("держи " + self.f.token)
+                self.assertEqual(studio.draft().get("token"), self.f.token)
+                self.assertNotIn("queued", studio.draft())
+                return orig(prompt, cwd, **k)
+            with mock.patch.object(studio, "claude", build_and_token):
+                self.t.api("confirm")
+        self.assertEqual(studio.draft()["stage"], "done")
+        self.assertIn(f"BOT_TOKEN={self.f.token}", read(os.path.join(studio.registry()["voda"]["dir"], ".env")))
+        self.assertTrue(any(m == "deleteMessage" for m, _ in self.t.calls))
+
+    def test_cancel_drops_unfinished_bot(self):
+        """Отмена на шаге «токен»: недоделанный бот не висит в «Моих ботах» и на диске."""
+        with mock.patch.object(studio, "botfather", lambda n, w: (None, "нет")):
+            self.t.api("idea", {"text": "дневник"})
+            self.t.api("enough")
+            self.t.api("name", {"text": "Дневник"})
+            self.t.api("confirm")
+        path = studio.registry()["voda"]["dir"]
+        self.assertTrue(os.path.isdir(path))
+        self.t.press("cancel")
+        self.assertEqual(studio.registry(), {})
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(studio.draft(), {})
+
+    def test_voice_and_photo_start_idea(self):
+        """Голосовое → текст идеи; фото с подписью → картинка к идее и сама идея."""
+        class Media:
+            def voice_text(self, token, msg): return "бот для списка покупок"
+            def photo_path(self, token, msg, folder): return os.path.join(TMP, "shot.jpg")
+        with mock.patch.object(kit, "_media", Media()):
+            self.t.send("", voice={"file_id": "v1"})
+            self.assertEqual(studio.draft()["idea"], "бот для списка покупок")
+            self.assertIn("«бот для списка покупок»", self.texts())
+            studio.put({})
+            self.t.send("", photo=[{"file_id": "p1"}], caption="сделай как на картинке: трекер сна")
+        d = studio.draft()
+        self.assertEqual(d["idea"], "сделай как на картинке: трекер сна")
+        self.assertEqual(d["shots"], [os.path.join(TMP, "shot.jpg")])
+
+    def test_resume_on_start(self):
+        """/start посреди черновика показывает текущий шаг, а не начинает заново."""
+        self.t.send("бот-напоминалка")
+        d = studio.draft()
+        self.t.send("/start")
+        self.assertIn("Вопрос 1 из 2", self.t.last)
+        self.assertEqual(studio.draft()["id"], d["id"])
+        self.t.api("enough")
+        self.t.send("/start")
+        self.assertIn("Как назовём", self.t.last)
+        self.t.api("name", {"text": "Х"})
+        self.t.send("/start")
+        self.assertIn("✅ Создать", self.t.buttons)
+
+    def test_mode_chat_or_app_in_studio(self):
+        """Студия с https: первый /start — «Как удобнее?»; в чате — без web_app-кнопок; API mode из приложения."""
+        studio.bot.app_url = "https://apps.1-2-3-4.sslip.io/"
+        try:
+            self.t.send("/start")
+            self.assertIn("Как удобнее", self.t.last)
+            self.t.press("mode:chat")
+            self.assertIn("Студия", self.t.last)
+            self.assertIn("Режим: 💬 чат", self.t.last)
+            self.assertFalse(any("web_app" in x for x in self.t.keyboard))
+            self.assertIn("⚙️ Режим", self.t.buttons)
+            self.t.press("mode")
+            self.t.press("mode:app")
+            self.assertIn("Режим: 📱 приложение", self.t.last)
+            self.assertTrue(any("web_app" in x for x in self.t.keyboard))
+            self.assertEqual(self.t.api("mode", {"mode": "chat"})[1], {"mode": "chat"})
+            self.assertIn("Студия", self.t.last)
+            self.assertEqual(studio.bot.ui_mode(), "chat")
+        finally:
+            studio.bot.app_url = ""
 
     def test_one_tap_managed_bot(self):
         """Managed Bots: кнопка «⚡ Создать», подтверждение в Telegram → токен сам → запуск."""
@@ -272,6 +363,38 @@ class StudioFlow(unittest.TestCase):
     def test_support_button_on_home(self):
         self.t.send("/start")
         self.assertIn("🛠 Поддержка", self.t.buttons)
+        self.assertNotIn("Bot Management Mode", self.t.last)  # Секретарь есть — подсказка про токен не нужна
+
+    def test_undo_after_fix(self):
+        self.t.api("idea", {"text": "вода"})
+        self.t.api("enough")
+        self.t.api("name", {"text": "Вода"})
+        self.t.api("confirm")
+        path = studio.registry()["voda"]["dir"]
+        before = read(os.path.join(path, "README.md"))
+
+        def edit(prompt, cwd, on_step=None, **k):
+            with open(os.path.join(cwd, "README.md"), "a") as f:
+                f.write("\nправка\n")
+            return True, "Добавил"
+        with mock.patch.object(studio, "claude", edit):
+            self.t.api("fix", {"slug": "voda", "text": "добавь кнопку"})
+        undo = next(x["callback_data"] for x in self.t.keyboard if x["text"] == "↩️ Откатить")
+        self.t.press(undo)
+        self.assertIn("Правка отменена", self.t.last)
+        self.assertEqual(read(os.path.join(path, "README.md")), before)
+        self.assertTrue(any(c[:2] == ("pm2", "restart") for c in self.f.pm2))
+
+    def test_webapp_files(self):
+        """Приложение Студии: <body data-support> — признак, а не кнопка (клик по body не открывает поддержку);
+        в kit.js — «Перейти в чат»."""
+        self.assertIn('<body data-support="/api/support">', read(os.path.join(HERE, "webapp", "index.html")))
+        self.assertIn("el !== document.body", read(os.path.join(HERE, "kit", "template", "webapp", "kit.js")))
+        js = read(os.path.join(HERE, "kit", "template", "webapp", "kit.js"))
+        self.assertIn("data-mode", js)
+        self.assertIn("Перейти в чат", js)
+        self.assertIn("api('mode', { mode: 'chat' })", js)
+        self.assertIn("bot.menu(", read(os.path.join(HERE, "kit", "template", "bot.py")))
 
     def test_stranger(self):
         self.t.send("/start", uid=7)

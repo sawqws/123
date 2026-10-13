@@ -353,7 +353,7 @@ class Web:
             return {"run": run_json(a), "history": a.history[-20:][::-1] if b.get("history") else None}
         if path == "/api/ask":
             text, title = self.task(b)
-            run = a.begin(text, title, source="app")
+            run = a.begin(text, title, source="app", kind="psy_all" if b.get("preset") in self.PSY_ALL else None)
             if run is None:
                 raise ApiError(409, "Ещё занимаюсь прошлым поручением")
             asyncio.create_task(a.work(run))
@@ -381,6 +381,8 @@ class Web:
             return {"text": read_memory(a.memory_path())}
         raise ApiError(404, "нет такого метода")
 
+    PSY_ALL = {"psy_week": "week", "psy_month": "month"}  # 🧠 Психолог: все чаты за период
+
     def task(self, b):
         """Поручение из приложения -> (текст для Claude, заголовок для истории)."""
         a = self.agent
@@ -392,6 +394,9 @@ class Web:
             return a.ASK_MISSED, a.BTN_MISSED
         if preset == "sort":
             return a.ASK_SORT, a.BTN_SORT
+        if preset in self.PSY_ALL:
+            days, period = a.PSY_PERIODS[self.PSY_ALL[preset]]
+            return a.ASK_PSY_ALL.format(period=period, days=days), f"🧠 Все чаты · {period}"
         if preset in ("psy", "brief") and not chat:
             raise ApiError(400, "Укажите чат")
         if preset == "psy":
