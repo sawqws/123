@@ -196,8 +196,9 @@ def kb(*rows):
     return [r for r in out if r]
 
 
-def app_button(text="📱 Открыть", path="", style=None):
-    if not public_url:
+def app_button(uid, text="📱 Открыть", path="", style=None, always=False):
+    """Кнопка приложения (web_app). В режиме «💬 чат» её нет — только по явному /app (always=True)."""
+    if not public_url or (ui_mode(uid) == "chat" and not always):
         return None
     b = {"text": text, "web_app": {"url": public_url + "/" + (f"?p={urllib.parse.quote(path)}" if path else "")}}
     if style:
@@ -205,15 +206,17 @@ def app_button(text="📱 Открыть", path="", style=None):
     return b
 
 
-def with_app(rows, text="📱 Открыть", path="", style=None):
-    return kb(*rows, [app_button(text, path, style)])
+def with_app(uid, rows, text="📱 Открыть", path="", style=None, always=False):
+    return kb(*rows, [app_button(uid, text, path, style, always)])
 
 
 def setup_bot():
     # в меню — только частые команды; остальные (/app, /connect, /status, /new) работают, как раньше
     commands = [
         {"command": "app", "description": "📱 Приложение"},
+        {"command": "mode", "description": "💬 Чат или 📱 приложение"},
         {"command": "today", "description": "Разбор дня"},
+        {"command": "profile", "description": "Профиль"},
         {"command": "water", "description": "Вода"},
         {"command": "food", "description": "Питание"},
         {"command": "goals", "description": "Цели"},
@@ -268,6 +271,43 @@ def claim(uid):
 
 def is_admin(uid):
     return uid == (owner() or min(ALLOWED or {0}))
+
+
+# ---------- режим: 💬 чат или 📱 приложение ----------
+# Выбор при первом /start, потом — /mode или кнопка «⚙️ Режим». «Чат» — всё кнопками и командами здесь, кнопок
+# web_app в сообщениях нет (кнопка «Форма» слева от поля ввода остаётся — её ставит Telegram). «Приложение» —
+# /start и ответы короткие, главная кнопка — открыть приложение; чат всё равно отвечает на команды и текст.
+
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+
+
+def ui_mode(uid):
+    """'chat' | 'app' | '' (ещё не выбирал: /start предложит выбор, кнопки приложения пока как раньше)."""
+    m = db.meta(f"mode:{uid}")
+    return m if m in MODES else ""
+
+
+def set_mode(uid, m):
+    if m not in MODES:
+        raise ValueError("Режим — chat или app")
+    db.meta(f"mode:{uid}", m)
+    return m
+
+
+def mode_note(uid):
+    """Подпись режима для карточки /start (одной строкой, курсивом — box() сам ставит <i>)."""
+    return f"Режим: {MODES.get(ui_mode(uid), 'не выбран')} · сменить — /mode"
+
+
+def mode_card():
+    return (box("🧭", "Как удобнее?", ["💬 <b>В чате</b> — всё кнопками и командами здесь",
+                                        "📱 <b>Приложение</b> — кольца, тренды, питание и тренер экранами"],
+                "Поменять можно в любой момент: /mode"),
+            kb([btn("💬 В чате", "mode|chat", "primary"), btn("📱 Приложение", "mode|app", "primary")]))
+
+
+def ask_mode(chat):
+    send(chat, *mode_card())
 
 
 def check_init_data(init_data, token=None, max_age=7 * 86400):
@@ -407,7 +447,8 @@ def first_sync(uid):
             db.save_profile(uid, upd)
         replace(uid, mid, box("✅", "WHOOP подключён", f"Загружено записей: <b>{n}</b>. Утром пришлю первый разбор.",
                               note="Добавь в профиле возраст, спорт и цель — советы будут точнее."),
-                kb([btn("🧠 Разбор сейчас", "b|now", "success"), app_button("👤 Профиль", "/profile")]))
+                kb([btn("🧠 Разбор сейчас", "b|now", "success"),
+                    app_button(uid, "👤 Профиль", "/profile") or btn("👤 Профиль", "pf|")]))
     except Exception as e:
         traceback.print_exc()
         send(uid, err(f"Не получилось загрузить данные WHOOP: {esc(str(e)[:200])}"))
@@ -545,7 +586,8 @@ def progress_report(uid, chat=None, week=False):
             return
         db.brief(uid, day.isoformat(), "week" if week else "progress", ai.to_html(md))
         body, _ = short(md, 5, 600)
-        replace(chat, mid, box(*head, body), kb([app_button("📱 Весь разбор", "/trends", "primary"),
+        replace(chat, mid, box(*head, body), kb([app_button(uid, "📱 Весь разбор", "/trends", "primary")
+                                                  or btn("📄 Весь разбор", f"full|{'week' if week else 'progress'}"),
                                                   btn("💬 Спросить", "q|")]))
     finally:
         busy.discard(uid)
@@ -573,7 +615,7 @@ def morning_brief(uid, chat=None, force=False):
             note = f"Claude недоступен: {esc(e)}"
         db.brief(uid, t["day"], "morning", full)
         send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note, expand=False),
-             kb([app_button("📱 Открыть", style="primary"), btn("💬 Спросить", "q|")]))
+             kb([app_button(uid, "📱 Открыть", style="primary"), btn("💬 Спросить", "q|")]))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
         return True
@@ -598,7 +640,7 @@ def morning_early(uid):
         y = headline({"yesterday": t.get("yesterday")})
         send(uid, box("☀️", "Доброе утро", [y, body], note="WHOOP ещё не посчитал сон — разбор пришлю позже.",
                       expand=False),
-             kb([btn("🔄 Обновить", "s|"), app_button("📱 Открыть")]))
+             kb([btn("🔄 Обновить", "s|"), app_button(uid, "📱 Открыть")]))
         return True
     finally:
         busy.discard(uid)
@@ -723,7 +765,7 @@ def workout_note(uid, w):
     stats = f"Нагрузка <b>{fmt(w['strain'])}</b> · пульс {w['avg_hr'] or '—'}/{w['max_hr'] or '—'}" \
         + (f" · {w['kcal']} ккал" if w.get("kcal") else "")
     title = esc(w["sport"]) + (f" · {w['minutes']} мин" if w.get("minutes") else "")
-    send(uid, box(sport_icon(w["sport"]), title, [stats, body], expand=False), with_app([], "📱 Открыть"))
+    send(uid, box(sport_icon(w["sport"]), title, [stats, body], expand=False), with_app(uid, [], "📱 Открыть"))
 
 
 def evening(uid, now):
@@ -741,30 +783,199 @@ def evening(uid, now):
         lines.append(f"• +{lack_p} г белка: творог, яйца, курица или кефир")
     elif lack_k >= 300:
         lines.append(f"• +{lack_k} ккал — нормальный ужин, не пропускай")
-    send(uid, box("🍽", "Итог питания", "\n".join(lines)), with_app([], "📱 Питание", "/food"))
+    send(uid, box("🍽", "Итог питания", "\n".join(lines)), with_app(uid, [], "📱 Питание", "/food"))
 
 
 # ---------- чат ----------
 
-HELP = box("⚡", "Форма — тренер по WHOOP", [
-    "☀️ Утром — план на день, после тренировки — что съесть\n"
-    "💬 Вопрос — текстом или голосом\n"
-    "🍽 Еда — фото, видео или «съел гречку»\n"
-    "🎥 Видео упражнения — разбор техники\n"
-    "💧 Вода — «выпил 500 мл»",
-    "/today · /food · /water · /goals · /progress · /morning · /sync · /new · /status"],
-    note="Всё подробно — в приложении: кнопка «Форма» слева от поля ввода.")
+def help_text(uid):
+    return box("⚡", "Форма — тренер по WHOOP", [
+        "☀️ Утром — план на день, после тренировки — что съесть\n"
+        "💬 Вопрос — текстом или голосом\n"
+        "🍽 Еда — фото, видео или «съел гречку»\n"
+        "🎥 Видео упражнения — разбор техники\n"
+        "💧 Вода — «выпил 500 мл»",
+        "/today · /food · /water · /goals · /profile · /progress · /morning · /sync · /new · /status · /mode"],
+        note=("Всё подробно — в приложении: кнопка «Форма» слева от поля ввода." if ui_mode(uid) == "app"
+              else "Всё — кнопками и командами здесь; приложение — /app или /mode.") + f"\n{mode_note(uid)}")
+
 
 FOOD_WORDS = re.compile(r"^(съел[аи]?|поел[аи]?|ел[аи]?|выпил[аи]?|завтрак|обед|ужин|перекус|еда)\b[:\s,-]*", re.I)
 
 
+def main_menu(uid):
+    """Главное меню чата. «📱 приложение» — открыть и 2–3 главных действия; «💬 чат» — все функции кнопками."""
+    connected = bool(db.token(uid))
+    conn = [btn("🔌 Подключить WHOOP", "c|", "success")] if not connected else []
+    if ui_mode(uid) == "app":
+        return kb(conn, [app_button(uid, "📱 Открыть", style="primary" if connected else None)],
+                  [btn("🧠 Разбор дня", "b|now"), btn("💧 Вода", "water|")],
+                  [btn("⚙️ Режим", "mode|ask"), support.Support.button()])
+    return kb(conn, [btn("🧠 Разбор дня", "b|now", "success" if connected else None), btn("📈 Прогресс", "p|")],
+              [btn("🍽 Питание", "food|"), btn("💧 Вода", "water|"), btn("🎯 Цели", "goals|")],
+              [btn("📊 Сводка", "sum|week"), btn("👤 Профиль", "pf|"), btn("☀️ Утро", "morning|")],
+              [btn("⚙️ Режим", "mode|ask"), support.Support.button()])
+
+
 def welcome(chat, uid, name):
     connected = bool(db.token(uid))
+    hint = ("Всё главное — в приложении." if ui_mode(uid) == "app" else "Всё — кнопками ниже и командами.") \
+        if connected else "Сначала подключим WHOOP — 3 минуты."
     send(chat, box("👋", f"Привет{', ' + esc(name) if name else ''}!",
                    "Я <b>Форма</b> — тренер по данным WHOOP: как сегодня тренироваться, есть и спать.",
-                   note="Всё главное — в приложении." if connected else "Сначала подключим WHOOP — 3 минуты."),
-         kb([btn("🔌 Подключить WHOOP", "c|", "success")] if not connected else [],
-            [app_button("📱 Открыть", style="primary" if connected else None)], [support.Support.button()]))
+                   note=f"{hint}\n{mode_note(uid)}"),
+         main_menu(uid))
+
+
+def food_button(uid):
+    """«Питание»: в режиме «приложение» — экран еды, в чате — карточка /food сюда."""
+    return app_button(uid, "📱 Питание", "/food") or btn("🍽 Питание", "food|")
+
+
+def more_button(uid, kind, path="/coach"):
+    """«Полностью»: в режиме «приложение» — открыть приложение, в чате — прислать весь текст сюда."""
+    return app_button(uid, "📱 Полностью", path) or btn("📄 Полностью", f"full|{kind}")
+
+
+def send_long(chat, icon, title, html_text, limit=3500):
+    """Длинный HTML-текст — несколькими сообщениями, по строкам."""
+    parts, cur = [], ""
+    for line in html_text.split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            parts.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    parts.append(cur)
+    for i, p in enumerate(parts):
+        send(chat, box(icon, title if not i else f"{title} · {i + 1}", p, expand=False))
+
+
+def send_full(chat, uid, kind):
+    """Полный текст в чат (режим «чат»): последний ответ тренера или сохранённый разбор (progress, week, sum-…)."""
+    if kind == "answer":
+        h = [m for m in db.history(uid, 40) if m["role"] == "coach"]
+        text, icon, title = (ai.to_html(h[-1]["text"]) if h else ""), "💬", "Тренер · полностью"
+    else:
+        r = db.q("SELECT text FROM briefs WHERE user=? AND kind=? ORDER BY day DESC LIMIT 1", (uid, kind))
+        text = r[0]["text"] if r else ""
+        if kind.startswith("sum-"):
+            text = ai.to_html(text)
+        icon, title = ("📊", "Сводка · полностью") if kind.startswith("sum-") else ("📈", "Разбор · полностью")
+    if not text.strip():
+        send(chat, err("Пока нечего показать"))
+        return
+    send_long(chat, icon, title, text)
+
+
+PERIODS = [("day", "День"), ("week", "Неделя"), ("month", "Месяц"), ("all", "Всё время")]
+
+
+def summary_report(chat, uid, period="week"):
+    """«📊 Сводка и советы» в чате: цифры за период против прошлого и советы Claude (кэш на день, как в приложении)."""
+    if period not in dict(PERIODS):
+        period = "week"
+    if uid in busy:
+        send(chat, BUSY)
+        return
+    busy.add(uid)
+    try:
+        typing(chat)
+        today = today_of(uid)
+        s = insights.summary(db, uid, today, period)
+        if not s["stats"]["days"] and not (s.get("day") or {}).get("cycle"):
+            send(chat, err("За этот период нет данных WHOOP — подключи браслет: /connect"))
+            return
+        kind = f"sum-{period}"
+        cached = db.brief(uid, today.isoformat(), kind)
+        if cached:
+            text = cached["text"]
+        else:
+            ctx = insights.summary_context(s, profile(uid), whoop.body(db, uid))
+            try:
+                text = ai.summary(ctx, period)
+            except ai.AIError as e:
+                send(chat, err(f"Сводка не получилась: {esc(e)}"))
+                return
+            db.brief(uid, today.isoformat(), kind, text)
+        body, cut = short(text, 8, 900)
+        rows = [btn(("✓ " if k == period else "") + w, f"sum|{k}") for k, w in PERIODS]
+        send(chat, box("📊", f"Сводка · {dict(PERIODS)[period].lower()}", body, expand=False),
+             kb(rows[:2], rows[2:], [app_button(uid, "📱 Подробнее", "/summary")
+                                     or (btn("📄 Полностью", f"full|{kind}") if cut else None)]))
+    finally:
+        busy.discard(uid)
+
+
+# профиль в чате: посмотреть и поменять словами («вес 61, рост 170, спорт бокс»); подробная форма — в приложении
+PROFILE_LABELS = [("age", "Возраст"), ("sex", "Пол"), ("height", "Рост, см"), ("weight", "Вес, кг"), ("goal", "Цель"),
+                  ("sport", "Спорт"), ("schedule", "Расписание"), ("diet", "Еда"), ("notes", "Тренеру важно"),
+                  ("morning", "Утренний разбор")]
+PROFILE_WORDS = {"возраст": "age", "лет": "age", "рост": "height", "вес": "weight", "пол": "sex", "цель": "goal",
+                 "спорт": "sport", "расписание": "schedule", "тренировки": "schedule", "еда": "diet", "ем": "diet",
+                 "питание": "diet", "тренеру": "notes", "заметки": "notes", "важно": "notes", "утро": "morning",
+                 "разбор": "morning"}
+GOAL_WORDS = {"form": "форма", "mass": "масса", "dry": "рельеф", "weight": "вес к соревнованиям"}
+
+
+def profile_view(uid, title="Профиль"):
+    p = profile(uid)
+    lines = []
+    for k, label in PROFILE_LABELS:
+        v = p.get(k)
+        if v in (None, ""):
+            continue
+        if k == "sex":
+            v = {"m": "парень", "f": "девушка"}.get(v, v)
+        elif k == "goal":
+            v = GOAL_WORDS.get(v, v)
+        elif k == "morning" and v == "off":
+            v = "выключен"
+        lines.append(f"• {label} — {esc(v)}")
+    return (box("👤", title, "\n".join(lines) or "Пока пусто — расскажи о себе, советы станут точнее.",
+                note="Изменить — кнопкой: «вес 61, рост 170», «спорт бокс», «цель масса», «пол парень»…"),
+            kb([btn("✏️ Изменить", "pf|edit"), btn("🎯 Цели", "goals|")]))
+
+
+def parse_profile(text):
+    """«вес 61, рост 170, спорт бокс, 3 раза в неделю» → поля профиля; части — через запятую или с новой строки."""
+    out = {}
+    for part in re.split(r"[;\n]+|,(?!\d)", text or ""):  # запятая внутри числа («61,5») — не разделитель
+        m = re.match(r"\s*([^\s:—-]+)\s*[:—-]?\s*(.+?)\s*$", part)
+        if not m:
+            continue
+        k = PROFILE_WORDS.get(m.group(1).lower().rstrip(".:"))
+        v = m.group(2)
+        if not k:
+            continue
+        if k in ("age", "height", "weight"):
+            n = re.search(r"\d+(?:[.,]\d+)?", v)
+            if not n:
+                continue
+            v = n.group(0)
+        elif k == "sex":
+            v = "f" if v.lower().startswith(("д", "ж")) else "m"
+        elif k == "goal":
+            v = next((code for code, w in GOAL_WORDS.items() if v.lower().startswith(w[:3])), v)
+        elif k == "morning":
+            v = "off" if v.lower().startswith("вык") else v
+        out[k] = v
+    return out
+
+
+def edit_profile(chat, uid, text):
+    data = parse_profile(text)
+    if not data:
+        awaiting(uid, "profile")
+        send(chat, err("Не понял. Например: «вес 61, рост 170, спорт бокс» — или /profile"))
+        return
+    try:
+        db.save_profile(uid, data)
+    except ValueError as e:
+        awaiting(uid, "profile")
+        send(chat, err(f"{esc(e)}. Попробуй ещё раз"))
+        return
+    send(chat, *profile_view(uid, "Профиль обновлён"))
 
 
 def meal_card(m, comment="", total=""):
@@ -790,9 +1001,9 @@ def food_text(uid):
     return box("🍽", "Питание сегодня", [top, "\n".join(lines)], note=note)
 
 
-def water_buttons(last_id=None):
+def water_buttons(uid, last_id=None):
     return kb([btn("+250 мл", "wa|add|250"), btn("+500 мл", "wa|add|500")],
-              [btn("↩️ Отменить", f"wa|del|{last_id}") if last_id else None, app_button("📱 Питание", "/food")])
+              [btn("↩️ Отменить", f"wa|del|{last_id}") if last_id else None, food_button(uid)])
 
 
 def water_text(uid, added=0, title=None):
@@ -814,9 +1025,9 @@ def log_water(chat, uid, ml, mid=None):
     row = db.add_water(uid, now.date().isoformat(), now.strftime("%H:%M"), ml)
     text, _ = water_text(uid, ml)
     if mid:
-        replace(chat, mid, text, water_buttons(row["id"]))
+        replace(chat, mid, text, water_buttons(uid, row["id"]))
     else:
-        send(chat, text, water_buttons(row["id"]))
+        send(chat, text, water_buttons(uid, row["id"]))
 
 
 PHOTO_ASK = ai.PHOTO_ASK
@@ -831,7 +1042,7 @@ def save_meal_and_reply(chat, uid, est):
     n, e = t["nutrition"], t["eaten"]
     total = f"За день {e['kcal']}" + (f" из {n['kcal']} ккал" if n else " ккал")
     send(chat, meal_card(m, est.get("comment", ""), total),
-         kb([btn("🗑 Удалить", f"m|del|{m['id']}"), app_button("📱 Питание", "/food")]))
+         kb([btn("🗑 Удалить", f"m|del|{m['id']}"), food_button(uid)]))
     return m
 
 
@@ -847,7 +1058,7 @@ def log_meal(chat, uid, text="", photo=None):
             est = ai.meal(ctx, text, image=photo)
         except ai.AIError as e:
             send(chat, err(f"Не смог оценить еду: {esc(e)}. Добавь вручную в приложении."),
-                 with_app([], "📱 Питание", "/food"))
+                 kb([food_button(uid)]))
             return
         if est.get("food") is False:
             if photo:  # скрин WHOOP, тренировки, план — это вопрос тренеру с картинкой
@@ -881,7 +1092,7 @@ def answer(chat, uid, question, photo=None):
         db.say(uid, "coach", out)
         body, cut = short(out, 5, 600)
         send(chat, box("💬", "Тренер", body, expand=False),
-             with_app([], "📱 Полностью", "/coach") if cut else None)
+             kb([more_button(uid, "answer")]) if cut else None)
     finally:
         busy.discard(uid)
 
@@ -936,7 +1147,7 @@ def set_morning(chat, uid, value):
 def sync_now(chat, uid, mid):
     sync_user(uid, days=7)
     _, t = context(uid)
-    replace(chat, mid, box("✅", "WHOOP обновлён", headline(t)), with_app([], "📱 Открыть"))
+    replace(chat, mid, box("✅", "WHOOP обновлён", headline(t)), with_app(uid, [], "📱 Открыть"))
 
 
 def on_message(msg):
@@ -958,14 +1169,24 @@ def on_message(msg):
     kind = media.kind(msg)
     if cmd == "/start":
         arg = text.split()[1] if len(text.split()) > 1 else ""
-        welcome(chat, uid, frm.get("first_name"))
+        if ui_mode(uid):
+            welcome(chat, uid, frm.get("first_name"))
+        else:  # первый раз — сначала выбор: 💬 чат или 📱 приложение
+            ask_mode(chat)
         if arg == "connect":
             connect(chat, uid)
+    elif cmd == "/mode":
+        ask_mode(chat)
     elif cmd == "/help":
-        send(chat, HELP, with_app([[support.Support.button()]]))
+        send(chat, help_text(uid), with_app(uid, [[support.Support.button()]]))
+    elif cmd == "/profile":
+        if arg:
+            edit_profile(chat, uid, arg)
+        else:
+            send(chat, *profile_view(uid))
     elif cmd == "/app":
         if public_url:
-            send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."), with_app([], style="primary"))
+            send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."), with_app(uid, [], style="primary", always=True))
         else:
             send(chat, "⏳ Приложение ещё запускается — пришлю кнопку, как будет готово. Что с адресом — /status")
     elif cmd == "/connect":
@@ -977,14 +1198,14 @@ def on_message(msg):
     elif cmd == "/progress":
         threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
     elif cmd == "/food":
-        send(chat, food_text(uid), with_app([], "📱 Питание", "/food"))
+        send(chat, food_text(uid), with_app(uid, [], "📱 Питание", "/food"))
     elif cmd == "/water":
         ml = water.parse(arg) or water.parse("вода " + arg) if arg else None
         if ml:
             log_water(chat, uid, ml)
         else:
             text, last = water_text(uid)
-            send(chat, text, water_buttons(last))
+            send(chat, text, water_buttons(uid, last))
     elif cmd in ("/goals", "/goal"):
         if arg:
             add_goal(chat, uid, arg)
@@ -1027,6 +1248,9 @@ def on_text(chat, uid, text, wait=None):
     """Обычный текст (или распознанное голосовое): цель после кнопки, вода, еда или вопрос тренеру."""
     if wait == "goal":
         add_goal(chat, uid, text)
+        return
+    if wait == "profile":
+        edit_profile(chat, uid, text)
         return
     ml = water.parse(text)
     if ml:
@@ -1115,7 +1339,7 @@ def on_video(chat, uid, msg, wait=None):
             title = esc(first_sentence(out.get("title") or "", 40)) if out["kind"] == "exercise" else ""
             send(chat, box("🎥" if out["kind"] == "exercise" else "💬", title or ("Техника" if out["kind"] == "exercise"
                                                                                   else "Тренер"), body, expand=False),
-                 with_app([], "📱 Полностью", "/coach") if cut else None)
+                 kb([more_button(uid, "answer")]) if cut else None)
         finally:
             busy.discard(uid)
     finally:
@@ -1158,6 +1382,36 @@ def on_callback(cq):
         note = "Разбираю прогресс…"
     elif data[0] == "q":
         send(chat, "💬 Спроси текстом или голосом.\n<i>Например: «что съесть перед тренировкой?»</i>")
+    elif data[0] == "mode":
+        if data[1] in MODES:
+            set_mode(uid, data[1])
+            replace(chat, mid, box("✅", "Режим: " + MODES[data[1]], note="Сменить — /mode или кнопка «⚙️ Режим»"))
+            welcome(chat, uid, cq["from"].get("first_name"))
+            note = MODES[data[1]]
+        else:
+            ask_mode(chat)
+    elif data[0] == "full":
+        send_full(chat, uid, data[1])
+    elif data[0] == "food":
+        send(chat, food_text(uid), with_app(uid, [], "📱 Питание", "/food"))
+    elif data[0] == "water":
+        text, last = water_text(uid)
+        send(chat, text, water_buttons(uid, last))
+    elif data[0] == "goals":
+        send(chat, *goals_view(uid))
+    elif data[0] == "morning":
+        u = db.user(uid)
+        send(chat, morning_text(u), morning_buttons(u))
+    elif data[0] == "pf":
+        if data[1:] == ["edit"]:
+            awaiting(uid, "profile")
+            send(chat, "✍️ Напиши, что поменять, одним сообщением.\n<i>Например: «вес 61, рост 170, спорт бокс».</i>")
+        else:
+            send(chat, *profile_view(uid))
+    elif data[0] == "sum":
+        threading.Thread(target=summary_report, args=(chat, uid, data[1] if len(data) > 1 else "week"),
+                         daemon=True).start()
+        note = "Считаю сводку…"
     elif data[0] == "g" and data[1] == "add":
         awaiting(uid, "goal")
         send(chat, "✍️ Напиши цель одним сообщением.\n<i>Например: «ложиться до 23:00».</i>")
@@ -1185,7 +1439,7 @@ def on_callback(cq):
     elif data[0] == "wa" and data[1] == "del":
         if db.delete_water(uid, int(data[2])):
             text, last = water_text(uid, title="↩️ <b>Отменил</b>")
-            edit(chat, mid, text, water_buttons(last))
+            edit(chat, mid, text, water_buttons(uid, last))
             note = "Отменил"
     elif data[0] == "m" and data[1] == "del":
         if db.delete_meal(uid, int(data[2])):
@@ -1434,7 +1688,13 @@ def route(uid, path, b):
             "today": day_payload(uid, today), "series": insights.series(db, uid, today, 30),
             "redirect": redirect_url(), "thinking": uid in busy,
             "goals": db.goals(uid), "morning": u["profile"].get("morning") or store.MORNING_DEFAULT,
+            "mode": ui_mode(uid),
         }
+    if path == "/api/mode":  # «💬 Перейти в чат» из приложения: режим «чат» и главное меню — в чат
+        m = set_mode(uid, str(b.get("mode") or ""))
+        if m == "chat":
+            welcome(uid, uid, u["name"])
+        return {"mode": m}
     if path == "/api/day":
         day = datetime.date.fromisoformat(b.get("d") or today.isoformat())
         return {"day": day_payload(uid, min(day, today))}
@@ -1566,7 +1826,7 @@ def use_url(url):
         if owner():
             try:
                 send(owner(), box("⚡", "Форма готова", note="Кнопка «Форма» — слева от поля ввода."),
-                     with_app([] if db.token(owner()) else [[btn("🔌 Подключить WHOOP", "c|", "success")]]))
+                     with_app(owner(), [] if db.token(owner()) else [[btn("🔌 Подключить WHOOP", "c|", "success")]]))
             except Exception as e:
                 print("notify:", e)
     return True
