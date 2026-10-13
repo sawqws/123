@@ -7,9 +7,13 @@
   const { tg, $, esc, toast, haptic, sheet, busy } = Kit;
   const view = $('view');
   const S = {
-    tab: 'sec', hub: null, sec: null, secErr: null, gate: null, draft: '', open: {}, seen: {}, hidden: {},
+    tab: 'sec', hub: null, sec: null, secErr: null, gate: null, draft: '', open: {},
     updating: null, logs: null, memory: null, queued: null,
+    pending: [],      // вопросы, ушедшие на сервер, но ещё без ответа сервера (пузырь в ленте сразу)
+    older: false,     // развёрнут ли блок «Раньше»
+    painted: {}, feedSig: null,
   };
+  const QUEUE_MAX = 5;  // как в tgbot/agent.py
 
   // ---------- мелочи ----------
   const NB = '\u00a0';
@@ -87,24 +91,31 @@
 
   // ---------- отрисовка ----------
   function render(anim) {
-    if (S.gate) return gate();
+    if (S.gate) { syncDock(); return gate(); }
     const html = S.tab === 'bots' ? botsView() : S.tab === 'more' ? moreView() : secView();
     view.innerHTML = html;
     view.classList.toggle('enter', !!anim);
     fillAnswers(view);
-    if (S.tab === 'sec') bindComposer();
+    S.painted = {};
+    syncDock();
     requestAnimationFrame(() => view.querySelectorAll('.bar > i[data-w]').forEach((b) => { b.style.width = b.dataset.w; }));
   }
 
-  // часть экрана Секретаря без перерисовки поля ввода (чтобы не сбить набор)
+  // часть экрана Секретаря без перерисовки (поле ввода живёт в #dock и не пересоздаётся); одинаковый HTML не трогаем
   function paintLive() {
-    const box = $('composer');
+    const box = $('convo');
     if (S.tab !== 'sec' || !box || (box.dataset.down === '1') !== !!S.secErr) return render();  // Секретарь пропал или вернулся
-    for (const [id, fn] of [['sechero', secHero], ['downbox', downBox], ['runbox', runCard], ['psybox', psyCard], ['acc', accountCard], ['chats', chatsBlock], ['hist', histBlock]]) {
+    for (const [id, fn] of [['sechero', secHero], ['downbox', downBox], ['convo', convoBlock], ['psybox', psyCard], ['acc', accountCard], ['chats', chatsBlock]]) {
       const el = $(id);
-      if (el) { el.innerHTML = fn(); fillAnswers(el); }
+      if (!el) continue;
+      const html = fn();
+      if (S.painted[id] === html) continue;
+      S.painted[id] = html;
+      el.innerHTML = html;
+      fillAnswers(el);
     }
     syncSend();
+    followFeed();
   }
 
   function gate() {
@@ -122,13 +133,9 @@
 
   // ---------- Секретарь ----------
   const isWork = () => !!(!S.secErr && S.sec && S.sec.run && S.sec.run.state === 'work');
-  const shownRun = () => {
-    const r = S.sec && S.sec.run;
-    if (!r) return null;
-    if (r.state === 'work') { S.seen[r.id] = true; return r; }
-    if (S.hidden[r.id] || (!S.seen[r.id] && (r.ago || 0) > 600)) return null;
-    return r;
-  };
+  const queueOf = () => (S.sec && S.sec.queue) || [];
+  const isBusy = () => isWork() || queueOf().length > 0;
+  const queueFull = () => queueOf().length >= QUEUE_MAX;
 
   function secHero() {
     const st = S.sec;
@@ -158,24 +165,12 @@
   function secView() {
     const down = !!S.secErr;
     let out = `<div id="sechero">${secHero()}</div>
-      <section class="card feature composer rise" id="composer" data-down="${down ? 1 : 0}">
-        <textarea id="ask" rows="2" maxlength="4000" placeholder="Поручите: «найди билеты в Китай на ноябрь», «забронируй стол», «что я пропустил»…" aria-label="Поручение">${esc(S.draft)}</textarea>
-        <div class="chips quick">
-          ${FILLS.map(([t, v], i) => `<button class="chip" data-fill="${i}">${t}</button>`).join('')}
-          <button class="chip" data-preset="missed">📬 Что я пропустил</button>
-          <button class="chip" data-preset="sort">🗂 Навести порядок</button>
-          <button class="chip" data-act="psy">🧠 Разбор чата</button>
-        </div>
-        <div class="composer-bar"><button class="btn ghost sm" data-act="new">Новый разговор</button>
-          <button class="btn primary sm send" data-act="send">Отправить</button></div>
-      </section>
       <div id="downbox">${downBox()}</div>
-      <div id="runbox">${runCard()}</div>`;
+      <div id="convo" data-down="${down ? 1 : 0}">${convoBlock()}</div>`;
     if (!down) {
       out += `<div id="psybox">${psyCard()}</div>
       <div id="acc">${accountCard()}</div>
-      <div id="chats">${chatsBlock()}</div>
-      <div id="hist">${histBlock()}</div>`;
+      <div id="chats">${chatsBlock()}</div>`;
     } else {
       out += `<p class="hint center">Боты и дела работают — они на соседних вкладках.</p>`;
     }
@@ -188,7 +183,7 @@
   function psyCard() {
     const st = S.sec;
     if (!st) return '';
-    const dis = isWork() ? 'disabled' : '';
+    const dis = queueFull() ? 'disabled' : '';
     const body = st.me
       ? `<div class="btns psy-btns"><button class="btn tonal sm" data-preset="psy_week" ${dis}>Все чаты · неделя</button>
           <button class="btn tonal sm" data-preset="psy_month" ${dis}>Все чаты · месяц</button>
@@ -197,31 +192,6 @@
          <button class="btn tonal sm" data-act="login">Войти в аккаунт</button>`;
     return `<section class="card psy"><div class="row-flat"><span class="ava-ic">🧠</span><div class="main"><b>Психолог</b>
       <div class="hint">Отношения и роли, тон, скрытые конфликты, на кого уходят силы — и советы</div></div></div>${body}</section>`;
-  }
-
-  function runCard() {
-    const r = shownRun();
-    if (!r) return '';
-    const work = r.state === 'work';
-    const label = { work: 'Работаю', done: 'Готово', error: 'Не получилось', stopped: 'Остановлено' }[r.state] || '';
-    const steps = r.steps || [];
-    const meta = mmss(r.secs || 0) + (steps.length ? ` · ${num(steps.length, 'шаг', 'шага', 'шагов')}` : '');
-    let body;
-    if (work) {
-      const shown = steps.slice(-4);
-      body = `<ul class="steps">${(shown.length ? shown : ['Думаю']).map((s, i, a) =>
-        `<li class="${i === a.length - 1 ? 'now' : ''}">${esc(s)}</li>`).join('')}</ul>` +
-        (r.confirm ? `<div class="note warn-note"><div><b>Ждёт «Да» в чате</b><div class="hint">${esc(r.confirm.replace(/\n{2,}/g, '\n'))}</div>
-          <button class="btn tonal sm" data-act="chat">Перейти в чат</button></div></div>` : '') +
-        `<div class="btns"><button class="btn danger sm" data-act="stop">Остановить</button></div>`;
-    } else {
-      body = answer('run-' + r.id, r.html, false) +
-        `<div class="run-foot"><span class="hint">Ответ и в чате</span><button class="btn ghost sm" data-hide="${esc(r.id)}">Скрыть</button></div>`;
-    }
-    return `<section class="card run ${esc(r.state)}"><div class="run-head">
-        <span class="pill dot ${work ? 'accent live' : r.state === 'done' ? 'ok' : 'err'}">${label}</span>
-        <span class="hint tnum">${meta}</span></div>
-      <div class="run-q">${esc(r.q)}</div>${body}</section>`;
   }
 
   function accountCard() {
@@ -258,51 +228,165 @@
     return out;
   }
 
-  function histBlock() {
+  // ---------- разговор: одна лента, как в мессенджере ----------
+  const sameConv = (it) => (it.conv || '') === ((S.sec && S.sec.conv) || '');
+  // вопросы и ответы текущего разговора по порядку (старые сверху)
+  function convItems() {
     const st = S.sec;
-    if (!st) return '';
-    const r = shownRun();
-    const items = (st.history || []).filter((it) => !(r && it.id === r.id)).slice(0, 8);
-    if (!items.length) return '';
-    return `<div class="label">Последние ответы</div>` + items.map((it) => `<article class="card hist">
-      <div class="hist-head"><span class="src">${it.source === 'app' ? '📱' : '💬'}</span><div class="main">
-        <div class="q">${esc(it.q)}${it.state !== 'done' ? ` <span class="pill err">${it.state === 'stopped' ? 'стоп' : 'ошибка'}</span>` : ''}</div>
-        <div class="hint tnum">${esc([it.at, it.secs != null ? mmss(it.secs) : ''].filter(Boolean).join(' · '))}</div></div></div>
-      ${answer('h-' + it.id, it.html, true)}</article>`).join('');
+    if (!st) return [];
+    const items = (st.history || []).filter(sameConv).slice().reverse();
+    const r = st.run;
+    if (r && r.state !== 'work' && sameConv(r) && !items.some((it) => it.id === r.id)) items.push(r);  // ответ пришёл раньше истории
+    return items;
+  }
+  const PRESET_LABEL = { missed: 'Что я пропустил', sort: 'Навести порядок', psy_week: 'Разбор чатов за неделю',
+    psy_month: 'Разбор чатов за месяц', psy: 'Разбор чата', brief: 'Что пишут' };
+
+  const bubbleMe = (q, meta, cls) => `<div class="msg me ${cls || ''}"><div class="txt">${esc(q)}</div>${meta ? `<div class="msg-meta">${esc(meta)}</div>` : ''}</div>`;
+  function bubbleAi(it, last) {
+    const bits = [it.at, it.secs != null ? mmss(it.secs) : ''].filter(Boolean).join(' · ');
+    return `<div class="msg ai">${it.state && it.state !== 'done' ? `<span class="pill err">${it.state === 'stopped' ? 'остановлено' : 'ошибка'}</span> ` : ''}${
+      answer('h-' + it.id, it.html, !last)}${bits ? `<div class="msg-meta tnum">${esc(bits)}</div>` : ''}</div>`;
+  }
+  function bubbleWork(r) {
+    const steps = r.steps || [];
+    const shown = steps.slice(-4);
+    const meta = mmss(r.secs || 0) + (steps.length ? ` · ${num(steps.length, 'шаг', 'шага', 'шагов')}` : '');
+    return `<div class="msg ai work"><div class="run-head"><span class="pill dot accent live">Работаю</span><span class="hint tnum">${meta}</span></div>
+      <ul class="steps">${(shown.length ? shown : ['Думаю']).map((x, i, a) => `<li class="${i === a.length - 1 ? 'now' : ''}">${esc(x)}</li>`).join('')}</ul>
+      ${r.confirm ? `<div class="note warn-note"><div><b>Ждёт «Да» в чате</b><div class="hint">${esc(r.confirm.replace(/\n{2,}/g, '\n'))}</div>
+        <button class="btn tonal sm" data-act="chat">Перейти в чат</button></div></div>` : ''}
+      <div class="btns"><button class="btn danger sm" data-act="stop">Остановить${queueOf().length ? ' всё' : ''}</button></div></div>`;
   }
 
-  function syncSend() {
-    const s = view.querySelector('[data-act="send"]');
-    if (s) s.disabled = !S.draft.trim() || isWork();
-    view.querySelectorAll('[data-preset], [data-act="psy"]').forEach((b) => { b.disabled = isWork(); });
+  function convoBlock() {
+    const st = S.sec;
+    if (!st) return `<div class="card"><div class="sk" style="height:18px;width:50%"></div><div class="sk" style="height:42px;margin-top:12px"></div></div>`;
+    const items = convItems();
+    const run = isWork() ? st.run : null;
+    const queue = queueOf();
+    const pend = S.pending;
+    let out = `<div class="label">Разговор<button class="more" data-act="new">Новый разговор</button></div>`;
+    if (!items.length && !run && !queue.length && !pend.length) {
+      out += `<div class="card"><div class="empty"><span class="e">✦</span><b>Поручите что угодно</b>Найду, отвечу, сделаю. Уточнять можно, пока я думаю — вопросы встанут в очередь.</div></div>`;
+    } else {
+      out += `<div class="convo">`;
+      items.forEach((it, i) => { out += bubbleMe(it.q, it.source === 'app' ? '' : 'из чата') + bubbleAi(it, i === items.length - 1 && !run); });
+      if (run) out += bubbleMe(run.q) + bubbleWork(run);
+      queue.forEach((x, i) => { out += bubbleMe(x.q, `в очереди №${i + 1}`, 'wait'); });
+      pend.forEach((x) => { out += bubbleMe(x.q, 'отправляю…', 'wait'); });
+      out += `</div>`;
+    }
+    const old = (st.history || []).filter((it) => !sameConv(it)).slice(0, 8);
+    if (old.length) {
+      out += `<button class="more-btn older" data-act="older">${S.older ? 'Скрыть прежние разговоры' : `Раньше · ${old.length}`}</button>`;
+      if (S.older) {
+        out += old.map((it) => `<article class="card hist">
+          <div class="hist-head"><span class="src">${it.source === 'app' ? '📱' : '💬'}</span><div class="main">
+            <div class="q">${esc(it.q)}${it.state !== 'done' ? ` <span class="pill err">${it.state === 'stopped' ? 'стоп' : 'ошибка'}</span>` : ''}</div>
+            <div class="hint tnum">${esc([it.at, it.secs != null ? mmss(it.secs) : ''].filter(Boolean).join(' · '))}</div></div></div>
+          ${answer('o-' + it.id, it.html, true)}</article>`).join('');
+      }
+    }
+    return out;
   }
-  function bindComposer() {
+
+  // автопрокрутка к новому пузырю (только когда в ленте что-то изменилось, не на каждый опрос)
+  function followFeed(force) {
+    const st = S.sec;
+    if (!st || S.tab !== 'sec') return;
+    const r = st.run;
+    const sig = [convItems().length, r ? r.id + r.state : '', queueOf().length, S.pending.length].join('|');
+    const first = S.feedSig === null;
+    const changed = sig !== S.feedSig;
+    S.feedSig = sig;
+    if (!force && (first || !changed)) return;
+    requestAnimationFrame(() => {
+      const bubbles = view.querySelectorAll('.convo > .msg');
+      const last = bubbles[bubbles.length - 1];
+      if (last) last.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    });
+  }
+
+  // ---------- поле поручения: закреплено внизу (#dock), всегда активно — и пока Секретарь думает ----------
+  const FILL_HTML = FILLS.map(([t], i) => `<button class="chip" data-fill="${i}">${t}</button>`).join('');
+  const dockEl = $('dock');
+  function buildDock() {
+    if (!dockEl || dockEl.dataset.ready) return;
+    dockEl.dataset.ready = '1';
+    dockEl.innerHTML = `<div class="dock-in">
+      <div class="chips quick">${FILL_HTML}
+        <button class="chip" data-preset="missed">📬 Что я пропустил</button>
+        <button class="chip" data-preset="sort">🗂 Навести порядок</button>
+        <button class="chip" data-act="psy">🧠 Разбор чата</button></div>
+      <div class="dock-bar"><textarea id="ask" rows="1" maxlength="4000" aria-label="Поручение"
+        placeholder="Поручение или уточнение…"></textarea>
+        <button class="btn primary icon send" data-act="send" aria-label="Отправить">↑</button></div>
+      <div class="hint dock-hint" id="dockhint"></div></div>`;
     const ta = $('ask');
-    if (!ta) return;
-    const size = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, innerHeight * 0.4) + 'px'; };
+    const size = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, innerHeight * 0.3) + 'px'; padDock(); };
     ta.addEventListener('input', () => { S.draft = ta.value; size(); syncSend(); });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); });
-    requestAnimationFrame(size);
-    syncSend();
+    ta.value = S.draft;
+    ta.sizeNow = size;
+    dockEl.addEventListener('click', onClick);
+  }
+  // место под закреплённое поле: низ страницы не прячется за ним
+  function padDock() {
+    document.body.style.setProperty('--dock-h', (dockEl && !dockEl.hidden ? dockEl.offsetHeight : 0) + 'px');
+  }
+  function syncDock() {
+    if (!dockEl) return;
+    const on = S.tab === 'sec' && !S.gate;
+    if (on) buildDock();
+    dockEl.hidden = !on;
+    document.body.classList.toggle('has-dock', on);
+    padDock();
+    if (on) syncSend();
+  }
+  function syncSend() {
+    const s = dockEl && dockEl.querySelector('[data-act="send"]');
+    if (!s) return;
+    const full = queueFull();
+    s.disabled = !S.draft.trim() || full;
+    dockEl.querySelectorAll('[data-preset], [data-act="psy"]').forEach((b) => { b.disabled = full; });
+    const hint = $('dockhint');
+    if (hint) {
+      hint.textContent = full ? `В очереди уже ${QUEUE_MAX} — дождитесь ответа или остановите` : isBusy() ? 'Добавлю в очередь — отвечу следом' : '';
+      hint.hidden = !hint.textContent;
+    }
+    padDock();
   }
 
   async function ask(body, btn) {
-    if (isWork()) { toast('Ещё занимаюсь прошлым поручением', 'err'); haptic('warning'); return false; }
     if (S.queued) { toast('Уже жду Секретаря с одним поручением', 'err'); haptic('warning'); return false; }
+    if (queueFull()) { toast(`В очереди уже ${QUEUE_MAX} — дождитесь ответа`, 'err'); haptic('warning'); return false; }
     haptic('tap');
+    const mine = { q: body.text || PRESET_LABEL[body.preset] || 'Поручение' + (body.chat ? ': ' + body.chat : '') };
+    if (body.preset && body.chat && body.preset !== 'brief') mine.q = (PRESET_LABEL[body.preset] || 'Разбор') + ': ' + body.chat;
+    S.pending.push(mine);
+    if (S.sec) paintLive();
     try {
       const r = await busy(btn, () => sec('ask', body));
+      S.pending = S.pending.filter((x) => x !== mine);
       started(r);
       return true;
     } catch (e) {
+      S.pending = S.pending.filter((x) => x !== mine);
       if (e.status === 502 || (e.data && e.data.down)) return queue(body);  // Секретарь не отвечает — поднимем и повторим
+      paintLive();
       toast(e.message, 'err'); haptic('error'); return false;
     }
   }
   function started(r) {
     S.secErr = null;
-    if (S.sec) S.sec.run = r.run; else loadSec();
+    if (S.sec) {
+      S.sec.run = r.run;
+      if (r.queue) S.sec.queue = r.queue;
+      if (r.queued) { toast(`Добавил в очередь · №${r.queued}`, 'ok'); haptic('success'); }
+    } else loadSec();
     paintLive();
+    followFeed(true);
     pollSoon(900);
   }
   // Секретарь лежит: просим Главного поднять его и повторяем отправку, пока не ответит (до ~6 минут: установка долгая)
@@ -342,12 +426,11 @@
     const text = S.draft.trim();
     if (!text) return;
     const ta = $('ask');
-    if (ta) ta.blur();
-    if (await ask({ text }, btn)) {
-      S.draft = '';
-      const now = $('ask');  // поле могли перерисовать (Секретарь не отвечал), поэтому берём заново
-      if (now) { now.value = ''; now.style.height = 'auto'; }
-      syncSend();
+    S.draft = '';  // поле очищаем сразу: пузырь уже в ленте; не ушло — вернём текст
+    if (ta) { ta.value = ''; ta.style.height = 'auto'; }
+    syncSend();
+    if (!(await ask({ text }, btn))) {
+      if (!S.draft) { S.draft = text; const now = $('ask'); if (now) { now.value = text; if (now.sizeNow) now.sizeNow(); } syncSend(); }
     }
   }
 
@@ -616,7 +699,7 @@
   }
 
   // ---------- нажатия ----------
-  view.addEventListener('click', async (e) => {
+  async function onClick(e) {
     const t = e.target;
     const b = t.closest('[data-bot]');
     if (b) return botSheet(b.dataset.bot);
@@ -634,8 +717,6 @@
     if (c) return chatSheet(S.sec.chats[+c.dataset.chat]);
     const x = t.closest('[data-expand]');
     if (x) { S.open[x.dataset.expand] = true; x.previousElementSibling.classList.remove('clip'); x.remove(); haptic('select'); return; }
-    const h = t.closest('[data-hide]');
-    if (h) { S.hidden[h.dataset.hide] = true; haptic('select'); return paintLive(); }
     const dj = t.closest('[data-deljob]');
     if (dj) return delJob(dj.dataset.deljob);
     const dr = t.closest('[data-delrmd]');
@@ -644,9 +725,23 @@
     if (!a) return;
     const act = a.dataset.act;
     if (act === 'send') return send(a);
-    if (act === 'psy') return isWork() ? toast('Ещё занимаюсь прошлым поручением', 'err') : psySheet();
-    if (act === 'stop') { haptic('rigid'); try { const r = await sec('stop'); S.sec.run = r.run || S.sec.run; paintLive(); } catch (er) { toast(er.message, 'err'); } return; }
-    if (act === 'new') { try { await sec('new'); haptic('success'); toast('Начинаем с чистого листа ✦', 'ok'); } catch (er) { toast(er.message, 'err'); } return; }
+    if (act === 'psy') return psySheet();
+    if (act === 'stop') {
+      haptic('rigid');
+      try { const r = await sec('stop'); S.sec.run = r.run || S.sec.run; S.sec.queue = []; paintLive(); } catch (er) { toast(er.message, 'err'); }
+      return;
+    }
+    if (act === 'new') {  // новый разговор: контекст сбрасывается, очередь чистится
+      if (!(await confirmBox('Начать новый разговор? Секретарь забудет, о чём вы говорили выше, а вопросы в очереди пропадут.'))) return;
+      try {
+        await sec('new');
+        S.older = false;
+        haptic('success'); toast('Начинаем с чистого листа ✦', 'ok');
+        await loadSec(true);
+      } catch (er) { toast(er.message, 'err'); }
+      return;
+    }
+    if (act === 'older') { S.older = !S.older; haptic('select'); return paintLive(); }
     if (act === 'chat') return toChat();
     if (act === 'tochat') {  // режим «💬 чат»: бот пришлёт главное меню, приложение закрывается
       try { await busy(a, () => api('mode', { mode: 'chat' })); haptic('success'); toChat(); } catch (er) { toast(er.message, 'err'); }
@@ -663,8 +758,13 @@
     if (act === 'update') return updateAll(a);
     if (act === 'support') return support();
     if (act === 'memory') return memorySheet();
-    if (act === 'jobexample') { S.draft = 'Каждый будний день в 7:00 пишите маме «доброе утро»'; bar.set('sec'); return go('sec'); }
-  });
+    if (act === 'jobexample') {
+      S.draft = 'Каждый будний день в 7:00 пишите маме «доброе утро»'; bar.set('sec'); go('sec');
+      const ta = $('ask');
+      if (ta) { ta.value = S.draft; if (ta.sizeNow) ta.sizeNow(); syncSend(); }
+    }
+  }
+  view.addEventListener('click', onClick);
 
   // ---------- данные ----------
   async function loadHub() {
@@ -695,11 +795,16 @@
       const was = S.sec.run;
       const r = await sec('run', { history: true });
       S.sec.run = r.run;
+      S.sec.queue = r.queue || [];
+      if (r.conv) S.sec.conv = r.conv;
       if (r.history) S.sec.history = r.history;
-      if (was && was.state === 'work' && r.run && r.run.state !== 'work') {
-        haptic(r.run.state === 'done' ? 'success' : 'error');
-        if (r.run.state === 'done') toast('Готово ✦ Ответ и в чате', 'ok');
-        return loadSec();
+      // закончился шаг: тот же run стал done/error, либо очередь уже запустила следующий вопрос
+      if (was && was.state === 'work' && (!r.run || r.run.id !== was.id || r.run.state !== 'work')) {
+        const fin = (r.history || []).find((x) => x.id === was.id) || (r.run && r.run.id === was.id ? r.run : null);
+        const ok = !fin || fin.state === 'done';
+        haptic(ok ? 'success' : 'error');
+        if (ok) toast('Готово ✦ Ответ и в чате', 'ok');
+        if (!isBusy()) return loadSec();
       }
       paintLive();
     } catch (e) { /* сеть моргнула — попробую снова */ }
@@ -707,10 +812,10 @@
 
   let timer = 0;
   function pollSoon(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
-  function poll() { pollSoon(S.updating || isWork() ? 1500 : S.tab === 'bots' ? 6000 : 20000); }
+  function poll() { pollSoon(S.updating || isBusy() ? 1500 : S.tab === 'bots' ? 6000 : 20000); }
   async function tick() {
     if (!document.hidden && !S.gate) {
-      if (isWork() && S.tab === 'sec') await pollRun();
+      if (isBusy() && S.tab === 'sec') await pollRun();
       else if (S.updating) await loadHub();
       else await Promise.all([S.tab !== 'sec' || !S.hub ? loadHub() : null, S.tab !== 'bots' ? loadSec() : null]);
     }
@@ -726,6 +831,7 @@
     if (want && TABS.some((x) => x.id === want)) S.tab = want;
   } catch (e) { /* без хранилища */ }
   bar = Kit.tabbar($('tabs'), TABS, S.tab, go);
+  window.addEventListener('resize', padDock);
   if (!(tg && tg.initData)) { S.gate = 'нет initData'; render(); return; }
   render(true);
   Promise.all([loadHub(), loadSec()]).then(() => { if (S.gate) render(); poll(); });

@@ -306,3 +306,36 @@ body.typing .tabs { transform: translateY(110%); }
 .sup-fab { position: fixed; z-index: 19; right: 14px; bottom: calc(var(--tab-h) + var(--safe-b) + 12px); display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px 0 10px; border: 1px solid var(--line, rgba(255,255,255,.1)); border-radius: 999px; background: var(--card, #1d2033); color: var(--text, #fff); font: 600 13px/1 inherit; font-family: inherit; box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); cursor: pointer; }
 .sup-fab .i { font-size: 16px; line-height: 1; }
 .sup-fab:active { transform: scale(.95); }
+
+/* ---------- лента разговора: вопрос справа, ответ слева ---------- */
+.convo { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.msg { max-width: 86%; min-width: 0; padding: 10px 14px; border-radius: var(--r); overflow-wrap: anywhere;
+  scroll-margin-bottom: calc(var(--dock-h, 0px) + var(--tab-h) + var(--safe-b) + 16px); }
+.msg.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
+.msg.me .txt { white-space: pre-wrap; }
+.msg.me.wait { opacity: .6; }
+.msg.ai { align-self: flex-start; max-width: 94%; background: var(--card); border-bottom-left-radius: 6px; }
+.msg.ai.work { width: 94%; }
+.msg.ai .answer { margin-top: 0; }
+.msg-meta { margin-top: 4px; font-size: 12px; opacity: .7; }
+.older { display: flex; margin: 0 auto 12px; }
+.work-note { width: 100%; text-align: left; align-items: center; }
+.work-note .spark { width: 22px; height: 22px; }
+
+/* поле поручения закреплено над вкладками и всегда активно */
+.dock { position: fixed; left: 0; right: 0; bottom: calc(var(--tab-h) + var(--safe-b)); z-index: 9; }
+.dock:empty { display: none; }
+.dock-in { max-width: 640px; margin: 0 auto; padding: 8px 16px 6px; background: color-mix(in srgb, var(--bg) 94%, transparent);
+  border-top: 1px solid var(--sep); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.dock .chips { flex-wrap: nowrap; overflow-x: auto; margin-bottom: 8px; scrollbar-width: none; }
+.dock .chips::-webkit-scrollbar { display: none; }
+.dock .chip { flex: none; }
+.dock-bar { display: flex; align-items: flex-end; gap: 8px; }
+.dock-bar textarea { flex: 1; min-width: 0; min-height: 44px; max-height: 30vh; padding: 10px 14px; border: 1px solid var(--sep);
+  border-radius: var(--r); background: var(--card); outline: 0; resize: none; font-size: 16px; line-height: 1.35; display: block; }
+.dock-bar textarea::placeholder { color: var(--hint); }
+.dock-hint { margin: 6px 4px 0; }
+body.typing .dock { bottom: 0; }
+body.has-dock .view { padding-bottom: calc(var(--dock-h, 0px) + var(--tab-h) + var(--safe-b) + 24px); }
+.sup-fab { transition: opacity .2s; }
+body.has-dock .sup-fab { opacity: 0; pointer-events: none; }
