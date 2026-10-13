@@ -179,6 +179,7 @@ bot.http_hook = proxy
 # ---------- Claude ----------
 
 TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash(python3:*)", "Bash(node:*)", "Bash(ls:*)", "Bash(cat:*)",
+         "Bash(sed -n:*)", "Bash(grep:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(find:*)",
          "Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(mkdir:*)", "Bash(cp:*)"]
 
 
@@ -325,7 +326,10 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
 - Стиль чата: заголовок жирным с одним эмодзи, содержимое — цитатой (kit.card), второстепенное — <i>…</i>, ошибки —
   «⚠️ …» (raise kit.Fail). Кнопки ≤ 24 символов, ≤ 3 в ряд (kit.rows), главное действие — style="primary"/"success",
   опасное — "danger" и с подтверждением. Колонки пробелами не выравнивать. Экран меняется на месте (c.show),
-  а не новым сообщением. На главном экране — кнопка приложения bot.app_button().
+  а не новым сообщением.
+- Главный экран — только через bot.menu(c, заголовок, строки, buttons=[ряды кнопок], quick=[1–2 ряда самого нужного]):
+  он сам добавляет кнопку приложения, «⚙️ Режим» (выбор «💬 чат / 📱 приложение» встроен в botkit: /mode, /app) и
+  «🛠 Поддержка». bot.app_button() сам никуда не добавляй. В режиме «чат» всё должно быть доступно кнопками в чате.
 - Мини-приложение обязательно: то же, что в чате, но нагляднее (цифры крупно, списки, прогресс, вкладки .tabs, если
   экранов несколько). Только классы kit.css и функции kit.js; своё — немного в app.css. Кнопки в ряд — .actions
   или .grid (не свои flex/grid: у .btn + .btn есть отступ сверху). Пустые состояния —
@@ -366,16 +370,15 @@ def home(c):
     if d.get("stage") and d["stage"] not in ("done",):
         return resume(c)
     n = len(registry())
-    tip = "" if one_tap() or secretary_ready() else (
-        "\n⚡ <b>Один раз:</b> @BotFather → «Open» → Студия → <b>Bot Management Mode</b> — и новые боты будут "
-        "создаваться в один тап, без токенов.")
-    c.show(card("🏗 <b>Студия ботов</b>",
-                ["Напиши, какой бот нужен — одним сообщением, текстом или голосом.",
-                 "Я уточню пару деталей, ты дашь имя и подтвердишь план — дальше всё сам: код, мини-приложение, "
-                 "аватар, @BotFather, запуск."],
-                "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>" + tip),
-           [[bot.app_button("📱 Открыть Студию")],
-            ([b(f"🧩 Мои боты · {n}", "bots")] if n else []) + [kit.support_button()]])  # 🛠 Поддержка Студии
+    foot = "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>"
+    if not n and not one_tap() and not secretary_ready():  # до первого бота: как он появится в Telegram
+        foot += ("\n<i>Бота в Telegram создаю через @BotFather: в конце попрошу токен. Чтобы в один тап — включи мне "
+                 "Bot Management Mode (@BotFather → Open).</i>")
+    if not bot.app_url and bot.db.get("app_wait"):
+        foot += "\n<i>📱 Приложение появится, когда заработает https (нужен Планер).</i>"
+    mine = [[b(f"🧩 Мои боты · {n}", "bots")]] if n else []
+    bot.menu(c, "🏗 <b>Студия</b>", ["Напиши, какой бот нужен — текстом или голосом.",
+                                    "Уточню, покажу план, сделаю сам."], buttons=mine, quick=mine, foot=foot)
 
 
 _one_tap = {"at": 0, "ok": False}
@@ -398,9 +401,17 @@ def cancel(c):
     d = draft()
     if d.get("stage") == "build":
         return c.show(card("⏳ <b>Уже собираю</b>", ["Сборку не остановить — дождись, потом можно удалить."]))
+    drop_unfinished(d)
     put({})
     c.toast("Черновик удалён")
     c.show(card("🗑 <b>Черновик удалён</b>", ["Напиши новую идею, когда захочешь."]))
+
+
+def drop_unfinished(d):
+    """Бот из черновика, который так и не запустили (нет username), — убрать из «Моих ботов» и с диска."""
+    info = registry().get(d.get("slug") or "")
+    if info and not info.get("username"):
+        remove(d["slug"])
 
 
 def resume(c):
@@ -443,6 +454,12 @@ def on_text(c):
         c.say("⏳ Секунду, ещё думаю — напиши это, когда покажу результат.")
         return
     if st == "build":
+        m = BOT_TOKEN.search(c.text)
+        if m:
+            bot.delete(c.chat, c.msg.get("message_id"))  # токен не должен висеть в чате
+            d["token"] = m.group(0)
+            put(d)
+            return c.say("🔑 Токен принял — запущу бота, как только допишу код.")
         d.setdefault("queued", []).append(c.text)
         put(d)
         return c.say(card("📌 <b>Запомнил</b>", [esc(c.text[:300])], "<i>Доделаю сборку и сразу внесу эту правку.</i>"))
@@ -848,10 +865,12 @@ def _build(chat):
                              "просто подтверди. Можно поменять адрес, если занят."],
                             "<i>Пока ты жмёшь, я пишу код.</i>"),
                  [[kit.url(f"⚡ Создать @{want_username(d)}", d["newbot"], "success")]])
-    else:
+    elif secretary_ready():
         t = threading.Thread(target=lambda: got.update(botfather=botfather(d["name"], d["plan"]["username"])),
                              daemon=True)
         t.start()
+    else:  # ни одного тапа, ни Секретаря — пусть Глеб создаст бота в @BotFather, пока пишется код
+        bot.send(chat, *token_card(d, early=True))
     try:
         avatar(path, d)
     except Exception as e:
@@ -881,13 +900,15 @@ def _build(chat):
             commit(path, "Первая версия (тесты не прошли)")
             return fail(chat, "Тесты не проходят:\n" + log, st)
     commit(path, "Первая версия: " + d["idea"][:200])
-    info["about"] = out[-700:]
+    info["about"] = brief(out)
     reg_set(slug, info)
 
     st.step("создаю бота в Telegram", force=True)
     if t:
         t.join(timeout=6 * 60)
     token, why = got.get("botfather") or (None, "Секретарь не ответил" if t else "")
+    if got.get("botfather") and not got["botfather"][0]:
+        why = got["botfather"][1]
     token = draft().get("token") or token  # пришёл через Managed Bots, пока писался код
     if not token:
         d = draft()
@@ -898,6 +919,16 @@ def _build(chat):
     deploy(chat, slug, token, st)
 
 
+def brief(text, n=600):
+    """Начало ответа Claude для карточки «готово»: не больше n символов, обрезать по концу абзаца или предложения."""
+    text = re.sub(r"\n{3,}", "\n\n", str(text).strip())
+    if len(text) <= n:
+        return text
+    cut = text[:n]
+    pos = max(cut.rfind("\n"), cut.rfind(". "))
+    return (cut[:pos + 1] if pos > n // 3 else cut).rstrip() + "…"
+
+
 def want_username(d):
     """Желаемый @username нового бота (оканчивается на bot)."""
     u = re.sub(r"_?bot$", "", (d.get("plan") or {}).get("username") or "my_helper", flags=re.I)[:28]
@@ -905,19 +936,23 @@ def want_username(d):
 
 
 def ask_token(chat, d):
-    p = d.get("plan") or {}
     if d.get("newbot"):
         return bot.send(chat, card(f"✅ <b>Код «{esc(d['name'])}» готов</b>",
                                    ["Осталось создать бота в Telegram: нажми кнопку и подтверди окно — дальше я сам."],
                                    "<i>Или создай в @BotFather вручную и пришли сюда токен.</i>"),
                         [[kit.url(f"⚡ Создать @{want_username(d)}", d["newbot"], "success")], [b("✖️ Отмена", "cancel")]])
-    bot.send(chat, card("🔑 <b>Последний шаг — токен</b>",
-                        [f"Сам создать не смог: {esc(d.get('why') or '')}",
-                         "1. @BotFather → /newbot",
-                         f"2. Имя: <code>{esc(d.get('name', ''))}</code>",
-                         f"3. Username: <code>{esc(p.get('username', 'my'))}_bot</code> (занят — допиши цифры)",
-                         "4. Пришли сюда токен — запущу сам."]),
-             [[kit.url("Открыть @BotFather", "https://t.me/BotFather", "primary")], [b("✖️ Отмена", "cancel")]])
+    bot.send(chat, *token_card(d))
+
+
+def token_card(d, early=False):
+    """(текст, кнопки): один шаг для Глеба — создать бота в @BotFather и прислать токен."""
+    title = "🔑 <b>Пока пишу код — создай бота</b>" if early else "🔑 <b>Код готов — нужен токен</b>"
+    lines = [f"@BotFather → /newbot → имя <code>{esc(d.get('name', ''))}</code> → адрес "
+             f"<code>{esc(want_username(d))}</code> (занят — допиши цифры) → токен пришли сюда, дальше я сам."]
+    if d.get("why") and not early:
+        lines.insert(0, f"<i>Сам создать не смог: {esc(d['why'])}</i>")
+    return card(title, lines), [[kit.url("Открыть @BotFather", "https://t.me/BotFather", "primary")],
+                                [b("✖️ Отмена", "cancel")]]
 
 
 def got_token(c):
@@ -1049,7 +1084,7 @@ def deploy(chat, slug, token, st=None):
 def done_card(info):
     who = f"@{info['username']}" if info.get("username") else info["name"]
     return card(f"🎉 <b>Бот «{esc(info['name'])}» готов</b> — {esc(who)}", [esc(info.get("about") or info.get("summary", ""))],
-                "<i>Открой, нажми «Начать». Мини-приложение — кнопка слева от поля ввода. "
+                "<i>Открой и нажми «Начать» — бот спросит, как удобнее: в чате или в приложении. "
                 "Что не так — просто напиши сюда.</i>")
 
 
@@ -1339,21 +1374,26 @@ def api_delete(r):
 
 def find_url():
     """Адрес приложений: ждём IP и проверяем, что Caddy уже отдаёт наш /health — тогда ставим кнопку."""
+    fails = 0
     while True:
         u = base_url()
         if u:
-            if bot.db.get("base_url") != u:
-                bot.db.set("base_url", u)
             try:
                 with urllib.request.urlopen(u + "health", timeout=20) as r:
                     if r.read() == b"ok":
+                        if bot.db.get("base_url") != u:
+                            bot.db.set("base_url", u)  # отсюда берут адрес новые боты (app_url_of)
+                        bot.db.delete("app_wait")
                         if bot.app_url != u:
                             bot.app_url = u
                             bot._menu()
                             print("Приложение:", u, flush=True)
                         return
-            except Exception:
-                pass
+            except Exception as e:
+                print("https ещё не отвечает:", u, e, flush=True)
+        fails += 1
+        if fails == 3:
+            bot.db.set("app_wait", True)
         time.sleep(60)
 
 

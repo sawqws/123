@@ -7,8 +7,9 @@
 
     @bot.home                         # главный экран: /start, кнопка «home», непонятный текст
     def home(c):
-        c.show(kit.card("💧 <b>Вода</b>", ["Сегодня: 1,2 л из 2 л"]),
-               [[kit.b("➕ 250 мл", "add|250", "primary")], [bot.app_button()]])
+        bot.menu(c, "💧 <b>Вода</b>", ["Сегодня: 1,2 л из 2 л"],
+                 buttons=[[kit.b("➕ 250 мл", "add|250", "primary"), kit.b("📊 Неделя", "week")]],
+                 quick=[[kit.b("➕ 250 мл", "add|250", "primary")]])   # quick — что показать в режиме «приложение»
 
     @bot.button("add")                # кнопка с callback_data «add|250» → c.args == ["250"]
     def add(c):
@@ -39,6 +40,11 @@
 Окружение: BOT_TOKEN, APP_PORT (порт мини-приложения на 127.0.0.1), APP_URL (его https-адрес), BOT_OWNER (id
 владельца), BOTKIT_COMMON (папка common/ репозитория: голосовые и фото). Данные — data/ рядом с ботом.
 Тесты без сети: t = bot.testing(); t.send("/start"); t.press("add|250"); t.last, t.buttons, t.api("state").
+Режим «💬 Чат / 📱 Приложение» встроен: первый /start (если есть https-адрес) спрашивает «🧭 Как удобнее?» (кнопки
+mode:chat / mode:app), потом /mode, кнопка «⚙️ Режим» и строка «💬 Перейти в чат» в приложении (kit.js → POST
+api/mode {mode}); bot.ui_mode() → "chat" | "app" | "". bot.menu(...) сам собирает главный
+экран под режим: в чате — все кнопки и без кнопки приложения, в приложении — кнопка приложения + quick (1–2 ряда).
+bot.app_button() в режиме «чат» возвращает None (rows() и c.show() пустые пропускают); /app показывает её всегда.
 🛠 Поддержка встроена: /fix (и кнопка kit.support_button()) — владелец пишет, что сломалось или что улучшить,
 Claude на сервере правит код бота, гоняет test_bot.py и перезапускает его (common/support.py). В мини-приложении —
 строка «🛠 Поддержка и пожелания» (kit.js, сама внизу) → встроенный api("support") → то же самое.
@@ -65,6 +71,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 MSK = datetime.timezone(datetime.timedelta(hours=3))
 DAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+MODES = {"chat": "💬 чат", "app": "📱 приложение"}
 
 
 # ---------- стиль сообщений (один на все боты) ----------
@@ -253,7 +260,11 @@ class Bot:
         self.data_dir = data or os.path.join(self.dir, "data")
         self.webapp = webapp or os.path.join(self.dir, "webapp")
         self.db = Store(os.path.join(self.data_dir, "db.json"))
-        self.handlers = {"command": {}, "button": {}, "reply": {}, "api": {}}
+        self.handlers = {"command": {"mode": self._mode_cmd, "app": self._app_cmd},
+                         "button": {"mode": self._mode_btn, "mode:chat": self._mode_btn, "mode:app": self._mode_btn},
+                         "reply": {}, "api": {"mode": self._mode_api}}  # встроенные; бот может переопределить
+        if all(c != "mode" for c, _ in self.commands):
+            self.commands = list(self.commands) + [("mode", "Чат или приложение")]
         self.on_text = self.on_photo = self.home_fn = self.on_managed = None
         self.me = {}
         self.jobs = []
@@ -426,9 +437,93 @@ class Bot:
                       reply_markup=self._markup(buttons) if buttons else None)
         return (r.get("result") or {}).get("message_id")
 
-    def app_button(self, text=None, style="primary"):
-        """Кнопка «открыть мини-приложение» (или None, если https-адреса нет — rows() её пропустит)."""
+    # --- режим «💬 Чат / 📱 Приложение» ---
+
+    def ui_mode(self):
+        """"chat" | "app" | "" (ещё не выбирал). Хранится в data/db.json («_mode»)."""
+        m = self.db.get("_mode")
+        return m if m in MODES else ""
+
+    @property
+    def mode(self):
+        return self.ui_mode()
+
+    def set_mode(self, mode):
+        if mode not in MODES:
+            raise ValueError("Режим — chat или app")
+        self.db.set("_mode", mode)
+
+    @property
+    def app_mode(self):
+        return self.ui_mode() == "app" and bool(self.app_url)
+
+    def mode_line(self):
+        """«Режим: 💬 чат · сменить — /mode» курсивом для подвала главного экрана ("" — если приложения нет)."""
         if not self.app_url:
+            return ""
+        return f"<i>Режим: {MODES.get(self.ui_mode(), 'не выбран')} · сменить — /mode</i>"
+
+    def mode_button(self, text="⚙️ Режим"):
+        return b(text, "mode") if self.app_url else None
+
+    def choose_mode(self, c):
+        """Карточка «🧭 Как удобнее?» — первый /start, /mode, кнопка «⚙️ Режим»."""
+        if not self.app_url:
+            return c.show(card("💬 <b>Всё здесь, в чате</b>", ["Приложения у меня пока нет — всё делается кнопками."]),
+                          [[b("‹ Главное", "home")]])
+        c.show(card("🧭 <b>Как удобнее?</b>", ["💬 <b>В чате</b> — всё кнопками и командами здесь",
+                                                f"📱 <b>Приложение</b> — {esc(self.app_text)} в одном окне"],
+                    "<i>Поменять можно в любой момент: /mode</i>"),
+               [[b("💬 В чате", "mode:chat", "primary"), b("📱 Приложение", "mode:app", "primary")]])
+
+    def _mode_cmd(self, c):
+        self.choose_mode(c)
+
+    def _app_cmd(self, c):
+        if not self.app_url:
+            return c.say("📱 Приложения у меня пока нет — всё здесь, в чате.")
+        c.say(f"📱 <b>{esc(self.app_text)}</b>", [[self.app_button(always=True)]])
+
+    def _mode_btn(self, c):
+        data = (c.cq or {}).get("data") or ""
+        mode = data.partition(":")[2] if data.startswith("mode:") else (c.args[0] if c.args else "")
+        if mode not in MODES:
+            return self.choose_mode(c)
+        self.set_mode(mode)
+        c.toast(f"Режим: {MODES[mode]}")
+        (self.home_fn or self._default_home)(c)
+
+    def _mode_api(self, r):
+        """GET api/mode → {"mode"}; POST {"mode": "chat"|"app"} — переключить; «chat» — бот присылает главное меню."""
+        mode = str(r.body.get("mode") or "")
+        if mode in MODES:
+            self.set_mode(mode)
+            if mode == "chat" and r.uid:
+                self.send(r.uid, card("✅ <b>Режим: 💬 чат</b>",
+                                      ["Всё, что было в приложении, есть и здесь — кнопками."],
+                                      "<i>Вернуть приложение — /mode</i>"))
+                (self.home_fn or self._default_home)(Ctx(self, r.uid, r.user))
+        return {"mode": self.ui_mode()}
+
+    def menu(self, c, title, lines=(), buttons=None, quick=None, foot=""):
+        """Главный экран под режим. buttons — ряды кнопок для чата; quick — 1–2 ряда самого нужного для режима
+        «приложение» (нет — первый ряд buttons). Кнопка приложения, «⚙️ Режим» и «🛠 Поддержка» добавляются сами."""
+        buttons = [row for row in (buttons or []) if row]
+        tail = [[self.mode_button(), support_button() if self.support_cfg is not False else None]]
+        mode = self.ui_mode()
+        if mode == "chat" or not self.app_url:
+            rows = buttons + tail
+        elif mode == "app":
+            rows = [[self.app_button()]] + [row for row in (quick or buttons[:1]) if row][:2] + tail
+        else:
+            rows = [[self.app_button()]] + buttons + tail
+        foot = "\n".join(x for x in (foot, self.mode_line()) if x)
+        return c.show(card(title, lines, foot), rows)
+
+    def app_button(self, text=None, style="primary", always=False):
+        """Кнопка «открыть мини-приложение». None, если https-адреса нет или выбран режим «чат» (rows() и c.show()
+        пустые кнопки пропускают); always=True — показать и в режиме «чат» (/app)."""
+        if not self.app_url or (self.ui_mode() == "chat" and not always):
             return None
         btn = {"text": clip(text or f"📱 {self.app_text}"), "web_app": {"url": self.app_url}}
         if style:
@@ -491,6 +586,8 @@ class Bot:
             cmd = cmd.split("@")[0].lower()
             self.waits.pop(chat, None)
             fn = self.handlers["command"].get(cmd) or self.home_fn or self._default_home  # неизвестная — главный экран
+            if cmd == "start" and self.app_url and not self.ui_mode():  # первый раз — как удобнее?
+                fn = self.choose_mode
             return fn(Ctx(self, chat, user, text=rest.strip(), args=rest.split(), msg=msg))
         kind = media_kind(msg)
         if kind == "voice":
@@ -498,7 +595,9 @@ class Bot:
         if kind == "photo":
             if self.on_photo:
                 return self.later(self._photo, chat, user, msg, text)
-            return self.send(chat, "📷 Фото я не разбираю — напиши словами.")
+            if text:  # подпись к фото — как обычный текст
+                return self._route_text(Ctx(self, chat, user, text=text, msg=msg))
+            return self.send(chat, "📷 Картинки я не разбираю — напиши словами, что на ней.")
         if text:
             return self._route_text(Ctx(self, chat, user, text=text, msg=msg))
 
@@ -552,9 +651,7 @@ class Bot:
             pass
 
     def _default_home(self, c):
-        c.show(card(f"{self.emoji} <b>{esc(self.name)}</b>", [esc(self.about)] if self.about else []),
-               ([[self.app_button()]] if self.app_url else []) + ([[support_button()]] if self.support_cfg is not False
-                                                                  else []) or None)
+        self.menu(c, f"{self.emoji} <b>{esc(self.name)}</b>", [esc(self.about)] if self.about else [])
 
     # --- мини-приложение ---
 
@@ -835,6 +932,13 @@ class Tester:
         m = self.messages
         kb = ((m[-1].get("reply_markup") or {}).get("inline_keyboard") or []) if m else []
         return [btn["text"] for row in kb for btn in row]
+
+    @property
+    def keyboard(self):
+        """Кнопки последнего сообщения целиком (dict): проверить web_app, url, style."""
+        m = self.messages
+        kb = ((m[-1].get("reply_markup") or {}).get("inline_keyboard") or []) if m else []
+        return [btn for row in kb for btn in row]
 
     @property
     def toasts(self):
