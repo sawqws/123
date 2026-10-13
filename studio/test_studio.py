@@ -17,6 +17,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 TMP = tempfile.mkdtemp(prefix="studio-test-")
 os.environ["STUDIO_BOTS_DIR"] = os.path.join(TMP, "bots")
+os.environ["STUDIO_SITES_DIR"] = os.path.join(TMP, "sites")
 os.environ["STUDIO_TOKEN"] = "123456:TESTTOKENTESTTOKENTESTTOKENTESTTOKEN"
 sys.path.insert(0, HERE)
 import studio  # noqa: E402
@@ -52,6 +53,13 @@ class Fake:
             return True, json.dumps(self.interview, ensure_ascii=False)
         if "план бота" in prompt:
             return True, json.dumps(self.plan, ensure_ascii=False)
+        if "план сайта" in prompt:
+            return True, json.dumps({"summary": "Сайт кофейни", "pages": ["Главная", "Меню"], "style": ["тёплый"],
+                                     "features": [], "slug": "coffee"}, ensure_ascii=False)
+        if "Статический сайт" in prompt or "дорабатываешь сайт" in prompt:
+            with open(os.path.join(cwd, "index.html"), "w") as f:
+                f.write("<!doctype html><title>Кофейня</title><h1>Привет</h1>")
+            return True, "Сайт кофейни: главная и меню."
         if on_step:
             on_step("пишу bot.py")
         return True, "Считает воду и напоминает."
@@ -400,6 +408,99 @@ class StudioFlow(unittest.TestCase):
         self.t.send("/start", uid=7)
         self.assertIn("личный", self.t.last)
         self.assertEqual(self.t.api("state", uid=7)[0], 403)
+
+
+class FakeReq:
+    def __init__(self, path, headers=None):
+        self.path, self.headers, self.code, self.out, self.sent = path, headers or {}, None, io.BytesIO(), {}
+        self.wfile = self.out
+
+    def send_response(self, code):
+        self.code = code
+
+    def send_header(self, k, v):
+        self.sent[k] = v
+
+    def end_headers(self):
+        pass
+
+    def reply(self, code, body, ctype="", cache=""):
+        self.code = code
+
+
+class Sites(StudioFlow):
+    def setUp(self):
+        shutil.rmtree(os.path.join(TMP, "sites"), ignore_errors=True)
+        super().setUp()
+
+    def make(self):
+        self.f.interview = {"kind": "site", "questions": [], "names": ["Кофейня"], "emoji": "☕"}
+        self.t.send("сделай сайт для кофейни")
+        self.assertEqual(studio.draft()["kind"], "site")
+        self.t.send("Кофейня")
+        self.assertEqual(studio.draft()["stage"], "plan")
+        self.assertIn("сайт", self.t.last)
+        self.t.press("go")
+        return studio.sites()["coffee"]
+
+    def test_build_site_private_then_protect_and_publish(self):
+        info = self.make()
+        self.assertEqual(info["access"], "private")
+        self.assertTrue(os.path.isfile(os.path.join(info["dir"], "index.html")))
+        self.assertEqual(studio.draft()["stage"], "done")
+        self.assertIn("Сайт «Кофейня» готов", self.t.last)
+        self.assertIn("🔒 Защитить паролем", self.t.buttons)
+        self.assertIn("🌍 Выпустить для всех", self.t.buttons)
+        self.assertNotIn("coffee", studio.registry())  # Главный видит только ботов
+        self.t.press("smode|coffee|password")
+        info = studio.sites()["coffee"]
+        self.assertEqual((info["access"], len(info["password"])), ("password", 8))
+        self.t.press("spub?|coffee")
+        self.assertIn("для всех", self.t.last)
+        self.t.press("smode|coffee|public")
+        self.assertEqual(studio.sites()["coffee"]["access"], "public")
+        self.t.press("sites")
+        self.assertIn("Кофейня", self.t.last)
+
+    def test_serve_access_modes(self):
+        info = self.make()
+        key, root = info["key"], f"/s/coffee/"
+        get = lambda path, **h: (lambda r: (studio.serve_site(r, "GET"), r)[1])(FakeReq(path, h))
+        self.assertEqual(get(root).code, 403)  # без ключа
+        self.assertEqual(get(root + "?k=bad").code, 403)
+        r = get(root + f"?k={key}")  # ключ → cookie и редирект
+        self.assertEqual((r.code, r.sent["Location"]), (302, root))
+        self.assertIn(f"sk_coffee={key}", r.sent["Set-Cookie"])
+        r = get(root, Cookie=f"sk_coffee={key}")
+        self.assertEqual(r.code, 200)
+        self.assertIn("Привет".encode(), r.out.getvalue())
+        self.assertEqual(get(root + "../../etc/passwd", Cookie=f"sk_coffee={key}").code, 404)
+        self.assertEqual(get(root + ".git/config", Cookie=f"sk_coffee={key}").code, 404)
+        self.assertEqual(get("/s/nope/").code, 404)
+        # пароль
+        import base64
+        pw = studio.set_access("coffee", "password")["password"]
+        self.assertEqual(get(root).code, 401)
+        bad = base64.b64encode(b"x:wrong").decode()
+        ok = base64.b64encode(f"x:{pw}".encode()).decode()
+        self.assertEqual(get(root, Authorization=f"Basic {bad}").code, 401)
+        self.assertEqual(get(root, Authorization=f"Basic {ok}").code, 200)
+        # все
+        studio.set_access("coffee", "public")
+        r = get(root)
+        self.assertEqual(r.code, 200)
+        self.assertNotIn("X-Robots-Tag", r.sent)
+        # закрыть снова — ключ новый, старая ссылка не работает
+        studio.set_access("coffee", "private")
+        self.assertEqual(get(root + f"?k={key}").code, 403)
+
+    def test_fix_site_and_delete(self):
+        info = self.make()
+        studio.fix(1, "coffee", "сделай шапку тёмной")
+        self.assertIn("дорабатываешь сайт", self.f.prompts[-1])
+        self.assertTrue(studio.remove_site("coffee"))
+        self.assertFalse(os.path.exists(info["dir"]))
+        self.assertEqual(studio.sites(), {})
 
 
 class Kit(unittest.TestCase):

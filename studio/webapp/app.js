@@ -43,9 +43,11 @@ function renderNew(s) {
       const r = d.result;
       h += `<div class="card hero fade"><span class="emoji">🎉</span><h2>«${esc(r.name)}» готов</h2>` +
         `<div class="muted">${esc(r.about || '')}</div>` +
+        (r.url ? `<button class="btn primary" style="margin-top:16px" data-link="${esc(r.url)}">🌐 Открыть сайт</button>` +
+          `<p class="muted" style="font-size:14px">Сайт пока закрыт. Защитить паролем или выпустить для всех — во вкладке «Мои».</p>` : '') +
         (r.username ? `<button class="btn primary" style="margin-top:16px" data-open="${esc(r.username)}">Открыть @${esc(r.username)}</button>` : '') + '</div>';
     }
-    h += `<div class="card fade"><h2>Какой бот нужен?</h2>` +
+    h += `<div class="card fade"><h2>Какой бот или сайт нужен?</h2>` +
       `<textarea id="idea" rows="4" placeholder="Например: напоминает пить воду и считает стаканы за день"></textarea>` +
       `<div class="chips" style="margin:12px 0 0">${s.examples.map((x) => `<button class="chip" data-example="${esc(x)}">${esc(x)}</button>`).join('')}</div>` +
       `<button class="btn primary" id="start" style="margin-top:12px">Дальше →</button></div>` +
@@ -121,6 +123,12 @@ function answered(d) {
 function planCard(d) {
   const p = d.plan || {};
   const list = (xs) => `<ul>${(xs || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+  if (d.kind === 'site') {
+    return `<div class="card plan fade"><h2>${esc(d.emoji || '')} ${esc(d.name)}</h2><div class="summary">${esc(p.summary || '')}</div>` +
+      `<h3>📄 Страницы</h3>${list(p.pages)}<h3>🎨 Стиль</h3>${list(p.style)}` +
+      (p.features && p.features.length ? `<h3>⚙️ Умеет</h3>${list(p.features)}` : '') +
+      `<div class="muted">Готовый сайт сначала закрыт — потом решишь: пароль или для всех.</div></div>`;
+  }
   return `<div class="card plan fade"><h2>${esc(d.emoji || '')} ${esc(d.name)}</h2><div class="summary">${esc(p.summary || '')}</div>` +
     `<h3>💬 В чате</h3>${list(p.chat)}<h3>📱 Мини-приложение</h3>${list(p.app)}` +
     (p.auto && p.auto.length ? `<h3>⏰ Пишет сам</h3>${list(p.auto)}` : '') +
@@ -144,6 +152,7 @@ function renderBots(s) {
 function openBot(slug) {
   const b = S.bots.find((x) => x.slug === slug);
   if (!b) return;
+  if (b.kind === 'site') return openSite(b);
   const status = b.status === 'online' ? '<span class="badge ok">работает</span>' : b.status ? '<span class="badge bad">не работает</span>' : '<span class="badge">не запущен</span>';
   const sh = sheet(`<div style="font-size:44px">${esc(b.emoji || '🧩')}</div><h2>${esc(b.name)}</h2>` +
     `<div style="margin-bottom:8px">${status}${b.username ? ' <span class="muted">@' + esc(b.username) + '</span>' : ''}</div>` +
@@ -162,6 +171,41 @@ function openBot(slug) {
   sh.querySelector('#bot-restart').onclick = () => act('restart', { slug }, 'Перезапустил');
   sh.querySelector('#bot-del').onclick = async () => {
     if (!(await ask(`Удалить «${b.name}»? Код и данные сотрутся.`))) return;
+    await act('delete', { slug }, 'Удалил');
+    sh.remove();
+  };
+}
+
+const ACCESS = { private: '🔑 по ссылке-ключу', password: '🔒 по паролю', public: '🌍 открыт всем' };
+
+function openSite(b) {
+  const slug = b.slug;
+  const sh = sheet(`<div style="font-size:44px">${esc(b.emoji || '🌐')}</div><h2>${esc(b.name)}</h2>` +
+    `<div style="margin-bottom:8px"><span class="badge ${b.access === 'public' ? 'ok' : ''}">${ACCESS[b.access] || ''}</span></div>` +
+    `<p class="muted">${esc(b.summary || '')}</p>` +
+    (b.password ? `<p>Пароль: <b>${esc(b.password)}</b></p>` : '') +
+    `<button class="btn primary" data-link="${esc(b.url || '')}">🌐 Открыть сайт</button>` +
+    `<div class="actions" style="margin-top:8px">` +
+    (b.access !== 'password' ? `<button class="btn" id="s-pass">🔒 Защитить паролем</button>` : '') +
+    (b.access !== 'public' ? `<button class="btn" id="s-pub">🌍 Выпустить для всех</button>` : `<button class="btn" id="s-priv">🔑 Закрыть снова</button>`) + `</div>` +
+    `<textarea id="bot-fix" rows="3" placeholder="Что поменять на сайте? Например: сделай шапку тёмной" style="margin-top:12px"></textarea>` +
+    `<button class="btn" id="bot-fix-go">✏️ Отправить правку</button>` +
+    `<div class="actions" style="margin-top:8px"><button class="btn danger" id="bot-del">🗑 Удалить</button></div>`);
+  const mode = async (m, msg) => { await act('access', { slug, mode: m }, msg); sh.remove(); };
+  const q = (id) => sh.querySelector(id);
+  if (q('#s-pass')) q('#s-pass').onclick = () => mode('password', 'Закрыл паролем');
+  if (q('#s-priv')) q('#s-priv').onclick = () => mode('private', 'Закрыл ключом');
+  if (q('#s-pub')) q('#s-pub').onclick = async () => {
+    if (await ask('Выпустить сайт для всех? Его откроет любой, у кого есть адрес, и найдут поисковики.')) mode('public', 'Открыт всем');
+  };
+  q('#bot-fix-go').onclick = async () => {
+    const text = q('#bot-fix').value.trim();
+    if (!text) { toast('Напиши, что поменять', true); return; }
+    await act('fix', { slug, text }, 'Дорабатываю — напишу в чат');
+    sh.remove();
+  };
+  q('#bot-del').onclick = async () => {
+    if (!(await ask(`Удалить сайт «${b.name}»?`))) return;
     await act('delete', { slug }, 'Удалил');
     sh.remove();
   };
