@@ -131,3 +131,5 @@ html[data-scheme="light"] .label .more { color: color-mix(in srgb, var(--accent)
   .stage { padding-top: 30px; }
   .state { font-size: 23px; }
 }
+
+.mode-list { margin-top: 10px; }

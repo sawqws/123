@@ -48,6 +48,7 @@ class Base(unittest.TestCase):
         eye.events.clear()
         eye.audio.clear()
         eye.page_seen[0] = 0
+        eye.setting("mode", "app")  # режим выбран (📱): кнопки страницы в сообщениях есть
         eye.on_message(self.msg("/start"))
 
     def tearDown(self):
@@ -256,6 +257,77 @@ class ChatTest(Base):
         self.assertIn("личный", self.sent[-1][1]["text"])
         self.assertEqual(len(eye.history()), 1)
 
+    def markups(self):
+        return [kw.get("reply_markup") or {} for k, kw in self.sent if k in ("sendMessage", "editMessageText")]
+
+    @staticmethod
+    def has_page(markup):
+        return any("web_app" in b or "url" in b for row in markup.get("inline_keyboard", []) for b in row)
+
+    @staticmethod
+    def datas(markup):
+        return [b.get("callback_data") for row in markup.get("inline_keyboard", []) for b in row]
+
+    def test_mode_choice_on_first_start(self):
+        """Первый /start — карточка «Как удобнее?»; выбор запоминается, /mode и «⚙️ Режим» показывают её снова."""
+        eye.setting("mode", delete=True)
+        with mock.patch.object(eye, "public_url", "https://eye.example"):
+            eye.on_message(self.msg("/start"))
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            self.assertEqual(self.datas(self.markups()[-1]), ["mode|chat", "mode|app"])
+            self.assertFalse(self.has_page(self.markups()[-1]))
+            eye.on_callback({"id": "1", "from": {"id": U}, "data": "mode|chat", "message": {"chat": {"id": U}, "message_id": 3}})
+            self.assertEqual(eye.ui_mode(), "chat")
+            edit = [kw for k, kw in self.sent if k == "editMessageText"][-1]
+            self.assertEqual((edit["message_id"], "Режим: 💬 чат" in edit["text"]), (3, True))
+            self.assertIn("Режим: 💬 чат", self.texts()[-1])  # и сразу главное меню чата с подписью режима
+            self.assertRegex(self.texts()[-1], r"<i>[^<]*Режим: 💬 чат[^<]*</i>")
+            menu = self.markups()[-1]
+            self.assertFalse(self.has_page(menu))
+            for d in ("new", "seen", "status", "mode|ask", "sup|ask"):
+                self.assertIn(d, self.datas(menu))
+            self.assertTrue(all(len(row) <= 3 and all(len(b["text"]) <= 24 for b in row) for row in menu["inline_keyboard"]))
+            self.sent.clear()
+            eye.on_message(self.msg("/start"))  # режим выбран — сразу меню, без карточки
+            self.assertNotIn("Как удобнее?", self.texts()[-1])
+            eye.on_message(self.msg("/mode"))
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            eye.on_callback({"id": "2", "from": {"id": U}, "data": "mode|ask", "message": {"chat": {"id": U}, "message_id": 4}})
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            eye.on_callback({"id": "3", "from": {"id": U}, "data": "mode|app", "message": {"chat": {"id": U}, "message_id": 5}})
+            self.assertEqual(eye.ui_mode(), "app")
+            self.assertIn("Режим: 📱 приложение", self.texts()[-1])
+            menu = self.markups()[-1]
+            self.assertEqual(menu["inline_keyboard"][0][0]["web_app"]["url"], "https://eye.example/")
+            self.assertIn("mode|ask", self.datas(menu))
+            self.assertLessEqual(sum(len(r) for r in menu["inline_keyboard"]), 6)
+            eye.on_callback({"id": "4", "from": {"id": 99}, "data": "mode|chat", "message": {"chat": {"id": 99}, "message_id": 1}})
+            self.assertEqual(eye.ui_mode(), "app")  # чужой — не меняет
+
+    def test_chat_mode_has_no_page_buttons(self):
+        """В режиме «чат» ни web_app, ни ссылок на страницу в сообщениях — кроме явного /app; «👁 Что видел» — в чате."""
+        eye.set_mode("chat")
+        self.sent.clear()
+        with mock.patch.object(eye, "public_url", "https://eye.example"), \
+                mock.patch.object(eye.ai, "look", return_value={"title": "Зимний дворец", "say": "Это Зимний дворец.", "text": ""}), \
+                mock.patch.object(eye.ai, "talk", return_value="Архитектор — Растрелли."), \
+                mock.patch.object(eye, "download", return_value=(JPEG, "a.jpg")):
+            for t in ("/start", "/help", "/status", "привет"):
+                eye.on_message(self.msg(t))
+            eye.on_message(self.msg(photo=[{"file_id": "a"}]))
+            eye.use_url("https://eye.example")
+            for m in self.markups():
+                self.assertFalse(self.has_page(m), m)
+            self.assertIn("Режим: 💬 чат", self.texts()[0])
+            self.assertIn("Зимний дворец", "".join(self.texts()))  # фото в чате разобрано
+            self.assertIn("sendVoice", [f[0] for f in self.files])  # и озвучено в чат (страница закрыта)
+            eye.on_callback({"id": "1", "from": {"id": U}, "data": "seen", "message": {"chat": {"id": U}, "message_id": 3}})
+            self.assertIn("Зимний дворец", self.texts()[-1])
+            self.assertTrue(self.texts()[-1].startswith("👁 <b>Что видел</b>"))
+            self.sent.clear()
+            eye.on_message(self.msg("/app"))  # явная просьба — кнопка страницы есть и в режиме «чат»
+            self.assertEqual(self.markups()[-1]["inline_keyboard"][0][0]["web_app"]["url"], "https://eye.example/")
+
     def test_button_style_fallback(self):
         def picky(method, **kw):
             self.sent.append((method, kw))
@@ -392,6 +464,25 @@ class WebTest(Base):
             self.call("/api/upload", b"junk", "video/quicktime")
         ev = self.call("/api/events?after=0")[1]["events"]
         self.assertEqual((ev[-1]["kind"], ev[-1]["text"]), ("error", "не получилось открыть видео"))
+
+    def test_mode_api(self):
+        """«💬 Перейти в чат» на странице: POST /api/mode → режим «чат», в чат приходит главное меню без кнопок страницы."""
+        self.assertEqual(self.call("/api/state")[1]["mode"], "app")
+        n = len(self.texts())
+        with mock.patch.object(eye, "public_url", "https://eye.example"):
+            code, r = self.call("/api/mode", json.dumps({"mode": "chat"}).encode())
+        self.assertEqual((code, r), (200, {"mode": "chat"}))
+        self.assertEqual(eye.ui_mode(), "chat")
+        self.assertEqual(len(self.texts()), n + 1)
+        self.assertIn("Режим: 💬 чат", self.texts()[-1])
+        kb = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+        self.assertFalse(any("web_app" in b or "url" in b for row in kb for b in row))
+        self.assertIn("mode|ask", [b.get("callback_data") for row in kb for b in row])
+        self.assertEqual(self.call("/api/state")[1]["mode"], "chat")
+        self.assertEqual(self.call("/api/mode", json.dumps({"mode": "pdf"}).encode())[0], 400)
+        self.assertEqual(self.call("/api/mode", json.dumps({"mode": "app"}).encode())[1], {"mode": "app"})
+        self.assertEqual(len(self.texts()), n + 1)  # обратно в приложение — без сообщения в чат
+        self.assertEqual(self.call("/api/mode", json.dumps({"mode": "chat"}).encode(), key=False)[0], 401)
 
     def test_talk_audio_and_text(self):
         with mock.patch.object(eye.speech, "hear", return_value="что это за здание") as hear, \

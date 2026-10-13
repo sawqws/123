@@ -239,3 +239,4 @@ details.about summary::before { content: "ⓘ "; }
 details.about p { margin: 8px 0 0; font-size: 14px; line-height: 1.45; }
 .zones { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin: 12px 0 6px; }
 .zones span { display: block; }
+.mode-list { margin-top: 10px; }

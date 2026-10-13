@@ -220,7 +220,7 @@
     const synced = d.connected && d.synced ? `WHOOP ${clock(d.synced)}` : d.connected ? 'WHOOP' : 'WHOOP не подключён';
     let h = hero(dateWord(t.day), `${dateLine(t.day)} · ${synced}`);
     if (!d.connected && !d.today.has_data) {
-      return h + connectCard() + waterCard(d.today.water) + foodMini(d.today) + features() + Kit.supportRow('/api/support');
+      return h + connectCard() + waterCard(d.today.water) + foodMini(d.today) + features() + Kit.supportRow('/api/support') + chatRow();
     }
     const z = r ? r.zone : null;
     const recC = z ? C[z] : 'var(--hint)';
@@ -255,12 +255,18 @@
     if (isToday) h += waterCard(t.water) + foodMini(t);
     if ((t.workouts || []).length) h += `<div class="label">Тренировки</div><div class="list rise">${t.workouts.map(workoutRow).join('')}</div>`;
     if (isToday && d.connected) h += `<p class="foot">Данные WHOOP — ${d.synced ? clock(d.synced) : 'ещё не загружены'} · <button class="link" data-a="sync">Обновить</button></p>`;
-    if (isToday) h += Kit.supportRow('/api/support');
+    if (isToday) h += Kit.supportRow('/api/support') + chatRow();
     return h;
   }
   const workoutRow = w => `<button class="row" data-a="detail" data-v="strain"><span class="ic">${sportIcon(w.sport)}</span><div class="main"><div class="title">${esc(w.sport)}</div>
     <div class="meta num">${esc(w.start)} · ${w.minutes || '—'} мин · пульс ${w.avg_hr || '—'}/${w.max_hr || '—'}</div></div>
     <div class="end num strain-v">${w.strain != null ? num(w.strain, 1) : '—'}</div></button>`;
+  // «💬 Перейти в чат» (внизу «Сегодня» и в профиле): режим «чат» — бот присылает главное меню, приложение закрывается
+  function chatRow() {
+    const m = S.data && S.data.mode;
+    return `<div class="list mode-list"><button class="row tap" data-a="tochat"><span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>
+      <div class="meta">${m === 'chat' ? 'режим чата уже включён' : 'бот перейдёт в режим чата: всё кнопками там'}</div></span><span class="end chev"></span></button></div>`;
+  }
   function features() {
     const row = (ic, t, s) => `<div class="row"><span class="ic">${ic}</span><div class="main"><div class="title">${t}</div><div class="meta">${s}</div></div></div>`;
     return `<div class="label">Что умеет Форма</div><div class="list rise">${row('☀️', 'Утренний план', 'Готовность, тренировка, отбой')}
@@ -603,7 +609,7 @@
       <div class="label">Тренер</div>
       <label class="field"><span>Утренний разбор: время или «выкл»</span><input name="morning" type="text" placeholder="07:00" value="${esc(d.morning === 'off' ? 'выкл' : d.morning || '07:00')}"></label>
       <label class="field"><span>Важно знать тренеру</span><textarea name="notes" rows="2" placeholder="травмы, соревнования, самочувствие…">${esc(p.notes || '')}</textarea></label>
-      <button class="btn primary" type="submit">Сохранить</button></form>${Kit.supportRow('/api/support')}`);
+      <button class="btn primary" type="submit">Сохранить</button></form>${Kit.supportRow('/api/support')}${chatRow()}`);
     el.addEventListener('click', ev => {
       const s = ev.target.closest('[data-group] button');
       if (s) { const was = s.classList.contains('on'); s.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('on')); if (!was || s.parentElement.dataset.group === 'goal') s.classList.add('on'); haptic('select'); }
@@ -707,6 +713,11 @@
     } else if (a === 'copy') {
       try { await navigator.clipboard.writeText(v); haptic('success'); toast('Скопировано', 'ok'); } catch (e) { toast('Выдели и скопируй адрес'); }
     } else if (a === 'open') { if (tg) tg.openLink(v); else window.open(v, '_blank'); }
+    else if (a === 'tochat') {  // режим «💬 чат»: бот запомнит и пришлёт главное меню в чат, приложение закрывается
+      try { await busy(el, () => api('/api/mode', { mode: 'chat' })); } catch (e) { fail(e); return; }
+      S.data.mode = 'chat';
+      if (tg && tg.close) tg.close(); else { toast('Режим чата включён — главное меню в чате', 'ok'); render(false); }
+    }
   });
   document.addEventListener('input', ev => {
     if (ev.target.tagName === 'TEXTAREA' && ev.target.closest('.ask')) {
