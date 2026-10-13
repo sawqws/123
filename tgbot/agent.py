@@ -84,6 +84,21 @@ ASK_MISSED = ("Посмотри непрочитанные чаты (chats --unr
               "и где меня упомянули, потом группы. Кто что хочет от меня и что надо ответить. Каналы — одной строкой.")
 ASK_SORT = "Разложи мои чаты по папкам, как в твоих правилах."
 ASK_PSY = "Сделай психологический разбор: {}. Как в твоих правилах, с цитатами и советами."
+PSY_PERIODS = {"week": (7, "неделю"), "month": (30, "месяц")}  # «Все чаты» — за сколько дней, как назвать
+ASK_PSY_ALL = (
+    "Сделай разбор всех моих чатов за {period} как сильный практикующий психолог (раздел «Разбор всех чатов за период» "
+    "в твоих правилах).\n"
+    "1. Выполни `period --days {days}` — все чаты с сообщениями за это время (вывод большой и лежит в файле — прочитай "
+    "его целиком, частями).\n"
+    "2. По каждому чату коротко, 1–2 строки: кто это для меня, тон, что важного, что напрягает.\n"
+    "3. Общий разбор: отношения и роли (кто инициирует, кто отвечает, кто для меня кто), где я трачу силы зря, "
+    "где конфликты, давление или манипуляции, что хорошего. Каждый вывод — с 1–2 короткими цитатами с датой; "
+    "факты отдельно от интерпретаций («похоже»).\n"
+    "4. В конце — 3–5 конкретных советов: что сделать или написать, чего избегать.\n"
+    "Самой последней строкой ответа напиши «Подробнее: имя; имя; имя» — 2–5 людей или чатов, которых стоит разобрать "
+    "отдельно, ровно так, как они называются в чатах (это станет кнопками)."
+)
+PSY_MORE = re.compile(r"^\s*\**\s*Подробнее\s*:\**\s*(.+?)\s*$", re.M)
 
 EXAMPLE_LIST = ["Что мне писали сегодня?",
                 "Ответьте Пете, что буду в 6",
@@ -206,7 +221,7 @@ def dots(code, n):
 
 class Agent:
     # для мини-приложения (tgbot/web.py): те же поручения, что у кнопок чата
-    ASK_MISSED, ASK_SORT, ASK_PSY = ASK_MISSED, ASK_SORT, ASK_PSY
+    ASK_MISSED, ASK_SORT, ASK_PSY, ASK_PSY_ALL, PSY_PERIODS = ASK_MISSED, ASK_SORT, ASK_PSY, ASK_PSY_ALL, PSY_PERIODS
     BTN_MISSED, BTN_SORT = BTN_MISSED, BTN_SORT
     EXAMPLE_LIST = EXAMPLE_LIST
     run = None             # текущее или последнее поручение: шаги, состояние, ответ
@@ -214,6 +229,7 @@ class Agent:
     app_url = None         # https-адрес мини-приложения, когда он отвечает
     web = None
     via_hub = False        # один бот с Главным (см. resolve)
+    hub_mode = ""          # режим Главного: chat — в сообщениях без кнопок приложения; app — с ними
     old_token = ""
     support = None         # 🛠 своя поддержка (common/support.py) — только отдельным ботом; в Главном — его «Доработать»
 
@@ -384,6 +400,8 @@ class Agent:
             elif kind == "login":
                 await ev.answer()
                 await self.on_login_choice(ev, arg)
+            elif kind == "psy":
+                await self.on_psy_button(ev, arg)
         except BotError as e:
             if not e.not_modified:
                 raise
@@ -410,7 +428,10 @@ class Agent:
         return self.app_url + ("?tab=sec" if self.via_hub else "/")
 
     def app_button(self):
-        """«📱 Приложение»: открывает мини-приложение, а пока https-адреса нет — объясняет, почему."""
+        """«📱 Приложение»: открывает мини-приложение, а пока https-адреса нет — объясняет, почему.
+        В режиме «💬 чат» Главного — None: приложение не навязываем (оно остаётся в /app и в кнопке меню)."""
+        if self.via_hub and self.hub_mode == "chat":
+            return None
         if self.app_url:
             return Button.web_app("📱 Приложение", self.app_open_url())
         return Button.inline("📱 Приложение", "m:app")
@@ -446,7 +467,7 @@ class Agent:
             if self.via_hub:
                 rows.append([self.home_button()])
             return card("👤 Аккаунт", "Аккаунт не подключён — на вопросы отвечаю и без него.\n"
-                        "Подключите, чтобы я вёл ваш Telegram: сводки, ответы, папки, расписания."), rows
+                        "Подключите, чтобы я вёл ваш Telegram: сводки, ответы, папки, расписания."), self.rows(rows)
         me = await self.client.get_me()
         ds = await actions.dialogs(self, fresh=True)
         unread = [d for d in ds if d.unread_count and not d.archived]
@@ -459,6 +480,7 @@ class Agent:
                  f"⏰ Расписаний: {len(js)}" + (f" · ближайшее {datetime.datetime.fromisoformat(nxt).astimezone(actions.MSK):%d.%m %H:%M}" if nxt else ""),
                  "🧠 Разговор: " + ("продолжается" if self.session_active() else "новый")]
         buttons = [[self.app_button()],
+                   [Button.inline("🧠 Психолог", "psy:card")],
                    [Button.inline("🆕 Новый разговор", "m:new"), Button.inline("🩺 Проверка", "m:check")],
                    [Button.inline("⏰ Расписание", "m:jobs"), Button.inline("📝 Память", "m:memory")],
                    [Button.inline("❓ Что я умею", "m:help"), self.support_button()] +
@@ -467,7 +489,12 @@ class Agent:
         if self.via_hub:
             buttons.append([self.home_button()])
         title = "👤 Аккаунт" if self.via_hub else "✦ Секретарь"
-        return card(title, "\n".join(lines), datetime.datetime.now(actions.MSK).strftime("обновлено в %H:%M")), buttons
+        return card(title, "\n".join(lines), datetime.datetime.now(actions.MSK).strftime("обновлено в %H:%M")), self.rows(buttons)
+
+    @staticmethod
+    def rows(buttons):
+        """Ряды кнопок без None и без пустых рядов (app_button() в режиме «чат» Главного — None)."""
+        return [[b for b in r if b] for r in buttons if any(r)]
 
     async def on_menu(self, ev, arg):
         back = [[Button.inline("← Назад", "m:home")]]
@@ -553,6 +580,11 @@ class Agent:
                 ok, out = self.from_hub(req), "ok"
             elif req.get("cmd") == "_status":
                 ok, out = True, await self.status()
+            elif req.get("cmd") == "_psy":  # 🧠 Психолог из Главного: разбор идёт в фоне, ответ — в чат
+                a = req.get("args") or {}
+                ok, out = await self.psy_start(a.get("scope"), a.get("chat"), source=a.get("source") or "chat")
+            elif req.get("cmd") == "_dialogs":  # последние диалоги для кнопок «Один чат» в Главном
+                ok, out = True, await self.recent_dialogs(int((req.get("args") or {}).get("limit") or 9))
             else:
                 ok, out = await self.execute(req.get("cmd"), req.get("args") or {})
         except Exception as e:
@@ -566,6 +598,7 @@ class Agent:
     def from_hub(self, req):
         """Главный опрашивает Telegram за двоих и отдаёт сюда то, что не его. Владелец — его владелец."""
         uid = int(req.get("owner") or 0)
+        self.hub_mode = str(req.get("mode") or "")
         if uid and uid != self.owner():
             self.allowed = uid
             s = load_settings()
@@ -598,13 +631,14 @@ class Agent:
 
     # ---------- Claude ----------
 
-    def begin(self, text, title=None, source="chat"):
-        """Занять секретаря поручением. None — уже занят. Чат и приложение идут одним путём: begin -> work."""
+    def begin(self, text, title=None, source="chat", kind=None):
+        """Занять секретаря поручением. None — уже занят. Чат и приложение идут одним путём: begin -> work.
+        kind="psy_all" — разбор всех чатов: к ответу добавятся кнопки «Подробнее про …»."""
         if self.busy:
             return None
         self.busy, self.trust = True, False
         self.run = {"id": uuid.uuid4().hex[:8], "q": (title or text).strip()[:300], "text": text, "state": "work",
-                    "steps": [], "started": time.time(), "source": source}
+                    "steps": [], "started": time.time(), "source": source, "kind": kind}
         return self.run
 
     async def ask(self, text, title=None, source="chat"):
@@ -658,11 +692,15 @@ class Agent:
         secs = int(time.monotonic() - started)
         run["secs"], run["ended"] = secs, time.time()
         if ok:
+            buttons = None
+            if run.get("kind") == "psy_all":
+                out, people = self.psy_people(out)
+                buttons = self.psy_buttons(people)
             body = ui.md(out)
             run.update(state="done", html=body)
             foot = f"✦ {secs // 60}:{secs % 60:02d}" + (f" · {ui.plural(len(steps), 'шаг', 'шага', 'шагов')}" if steps else "")
             self.remember(run)
-            await self.say(body + f"\n\n<i>{foot}</i>")
+            await self.say(body + f"\n\n<i>{foot}</i>", buttons=buttons)
         else:
             msg = out if out.startswith("<b>") else oops(out)
             run.update(state="stopped" if run.get("stop") else "error", html=msg)
@@ -747,6 +785,99 @@ class Agent:
         s = load_settings()
         s.pop("session", None)
         save_settings(s)
+
+    # ---------- 🧠 Психолог: все чаты за период или один чат ----------
+
+    async def psy_start(self, scope, chat=None, source="chat"):
+        """Запустить разбор: scope week|month — все чаты за период, иначе один чат (имя или id).
+        (ok, что сказать) — разбор идёт в фоне, ответ придёт в чат как обычно."""
+        if not await self.authorized():
+            return False, "аккаунт не подключён — нужно войти в аккаунт (/login)"
+        if self.busy:
+            return False, "ещё занимаюсь прошлым поручением — дождитесь ответа"
+        if scope in PSY_PERIODS:
+            days, period = PSY_PERIODS[scope]
+            text, title, kind = ASK_PSY_ALL.format(period=period, days=days), f"🧠 Все чаты · {period}", "psy_all"
+        else:
+            chat = re.sub(r"\s+", " ", str(chat or "")).strip()[:200]
+            if not chat:
+                return False, "укажите чат или человека"
+            name = await self.dialog_name(chat) if re.fullmatch(r"-?\d{3,}", chat) else ""
+            ref = f"«{name}» (id {chat})" if name else chat
+            text, title, kind = ASK_PSY.format(ref), f"🧠 Разбор: {name or chat}", "psy"
+        run = self.begin(text, title, source, kind)
+        if run is None:
+            return False, "ещё занимаюсь прошлым поручением — дождитесь ответа"
+        asyncio.create_task(self.work(run))
+        return True, {"id": run["id"], "q": run["q"]}
+
+    async def dialog_name(self, cid):
+        return next((d.name for d in await actions.dialogs(self) if str(d.id) == str(cid)), "")
+
+    async def recent_dialogs(self, limit=9):
+        """Последние лички и группы — для кнопок «Один чат» (архив, каналы и боты не нужны)."""
+        if not await self.authorized():
+            return []
+        out = []
+        for d in await actions.dialogs(self):
+            try:
+                k = actions.kind(d.entity)
+            except Exception:
+                k = "чат"
+            if d.archived or k in ("канал", "бот"):
+                continue
+            out.append({"id": d.id, "name": d.name or "?", "kind": k})
+            if len(out) >= limit:
+                break
+        return out
+
+    @staticmethod
+    def psy_people(out):
+        """Из ответа «Все чаты» вынуть последнюю строку «Подробнее: Саша; Петя» → (текст без неё, [имена])."""
+        found = list(PSY_MORE.finditer(out))
+        if not found:
+            return out, []
+        m = found[-1]
+        names = [n.strip(" .«»\"'*") for n in re.split(r"[;,]", m.group(1))]
+        names = [n for n in names if n and len(n) <= 40][:5]
+        return (out[:m.start()] + out[m.end():]).rstrip(), names
+
+    @staticmethod
+    def psy_buttons(people):
+        """«Подробнее про Сашу» по людям, по 2 в ряд, не длиннее 24 символов (имя — как в чатах)."""
+        btns = []
+        for n in people:
+            short = n if len("Подробнее про " + n) <= 24 else n.split()[0]
+            text = "Подробнее про " + short if len("Подробнее про " + short) <= 24 else "🧠 " + short[:22]
+            btns.append(Button.inline(text, "psy:n:" + n.encode()[:52].decode(errors="ignore")))
+        return [btns[i:i + 2] for i in range(0, len(btns), 2)] or None
+
+    def psy_card(self):
+        body = ("Разберу переписки как психолог: роли и отношения, тон, скрытые конфликты и манипуляции, "
+                "на кого уходят силы — и 3–5 советов.\n• Все чаты — общий разбор за период\n• Один чат — человек или группа")
+        rows = [[Button.inline("Все чаты · неделя", "psy:week"), Button.inline("Все чаты · месяц", "psy:month")],
+                [Button.inline("💬 Один чат", "psy:one")]]
+        if self.via_hub:
+            rows.append([self.home_button()])
+        return card("🧠 Психолог", body, "это несколько минут, ответ придёт сюда"), rows
+
+    async def on_psy_button(self, ev, arg):
+        kind, _, name = arg.partition(":")
+        if kind == "card":
+            text, rows = self.psy_card()
+            await ev.edit(text, buttons=rows)
+            return await ev.answer()
+        if kind == "one":
+            self.psy = True
+            await ev.edit(card("🧠 Разбор чата", "Какой чат или кого разобрать? Можно с уточнением:\n"
+                               "«группа 8Б за месяц, как ко мне относятся»", "/cancel — отмена"), buttons=None)
+            return await ev.answer()
+        if not (kind == "n" and name) and kind not in PSY_PERIODS:
+            return await ev.answer()
+        ok, why = await self.psy_start(kind if kind in PSY_PERIODS else "chat", name)
+        await ev.answer("Разбираю…" if ok else why[:180], alert=not ok)
+        if ok:
+            await ev.edit(buttons=None)  # кнопки своё отработали; статус разбора — отдельным сообщением
 
     # ---------- расписание ----------
 

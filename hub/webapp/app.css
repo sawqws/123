@@ -25,6 +25,13 @@ code { font: 13px/1.3 var(--mono); padding: 1px 5px; border-radius: 6px; backgro
 .composer-bar .send { min-width: 130px; }
 .btn[disabled] { opacity: .45; }
 
+/* 🧠 Психолог и «Перейти в чат» */
+.psy { padding: 14px; }
+.psy-btns { flex-wrap: wrap; margin-top: 12px; }
+.psy .note { margin-top: 10px; }
+.psy .note + .btn { margin-top: 10px; }
+.mode-list { margin-top: 18px; }
+
 /* живой статус поручения и ответ */
 .run { padding: 16px; }
 .run.work { border-color: var(--accent-line); }

@@ -48,7 +48,8 @@ class Base(unittest.TestCase):
         self.runs = []
         self.sh = mock.patch.object(hub, "sh", side_effect=self.fake_sh)
         self.sh.start()
-        hub.on_message(self.msg("/start"))
+        hub.on_message(self.msg("/start"))  # первый /start — «Как удобнее?»; дальше тесты живут в режиме «чат»
+        self.cq("mode|chat")
 
     def tearDown(self):
         for p in self.p + [self.sh]:
@@ -66,6 +67,9 @@ class Base(unittest.TestCase):
 
     def msg(self, text, uid=U, mid=1):
         return {"chat": {"id": uid, "type": "private"}, "from": {"id": uid}, "text": text, "message_id": mid}
+
+    def cq(self, data, uid=U, mid=1):
+        hub.on_callback({"id": "1", "from": {"id": uid}, "data": data, "message": {"chat": {"id": uid}, "message_id": mid}})
 
     def last(self):
         m = [kw for k, kw in self.sent if k in ("sendMessage", "editMessageText")][-1]
@@ -448,6 +452,7 @@ class ChatTest(Base):
         with mock.patch.dict(os.environ, {"HUB_URL": "https://hub.1-2-3-4.sslip.io/"}):
             hub.on_message(self.msg("/app"))
             self.assertIn('"web_app": {"url": "https://hub.1-2-3-4.sslip.io/app"}', self.last()[1])
+            hub.set_mode("app")  # кнопка приложения в экранах — только в режиме «приложение»
             hub.on_message(self.msg("/bots"))
             self.assertEqual(self.markup()["inline_keyboard"][0][0]["web_app"]["url"], "https://hub.1-2-3-4.sslip.io/app")
             self.assertTrue(hub.set_menu())
@@ -529,8 +534,15 @@ class FakeSecretary:
             def handle(self):
                 req = json.loads(self.rfile.readline())
                 fake.got.append(req)
-                out = {"account": account, "busy": False, "jobs": 0} if req.get("cmd") == "_status" else "ok"
-                self.wfile.write(json.dumps({"ok": True, "out": out}).encode() + b"\n")
+                ok, out = True, "ok"
+                if req.get("cmd") == "_status":
+                    out = {"account": account, "busy": False, "jobs": 0}
+                elif req.get("cmd") == "_dialogs":
+                    out = [{"id": 7, "name": "Петя", "kind": "личка"}, {"id": -100, "name": "8Б класс — очень длинное название", "kind": "группа"},
+                           {"id": 8, "name": "Саша", "kind": "личка"}, {"id": 9, "name": "Мама", "kind": "личка"}] if account else []
+                elif req.get("cmd") == "_psy":
+                    ok, out = (True, {"id": "ab12", "q": "🧠 Разбор"}) if account else (False, "аккаунт не подключён — нужно войти в аккаунт (/login)")
+                self.wfile.write(json.dumps({"ok": ok, "out": out}, ensure_ascii=False).encode() + b"\n")
 
         self.srv = socketserver.ThreadingUnixStreamServer(path, H)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -538,6 +550,9 @@ class FakeSecretary:
 
     def updates(self):
         return [r["update"] for r in self.got if r.get("cmd") == "_hub"]
+
+    def psy(self):
+        return [r["args"] for r in self.got if r.get("cmd") == "_psy"]
 
     def close(self):
         if self.open:
@@ -716,6 +731,179 @@ class ProxyTest(AppTest):
         sec = [b for b in s["bots"] if b["name"] == "tg-agent"][0]
         self.assertTrue(sec["part"])
         self.assertIsNone(sec["username"])  # своего бота у Секретаря нет
+
+
+
+
+class ModeTest(Base):
+    """Режим «💬 чат / 📱 приложение»: выбор при первом /start, /mode, кнопки приложения только в режиме «приложение»."""
+
+    def web_apps(self):
+        mk = [kw.get("reply_markup") or {} for k, kw in self.sent if k in ("sendMessage", "editMessageText")][-1]
+        return [btn for row in mk.get("inline_keyboard", []) for btn in row if "web_app" in btn]
+
+    def test_first_start_asks(self):
+        hub.setting("mode", None)
+        hub.on_message(self.msg("/start"))
+        text, btns = self.last()
+        self.assertIn("Как удобнее?", text)
+        self.assertIn('"mode|chat"', btns)
+        self.assertIn('"mode|app"', btns)
+        self.assertNotIn("Все боты работают", text)
+        self.cq("mode|app")
+        self.assertEqual(hub.ui_mode(), "app")
+        texts = [kw.get("text") for k, kw in self.sent if k in ("sendMessage", "editMessageText")]
+        self.assertIn("Режим: 📱 приложение", texts[-2])  # карточка стала подтверждением…
+        self.assertIn("👑 <b>Главный</b>", texts[-1])    # …и пришёл главный экран
+        self.assertIn("Режим: 📱 приложение", texts[-1])
+
+    def test_chat_mode_has_no_webapp_buttons(self):
+        with mock.patch.dict(os.environ, {"HUB_URL": "https://hub.1-2-3-4.sslip.io"}):
+            hub.on_message(self.msg("/start"))
+            text, btns = self.last()
+            self.assertIn("<i>Режим: 💬 чат", text)
+            self.assertEqual(self.web_apps(), [])
+            for label in ("Боты", "Секретарь", "Сделать бота", "Обновить всех", "🛠 Поддержка", "🧠 Психолог", "⚙️ Режим"):
+                self.assertIn(label, btns)
+            hub.on_message(self.msg("/bots"))
+            self.assertEqual(self.web_apps(), [])
+            hub.on_message(self.msg("/app"))  # явная просьба — кнопка есть
+            self.assertEqual(self.web_apps()[0]["web_app"]["url"], "https://hub.1-2-3-4.sslip.io/app")
+            hub.on_message(self.msg("/mode"))
+            self.assertIn("Как удобнее?", self.last()[0])
+            self.cq("mode|ask")
+            self.assertIn("Как удобнее?", self.last()[0])
+
+    def test_app_mode_short_start(self):
+        with mock.patch.dict(os.environ, {"HUB_URL": "https://hub.1-2-3-4.sslip.io"}):
+            self.cq("mode|app")
+            text, btns = self.last()
+            self.assertIn("Режим: 📱 приложение", text)
+            self.assertEqual(self.web_apps()[0]["web_app"]["url"], "https://hub.1-2-3-4.sslip.io/app")
+            rows = [kw.get("reply_markup") for k, kw in self.sent if k == "sendMessage"][-1]["inline_keyboard"]
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(len(r) <= 3 for r in rows))
+            self.assertIn("🧠 Психолог", btns)
+            self.assertNotIn("Сделать бота", btns)  # коротко: главное — приложение
+            hub.on_message(self.msg("/bots"))
+            self.assertTrue(self.web_apps())
+            hub.on_message(self.msg("привет"))  # текст всё равно работает (ушёл бы Секретарю)
+            self.assertIn("Секретарь не отвечает", self.last()[0])
+        with mock.patch.dict(os.environ, {"HUB_URL": ""}), mock.patch.object(hub, "public_ip", None):
+            hub.on_message(self.msg("/start"))  # https нет — честно и всё в чате
+            text, _ = self.last()
+            self.assertIn("https-адреса пока нет", text)
+            self.assertEqual(self.web_apps(), [])
+
+    def test_switch_from_app(self):
+        self.cq("mode|app")
+        with sync_threads():
+            self.assertEqual(hub.app_mode({"mode": "chat"}), {"mode": "chat"})
+        self.assertEqual(hub.ui_mode(), "chat")
+        texts = [kw.get("text") for k, kw in self.sent if k == "sendMessage"]
+        self.assertIn("Режим: 💬 чат", texts[-2])
+        self.assertIn("👑 <b>Главный</b>", texts[-1])  # главное меню чата пришло само
+        self.assertEqual(self.web_apps(), [])
+        with self.assertRaises(ValueError):
+            hub.app_mode({"mode": "voice"})
+
+    def test_mode_api(self):
+        self.cq("mode|app")
+        hub.fails.clear()
+        httpd = hub.ThreadingHTTPServer(("127.0.0.1", 0), hub.Web)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/app/api/mode"
+        with sync_threads():
+            req = urllib.request.Request(url, data=b'{"mode": "chat"}', method="POST", headers={"X-Init-Data": init_data()})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                self.assertEqual(json.load(r), {"mode": "chat"})
+        self.assertEqual(hub.ui_mode(), "chat")
+        self.assertEqual(hub.app_state()["mode"], "chat")
+        req = urllib.request.Request(url, data=b'{"mode": "chat"}', method="POST", headers={"X-Init-Data": "x"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, timeout=10)
+        self.assertEqual(e.exception.code, 401)
+
+    def test_secretary_gets_mode(self):
+        sec = FakeSecretary(hub.AGENT_SOCK, None)
+        self.addCleanup(sec.close)
+        hub.on_message(self.msg("привет"))
+        self.assertEqual([r["mode"] for r in sec.got if r.get("cmd") == "_hub"], ["chat"])
+
+
+class PsyTest(Base):
+    """🧠 Психолог: карточка, «Все чаты» и «Один чат» уходят Секретарю, без входа в аккаунт — честно и кнопка входа."""
+
+    def rows(self):
+        mk = [kw.get("reply_markup") or {} for k, kw in self.sent if k in ("sendMessage", "editMessageText")][-1]
+        return mk.get("inline_keyboard", [])
+
+    def test_card_and_runs(self):
+        sec = FakeSecretary(hub.AGENT_SOCK, {"name": "Глеб", "username": "gleb"})
+        self.addCleanup(sec.close)
+        hub.on_message(self.msg("/psy"))
+        text, btns = self.last()
+        self.assertIn("🧠 <b>Психолог</b>", text)
+        for data in ("psy|week", "psy|month", "psy|one"):
+            self.assertIn(f'"{data}"', btns)
+        self.assertTrue(all(len(r) <= 3 for r in self.rows()))
+        self.assertTrue(all(len(btn["text"]) <= 24 for r in self.rows() for btn in r))
+        with sync_threads():
+            self.cq("psy|week", mid=3)
+        self.assertEqual(sec.psy(), [{"scope": "week", "chat": None}])
+        self.assertIn("Разбираю", self.last()[0])
+        with sync_threads():
+            self.cq("psy|month", mid=3)
+        self.assertEqual(sec.psy()[-1], {"scope": "month", "chat": None})
+        # один чат: последние диалоги кнопками (по 3 в ряд, ≤ 24 символов) или имя текстом
+        with sync_threads():
+            self.cq("psy|one", mid=3)
+        text, btns = self.last()
+        self.assertIn("Один чат", text)
+        self.assertIn('"psy|c|7"', btns)
+        self.assertIn('"psy|c|-100"', btns)
+        self.assertTrue(all(len(r) <= 3 for r in self.rows()))
+        self.assertTrue(all(len(btn["text"]) <= 24 for r in self.rows() for btn in r))
+        self.assertEqual(hub.setting("wait"), "psy")
+        with sync_threads():
+            self.cq("psy|c|-100", mid=3)
+        self.assertEqual(sec.psy()[-1], {"scope": "chat", "chat": "-100"})
+        self.assertIsNone(hub.setting("wait"))
+        with sync_threads():
+            self.cq("psy|one", mid=3)
+            hub.on_message(self.msg("Саша за месяц, как ко мне относится"))
+        self.assertEqual(sec.psy()[-1], {"scope": "chat", "chat": "Саша за месяц, как ко мне относится"})
+        self.assertEqual(sec.updates(), [])  # имя чата — не свободный текст Секретарю
+        hub.on_message(self.msg("/start"))
+        self.assertIn('"psy"', self.last()[1])  # кнопка на главном экране
+        hub.on_message(self.msg("🧠 Разбор чата"))  # кнопка клавиатуры Секретаря — та же карточка
+        self.assertIn("🧠 <b>Психолог</b>", self.last()[0])
+        self.assertEqual(sec.updates(), [])
+
+    def test_not_logged_in(self):
+        sec = FakeSecretary(hub.AGENT_SOCK, None)
+        self.addCleanup(sec.close)
+        hub.on_message(self.msg("/psy"))
+        text, btns = self.last()
+        self.assertIn("аккаунт пока не подключён", text)
+        self.assertIn('"s:login:"', btns)  # вход — у Секретаря
+        self.assertIn('"s:m:home"', btns)
+        self.assertNotIn("psy|week", btns)
+        with sync_threads():  # всё же запустили (старая карточка) — Секретарь отказал, предлагаем войти
+            hub.psy_run(U, "week")
+        text, btns = self.last()
+        self.assertIn("Разбор не запустился", text)
+        self.assertIn("аккаунт не подключён", text)
+        self.assertIn('"s:login:"', btns)
+
+    def test_secretary_down(self):
+        with mock.patch.object(hub, "revive"), sync_threads():
+            hub.on_message(self.msg("/psy"))
+        text, btns = self.last()
+        self.assertIn("не отвечает", text)
+        self.assertIn('"srst"', btns)
 
 
 if __name__ == "__main__":

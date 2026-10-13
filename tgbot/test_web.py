@@ -357,9 +357,77 @@ class Api(unittest.TestCase):
         self.assertEqual(title, "🧠 Разбор: 8Б класс")
         text, title = w.task({"preset": "brief", "chat": "Петя", "id": 7})
         self.assertIn("«Петя» (id 7)", text)
+        text, title = w.task({"preset": "psy_week"})
+        self.assertIn("period --days 7", text)
+        self.assertEqual(title, "🧠 Все чаты · неделю")
+        self.assertIn("period --days 30", w.task({"preset": "psy_month"})[0])
         for bad in ({"preset": "psy"}, {"text": "   "}, {"text": "x" * 5000}):
             with self.assertRaises(web.ApiError):
                 w.task(bad)
+
+    def test_psy_all_from_hub_and_app(self):
+        """«Все чаты» из Главного (_psy) и из приложения: разбор идёт как обычное поручение, в чат — с кнопками
+        «Подробнее про …» по людям; «Один чат» по id — имя из диалогов; без входа — честный отказ."""
+        a = self.make()
+        answer = "**🧠 Все чаты**\n- Петя: тепло\n\nПодробнее: Петя; 8Б класс"
+        a.run_claude = mock.AsyncMock(return_value=(True, answer))
+
+        async def scenario():
+            ok, out = await a.psy_start("week")
+            self.assertTrue(ok, out)
+            self.assertEqual(a.run["kind"], "psy_all")
+            await self.until(lambda: a.run["state"] == "done")
+            self.assertIn("period --days 7", a.run_claude.await_args[0][0])
+            last = a.bot.sent[-1]
+            self.assertNotIn("Подробнее:", last["text"])
+            self.assertEqual([b["text"] for r in last["buttons"] for b in r], ["Подробнее про Петя", "Подробнее про 8Б класс"])
+            self.assertEqual(last["buttons"][0][1]["callback_data"], "psy:n:8Б класс")
+            # один чат по id из кнопок Главного → имя подставляется
+            ok, out = await a.psy_start("chat", "-1000000000100")
+            self.assertTrue(ok)
+            await self.until(lambda: a.run["state"] == "done")
+            self.assertIn("«8Б класс» (id -1000000000100)", a.run_claude.await_args[0][0])
+            self.assertEqual(a.run["q"], "🧠 Разбор: 8Б класс")
+            self.assertIsNone(a.bot.sent[-1]["buttons"])  # кнопки «Подробнее» — только у «Все чаты»
+            self.assertFalse((await a.psy_start("chat", "  "))[0])
+            # из приложения — те же поручения, тот же путь
+            code, r = await self.req("/api/ask", {"preset": "psy_month"})
+            self.assertEqual(code, 200, r)
+            self.assertEqual(r["run"]["q"], "🧠 Все чаты · месяц")
+            await self.until(lambda: a.run["state"] == "done")
+            self.assertEqual([b["text"] for row in a.bot.sent[-1]["buttons"] for b in row][:1], ["Подробнее про Петя"])
+            code, r = await self.req("/api/ask", {"preset": "psy_week"})
+            self.assertEqual(code, 200)
+            await self.until(lambda: a.run["state"] == "done")
+            # занят — отказ, не вошёл — отказ с подсказкой
+            a.busy = True
+            self.assertIn("занимаюсь", (await a.psy_start("week"))[1])
+            a.busy = False
+            a.client = None
+            self.assertIn("аккаунт не подключён", (await a.psy_start("week"))[1])
+            self.assertEqual(await a.recent_dialogs(), [])
+        self.go(a, scenario)
+
+    def test_recent_dialogs_and_hub_mode(self):
+        a = self.make()
+        a.via_hub = True
+
+        async def scenario():
+            ds = await a.recent_dialogs(2)
+            self.assertEqual([d["name"] for d in ds], ["Петя", "8Б класс"])
+            self.assertEqual(ds[1], {"id": -1000000000100, "name": "8Б класс", "kind": "группа"})
+            a.app_url = "https://hub.1-2-3-4.sslip.io/app"
+            a.hub_mode = "chat"
+            _, rows = await a.dashboard()
+            self.assertFalse(any("web_app" in b for r in rows for b in r))  # режим «чат» — без кнопки приложения
+            self.assertIn("psy:card", [b.get("callback_data") for r in rows for b in r])
+            a.hub_mode = "app"
+            _, rows = await a.dashboard()
+            self.assertTrue(any("web_app" in b for r in rows for b in r))
+            text, rows = a.psy_card()
+            self.assertIn("🧠 Психолог", text)
+            self.assertEqual([b["callback_data"] for r in rows for b in r], ["psy:week", "psy:month", "psy:one", "home"])
+        self.go(a, scenario)
 
     def test_stop_from_app(self):
         a = self.make()

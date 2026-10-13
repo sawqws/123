@@ -99,7 +99,7 @@
   // часть экрана Секретаря без перерисовки поля ввода (чтобы не сбить набор)
   function paintLive() {
     if (S.tab !== 'sec' || !$('composer') === !S.secErr) return render();  // Секретарь пропал или вернулся
-    for (const [id, fn] of [['sechero', secHero], ['runbox', runCard], ['acc', accountCard], ['chats', chatsBlock], ['hist', histBlock]]) {
+    for (const [id, fn] of [['sechero', secHero], ['runbox', runCard], ['psybox', psyCard], ['acc', accountCard], ['chats', chatsBlock], ['hist', histBlock]]) {
       const el = $(id);
       if (el) { el.innerHTML = fn(); fillAnswers(el); }
     }
@@ -155,10 +155,29 @@
           <button class="btn primary sm send" data-act="send">Отправить</button></div>
       </section>
       <div id="runbox">${runCard()}</div>
+      <div id="psybox">${psyCard()}</div>
       <div id="acc">${accountCard()}</div>
       <div id="chats">${chatsBlock()}</div>
-      <div id="hist">${histBlock()}</div>`;
+      <div id="hist">${histBlock()}</div>
+      <div class="list mode-list"><button class="row tap" data-act="tochat"><span class="ic">💬</span><div class="main">
+        <div class="title">Перейти в чат</div><div class="meta">Всё кнопками в чате; вернуть приложение — /mode</div></div>
+        <span class="end chev"></span></button></div>`;
     return out;
+  }
+
+  // 🧠 Психолог: все чаты за неделю или месяц (ответ — как обычное поручение, и в чате с кнопками «Подробнее про …»)
+  function psyCard() {
+    const st = S.sec;
+    if (!st) return '';
+    const dis = isWork() ? 'disabled' : '';
+    const body = st.me
+      ? `<div class="btns psy-btns"><button class="btn tonal sm" data-preset="psy_week" ${dis}>Все чаты · неделя</button>
+          <button class="btn tonal sm" data-preset="psy_month" ${dis}>Все чаты · месяц</button>
+          <button class="btn tonal sm" data-act="psy" ${dis}>Выбрать чат</button></div>`
+      : `<div class="note">Разбираю переписки из вашего Telegram — для этого нужен вход в аккаунт.</div>
+         <button class="btn tonal sm" data-act="login">Войти в аккаунт</button>`;
+    return `<section class="card psy"><div class="row-flat"><span class="ava-ic">🧠</span><div class="main"><b>Психолог</b>
+      <div class="hint">Отношения и роли, тон, скрытые конфликты, на кого уходят силы — и советы</div></div></div>${body}</section>`;
   }
 
   function runCard() {
@@ -556,6 +575,10 @@
     if (act === 'stop') { haptic('rigid'); try { const r = await sec('stop'); S.sec.run = r.run || S.sec.run; paintLive(); } catch (er) { toast(er.message, 'err'); } return; }
     if (act === 'new') { try { await sec('new'); haptic('success'); toast('Начинаем с чистого листа ✦', 'ok'); } catch (er) { toast(er.message, 'err'); } return; }
     if (act === 'chat') return toChat();
+    if (act === 'tochat') {  // режим «💬 чат»: бот пришлёт главное меню, приложение закрывается
+      try { await busy(a, () => api('mode', { mode: 'chat' })); haptic('success'); toChat(); } catch (er) { toast(er.message, 'err'); }
+      return;
+    }
     if (act === 'login') {
       try { const r = await busy(a, () => sec('login')); toast(r.text, 'ok'); setTimeout(toChat, 1200); } catch (er) { toast(er.message, 'err'); }
       return;
