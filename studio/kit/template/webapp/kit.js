@@ -171,6 +171,16 @@ if (!document.body.hasAttribute('data-no-support')) {
   // плавающая кнопка — видна на любом экране, над вкладками
   document.body.insertAdjacentHTML('beforeend',
     '<button class="sup-fab" type="button" data-support aria-label="Поддержка и пожелания"><span class="i">🛠️</span><span class="t">Поддержка</span></button>');
+  // при прокрутке вниз кнопка уезжает, вверх и у верха — возвращается, в самом низу (там строка «Поддержка») — прячется
+  const fab = document.querySelector('.sup-fab');
+  let lastY = scrollY;
+  addEventListener('scroll', () => requestAnimationFrame(() => {
+    const y = scrollY;
+    if (y < 40) fab.classList.remove('away');
+    else if (innerHeight + y >= document.documentElement.scrollHeight - 90) fab.classList.add('away');
+    else if (Math.abs(y - lastY) > 6) fab.classList.toggle('away', y > lastY);
+    if (Math.abs(y - lastY) > 6 || y < 40) lastY = y;
+  }), { passive: true });
   (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',
     '<div class="list sup-list"><button class="row" data-support><span class="icon">🛠️</span><span class="main">' +
     '<span class="name">Поддержка и пожелания</span><span class="meta">Ошибка или идея — починю/добавлю</span></span>' +

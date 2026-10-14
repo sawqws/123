@@ -246,6 +246,26 @@
     b.setAttribute('aria-label', 'Поддержка и пожелания');
     b.innerHTML = '<span class="i">🛠️</span><span class="t">Поддержка</span>';
     document.body.appendChild(b);
+    awayOnScroll(b);
+  }
+  // плавающая кнопка не мешает читать: при прокрутке вниз уезжает, при прокрутке вверх и у верха — возвращается,
+  // в самом низу (там своя строка «Поддержка») — прячется
+  function awayOnScroll(el) {
+    let lastY = scrollY;
+    let ticking = false;
+    addEventListener('scroll', () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = scrollY;
+        const bottom = innerHeight + y >= document.documentElement.scrollHeight - 90;
+        if (y < 40) el.classList.remove('away');
+        else if (bottom) el.classList.add('away');
+        else if (Math.abs(y - lastY) > 6) el.classList.toggle('away', y > lastY);
+        if (Math.abs(y - lastY) > 6 || y < 40) lastY = y;
+        ticking = false;
+      });
+    }, { passive: true });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', supportFab); else supportFab();
 

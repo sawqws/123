@@ -129,6 +129,8 @@ label.field { display: block; margin-bottom: 12px; } label.field > span { displa
 .sup-fab { position: fixed; z-index: 19; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px 0 10px; border: 1px solid var(--line, rgba(127,127,127,.2)); border-radius: 999px; background: var(--card); color: var(--text); font: 600 13px/1 inherit; font-family: inherit; box-shadow: 0 10px 28px -12px rgba(0, 0, 0, .55); cursor: pointer; }
 .sup-fab .i { font-size: 16px; line-height: 1; }
 .sup-fab:active { transform: scale(.95); }
+.sup-fab { transition: transform .38s ease, opacity .28s ease; }
+.sup-fab.away { transform: translateY(calc(100% + 28px)) scale(.92); opacity: 0; pointer-events: none; }
 body.has-tabbar .sup-fab, body.has-tabs .sup-fab { bottom: calc(82px + env(safe-area-inset-bottom, 0px)); }
 
 /* ========== Пастель (как iPhone): светлый тёплый фон, белые карточки, мягкие тени, пастельный акцент ==========
