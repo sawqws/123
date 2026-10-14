@@ -1,5 +1,5 @@
 /* botkit — общий дизайн мини-приложений Студии. Не править под бота: своё — в app.css.
-   Цвета — из темы Telegram (--tg-theme-*), запасные — тёмная тема. Сетка 8px, радиусы 12/16, шрифт системный.
+   Вид — «пастель» как iPhone, всегда светлая (слой studio/kit/pastel.css в конце файла); боту задавать только --accent в app.css. Сетка 8px, радиусы 12/16, шрифт системный.
    Классы: .top .title .subtitle · .card .card h2 · .section · .list .row (.icon .main .name .meta .end) ·
    .stat (.value .label) · .grid (сетка карточек или кнопок) · .actions (кнопки в ряд) · .tabs > button(.on) · .btn(.primary .danger .small .ghost) · input textarea select ·
    .chips > .chip(.on) · .bar > i · .empty (.emoji) · .skeleton · .toast · .sheet · .badge(.ok .warn .bad) · .muted */
@@ -160,6 +160,7 @@ body.has-tabbar .sup-fab, body.has-tabs .sup-fab { bottom: calc(82px + env(safe-
   --serif: ui-serif, "New York", "Iowan Old Style", "Times New Roman", Georgia, serif;
 }
 html, body { background: var(--bg); color: var(--text); }
+body { padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
 body::before {
   content: ""; position: fixed; inset: 0 0 auto; height: 46vh; z-index: -1; pointer-events: none;
   background: radial-gradient(90% 70% at 50% -10%, var(--accent-soft), transparent 72%);

@@ -30,6 +30,8 @@
 }
 
 html, body { background: var(--bg); color: var(--text); }
+/* место под плавающей «Поддержкой», чтобы она не закрывала последнюю строку */
+body { padding-bottom: calc(84px + var(--bottom)); }
 /* едва заметная пастельная дымка акцента сверху — «лицо» бота */
 body::before {
   content: ""; position: fixed; inset: 0 0 auto; height: 46vh; z-index: -1; pointer-events: none;

@@ -103,7 +103,7 @@ async function locate(page, c) {
       const el = await locate(page, c);
       if (!el) { log.notes.push(`путь сломался на «${c.text}»`); return page; }
       await page.evaluate(FILL);
-      await el.click({ timeout: 2000 }).catch(() => {});
+      await el.click({ timeout: 1500 }).catch(() => el.evaluate((e) => e.click()).catch(() => {}));
       await page.waitForTimeout(350);
     }
     return page;
@@ -128,7 +128,8 @@ async function locate(page, c) {
       const el = await locate(p, c);
       if (!el) { await p.close(); continue; }
       await p.evaluate(FILL);
-      await el.click({ timeout: 2000 }).catch((e) => log.notes.push('не нажалось: ' + e.message.split('\n')[0]));
+      // перекрыто (плавающая кнопка, вкладки) — жмём напрямую, как палец по видимой части
+      await el.click({ timeout: 1500 }).catch(() => el.evaluate((e) => e.click()).catch((e) => log.notes.push('не нажалось: ' + e.message.split('\n')[0])));
       await p.waitForTimeout(600);
       const over = await p.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       if (over > 1) log.errors.push(`прокрутка вбок на ${over}px`);
