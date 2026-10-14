@@ -772,6 +772,89 @@ class BotTest(unittest.TestCase):
         self.assertTrue(env["HUB_OWNER"].isdigit())
         self.assertIn("Главный запущен", self.last()[0])
 
+    # ---- проверка «до конца»: отмена, устаревшие и чужие кнопки, сбои ----
+    def all_calls(self):
+        s = bot.load_settings(); s["owner"] = CHAT; bot.save_settings(s)  # on_update пускает только владельца
+        calls, real = [], self.fake_tg
+        return calls, mock.patch.object(bot, "tg", lambda m, **p: calls.append((m, p)) or real(m, **p))
+
+    def test_waiting_cards_can_be_cancelled(self):
+        """Карточка «жду ссылку / ТЗ / эмодзи» — с кнопкой «✕ Отмена»: бот перестаёт ждать, сообщение правится."""
+        calls, patch = self.all_calls()
+        with patch:
+            self.say(bot.BTN_SHOW)
+            self.assertIn(bot.CANCEL, self.last()[1])
+            self.assertEqual(bot.mode.get(CHAT), "show")
+            self.cb(bot.CANCEL, mid=12)
+            self.assertNotIn(CHAT, bot.mode)
+            self.assertIn("Отменил", [p for m, p in calls if m == "editMessageText"][-1]["text"])
+            self.assertTrue(any(m == "answerCallbackQuery" for m, _ in calls))
+            self.say("/emoji")
+            self.assertIn(bot.CANCEL, self.last()[1])
+
+    def test_show_mode_does_not_stick(self):
+        """«👀 Только ответы», потом другая кнопка — следующая ссылка решается и сдаётся, а не только показывается."""
+        self.say(bot.BTN_SHOW)
+        with mock.patch.object(bot, "run_script", lambda *a: None):
+            self.say(bot.BTN_LIST)
+        self.assertNotIn(CHAT, bot.mode)
+        with mock.patch.object(bot, "run_task", lambda chat, url, text, show=False, mid=None: self.prompts.append(show)):
+            self.say(URL)
+        self.assertEqual(self.prompts[-1], False)
+
+    def test_draft_is_not_sent_twice(self):
+        """Двойное «Отправить учителю» (или чат + приложение сразу): answer.js — один раз."""
+        bot.set_draft({"task": TASK, "url": URL, "title": "Конспект §5", "pairs": [], "own_files": False}, active=True)
+        drafts.write(TASK, "текст")
+        bot.SENDING.add(TASK)  # первое нажатие ещё отправляет
+        try:
+            self.cb("send:" + TASK)
+        finally:
+            bot.SENDING.discard(TASK)
+        self.assertEqual(self.nodes, [])
+        self.assertIn("Уже отправляю", self.last()[0])
+        self.cb("send:" + TASK)
+        self.assertEqual([a[0] for a in self.nodes], ["horo/answer.js"])
+
+    def test_stale_and_foreign_buttons_are_answered(self):
+        """Чужая кнопка, кнопка без сообщения, старая кнопка почерка, повторное «Сдать все» — ответ, без падений."""
+        calls, patch = self.all_calls()
+        with patch:
+            bot.on_update({"callback_query": {"id": "9", "data": "send", "from": {"id": 777},
+                                              "message": {"chat": {"id": 777}, "message_id": 1}}})
+            bot.on_update({"callback_query": {"id": "10", "data": "send", "from": {"id": CHAT}}})
+            answers = [p for m, p in calls if m == "answerCallbackQuery"]
+            self.assertEqual([a["callback_query_id"] for a in answers], ["9", "10"])
+            self.assertIn("личный", answers[0]["text"])
+            self.assertIn("устарела", answers[1]["text"])
+            self.cb("hand:slant2:1")
+            self.assertIn("Кнопка устарела", self.last()[0])
+            n = len(self.msgs)
+            bot.ALL_RUNNING.add(CHAT)
+            try:
+                self.cb("all:yes", mid=30)  # пачка уже сдаётся — «не сдаю» не пишем
+            finally:
+                bot.ALL_RUNNING.discard(CHAT)
+            self.assertEqual(len(self.msgs), n)
+            self.assertNotIn("не сдаю", str([p for m, p in calls if m == "editMessageText" and p["message_id"] == 30]))
+
+    def test_crash_is_reported_not_silent(self):
+        """Сбой в обработчике: крутилка у кнопки снимается, Глебу — «⚠️ Что-то сломалось», а не тишина."""
+        calls, patch = self.all_calls()
+        with patch, mock.patch.object(bot, "on_more", mock.Mock(side_effect=RuntimeError("boom"))), \
+                mock.patch.object(bot, "handle", mock.Mock(side_effect=KeyError("x"))), \
+                mock.patch("builtins.print"):
+            bot.on_update({"callback_query": {"id": "5", "data": "m:help", "from": {"id": CHAT},
+                                              "message": {"chat": {"id": CHAT}, "message_id": 3}}})
+            self.assertIn("5", [p["callback_query_id"] for m, p in calls if m == "answerCallbackQuery"])
+            self.assertIn("⚠️ Что-то сломалось: boom", self.last()[0])
+            bot.on_update({"message": {"chat": {"id": CHAT}, "from": {"id": CHAT}, "text": "привет"}})
+            self.assertIn("⚠️ Что-то сломалось", self.last()[0])
+            args = mock.Mock(exc_type=ValueError, exc_value=ValueError("фон упал"), exc_traceback=None, thread=None)
+            with mock.patch.object(bot.threading, "__excepthook__", lambda a: None):
+                bot.thread_crash(args)
+            self.assertIn("фон упал", self.last()[0])
+
 
 class AppTest(BotTest):
     """Приложение (Mini App): подпись Telegram, доступ только владельцу, действия те же, что у кнопок."""

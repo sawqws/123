@@ -175,6 +175,7 @@ ABOUT = ("Помощник по HDP. Решаю и сдаю задания по 
          "слежу за дедлайнами, комментариями и оценками.")
 ABOUT_SHORT = "Решаю задания HDP, слежу за дедлайнами и оценками"
 BUSY = "⏳ Занят другим заданием — пришли ещё раз через пару минут"
+CANCEL = "x:cancel"  # «✕ Отмена» под карточками, которые ждут ввода (ссылку, ТЗ, эмодзи, листы алфавита)
 
 
 def esc(x):
@@ -194,6 +195,10 @@ def card(title, body="", note="", icon=""):
     if note:
         lines.append(f"<i>{note}</i>")
     return "\n".join(lines)
+
+
+def cancel_kb():
+    return kb([("✕ Отмена", CANCEL)])
 
 
 def err(text, note=""):
@@ -1144,11 +1149,29 @@ def add_draft_photo(chat, msg, task=None):
         markup=draft_kb(d["task"]), raw_html=True))
 
 
+SENDING = set()  # черновики, которые сейчас отправляются учителю
+sending_lock = threading.Lock()
+
+
 def submit_draft(chat, task=None):
+    """«Отправить учителю». Двойное нажатие (или чат + приложение сразу) не отправляет ответ дважды."""
     d = draft(task)
     if not d:
         send(chat, "⚠️ Черновика уже нет", menu=True)
         return
+    with sending_lock:
+        if d["task"] in SENDING:
+            send(chat, card("Уже отправляю", note=esc(d["title"]) + " — результат придёт сюда", icon="⏳"), raw_html=True)
+            return
+        SENDING.add(d["task"])
+    try:
+        _submit_draft(chat, d)
+    finally:
+        with sending_lock:
+            SENDING.discard(d["task"])
+
+
+def _submit_draft(chat, d):
     if not lock.acquire(blocking=False):  # все места заняты решением — отправим, как только одно освободится
         send(chat, card("Отправлю чуть позже", note=f"{esc(d['title'])} — сейчас решаю {MAX_PARALLEL} задания, "
                                                     "отправлю, как только одно закончу", icon="⏳"), raw_html=True)
@@ -1227,12 +1250,21 @@ def on_callback(cq):
             remember_mids(d["task"], send(chat, card("Что поправить?", note=f"{esc(d['title'])} · пришли текст, просьбу "
                                                      "(«в №3 ответ другой»), голосовое или фото", icon="✏️"), raw_html=True))
         return
+    if data == CANCEL:  # ✕ Отмена: бот больше не ждёт ввода
+        quiet("answerCallbackQuery", callback_query_id=cq["id"])
+        mode.pop(chat, None)
+        pending.pop(chat, None)
+        edit(chat, mid, card("Отменил", note="Выбери действие внизу или пришли ссылку на задание", icon="👌"))
+        return
     if data.startswith("hand:"):
         try:
             tg("answerCallbackQuery", callback_query_id=cq["id"])
         except urllib.error.HTTPError as e:
             print("callback:", e)
         _, key, *sign = data.split(":")
+        if key != "ok" and (key not in HAND_STEPS or not sign or sign[0] not in ("1", "-1")):  # кнопка старой версии
+            send(chat, card("Кнопка устарела", note="Пример почерка заново — /style", icon="🤔"), menu=True, raw_html=True)
+            return
         quiet("editMessageReplyMarkup", chat_id=chat, message_id=mid,  # кнопки остаются только под новым примером
               reply_markup=json.dumps({"inline_keyboard": []}))
         if key == "ok":
@@ -1253,6 +1285,10 @@ def on_callback(cq):
         rows = pending.pop(chat, [])
         if data == "all:yes" and rows:
             threading.Thread(target=run_all, args=(chat, rows), daemon=True).start()
+        elif data == "all:yes" and ALL_RUNNING:  # второе нажатие, пока сдаю: не писать «не сдаю»
+            return
+        elif data == "all:yes":  # список из старого сообщения (бот перезапускался)
+            edit(chat, mid, card("Список устарел", note=f"Свежий — кнопка «{BTN_ALL}»", icon="🤔"))
         else:
             edit(chat, mid, card("Автотесты не сдаю", note=f"Передумаешь — кнопка «{BTN_ALL}»", icon="👌"))
         return
@@ -1529,11 +1565,15 @@ def find_auto_tests(chat):
         lock.release()
 
 
+ALL_RUNNING = set()  # чаты, где сейчас сдаётся пачка автотестов
+
+
 def run_all(chat, tests):
     """Сдаёт пачку тестов (строки из status.js --json или ссылки) с одной живой карточкой на всю пачку."""
     if not lock.acquire(blocking=False):
         send(chat, BUSY)
         return
+    ALL_RUNNING.add(chat)
     try:
         tests = [t if isinstance(t, dict) else {"url": t, "title": "", "subj": ""} for t in tests]
         n, t0, rows, details = len(tests), time.time(), [], []
@@ -1561,6 +1601,7 @@ def run_all(chat, tests):
              f"<i>Заняло {mmss(time.time() - t0)} · подробности — в свёрнутой цитате</i>",
              menu=True, raw_html=True, effect=EFFECT_CONFETTI if perfect == n else None)
     finally:
+        ALL_RUNNING.discard(chat)
         lock.release()
         threading.Thread(target=refresh_overview, daemon=True).start()
 
@@ -1977,6 +2018,8 @@ def handle(msg):
     text = (msg.get("text") or "").strip()
     text = ALIASES.get(text, text)
     name = msg.get("from", {}).get("first_name") or ""
+    if mode.get(chat) == "show" and (text.startswith("/") or (text in BUTTONS and text != BTN_SHOW)):
+        mode.pop(chat)  # иначе ссылка, присланная когда-нибудь потом, только показала бы ответы, а не сдала
 
     if text in ("/start site", "/site") or text.startswith("/site "):  # ссылка t.me/<бот>?start=site со страницы входа
         send_site(chat)
@@ -2054,7 +2097,8 @@ def handle(msg):
     if text.startswith("/emoji"):
         mode[chat] = "emoji"
         send(chat, card("Премиум-эмодзи", "Пришли одним сообщением премиум-эмодзи — буду ставить их в своих "
-                        "сообщениях вместо обычных.", "Работает, если у тебя есть Telegram Premium", "✨"), raw_html=True)
+                        "сообщениях вместо обычных.", "Работает, если у тебя есть Telegram Premium", "✨"),
+             markup=cancel_kb(), raw_html=True)
         return
     if mode.get(chat) == "emoji":
         mode.pop(chat)
@@ -2085,7 +2129,7 @@ def handle(msg):
             return
         if text not in BUTTONS and not LINK.search(text):
             send(chat, card("Жду листы алфавита", note="Скриншот или фото. Закончил — напиши «готово»", icon="📸"),
-                 raw_html=True)
+                 markup=cancel_kb(), raw_html=True)
             return
         mode.pop(chat)
     if text.startswith("/style"):
@@ -2149,7 +2193,7 @@ def handle(msg):
     if text == BTN_SHOW:
         mode[chat] = "show"
         send(chat, card("Жду ссылку на задание", note="Покажу ответы, на сайт ничего не отправлю", icon="👀"),
-             raw_html=True)
+             markup=cancel_kb(), raw_html=True)
         return
     if text == BTN_ALL:
         threading.Thread(target=find_auto_tests, args=(chat,), daemon=True).start()
@@ -2427,7 +2471,7 @@ def prep_ask_tz(chat):
     subj = (PREP_CTX.get(chat) or {}).get("subj")
     send(chat, card("Своё ТЗ", "Напиши или скажи голосом, по чему подготовить: темы, параграфы, вопросы учителя.",
                     (f"Предмет — {esc(subj)}. " if subj else "") + "Можно сразу время: «за 5 минут»", "✍️"),
-         raw_html=True)
+         markup=cancel_kb(), raw_html=True)
 
 
 def prep_take_tz(chat, text):
@@ -2468,8 +2512,8 @@ def prep_run(chat, minutes, more=False):
         send(chat, err("Эта подготовка уже неактуальна — выбери предмет заново"), raw_html=True)
         prep_menu(chat)
         return
-    if not lock.acquire(blocking=False):
-        send(chat, BUSY)
+    if not lock.acquire(blocking=False):  # кнопки под прошлым сообщением уже убраны — дать повторить
+        send(chat, BUSY, markup=kb([("🔁 Ещё раз", "pp:more" if more else f"pp:t:{minutes}")]))
         return
     subj, tz, topics = ctx["subj"], ctx["tz"], ctx["topics"]
     minutes = minutes if minutes in prep.MINUTES else 5
@@ -2529,8 +2573,10 @@ def on_prep_button(chat, mid, cq_id, key):
         if not arg.isdigit() or int(arg) >= len(names):
             threading.Thread(target=prep_menu, args=(chat, mid), daemon=True).start()
             return
-        c = prep_ctx(chat, names[int(arg)])
-        edit(chat, mid, prep.topics_html(c["subj"], c["icon"], c["topics"]), prep_time_kb())
+        def pick():  # темы могут идти с сайта (до 3 минут) — не в цикле опроса Telegram
+            c = prep_ctx(chat, names[int(arg)])
+            edit(chat, mid, prep.topics_html(c["subj"], c["icon"], c["topics"]), prep_time_kb())
+        threading.Thread(target=pick, daemon=True).start()
     elif act == "back":
         threading.Thread(target=prep_menu, args=(chat, mid), daemon=True).start()
     elif act == "tz":
@@ -2696,6 +2742,7 @@ def setup_profile():
 
 def main():
     global offset
+    threading.excepthook = thread_crash
     threading.Thread(target=setup_profile, daemon=True).start()
     web.start(TOKEN, owner, ROUTES, on_app_url)
     print("Бот запущен")
@@ -2725,17 +2772,41 @@ def main():
             on_update(u, sup)
 
 
+def oops(chat, e):
+    """Непредвиденная ошибка в обработчике или фоновом деле: Глебу — одна строка «⚠️», подробности — в лог pm2."""
+    try:
+        send(chat, err(f"Что-то сломалось: {e}", "Попробуй ещё раз. Повторится — 🛠 Поддержка (/fix)"),
+             menu=True, raw_html=True)
+    except Exception as e2:
+        print("oops:", e2)
+
+
+def thread_crash(args):
+    """threading.excepthook: дело в фоне упало — раньше Глеб видел только тишину."""
+    threading.__excepthook__(args)
+    if not issubclass(args.exc_type, SystemExit) and owner():
+        oops(owner(), args.exc_value)
+
+
 def on_update(u, sup=None):
     """Одно обновление Telegram (из цикла main; тесты зовут его же): поддержка, кнопка или сообщение."""
     if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
         return
     cq = u.get("callback_query")
     if cq:
-        if cq.get("from", {}).get("id") == owner() and cq.get("message"):
-            try:
-                on_callback(cq)
-            except Exception as e:
-                print("callback:", e)
+        msg = cq.get("message") or {}
+        if cq.get("from", {}).get("id") != owner():  # чужой человек нажал кнопку — крутилка не должна висеть
+            quiet("answerCallbackQuery", callback_query_id=cq.get("id"), text="Это личный бот")
+            return
+        if "chat" not in msg:
+            quiet("answerCallbackQuery", callback_query_id=cq.get("id"), text="Кнопка устарела — открой меню заново")
+            return
+        try:
+            on_callback(cq)
+        except Exception as e:
+            print("callback:", e)
+            quiet("answerCallbackQuery", callback_query_id=cq.get("id"))
+            oops(msg["chat"]["id"], e)
         return
     msg = u.get("message") or {}
     uid = msg.get("from", {}).get("id")
@@ -2750,6 +2821,7 @@ def on_update(u, sup=None):
         handle(msg)
     except Exception as e:
         print("handle:", e)
+        oops(msg["chat"]["id"], e)
 
 
 if __name__ == "__main__":
