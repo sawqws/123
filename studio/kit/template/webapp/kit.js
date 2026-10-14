@@ -175,11 +175,12 @@ if (!document.body.hasAttribute('data-no-support')) {
   const fab = document.querySelector('.sup-fab');
   let lastY = scrollY;
   addEventListener('scroll', () => requestAnimationFrame(() => {
-    const y = scrollY;
-    if (y < 40) fab.classList.remove('away');
+    const y = scrollY;  // срабатывает после заметной прокрутки: вниз 48 px, вверх 24 px
+    if (y < 60) { fab.classList.remove('away'); lastY = y; }
     else if (innerHeight + y >= document.documentElement.scrollHeight - 90) fab.classList.add('away');
-    else if (Math.abs(y - lastY) > 6) fab.classList.toggle('away', y > lastY);
-    if (Math.abs(y - lastY) > 6 || y < 40) lastY = y;
+    else if (y - lastY > 48) { fab.classList.add('away'); lastY = y; }
+    else if (lastY - y > 24) { fab.classList.remove('away'); lastY = y; }
+    else if ((y > lastY) === fab.classList.contains('away')) lastY = y;
   }), { passive: true });
   (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',
     '<div class="list sup-list"><button class="row" data-support><span class="icon">🛠️</span><span class="main">' +

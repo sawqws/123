@@ -257,12 +257,14 @@
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(() => {
+        // срабатывает только после заметной прокрутки (вниз 48 px, вверх 24 px), а не от каждого движения пальца
         const y = scrollY;
         const bottom = innerHeight + y >= document.documentElement.scrollHeight - 90;
-        if (y < 40) el.classList.remove('away');
+        if (y < 60) { el.classList.remove('away'); lastY = y; }
         else if (bottom) el.classList.add('away');
-        else if (Math.abs(y - lastY) > 6) el.classList.toggle('away', y > lastY);
-        if (Math.abs(y - lastY) > 6 || y < 40) lastY = y;
+        else if (y - lastY > 48) { el.classList.add('away'); lastY = y; }
+        else if (lastY - y > 24) { el.classList.remove('away'); lastY = y; }
+        else if ((y > lastY) === el.classList.contains('away')) lastY = y;  // движение в ту же сторону — копим от новой точки
         ticking = false;
       });
     }, { passive: true });
