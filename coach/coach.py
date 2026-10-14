@@ -411,7 +411,7 @@ def setup_text():
                note="Это ключ доступа, а не новое приложение. Секрет храню на сервере, сообщение с ним удалю.")
 
 
-def connect(chat, uid):
+def connect(chat, uid, again=False):
     cid, sec = creds()
     if not (cid and sec):
         send(chat, setup_text(), [[{"text": "🌐 WHOOP Developer", "url": DEV_DASHBOARD}]])
@@ -421,7 +421,7 @@ def connect(chat, uid):
         send(chat, err("Адрес приложения ещё не готов — повтори /connect через минуту (/status)."))
         return
     send(chat, box("🔗", "Подключение WHOOP", "Нажми кнопку, войди в WHOOP и разреши доступ — потом вернись сюда."),
-         [[{"text": "Подключить WHOOP", "url": link, "style": "success"}]])
+         [[{"text": "🔄 Подключить снова" if again else "Подключить WHOOP", "url": link, "style": "success"}]])
 
 
 def finish_connect(state, code):
@@ -439,9 +439,12 @@ def finish_connect(state, code):
         db.mark_synced(uid)  # первую загрузку делает first_sync, расписание пусть не дублирует
     except Exception as e:
         print("whoop exchange:", e)
+        why = ("WHOOP не пустил сервер (защита Cloudflare)" if whoop.blocked(403, str(e))
+               else "Код входа устарел — WHOOP его не принял" if any(c in str(e) for c in ("400", "401"))
+               else "WHOOP сейчас не отвечает")
         try:  # новая кнопка сразу в чат — писать /connect не нужно
-            send(uid, err("WHOOP не принял вход — вот новая кнопка, попробуй ещё раз."))
-            connect(uid, uid)
+            send(uid, err(f"Вход в WHOOP не получился: {why}. Нажми «Подключить снова» — займёт минуту."))
+            connect(uid, uid, again=True)
         except Exception as e2:
             print("reconnect:", e2)
         return False, "WHOOP не принял вход. Новая кнопка уже в Telegram."
