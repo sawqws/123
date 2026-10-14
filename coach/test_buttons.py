@@ -515,7 +515,8 @@ class ButtonsTest(unittest.TestCase):
         # есть только без WHOOP, остальные — только с данными)
         body = source(coach).split("def on_callback")[1].split("\ndef ")[0]
         missing = (callback_kinds(body, r"data\[0\]") if data else {"c", "mode"}) - cr.pressed
-        self.assertEqual(missing, {"c"} if data else set(), f"не нажаты виды кнопок: {missing}")
+        # «c» с данными теперь бывает: «Вход истёк → 🔌 Подключить WHOOP» после неудачного обновления
+        self.assertLessEqual(missing, {"c"} if data else set(), f"не нажаты виды кнопок: {missing}")
         self.assertEqual(cr.problems, [], "\n" + "\n".join(cr.problems[:40]))
         return cr
 
