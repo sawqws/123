@@ -12,8 +12,14 @@
 const fs = require('fs');
 const { open, close, loadTask, BASE } = require('./lib');
 
-const [url, ansFile, flag] = process.argv.slice(2);
-const noSubmit = flag === '--no-submit';
+const args = process.argv.slice(2);
+const [url, ansFile] = args.filter(a => !a.startsWith('--'));
+const noSubmit = args.includes('--no-submit');
+// Как человек: над каждым вопросом «думает» 20–45 с (всего не больше HORO_PACE_MAX с, по умолчанию 6 мин),
+// чтобы попытка не выглядела сданной за полминуты. --fast — без пауз (проверка вручную).
+const fast = args.includes('--fast') || process.env.HORO_FAST === '1';
+const PACE_MAX = Number(process.env.HORO_PACE_MAX || 360) * 1000;
+const think = (page, N) => fast ? 0 : page.waitForTimeout(Math.min(PACE_MAX / N, 20000 + Math.random() * 25000));
 const ANS = JSON.parse(fs.readFileSync(ansFile, 'utf8'));
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -149,6 +155,7 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         throw new Error(`Вопрос ${n}: тип ${q.type} скрипт пока не умеет`);
       }
 
+      await think(page, N);  // ответ введён — «перечитывает» перед следующим
       if (n < N) {
         await page.click('[data-testid=testFormNextButton]');
         await page.waitForTimeout(2000);
