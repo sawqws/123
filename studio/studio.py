@@ -55,7 +55,7 @@ if SITES_ONLY:
                   short="Делает сайты по описанию",
                   commands=[("start", "Новый сайт"), ("sites", "Мои сайты"), ("cancel", "Отменить черновик")],
                   token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
-                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=None)
+                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=False)  # без /fix: это правка кода сервера
 else:
     bot = kit.Bot("Студия", emoji="🏗", app_text="Студия",
                   about="Делаю красивых и простых ботов по твоей идее: уточню, покажу план, напишу код, "
@@ -667,16 +667,17 @@ def on_answer(c):
     d = draft()
     if not c.args or c.args[0] != d.get("id"):
         return c.toast("Это старый вопрос")
-    i, k = int(c.args[1]), int(c.args[2])
-    opts = ((d.get("qs") or [{}] * (i + 1))[i] or {}).get("options") or []
-    if k >= len(opts) or not answer(c.chat, opts[k], i):
+    i, k = num(c.args, 1), num(c.args, 2)
+    qs = d.get("qs") or []
+    opts = (qs[i].get("options") or []) if 0 <= i < len(qs) else []
+    if not 0 <= k < len(opts) or not answer(c.chat, opts[k], i):
         c.toast("Уже ответил")
 
 
 @bot.button("skip")
 def on_skip(c):
     d = draft()
-    if c.args and c.args[0] == d.get("id") and answer(c.chat, "", int(c.args[1])):
+    if c.args and c.args[0] == d.get("id") and answer(c.chat, "", num(c.args, 1)):
         return
     c.toast("Уже ответил")
 
@@ -709,9 +710,10 @@ def ask_name(chat):
 @bot.button("name")
 def on_name(c):
     d = draft()
-    if not c.args or c.args[0] != d.get("id") or d.get("stage") != "name":
+    names, k = d.get("names") or [], num(c.args, 1)
+    if not c.args or c.args[0] != d.get("id") or d.get("stage") != "name" or not 0 <= k < len(names):
         return c.toast("Имя уже выбрано")
-    set_name(c.chat, (d.get("names") or [""])[int(c.args[1])])
+    set_name(c.chat, names[k])
 
 
 def set_name(chat, name):
@@ -1280,8 +1282,8 @@ def fix(chat, slug, text):
 def on_undo(c):
     slug = c.args[0] if c.args else ""
     info = registry().get(slug) or sites().get(slug)
-    if not info:
-        return c.toast("Бота уже нет")
+    if not info or len(c.args) < 2 or not re.fullmatch(r"[0-9a-f]{6,40}", c.args[1]):
+        return c.toast("Кнопка устарела" if info else "Бота уже нет")
     code, out = git(info["dir"], "-c", "user.name=Студия", "-c", "user.email=studio@localhost", "revert", "--no-edit",
                     c.args[1])
     if code != 0:
@@ -1353,26 +1355,29 @@ def show_bot(c):
 @bot.button("logs")
 def on_logs(c):
     info = registry().get(c.args[0] if c.args else "")
-    if info:
-        c.say(f"📜 <b>{esc(info['name'])}</b>\n<pre>{esc(logs(info['pm2']))}</pre>",
-              [[b("✏️ Починить", f"fix|{info['slug']}", "primary")]])
+    if not info:
+        return c.toast("Бота уже нет")
+    c.say(f"📜 <b>{esc(info['name'])}</b>\n<pre>{esc(logs(info['pm2']))}</pre>",
+          [[b("✏️ Починить", f"fix|{info['slug']}", "primary")]])
 
 
 @bot.button("restart")
 def on_restart(c):
     info = registry().get(c.args[0] if c.args else "")
-    if info:
-        sh("pm2", "restart", info["pm2"], timeout=60)
-        c.toast("Перезапустил")
-        show_bot(c)
+    if not info:
+        return c.toast("Бота уже нет")
+    sh("pm2", "restart", info["pm2"], timeout=60)
+    c.toast("Перезапустил")
+    show_bot(c)
 
 
 @bot.button("del?")
 def on_del_ask(c):
     info = registry().get(c.args[0] if c.args else "")
-    if info:
-        c.show(card(f"🗑 <b>Удалить «{esc(info['name'])}»?</b>", ["Бот остановится, код и данные сотрутся."]),
-               [[b("Да, удалить", f"del|{info['slug']}", "danger"), b("Нет", f"bot|{info['slug']}")]])
+    if not info:
+        return c.toast("Бота уже нет")
+    c.show(card(f"🗑 <b>Удалить «{esc(info['name'])}»?</b>", ["Бот остановится, код и данные сотрутся."]),
+           [[b("Да, удалить", f"del|{info['slug']}", "danger"), b("Нет", f"bot|{info['slug']}")]])
 
 
 @bot.button("del")
@@ -1635,7 +1640,7 @@ def set_access(slug, mode):
 @bot.button("smode")
 def on_smode(c):
     if len(c.args) < 2:
-        return
+        return c.toast("Кнопка устарела")
     info = set_access(c.args[0], c.args[1])
     if not info:
         return c.toast("Сайта уже нет")
@@ -1658,9 +1663,10 @@ def on_spub_ask(c):
 @bot.button("sdel?")
 def on_sdel_ask(c):
     info = sites().get(c.args[0] if c.args else "")
-    if info:
-        c.show(card(f"🗑 <b>Удалить сайт «{esc(info['name'])}»?</b>", ["Файлы сайта сотрутся, ссылка перестанет работать."]),
-               [[b("Да, удалить", f"sdel|{info['slug']}", "danger"), b("Нет", f"site|{info['slug']}")]])
+    if not info:
+        return c.toast("Сайта уже нет")
+    c.show(card(f"🗑 <b>Удалить сайт «{esc(info['name'])}»?</b>", ["Файлы сайта сотрутся, ссылка перестанет работать."]),
+           [[b("Да, удалить", f"sdel|{info['slug']}", "danger"), b("Нет", f"site|{info['slug']}")]])
 
 
 @bot.button("sdel")
@@ -1699,6 +1705,14 @@ def api_state(r):
             "secretary": False if SITES_ONLY else secretary_ready()}
 
 
+def num(args, i):
+    """args[i] как целое; нет или не число (старая, битая кнопка, мусор из приложения) — -1."""
+    try:
+        return int(args[i])
+    except (IndexError, ValueError, TypeError):
+        return -1
+
+
 def need(d, stage):
     if d.get("stage") != stage:
         raise kit.Fail("Черновик уже на другом шаге — обнови")
@@ -1719,7 +1733,7 @@ def api_idea(r):
 def api_answer(r):
     d = draft()
     need(d, "ask")
-    if not answer(owner_chat(), str(r.body.get("text") or ""), int(r.body.get("i", d.get("qi", 0)))):
+    if not answer(owner_chat(), str(r.body.get("text") or ""), num([r.body.get("i", d.get("qi", 0))], 0)):
         raise kit.Fail("Этот вопрос уже прошли")
     return api_state(r)
 
@@ -1766,6 +1780,7 @@ def api_confirm(r):
 def api_cancel(r):
     if draft().get("stage") == "build":
         raise kit.Fail("Сборку не остановить")
+    drop_unfinished(draft())  # как кнопка «Отмена»: недоделанный бот не остаётся в «Моих ботах» и на диске
     put({})
     return api_state(r)
 
