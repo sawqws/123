@@ -230,6 +230,9 @@ class Hand:
         xh, m = size * XH, self.m
         line = Noise(3, (0.004, 0.012))
         tilt = random.uniform(-0.03, 0.03) * m
+        if lay:  # длинная строка (числитель дроби) не должна уехать за свою высоту: иначе черта дроби режет буквы
+            span = max(lay[-1][1], xh)
+            tilt = max(-0.3 * xh / span, min(0.3 * xh / span, tilt))
         amp = xh * random.uniform(0.06, 0.14) * m
         for c, x, up, k, p in lay:
             gx = x0 + x
@@ -265,7 +268,7 @@ class Hand:
         x1 = x + random.uniform(-0.1, 0.15) * xh
         x2 = x + w + xh * random.uniform(0.5, 1.2)       # черта уходит дальше записи
         sup = any(ch in '²³⁴⁵' for ch in den)
-        self._draw(ln, x1 + (x2 - x1 - wn) / 2 + random.uniform(-0.3, 0.3) * xh, y - xh * random.uniform(0.4, 0.55), size)
+        self._draw(ln, x1 + (x2 - x1 - wn) / 2 + random.uniform(-0.3, 0.3) * xh, y - xh * (random.uniform(0.4, 0.55) + 0.01 * min(len(num), 16)), size)  # длинный числитель чуть выше: черта его не задевает
         self._draw(ld, x1 + (x2 - x1 - wd) / 2 + random.uniform(-0.3, 0.3) * xh, y + xh * (random.uniform(1.65, 1.8) + 0.35 * sup), size)
         y1, y2 = y + random.uniform(-0.1, 0.1) * xh, y + random.uniform(-0.15, 0.1) * xh * m
         lift = random.uniform(0, 0.2) * xh * m            # кончик черты чуть загибается вверх
