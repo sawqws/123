@@ -137,18 +137,70 @@ class AlphabetTest(unittest.TestCase):
         self.assertIn('метки', errors[0])
 
 
+def old_sheet(code, chars, small=True):
+    """Старый лист букв (сетка 6×6, метки номера code), заполненный как у Глеба:
+    большая — на линии строки, маленькая — на нижней рамке клетки."""
+    im = Image.new('RGB', (A.W, A.H), A.BG)
+    d = ImageDraw.Draw(im)
+    for cx, cy in A.corners():
+        d.rectangle([cx - A.MARK / 2, cy - A.MARK / 2, cx + A.MARK / 2, cy + A.MARK / 2], fill=A.MAGENTA)
+    for k, (cx, cy) in enumerate(A.bits()):
+        if code >> k & 1:
+            d.rectangle([cx - A.BIT / 2, cy - A.BIT / 2, cx + A.BIT / 2, cy + A.BIT / 2], fill=A.MAGENTA)
+    cell_h = (A.H - A.TOP - A.BOTTOM) / 6
+    big, little = ImageFont.truetype(A.FONT, 110), ImageFont.truetype(A.FONT, 120)
+    for i, ch in enumerate(chars):
+        x0, x1, y0, base = A.cell(i, 6, 6)
+        d.rectangle([x0 + 6, y0 + 6, x1 - 6, y0 + cell_h - 6], outline=A.LINE, width=2)
+        d.line([x0 + 14, base, x1 - 14, base], fill=A.LINE, width=3)
+        d.text((x0 + 40, base), ch.upper(), font=big, fill=(90, 160, 240), anchor='ls')
+        if small:
+            d.text((x0 + 60, y0 + cell_h - 8), ch, font=little, fill=(90, 160, 240), anchor='ls')
+    return im
+
+
 class OldSheetTest(unittest.TestCase):
-    def test_old_alphabet_sheet_is_rejected(self):
-        im = fill(0)
-        d = ImageDraw.Draw(im)
-        for k, (cx, cy) in enumerate(A.bits()):  # метки как у старого листа №1
-            col = A.MAGENTA if k == 0 else A.BG
-            d.rectangle([cx - A.BIT / 2, cy - A.BIT / 2, cx + A.BIT / 2, cy + A.BIT / 2], fill=col)
-        with tempfile.TemporaryDirectory() as t:
-            A.EXTRA = os.path.join(t, 'x.npz')
-            added, errors = A.ingest([as_telegram(im)])
-        self.assertEqual(added, [])
-        self.assertIn('старого алфавита', errors[0])
+    """Глеб заполнил старые листы (3 листа, 6×6). Их больше не отклоняем: большие и маленькие буквы берём,
+    а если Telegram сжал лист — только большие и совет прислать файлом."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        A.EXTRA = os.path.join(self.tmp.name, 'extra.npz')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def sharp(self, im):
+        path = os.path.join(self.tmp.name, f'in_{id(im)}.png')
+        im.save(path)
+        return path
+
+    def test_old_russian_sheet_full_size(self):
+        added, errors = A.ingest([self.sharp(old_sheet(1, 'абвгде'))])
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(added), sorted('АаБбВвГгДдЕе'))
+        z = np.load(A.EXTRA)
+        for ch in 'аве':  # маленькие подогнаны к высоте строчной, большие — к высоте заглавной
+            self.assertAlmostEqual(np.ptp(z[f'{ord(ch)}_0'][:, 1]), A.SHORT_H, delta=0.15, msg=ch)
+        self.assertAlmostEqual(np.ptp(z[f'{ord("В")}_0'][:, 1]), A.DIGIT_H, delta=0.15)
+
+    def test_old_latin_sheet_skips_letters_like_russian(self):
+        added, _ = A.ingest([self.sharp(old_sheet(3, 'abcdefg'))])
+        self.assertEqual(sorted(added), sorted('BbDdFfGg'))  # a c e — как русские, их не берём
+
+    def test_compressed_sheet_gives_capitals_and_tip(self):
+        added, errors = A.ingest([as_telegram(old_sheet(1, 'абвгде'))])
+        self.assertEqual((sorted(added), errors), (sorted('АБВГДЕ'), []))
+        self.assertIn('файлом', A.ingest.tips[0])
+
+    def test_retry_once(self):
+        folder = os.path.join(self.tmp.name, 'alphabet')
+        os.makedirs(folder)
+        old_sheet(1, 'аб').save(os.path.join(folder, 'in_1_file_0.png'))
+        fill(0).save(os.path.join(folder, 'in_2_file_1.png'))  # новый лист: его уже разобрали при получении
+        added, errors = A.retry(folder)
+        self.assertEqual(sorted(added), sorted('АаБб'))
+        self.assertEqual(A.retry(folder), ([], []))  # второй раз ничего
 
 
 class StyleTest(unittest.TestCase):
