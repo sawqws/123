@@ -215,6 +215,12 @@ class BotTest(unittest.TestCase):
         self.assertEqual(len(self.prompts), n)
         self.assertIn("Не доделал", self.last()[0])
 
+    def test_table_is_filled_on_picture(self):
+        p = bot.prompt_for(URL, "", False)
+        self.assertIn("from table import Table", p)
+        self.assertIn("ПРЯМО НА КАРТИНКЕ", p)
+        self.assertIn(f"horo/tmp/{TASK}/draft_files/N_table.jpg", p)
+
     def test_no_personal_info_in_tasks(self):
         p = bot.prompt_for(URL, "", False)
         self.assertIn("ничего личного о Глебе", p)
