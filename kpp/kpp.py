@@ -27,6 +27,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -203,6 +204,7 @@ def setup_bot():
         {"command": "auto", "description": "Автопропуск в Домиленде"},
         {"command": "place", "description": "Адрес"},
         {"command": "login", "description": "Войти через Яндекс"},
+        {"command": "invite", "description": "Дать доступ (сестре, семье)"},
         {"command": "help", "description": "Как пользоваться"},
     ]
     desc = ("Пропуск для такси в ЖК за одно сообщение.\n\n"
@@ -223,10 +225,65 @@ def setup_bot():
 
 # ---------- доступ ----------
 
+def owner_id():
+    return st.get("owner") or min(ALLOWED or {0})
+
+
+def is_owner(uid):
+    """Владелец (и все из KPP_ALLOWED): вход в Домиленд, адрес, автопропуск, приглашения, /fix."""
+    return bool(uid) and (uid in ALLOWED if ALLOWED else uid == st.get("owner"))
+
+
 def allowed(uid):
-    if ALLOWED:
-        return uid in ALLOWED
-    return uid == st.get("owner")
+    """Владелец или гость по приглашению (/invite): гость заказывает пропуска на вход владельца."""
+    return is_owner(uid) or str(uid) in (st.get("guests") or {})
+
+
+# ---------- гости: «👥 Дать доступ» (/invite) — одноразовая ссылка на сутки ----------
+INVITE_TTL = 24 * 3600
+OWNER_ONLY = {"/login", "/logout", "/update", "/place", "/auto", "/invite", "/guests"}
+_me = {}
+
+
+def bot_username():
+    if not _me.get("username"):
+        try:
+            _me.update(tg("getMe").get("result") or {})
+        except Exception:
+            pass
+    return _me.get("username") or ""
+
+
+def make_invite():
+    code = secrets.token_urlsafe(9).replace("-", "x").replace("_", "y")
+    now = time.time()
+    st["invites"] = {c: t for c, t in (st.get("invites") or {}).items() if now - t < INVITE_TTL}
+    st["invites"][code] = now
+    save(st)
+    return f"https://t.me/{bot_username()}?start=inv_{code}"
+
+
+def accept_invite(uid, code, frm):
+    """True — гость добавлен (ссылка одноразовая, живёт сутки)."""
+    t = (st.get("invites") or {}).pop(code, None)
+    if not t or time.time() - t > INVITE_TTL or not uid:
+        return False
+    name = " ".join(x for x in (frm.get("first_name"), frm.get("last_name")) if x) or (frm.get("username") or "гость")
+    st.setdefault("guests", {})[str(uid)] = {"name": name[:60], "added": int(time.time())}
+    save(st)
+    if owner_id():
+        send(owner_id(), fmt("👥 Новый доступ", f"{esc(name)} теперь может заказывать пропуска.",
+                             "Убрать — /guests"))
+    return True
+
+
+def guests_view():
+    g = st.get("guests") or {}
+    if not g:
+        return fmt("👥 Доступ", "Пока только у тебя.", "Дать доступ — /invite"), []
+    rows = [[btn(f"✕ {v.get('name', k)}"[:24], f"gdel|{k}")] for k, v in g.items()]
+    return fmt("👥 Доступ", "\n".join(f"• {esc(v.get('name', k))}" for k, v in g.items()),
+               "Заказывают пропуска на твой вход. Нажми, чтобы убрать."), rows
 
 
 def claim(uid):
@@ -672,12 +729,30 @@ def on_message(msg):
     if msg["chat"].get("type") != "private":
         return
     text = (msg.get("text") or msg.get("caption") or "").strip()
+    if text.startswith("/start inv_") and not allowed(uid):  # гость по ссылке-приглашению
+        if accept_invite(uid, text.split("inv_", 1)[1].strip(), frm):
+            send(chat, home_text(f"Привет, {esc(frm.get('first_name') or '')}! ") if st.get("jwt") else
+                 fmt("👋 Доступ есть", "Вход в Домиленд пока не настроен — владелец скоро войдёт."), menu_buttons())
+        else:
+            send(chat, "🔒 Ссылка устарела или уже использована — попроси новую.")
+        return
     if text.startswith("/start"):
         claim(uid)
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
         return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+    if (cmd in OWNER_ONLY or (not cmd and dl.extract_token(text))) and not is_owner(uid):
+        send(chat, fail("Это может только владелец бота. Пропуск — просто пришли номер машины."))
+        return
+    if cmd == "/invite":
+        link = make_invite()
+        send(chat, fmt("👥 Дать доступ", f"Перешли эту ссылку — по ней можно один раз войти, она живёт сутки:\n{esc(link)}",
+                       "Гость заказывает пропуска на твой вход; вход, адрес и настройки меняешь только ты."))
+        return
+    if cmd == "/guests":
+        send(chat, *guests_view())
+        return
     if cmd == "/start" and not ui_mode():
         ask_mode(chat)  # первый раз: сначала выбор, чат или приложение
     elif cmd == "/start":
@@ -744,8 +819,16 @@ def on_callback(cq):
     if not allowed(uid) or not chat:
         tg("answerCallbackQuery", callback_query_id=cq["id"])
         return
+    if (data[0] in ("pl", "ap", "gdel") or data[:2] in (["m", "place"], ["m", "auto"])) and not is_owner(uid):
+        tg("answerCallbackQuery", callback_query_id=cq["id"], text="Это может только владелец бота", show_alert=True)
+        return
     try:
-        if data[0] == "x":  # отменить пропуск
+        if data[0] == "gdel":  # убрать гостя
+            (st.get("guests") or {}).pop(data[1], None)
+            save(st)
+            edit(chat, mid, *guests_view())
+            note = "Убрал"
+        elif data[0] == "x":  # отменить пропуск
             call(lambda c: c.cancel(data[1]))
             plate = next((k for k, v in (st.get("recent") or {}).items() if str(v.get("id")) == data[1]), "")
             if plate:
@@ -930,7 +1013,9 @@ def api_photo(data, ctype=""):
 
 
 def api_post(chat, path, body):
-    """POST /api/… от владельца. -> (код, ответ)."""
+    """POST /api/… от владельца или гостя (chat — его id). -> (код, ответ)."""
+    if path in ("/api/login", "/api/place") and not is_owner(chat):
+        return 403, {"error": "Вход и адрес меняет только владелец бота"}
     if path == "/api/order":
         return api_order(chat, body)
     if path == "/api/cancel":
@@ -1148,7 +1233,7 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     print("КПП запущен")
     global SUP
-    SUP = sup = support.Support(TOKEN, "КПП", folders=["kpp"], pm2="kpp-bot", allowed=allowed,
+    SUP = sup = support.Support(TOKEN, "КПП", folders=["kpp"], pm2="kpp-bot", allowed=is_owner,
                                 tests=["python3 kpp/test_kpp.py"])
     while True:
         try:
