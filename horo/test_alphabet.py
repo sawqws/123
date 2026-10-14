@@ -160,8 +160,8 @@ def old_sheet(code, chars, small=True):
 
 
 class OldSheetTest(unittest.TestCase):
-    """Глеб заполнил старые листы (3 листа, 6×6). Их больше не отклоняем: большие и маленькие буквы берём,
-    а если Telegram сжал лист — только большие и совет прислать файлом."""
+    """Глеб заполнил старые листы (3 листа, 6×6). В полном размере берём большие и маленькие буквы,
+    сжатые Telegram — не берём (буквы выходят кривыми)."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -188,10 +188,12 @@ class OldSheetTest(unittest.TestCase):
         added, _ = A.ingest([self.sharp(old_sheet(3, 'abcdefg'))])
         self.assertEqual(sorted(added), sorted('BbDdFfGg'))  # a c e — как русские, их не берём
 
-    def test_compressed_sheet_gives_capitals_and_tip(self):
+    def test_compressed_old_sheet_is_not_taken(self):
+        # сжатый Telegram старый лист (889 px) даёт кривые буквы — не берём, просим новые листы файлами
         added, errors = A.ingest([as_telegram(old_sheet(1, 'абвгде'))])
-        self.assertEqual((sorted(added), errors), (sorted('АБВГДЕ'), []))
-        self.assertIn('файлом', A.ingest.tips[0])
+        self.assertEqual(added, [])
+        self.assertIn('новые листы файлами', errors[0])
+        self.assertFalse(os.path.exists(A.EXTRA))
 
     def test_retry_once(self):
         folder = os.path.join(self.tmp.name, 'alphabet')

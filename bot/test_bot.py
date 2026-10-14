@@ -324,6 +324,14 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot, "GLEB_EXTRA", __file__):
             self.assertNotIn("НУЖЕН_АЛФАВИТ", bot.prompt_for(URL, "", False))
 
+    def test_rework_prompt(self):
+        # доработка: прошлые файлы ответа, только то, что просит учитель, почерком прямо на скриншоте задания
+        p = bot.prompt_for(URL, "", False)
+        self.assertIn("reworking", p)
+        self.assertIn(f"node horo/shot.js {URL} horo/tmp/{TASK}/shot.png", p)
+        self.assertIn("prev*.jpg", p)
+        self.assertIn("ТОЛЬКО то, что просит", p)
+
     def test_errors_are_short(self):
         trace = "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x\n    at open (/root/horo/horo/lib.js:40:11)"
         self.assertEqual(bot.explain(trace), "⚠️ Не получилось: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x")

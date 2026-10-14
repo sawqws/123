@@ -268,12 +268,15 @@ def ingest(paths):
             errors.append(f'{os.path.basename(path)}: {e}')
             continue
         m = ink(sheet)
-        if page in OLD_LETTERS:
-            sharp = img.width >= SHARP
-            glyphs = old_letters(m, page, small=sharp)
-            if not sharp and 'файлом' not in ' '.join(ingest.tips):
-                ingest.tips.append('большие буквы взял, а маленькие Telegram сжал до пятен — пришли эти же листы '
-                                   'файлом (📎 → Файл), тогда возьму и маленькие')
+        if page in OLD_LETTERS or page == 'old-digits':
+            # старые листы клетки мельче: сжатый Telegram лист даёт кривые буквы (9 как «?», B как «!») —
+            # они бы испортили и хорошие буквы банка. Такой лист не берём совсем
+            if img.width < SHARP:
+                errors.append(f'{os.path.basename(path)}: лист старого алфавита сжат Telegram — буквы на нём слишком '
+                              'мелкие, хорошо их не разобрать. Нажми «✍️ Почерк» — пришлю новые листы файлами '
+                              'в полном размере (или пришли этот лист файлом, если он у тебя крупнее)')
+                continue
+            glyphs = old_letters(m, page) if page in OLD_LETTERS else cells(m, page)
         else:
             glyphs = cells(m, page)
         for ch, pts, w in normalize(glyphs):
@@ -305,13 +308,13 @@ def cells(m, page):
     return out
 
 
-SHARP = 1300  # ширина присланной картинки, с которой маленькие буквы старого листа ещё читаются
+SHARP = 1300  # старый лист уже этой ширины (сжат Telegram до 889×1280) не берём: буквы выходят кривыми
 
 
 def old_letters(m, page, small=True):
     """Старый лист букв: в клетке две буквы — большая на линии строки и маленькая на нижней рамке.
     Делим по пятнам: что выше линии (+25 px) — большая, ниже — маленькая.
-    small=False: маленькие не берём (Telegram сжал лист — от них остались пятна в 15 px)."""
+    small=False: маленькие не берём."""
     seq = OLD_LETTERS[page]
     keep = set(PAGES[2][1].lower()) if page == 'old-lat' else set(seq)
     cell_h = (H - TOP - BOTTOM) / 6
