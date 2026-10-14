@@ -439,6 +439,7 @@ def need_login(chat, msg_id=None):
 # ---------- вход и адрес ----------
 
 def do_login(chat, token):
+    """Вход по Яндекс-токену. -> None, если вошли, иначе (код, текст ошибки) — для приложения."""
     msg = send(chat, "⏳ <b>Вхожу в Домиленд…</b>")["result"]["message_id"]
     c = dl.Client(token)
     try:
@@ -446,11 +447,12 @@ def do_login(chat, token):
         me = c.me()
         places = c.places()
     except dl.AuthError:
-        edit(chat, msg, fail("Домиленд не принял вход — попробуй ещё раз."), login_buttons())
-        return
+        edit(chat, msg, fail("Домиленд не принял вход — войди в Яндекс ещё раз и пришли новый адрес."),
+             login_buttons())
+        return 401, "Домиленд не принял вход — войди в Яндекс ещё раз и вставь новый адрес"
     except dl.Error as e:
-        edit(chat, msg, fail(f"Домиленд не ответил: {esc(e)}"))
-        return
+        edit(chat, msg, fail(f"Домиленд не ответил: {esc(str(e)[:200])}\nПришли тот же адрес ещё раз чуть позже."))
+        return 502, f"Домиленд не ответил: {str(e)[:200]} — попробуй ещё раз"
     st.update(yandex_token=token, jwt=c.jwt, name=me.get("shortName") or me.get("fullName") or "")
     st["places"] = [{"id": p.get("id"), "building": p.get("buildingId"),
                      "title": dl.no_flat(p.get("address") or p.get("title") or p.get("buildingTitle") or str(p.get("id"))),
@@ -458,6 +460,28 @@ def do_login(chat, token):
     save(st)
     edit(chat, msg, fmt("✅ Вход выполнен", note=f"Аккаунт: {esc(st['name'])}" if st.get("name") else ""))
     choose_place(chat)
+
+
+def short_labels(titles, n=22):
+    """Подписи кнопок ≤ n символов: общее начало адресов («ЖК «Домиленд+», корпус») убираем — оно уходит
+    в подпись сообщения; длинное — без первых слов (важен конец: дом, корпус), в крайнем случае с «…».
+    Полные адреса — в тексте сообщения. -> (подписи, общее начало)."""
+    words = [str(t).split() for t in titles]
+    common = 0
+    if len(words) > 1:
+        while all(len(w) > common + 1 for w in words) and len({w[common] for w in words}) == 1:
+            common += 1
+        cut = [i + 1 for i in range(common) if words[0][i].endswith(",")]
+        common = cut[-1] if cut else common  # по запятой: «корпус 2» лучше, чем просто «2»
+    out = []
+    for w, t in zip(words, titles):
+        w = w[common:] or [str(t)]
+        while len(" ".join(w)) > n and len(w) > 1:  # отличается обычно конец адреса (дом, корпус) — режем начало
+            w = w[1:]
+        o = " ".join(w)
+        out.append(o if len(o) <= n else o[:n - 1].rstrip(" ,") + "…")
+    return (out,
+            " ".join(words[0][:common]).rstrip(",") if words else "")
 
 
 def choose_place(chat, msg_id=None):
@@ -468,11 +492,13 @@ def choose_place(chat, msg_id=None):
     flats = [p for p in places if p["flat"]] or places
     if len(flats) == 1 and not msg_id:
         return set_place(chat, flats[0])
-    rows = [[btn(("✓ " if p["id"] == st.get("place_id") else "") + p["title"][:60], f"pl|{p['id']}",
-                 "primary" if p["id"] == st.get("place_id") else None)] for p in places]
+    labels, common = short_labels([p["title"] for p in places])
+    rows = [[btn(("✓ " if p["id"] == st.get("place_id") else "") + label, f"pl|{p['id']}",
+                 "primary" if p["id"] == st.get("place_id") else None)] for p, label in zip(places, labels)]
     if st.get("place_id"):
         rows.append([btn("‹ Назад", "m|home")])
-    text = fmt("📍 Куда заказывать пропуск?")
+    text = fmt("📍 Куда заказывать пропуск?", "\n".join(f"• {esc(p['title'])}" for p in places),
+               f"Все адреса: {esc(common)}" if common else "")
     return edit(chat, msg_id, text, rows) if msg_id else send(chat, text, rows)
 
 
@@ -580,8 +606,9 @@ def autopass_view():
             body.append(f"<b>{esc(p.get('title') or '')}</b>: {esc(p['description'])}")
     note = "" if places else "Для твоих адресов Домиленд эту настройку не показывает."
     text = fmt(f"🤖 {esc(data.get('screenTitle') or 'Автопропуск')}", "\n\n".join(body), note)
-    rows = [[btn(("🟢 " if p.get("isActive") else "⚪️ ") + str(p.get("title") or p.get("id"))[:50],
-                 f"ap|{p.get('id')}")] for p in places]
+    labels, _ = short_labels([str(p.get("title") or p.get("id")) for p in places], 20)
+    rows = [[btn(("🟢 " if p.get("isActive") else "⚪️ ") + label, f"ap|{p.get('id')}")]
+            for p, label in zip(places, labels)]
     return text, rows + [[btn("‹ Назад", "m|home")]]
 
 
@@ -631,14 +658,19 @@ def spoken_plate(text):
         return ask_claude(prompt, tmp)
 
 
-def spawn(fn, *args):
-    """Медленное (речь, картинки, видео) — в отдельном потоке, чтобы бот не замирал."""
+def spawn(fn, chat, *args):
+    """Медленное (речь, картинки, видео) — в отдельном потоке, чтобы бот не замирал.
+    Упало — человек узнаёт об этом, а не смотрит вечно на «⏳ Ищу номер…»."""
     def run():
         try:
-            fn(*args)
+            fn(chat, *args)
         except Exception as e:
             print("media:", e)
             traceback.print_exc()
+            try:
+                send(chat, fail("Не получилось разобрать — пришли номер текстом: <code>А123ВС777</code>"))
+            except Exception:
+                pass
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -796,8 +828,7 @@ def on_message(msg):
             tg("deleteMessage", chat_id=chat, message_id=msg["message_id"])
         except Exception:
             pass
-        do_login(chat, dl.extract_token(text))
-        if st.get("pending") and st.get("place_id"):
+        if not do_login(chat, dl.extract_token(text)) and st.get("pending") and st.get("place_id"):
             order(chat, st.pop("pending"))
     elif dl.plates(text):
         for plate in dl.plates(text)[:3]:
@@ -810,18 +841,40 @@ def on_message(msg):
         send(chat, fail("Не вижу номера — пришли так: <code>А123ВС777</code>, скриншотом или голосом"))
 
 
+def answer_cb(cq, text="", alert=False):
+    """Ответ на нажатие (убирает «часики» у кнопки); сбой Telegram здесь не должен ронять обработку."""
+    try:
+        tg("answerCallbackQuery", callback_query_id=cq["id"], text=text[:190], show_alert=alert)
+    except Exception as e:
+        print("answerCallbackQuery:", e)
+
+
+def drop_buttons(chat, mid):
+    """Убрать кнопки у сообщения — чтобы второе нажатие «Заказать ещё раз» не заказало второй пропуск."""
+    try:
+        tg("editMessageReplyMarkup", chat_id=chat, message_id=mid, reply_markup={"inline_keyboard": []})
+    except Exception as e:
+        print("drop buttons:", e)
+
+
+SLOW = {"again", "rp", "x", "ap"}  # ходят в Домиленд: отвечаем на нажатие сразу, результат — сообщением
+
+
 def on_callback(cq):
     uid = cq["from"]["id"]
     msg = cq.get("message") or {}
     chat, mid = msg.get("chat", {}).get("id"), msg.get("message_id")
     data = (cq.get("data") or "").split("|")
-    note = ""
+    note, alert, answered = "", False, False
     if not allowed(uid) or not chat:
-        tg("answerCallbackQuery", callback_query_id=cq["id"])
+        answer_cb(cq, "🔒 Это личный бот." if chat else "")
         return
     if (data[0] in ("pl", "ap", "gdel") or data[:2] in (["m", "place"], ["m", "auto"])) and not is_owner(uid):
-        tg("answerCallbackQuery", callback_query_id=cq["id"], text="Это может только владелец бота", show_alert=True)
+        answer_cb(cq, "Это может только владелец бота", True)
         return
+    if data[0] in SLOW and len(data) > 1:
+        answer_cb(cq, {"again": "⏳ Заказываю…", "rp": "⏳ Заказываю…", "x": "⏳ Отменяю…"}.get(data[0], "⏳ Секунду…"))
+        answered = True
     try:
         if data[0] == "gdel":  # убрать гостя
             (st.get("guests") or {}).pop(data[1], None)
@@ -837,20 +890,22 @@ def on_callback(cq):
                 edit(chat, mid, fmt("↩️ Пропуск отменён", pass_body(plate)), [])
             else:
                 edit(chat, mid, *passes_view())
-            note = "Отменил"
-        elif data[0] == "again":
+        elif data[0] == "again":  # «Заказать ещё раз» / «Повторить» — кнопка одноразовая
+            drop_buttons(chat, mid)
             order(chat, data[1], force=True)
-        elif data[0] == "rp":  # повторить последний
+        elif data[0] == "rp":  # повторить последний (тот же номер недавно — «уже заказан», не дубль)
             order(chat, data[1])
         elif data[0] == "pl":
             p = next((p for p in st.get("places") or [] if str(p["id"]) == data[1]), None)
             if p:
                 set_place(chat, p, mid)
                 note = "Адрес выбран"
+            else:
+                choose_place(chat, mid)
+                note, alert = "Этого адреса уже нет — выбери из списка", True
         elif data[0] == "ap":
             toggle_autopass(data[1])
             edit(chat, mid, *autopass_view())
-            note = "Сохранил"
         elif data[0].startswith("mode"):  # «⚙️ Режим» → карточка на месте; mode:chat / mode:app — выбор
             key = data[0].partition(":")[2]
             if key in MODES:
@@ -869,13 +924,37 @@ def on_callback(cq):
                 edit(chat, mid, *autopass_view())
             else:
                 edit(chat, mid, home_text(), menu_buttons())
+        else:  # старая кнопка от прошлой версии бота
+            note = "Кнопка устарела — /start"
     except dl.AuthError:
         send(chat, fail("Вход в Домиленд устарел — войди ещё раз."), login_buttons())
+        note = "Нужно войти заново"
+    except dl.Error as e:
+        text = fail(f"Домиленд не ответил: {esc(str(e)[:200])}\nПопробуй ещё раз через минуту.")
+        if answered:
+            send(chat, text)
+        note, alert = "⚠️ Домиленд не ответил — попробуй ещё раз", True
+    except IndexError:  # обрезанные данные кнопки
+        note = "Кнопка устарела — /start"
     except Exception as e:
         print("callback:", e)
         traceback.print_exc()
-        note = "Не получилось"
-    tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
+        if answered:
+            send(chat, fail("Не получилось — попробуй ещё раз или /start"))
+        note, alert = "⚠️ Не получилось — попробуй ещё раз", True
+    if not answered:
+        answer_cb(cq, note, alert)
+
+
+def oops(u):
+    """Необработанная ошибка в обработчике: сказать человеку, а не молчать."""
+    try:
+        if u.get("callback_query"):
+            answer_cb(u["callback_query"], "⚠️ Не получилось — попробуй ещё раз", True)
+        elif (u.get("message") or {}).get("chat", {}).get("type") == "private":
+            send(u["message"]["chat"]["id"], fail("Что-то пошло не так — попробуй ещё раз или /start"))
+    except Exception as e:
+        print("oops:", e)
 
 
 def update(chat):
@@ -1026,9 +1105,9 @@ def api_post(chat, path, body):
         token = dl.extract_token(str(body.get("text") or ""))
         if not token:
             return 400, {"error": "В адресе нет токена — скопируй его целиком после входа"}
-        do_login(chat, token)
-        if st.get("yandex_token") != token:
-            return 401, {"error": "Домиленд не принял вход — попробуй ещё раз", "login": True}
+        bad = do_login(chat, token)
+        if bad:
+            return bad[0], {"error": bad[1], "login": True}
         return 200, app_state()
     if path == "/api/place":
         p = next((p for p in st.get("places") or [] if str(p["id"]) == str(body.get("id"))), None)
@@ -1257,6 +1336,7 @@ def main():
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()
+                oops(u)
 
 
 if __name__ == "__main__":
