@@ -75,7 +75,8 @@ def main(argv=None):
     ap.add_argument("--max", type=int, default=80)
     ap.add_argument("--wait", type=float, default=7)
     ap.add_argument("--start", default="/start")
-    ap.add_argument("--mode", default="💬 В чате", help="что выбрать в карточке «Как удобнее?»")
+    ap.add_argument("--mode", default="", help="что выбрать в карточке «Как удобнее?» (меняет настройку человека — "
+                                               "по умолчанию не выбирается)")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     log, seen, clicks = [], set(), [0]
@@ -137,7 +138,7 @@ def main(argv=None):
     t0 = time.time()
     res = press(a.bot, a.wait, text=a.start)
     record([a.start], res)
-    mode = next((s for s in screens(res) if any(b["text"] == a.mode for b in s["buttons"])), None)
+    mode = a.mode and next((s for s in screens(res) if any(b["text"] == a.mode for b in s["buttons"])), None)
     if mode:  # карточка «Как удобнее?» — проверяем в режиме чата: там все кнопки в чате
         record([a.start, a.mode], press(a.bot, a.wait, click=a.mode, msg=str(mode["msg"]), force=True))
         res = press(a.bot, a.wait, text=a.start)
