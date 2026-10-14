@@ -1199,8 +1199,8 @@ def bootstrap_remote():
     if os.environ.get("HUB_REMOTE") == "1" and not setting("key"):
         setting("key", token_key())
         setting("remote", True)
-        tell("🤖 Вход для Claude включён — он сам поставит и проверит ботов. О каждой команде напишу сюда. "
-             "Выключить: /claude → «⛔ Выключить».")
+        tell("🤖 Вход для Claude включён — он сам поставит и проверит ботов. Его команды не присылаю, "
+             "список — /claude → «📜 Что делал». Выключить: /claude → «⛔ Выключить».")
 
 
 def check_key(header):
@@ -1219,13 +1219,25 @@ def tell(text):
         print("tell:", e)
 
 
+CMDLOG = []  # что делал Claude: (время, что, зачем) — последние 50, смотреть в /claude → «📜 Что делал»
+
+
+def log_cmd(what, why=""):
+    """Команда Claude: в журнал; в чат — только если владелец включил «🔔 Писать о командах» (Глеб 14.10:
+    сообщения о каждой команде мешают)."""
+    CMDLOG.append((time.time(), what, why))
+    del CMDLOG[:-50]
+    if setting("remote_notify"):
+        tell("🤖 <b>Claude выполняет</b>" + (f" — {esc(why[:200])}" if why else "") + f"\n<pre>{esc(what[:600])}</pre>")
+
+
 def run_job(cmd, timeout, why=""):
     """Команда в bash в папке репозитория; вывод копится в задаче, Claude забирает его по id."""
     jid = secrets.token_hex(4)
     job = jobs[jid] = {"id": jid, "cmd": cmd, "done": False, "code": None, "out": "", "started": time.time()}
     for k in sorted(jobs, key=lambda k: jobs[k]["started"])[:-50]:
         jobs.pop(k, None)
-    tell("🤖 <b>Claude выполняет</b>" + (f" — {esc(why[:200])}" if why else "") + f"\n<pre>{esc(cmd[:600])}</pre>")
+    log_cmd(cmd, why)
 
     def work():
         try:
@@ -1243,7 +1255,7 @@ def run_job(cmd, timeout, why=""):
             job["out"] += f"\n{e}"
             job["code"] = -1
         job["done"] = True
-        if job["code"] != 0:
+        if job["code"] != 0 and setting("remote_notify"):
             tell(f"🤖 Команда Claude завершилась с кодом {job['code']}")
     threading.Thread(target=work, daemon=True).start()
     return job
@@ -1258,8 +1270,7 @@ def remote_api(action, body):
         return {"code": code, "out": out[-100000:]}
     if action == "restart":
         code, out = sh("pm2", "restart", str(body["name"]), timeout=60)
-        tell(f"🤖 Claude перезапустил {esc(label(body['name']))}"
-             + (f": {esc(str(body['why'])[:300])}" if body.get("why") else ""))
+        log_cmd(f"перезапуск {label(body['name'])}", str(body.get("why") or ""))
         return {"code": code, "out": out[-5000:]}
     if action == "exec":
         cmd = str(body.get("cmd") or "").strip()
@@ -1280,7 +1291,7 @@ def remote_api(action, body):
         tell("🤖 <b>Claude:</b> " + esc(text))
         return {"ok": True}
     if action == "update":
-        tell("🤖 Claude обновляет всех ботов")
+        log_cmd("обновить всех ботов", str(body.get("why") or ""))
         threading.Thread(target=lambda: (time.sleep(1), update_all(owner())), daemon=True).start()
         return {"ok": True, "note": "Главный перезапустится в конце"}
     raise KeyError("нет такого действия")
@@ -1355,16 +1366,26 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": str(e)})
 
+    def length(self):
+        """Content-Length; мусор или меньше нуля — ValueError (ответ 400): иначе read(-1) ждал бы конца соединения."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if n < 0:
+            raise ValueError("bad length")
+        return n
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         if path.startswith("/app/agent/"):
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = self.length()
+            except ValueError:
+                return self.reply(400, {"error": "bad length"})
             if n > 300_000:
                 return self.reply(413, {"error": "слишком большой запрос"})
             return self.proxy(path[len("/app/agent"):], self.rfile.read(n) if n else b"")
         if path == "/app/api/support":  # 🛠 из приложения, со скриншотом
             try:
-                n = int(self.headers.get("Content-Length") or 0)
+                n = self.length()
                 if n > 16_000_000:
                     return self.reply(413, {"error": "слишком большой скриншот"})
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
@@ -1373,7 +1394,7 @@ class Web(BaseHTTPRequestHandler):
             return self.app_api(app_support, body if isinstance(body, dict) else {})
         if path == "/app/api/mode":  # {mode: chat|app} — то же, что action=mode
             try:
-                n = int(self.headers.get("Content-Length") or 0)
+                n = self.length()
                 body = json.loads(self.rfile.read(min(n, 10_000)) or b"{}") if n else {}
             except ValueError:
                 return self.reply(400, {"error": "bad json"})
@@ -1381,7 +1402,7 @@ class Web(BaseHTTPRequestHandler):
             return self.app_api(app_mode, body)
         if path == "/app/api/action":  # мини-приложение: вход по подписи Telegram
             try:
-                n = int(self.headers.get("Content-Length") or 0)
+                n = self.length()
                 body = json.loads(self.rfile.read(min(n, 100_000)) or b"{}") if n else {}
             except ValueError:
                 return self.reply(400, {"error": "bad json"})
@@ -1400,7 +1421,7 @@ class Web(BaseHTTPRequestHandler):
                      "Если это не ты, нажми «♻️ Новый ключ» в /claude.")
             return self.reply(401, {"error": "неверный ключ"})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
+            n = self.length()
             body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})
@@ -1424,12 +1445,15 @@ def claude_card(chat, mid):
     on = remote_on()
     url = hub_url()
     lines = ["Claude из облачной сессии сам смотрит ботов и логи, перезапускает, обновляет и выполняет "
-             "команды на сервере. О каждой команде я пишу сюда.", "",
+             "команды на сервере. " + ("О каждой команде пишу сюда." if setting("remote_notify")
+                                       else "Команды не присылаю — список в «📜 Что делал»."), "",
              "🟢 Включён" if on else "⚪️ Выключен"]
     if url:
         lines.append(f"Адрес: <code>{esc(url)}</code>")
     if on:
-        btns = [[b("🔑 Показать ключ", "cl|show"), b("♻️ Новый ключ", "cl|new")], [b("⛔ Выключить", "cl|off", "danger")]]
+        btns = [[b("📜 Что делал", "cl|log"),
+                 b("🔕 Не писать" if setting("remote_notify") else "🔔 Писать о командах", "cl|ntf")],
+                [b("🔑 Показать ключ", "cl|show"), b("♻️ Новый ключ", "cl|new")], [b("⛔ Выключить", "cl|off", "danger")]]
     else:
         btns = [[b("🔑 Включить", "cl|on", "success")]]
     btns.append([b("‹ Назад", "more")])
@@ -1456,6 +1480,14 @@ def on_claude(chat, mid, arg):
         claude_card(chat, mid)
     elif arg == "show":
         show_key(chat)
+    elif arg == "ntf":
+        setting("remote_notify", not setting("remote_notify"))
+        claude_card(chat, mid)
+    elif arg == "log":
+        rows = [f"{datetime.datetime.fromtimestamp(t, TZ):%d.%m %H:%M} · {esc((why or what)[:90])}"
+                for t, what, why in CMDLOG[-15:]]
+        show(chat, mid, card("📜 <b>Что делал Claude</b>", rows or ["Пока ничего (с последнего перезапуска Главного)."]),
+             [[b("‹ Назад", "cl|card")]])
     else:
         claude_card(chat, mid)
 

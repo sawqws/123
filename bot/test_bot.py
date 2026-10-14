@@ -328,8 +328,11 @@ class BotTest(unittest.TestCase):
             self.assertNotIn("заполни алфавит", bot.prompt_for(URL, "", False))
 
     def test_rework_prompt(self):
-        # доработка: прошлые файлы ответа, только то, что просит учитель, почерком прямо на скриншоте задания
+        # доработка: прошлые файлы ответа, только то, что просит учитель; скрин — только ответы, решение — на листе
         p = bot.prompt_for(URL, "", False)
+        self.assertIn(f"Work('horo/tmp/{TASK}')", p)
+        self.assertIn("справа от каждого примера только ответ", p)
+        self.assertNotIn("расширь картинку", p)
         self.assertIn("reworking", p)
         self.assertIn(f"node horo/shot.js {URL} horo/tmp/{TASK}/shot.png", p)
         self.assertIn("prev*.jpg", p)

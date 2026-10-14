@@ -112,7 +112,8 @@ def seeded(path=None, days=40):
     db.save_token(U, "acc", "ref", time.time() + 3600)
     fw = FakeWhoop(fake_whoop(days))
     with mock.patch.object(whoop.Client, "get", fw.get):
-        whoop.sync(db, U, "cid", "sec", days=days + 2)
+        # sync берёт дни от настоящего «сегодня», а записи — до TODAY: иначе тест падает уже через пару дней
+        whoop.sync(db, U, "cid", "sec", days=days + 2 + max(0, (datetime.date.today() - TODAY).days))
     return db, fw
 
 
@@ -1089,6 +1090,8 @@ class BotTest(unittest.TestCase):
         p = self.db.user(U)["profile"]
         self.assertEqual((p["weight"], p["height"], p["sport"], p["goal"], p["sex"], p["age"]), (61.5, 172, "бокс", "mass", "m", 14))
         self.assertIn("Профиль обновлён", self.texts()[-1])
+        self.assertIn("Рост, см — 172\n", self.texts()[-1])  # число без «.0»
+        self.assertIn("Вес, кг — 61,5", self.texts()[-1])
         self.assertIsNone(coach.awaiting(U))
         coach.on_message(self.msg("/profile утро выкл"))
         self.assertEqual(self.db.user(U)["profile"]["morning"], "off")

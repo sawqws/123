@@ -300,9 +300,9 @@ def _compose_pil(c1, c2, ink, mask):
     from PIL import Image, ImageChops, ImageFilter
     img = _background(c1, c2).convert("RGBA")
     # мягкая тень знака (тем же цветом, очень прозрачно) и светлый край сверху — как тиснение на бумаге
-    shadow = ImageChops.offset(mask, 0, 9).filter(ImageFilter.GaussianBlur(12)).point(lambda v: v * 0.16)
+    shadow = ImageChops.offset(mask, 0, 9).filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.16))
     img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, v) for v in ink] + [shadow]))
-    light = ImageChops.offset(mask, 0, -3).point(lambda v: v * 0.55)
+    light = ImageChops.offset(mask, 0, -3).point(lambda v: int(v * 0.55))
     img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, 255)] * 3 + [light]))
     img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, v) for v in ink] + [mask]))
     return img.convert("RGB")

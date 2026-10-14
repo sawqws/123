@@ -76,9 +76,9 @@ def api_add(r):
 
 @bot.api("delete")
 def api_delete(r):
-    i = int(r.body.get("index", -1))
+    i = r.body.get("index")
     items = notes()[::-1]
-    if not 0 <= i < len(items):
+    if not isinstance(i, int) or not 0 <= i < len(items):  # мусор из приложения — понятная ошибка, а не 500
         raise kit.Fail("Такой заметки нет")
     items.pop(i)
     bot.db.set("notes", items[::-1])

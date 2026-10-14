@@ -552,7 +552,7 @@ class Agent:
         if len(js) > len(shown):
             lines.append(f"<i>…и ещё {len(js) - len(shown)} — полный список в приложении</i>")
         dels = [Button.inline(f"🗑 {i}", f"j:ask:{j['id']}") for i, j in enumerate(shown, 1)]
-        return card("⏰ Расписание", "\n\n".join(lines), "чтобы добавить — просто напишите мне"), [dels[i:i + 4] for i in range(0, len(dels), 4)]
+        return card("⏰ Расписание", "\n\n".join(lines), "чтобы добавить — просто напишите мне"), [dels[i:i + 3] for i in range(0, len(dels), 3)]  # ≤ 3 в ряд
 
     async def on_jobs(self, ev, arg):
         op, _, jid = arg.partition(":")
@@ -1258,9 +1258,10 @@ class Agent:
         else:
             body += "\n\n👉 Чтобы я вёл ваш Telegram, подключите аккаунт — это минута. На вопросы отвечаю и без этого."
             buttons = [[Button.inline("🔑 Войти в аккаунт", "login:", style="primary")]]
+        if self.via_hub:  # внутри Главного — без картинки Секретаря, просто карточка
+            await self.say(body, buttons=buttons)
+            return
         try:
-            if self.via_hub:  # внутри Главного — без картинки Секретаря, просто карточка
-                raise RuntimeError("без баннера")
             await self.bot.send_file(self.owner(), BANNER, caption=body, parse_mode="html", buttons=buttons)
         except Exception as e:  # картинка не ушла — шлём текстом
             print("welcome:", repr(e), flush=True)
