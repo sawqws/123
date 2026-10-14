@@ -113,12 +113,13 @@ BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
 BTN_PREP = "📖 Подготовка"
 BTN_MODE = "⚙️ Режим"
+BTN_DELAY_ON, BTN_DELAY_OFF = "⏳ Задержка: вкл", "⏳ Задержка: выкл"  # сдача «как человек» — надпись по состоянию
 ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением)
     "📋 Что надо сделать": BTN_LIST, "⚡ Сдать все автотесты": BTN_ALL, "💬 Комментарии учителя": BTN_COMM,
     "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
 BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
-           BTN_APP, BTN_MORE, BTN_PREP, BTN_MODE}
+           BTN_APP, BTN_MORE, BTN_PREP, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF}
 
 
 def menu_kb():
@@ -131,14 +132,14 @@ def menu_kb():
         rows = [
             [{"text": "📱 Приложение", "web_app": {"url": APP_URL + "/"}, "style": "primary"}],
             [b(BTN_DO), b(BTN_LIST), b(BTN_PREP)],
-            [b(BTN_MODE), b(BTN_MORE)],
+            [b(BTN_MODE), b(BTN_MORE)],  # задержка в режиме приложения — в его настройках
         ]
     else:
         rows = [
             [b(BTN_DO, "primary"), b(BTN_SHOW)],
             [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
             [b(BTN_PREP), b(BTN_ALL), b(BTN_HAND)],  # почерк — на виду (Глеб искал его, когда он был только в «Ещё»)
-            [b(BTN_MODE), b(BTN_MORE)],
+            [b(BTN_MODE), b(btn_delay()), b(BTN_MORE)],  # задержка — отдельной кнопкой, не только /delay
         ]
     return json.dumps({
         "keyboard": rows,
@@ -909,6 +910,7 @@ def run_task(chat, url, text, show=False, mid=None):
             send(chat, card("Это задание уже решаю", note="Результат придёт сюда", icon="⏳"), raw_html=True)
             return
         running.add(task)
+    mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show)})
     try:
         if not lock.acquire(blocking=False):
             react(chat, mid, "🤔")
@@ -919,6 +921,41 @@ def run_task(chat, url, text, show=False, mid=None):
     finally:
         with running_lock:
             running.discard(task)
+        mark_active(task, None)
+
+
+def mark_active(task, info):
+    """Задания в работе — в настройках: перезапуск бота (/update, «Обновить всех») их не теряет."""
+    with settings_lock:
+        s = load_settings()
+        act = s.setdefault("active", {})
+        if info:
+            info["tries"] = act.get(task, {}).get("tries", 0)
+            act[task] = info
+        else:
+            act.pop(task, None)
+        save_settings(s)
+
+
+def resume_active():
+    """После перезапуска: задания, которые решались, начать заново (не больше двух раз подряд)."""
+    with settings_lock:
+        s = load_settings()
+        act = s.pop("active", None) or {}
+        save_settings(s)
+    for task, a in act.items():
+        title = esc(drafts.task_info(task)[1] or "Задание")
+        if a.get("tries", 0) >= 2:
+            send(a["chat"], card("Не доделал", note=f"{title} — два перезапуска подряд. Пришли ссылку ещё раз", icon="⚠️"),
+                 menu=True, raw_html=True)
+            continue
+        send(a["chat"], card("Продолжаю после перезапуска", note=f"{title} — решаю заново", icon="🔄"), raw_html=True)
+        with settings_lock:  # счётчик попыток — чтобы задание, роняющее бота, не крутилось вечно
+            s = load_settings()
+            s.setdefault("active", {})[task] = {**a, "tries": a.get("tries", 0) + 1}
+            save_settings(s)
+        threading.Thread(target=run_task, args=(a["chat"], a["url"], a.get("text", ""), a.get("show", False)),
+                         daemon=True).start()
 
 
 def _run_task(chat, url, text, show, mid, task):
@@ -1183,6 +1220,10 @@ def human_card():
     return card("Сдача как человек: " + ("вкл" if on else "выкл"),
                 "Тесты: пауза 20–45 с на вопрос, ответы учителю уходят через 4–12 мин после «Отправить»." if on else
                 "Тесты сдаю сразу, ответы учителю — сразу после «Отправить».", "Переключить — /delay или «⚙️ Ещё»", "⏳")
+
+
+def btn_delay():
+    return BTN_DELAY_ON if human_on() else BTN_DELAY_OFF
 
 
 def send_delay():
@@ -2233,10 +2274,10 @@ def handle(msg):
                  markup=cancel_kb(), raw_html=True)
             return
         mode.pop(chat)
-    if text.startswith("/delay"):  # /delay, /delay on, /delay off
-        arg = text[6:].strip().lower()
+    if text.startswith("/delay") or text in (BTN_DELAY_ON, BTN_DELAY_OFF):  # /delay [on|off] или кнопка у поля ввода
+        arg = text[6:].strip().lower() if text.startswith("/delay") else ""
         set_human(arg in ("on", "вкл", "1") if arg else not human_on())
-        send(chat, human_card(), markup=kb([("⏳ Переключить", "m:human")]), raw_html=True)
+        send(chat, human_card(), menu=True, raw_html=True)  # клавиатура обновится: на кнопке новое состояние
         return
     if text.startswith("/style"):
         threading.Thread(target=send_sample, args=(chat,), daemon=True).start()
@@ -2855,7 +2896,8 @@ def main():
     print("Бот запущен")
     print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
     threading.Thread(target=retry_alphabet, daemon=True).start()
-    threading.Thread(target=sender_loop, daemon=True).start()  # отложенные «как человек» отправки учителю
+    threading.Thread(target=sender_loop, daemon=True).start()
+    threading.Thread(target=resume_active, daemon=True).start()  # задания, прерванные перезапуском  # отложенные «как человек» отправки учителю
     s = load_settings()
     if s.pop("updated", None):  # поднялись после /update
         save_settings(s)
