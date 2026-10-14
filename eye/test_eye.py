@@ -345,6 +345,67 @@ class ChatTest(Base):
         self.assertEqual(second["reply_markup"]["inline_keyboard"][0][0]["text"], "👁 Открыть «Глаз»")
 
 
+    def cb(self, data, mid=5, uid=U):
+        eye.on_callback({"id": "c", "from": {"id": uid}, "data": data, "message": {"chat": {"id": uid}, "message_id": mid}})
+        return [kw for k, kw in self.sent if k == "answerCallbackQuery"]
+
+    def test_every_callback_answered_once(self):
+        for data in ("new", "status", "seen", "home", "mode|ask", "mode|chat", "mode|app", "zzz", ""):
+            self.sent.clear()
+            self.assertEqual(len(self.cb(data)), 1, data)
+        self.sent.clear()
+        self.assertIn("устарела", self.cb("old|1")[0]["text"])
+        self.sent.clear()
+        with mock.patch.object(eye, "status_text", side_effect=RuntimeError("диск")), \
+                mock.patch.object(eye.traceback, "print_exc"), mock.patch("builtins.print"):
+            a = self.cb("status")
+        self.assertEqual(len(a), 1)  # упало внутри — нажатие всё равно отвечено
+        self.assertTrue(a[0]["show_alert"])
+
+    def test_seen_and_back_edit_in_place(self):
+        self.sent.clear()
+        self.cb("seen", mid=12)
+        self.assertEqual([k for k, _ in self.sent][:1], ["editMessageText"])  # меню правится, не новое сообщение
+        edit = self.sent[0][1]
+        self.assertEqual(edit["message_id"], 12)
+        self.assertIn("home", self.datas(edit["reply_markup"]))
+        self.sent.clear()
+        self.cb("home", mid=12)
+        self.assertIn("seen", self.datas(self.sent[0][1]["reply_markup"]))
+        self.sent.clear()
+        self.cb("mode|ask", mid=12)
+        self.assertEqual(self.sent[0][0], "editMessageText")
+        self.assertIn("Как удобнее?", self.sent[0][1]["text"])
+        eye.on_message(self.msg("/status"))
+        self.assertIn("home", self.datas(self.sent[-1][1]["reply_markup"]))  # из проверки есть выход
+
+    def test_text_reply_shows_thinking_then_answer(self):
+        self.sent.clear()
+        with mock.patch.object(eye.ai, "talk", return_value="Это Нева."):
+            eye.on_message(self.msg("что за река"))
+        self.assertIn("Думаю", self.texts()[0])
+        self.assertEqual(self.sent[-1][0], "editMessageText")  # заглушка стала ответом
+        self.assertIn("Это Нева.", self.texts()[-1])
+        self.sent.clear()
+        with mock.patch.object(eye.ai, "talk", side_effect=OSError("нет места")), \
+                mock.patch.object(eye.traceback, "print_exc"):
+            eye.on_message(self.msg("а мост"))
+        self.assertTrue(self.texts()[-1].startswith("⚠️ Не получилось ответить"))
+
+    def test_photo_download_error(self):
+        self.sent.clear()
+        with mock.patch.object(eye, "download", side_effect=OSError("timed out")), mock.patch("builtins.print"):
+            eye.on_message(self.msg(photo=[{"file_id": "a"}]))
+        self.assertTrue(self.texts()[-1].startswith("⚠️ Не открыл фото"))
+
+    def test_unhandled_error_answered(self):
+        self.sent.clear()
+        eye.oops({"callback_query": {"id": "c"}})
+        eye.oops({"message": {"chat": {"id": U, "type": "private"}}})
+        self.assertEqual(self.sent[0][0], "answerCallbackQuery")
+        self.assertIn("Что-то пошло не так", self.texts()[-1])
+
+
 class WebTest(Base):
     def setUp(self):
         super().setUp()
@@ -483,6 +544,16 @@ class WebTest(Base):
         self.assertEqual(self.call("/api/mode", json.dumps({"mode": "app"}).encode())[1], {"mode": "app"})
         self.assertEqual(len(self.texts()), n + 1)  # обратно в приложение — без сообщения в чат
         self.assertEqual(self.call("/api/mode", json.dumps({"mode": "chat"}).encode(), key=False)[0], 401)
+
+    def test_mode_api_chat_send_fails(self):
+        def flaky(method, **kw):
+            if method == "sendMessage":
+                raise urllib.error.URLError("сеть")
+            return {"ok": True, "result": {}}
+        with mock.patch.object(eye, "tg", side_effect=flaky), mock.patch("builtins.print"):
+            code, r = self.call("/api/mode", json.dumps({"mode": "chat"}).encode())
+        self.assertEqual((code, r), (200, {"mode": "chat"}))  # режим сменён, хоть чат и не ответил
+        self.assertEqual(eye.ui_mode(), "chat")
 
     def test_talk_audio_and_text(self):
         with mock.patch.object(eye.speech, "hear", return_value="что это за здание") as hear, \

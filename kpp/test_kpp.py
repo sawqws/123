@@ -708,6 +708,124 @@ class App(BotBase):
             srv.server_close()
 
 
+class Errors(BotBase):
+    """Каждое нажатие отвечено, ошибки — понятным «⚠️ …», повторное нажатие не дублирует пропуск."""
+
+    def cb(self, data, mid=3):
+        kpp.on_callback({"id": "c", "from": {"id": 1}, "data": data, "message": {"chat": {"id": 1}, "message_id": mid}})
+        return [p for m, p in self.sent if m == "answerCallbackQuery"]
+
+    def test_every_callback_answered_once(self):
+        for data in ("x|5", "again|А123ВС777", "rp|А123ВС777", "pl|999", "ap|1", "m|passes", "m|home", "mode",
+                     "mode:chat", "gdel|2", "zzz", "x", "m", ""):
+            self.sent.clear()
+            with mock.patch.object(dl.Client, "cancel", side_effect=dl.NetError("Сеть: timed out")), \
+                    mock.patch.object(dl.Client, "passes", return_value=[]), \
+                    mock.patch.object(dl.Client, "autopass", return_value={}), \
+                    mock.patch.object(dl.Client, "set_autopass", return_value={}), \
+                    mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 1}]}):
+                answers = self.cb(data)
+            self.assertEqual(len(answers), 1, data)
+
+    def test_stale_and_unknown_buttons(self):
+        kpp.st["places"] = [{"id": 5, "building": 6, "title": "ЖК", "flat": True}]
+        self.assertIn("устарела", self.cb("zzz|1")[0]["text"])
+        self.sent.clear()
+        a = self.cb("pl|999")[0]  # адреса больше нет — показать список заново
+        self.assertTrue(a["show_alert"])
+        self.assertIn("Куда заказывать", self.texts()[-1])
+
+    def test_cancel_network_error_explained(self):
+        with mock.patch.object(dl.Client, "cancel", side_effect=dl.NetError("Сеть: timed out")):
+            answers = self.cb("x|5")
+        self.assertEqual(answers[0]["text"], "⏳ Отменяю…")  # часики ушли сразу
+        self.assertIn("⚠️ Домиленд не ответил", self.texts()[-1])
+
+    def test_again_button_used_once(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
+            self.cb("again|А123ВС777", mid=11)
+        self.assertEqual(cr.call_count, 1)
+        self.assertIn(("editMessageReplyMarkup", {"chat_id": 1, "message_id": 11,
+                                                  "reply_markup": {"inline_keyboard": []}}), self.sent)
+
+    def test_rp_twice_no_duplicate(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
+            self.cb("rp|А123ВС777")
+            self.cb("rp|А123ВС777")
+        self.assertEqual(cr.call_count, 1)
+        self.assertIn("уже заказан", self.texts()[-1])
+
+    def test_order_errors_in_chat(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.NetError("Сеть: timed out")):
+            self.msg("А123ВС777")
+        self.assertIn("⚠️ Не получилось заказать", self.texts()[-1])
+        self.assertIn("again|А123ВС777", json.dumps(self.sent[-1][1]["reply_markup"], ensure_ascii=False))
+        self.sent.clear()
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.AuthError("401")), \
+                mock.patch.object(dl.Client, "login", side_effect=dl.AuthError("401")):
+            self.msg("М456ОР50")
+        self.assertIn("Вход в Домиленд устарел", self.texts()[-1])
+        self.assertEqual(kpp.st["pending"], "М456ОР50")
+
+    def test_login_network_error_is_not_bad_token(self):
+        def boom(req, timeout=0):
+            raise OSError("timed out")
+        with mock.patch("urllib.request.urlopen", boom):
+            with self.assertRaises(dl.NetError):
+                dl.Client("y0_tok").login()
+        with mock.patch.object(dl.Client, "login", side_effect=dl.NetError("Сеть: timed out")):
+            code, res = kpp.api_post(1, "/api/login", {"text": "y0_abcdefghijklmnopqrstuvwxyz0123"})
+        self.assertEqual(code, 502)
+        self.assertIn("не ответил", res["error"])
+        self.assertIn("не ответил", self.texts()[-1])
+        with mock.patch.object(dl.Client, "login", side_effect=dl.AuthError("401")):
+            code, res = kpp.api_post(1, "/api/login", {"text": "y0_abcdefghijklmnopqrstuvwxyz0123"})
+        self.assertEqual((code, res["login"]), (401, True))
+
+    def test_pending_not_ordered_after_failed_login(self):
+        kpp.st["pending"] = "А123ВС777"
+        with mock.patch.object(dl.Client, "login", side_effect=dl.AuthError("401")), \
+                mock.patch.object(dl.Client, "create_taxi_pass") as cr:
+            self.msg("y0_abcdefghijklmnopqrstuvwxyz0123")
+        cr.assert_not_called()
+        self.assertIn("не принял вход", self.texts()[-1])
+
+    def test_media_crash_is_reported(self):
+        done = []
+        with mock.patch.object(kpp.threading, "Thread",
+                               side_effect=lambda target, daemon: done.append(target) or mock.Mock()):
+            kpp.spawn(lambda chat: 1 / 0, 1)
+        with mock.patch.object(kpp.traceback, "print_exc"), mock.patch("builtins.print"):
+            done[0]()
+        self.assertIn("Не получилось разобрать", self.texts()[-1])
+
+    def test_unhandled_error_answered(self):
+        kpp.oops({"callback_query": {"id": "c"}})
+        kpp.oops({"message": {"chat": {"id": 1, "type": "private"}}})
+        self.assertEqual(self.sent[0][0], "answerCallbackQuery")
+        self.assertIn("Что-то пошло не так", self.texts()[-1])
+
+    def test_place_buttons_short_but_distinct(self):
+        kpp.st["places"] = [{"id": 1, "building": 6, "title": "ЖК «Домиленд+», корпус 2, кв. 148", "flat": True},
+                            {"id": 2, "building": 7, "title": "ЖК «Домиленд+», корпус 5, кладовая 12", "flat": True}]
+        kpp.st["place_id"] = 1
+        self.msg("/place")
+        rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+        labels = [b["text"] for r in rows for b in r]
+        self.assertEqual(labels, ["✓ корпус 2, кв. 148", "корпус 5, кладовая 12", "‹ Назад"])
+        self.assertTrue(all(len(t) <= 24 for t in labels))
+        self.assertIn("ЖК «Домиленд+», корпус 5, кладовая 12", self.texts()[-1])  # полностью — в тексте
+
+    def test_button_limits(self):
+        kpp.st["last"] = "А123ВС777"
+        for mode in ("chat", "app"):
+            kpp.st["mode"] = mode
+            for row in kpp.menu_buttons():
+                self.assertLessEqual(len(row), 3)
+                for b in row:
+                    self.assertLessEqual(len(b["text"]), 24, b["text"])
+
+
 class Style(unittest.TestCase):
     def test_style_fallback(self):
         """Цветные кнопки: если Telegram их не знает (400 про кнопки) — те же кнопки без цвета."""

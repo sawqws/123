@@ -438,8 +438,11 @@ def send_draft(chat, k, mid=None):
         ui.st["av_drafts"].pop(k, None)
         ui.save()
     if mid:
-        ui.tg("editMessageReplyMarkup", chat_id=chat, message_id=mid,
-              reply_markup={"inline_keyboard": [[ui.b("✅ Отправлено · 📜 Чат", f"avo|{k}")]]})
+        try:  # отправлено уже — кнопку «Отправить» убираем, чтобы не нажать второй раз
+            ui.tg("editMessageReplyMarkup", chat_id=chat, message_id=mid,
+                  reply_markup={"inline_keyboard": [[ui.b("✅ Отправлено · 📜 Чат", f"avo|{k}")]]})
+        except Exception as e:
+            print("avito chats: кнопка после отправки:", e)
     return "Отправил в Авито"
 
 
@@ -517,7 +520,7 @@ def on_callback(chat, mid, data):
         ask_own(chat, data[1])
     elif data[0] == "avm":
         show_modes(chat, mid)
-    elif data[0] == "avmode" and data[1] in MODES:
+    elif data[0] == "avmode" and len(data) > 1 and data[1] in MODES:
         with ui.lock:
             ui.st["av_mode"] = data[1]
             ui.save()

@@ -170,6 +170,8 @@
     return svg(W, s, rows);
   }
   const avg = (rows, k) => { const v = rows.map(r => r[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const retryCard = (title, act) => `<section class="card"><div class="empty"><span class="e">⚠️</span><b>${title}</b>Проверь интернет и попробуй ещё раз.</div>
+    <button class="btn tonal" data-a="${act}">Повторить</button></section>`;
   const skel = (n = 3) => Array.from({ length: n }, (_, i) => `<div class="sk line" style="width:${[92, 78, 86, 60][i % 4]}%"></div>`).join('');
 
   // ---------- каркас ----------
@@ -646,6 +648,7 @@
         : `<p class="muted">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</p>
            <button class="btn primary" data-a="progress">Разобрать прогресс</button>`}</section>`;
     const rows = S.series[S.range] || (S.range === 30 ? S.data.series : null);
+    if (!rows && S.seriesErr === S.range) return h + retryCard('Графики не загрузились', 'series-retry');
     if (!rows) return h + [1, 2, 3].map(() => '<section class="card"><div class="sk line" style="width:40%"></div><div class="sk" style="height:130px;margin-top:14px"></div></section>').join('');
     if (!rows.some(r => r.recovery != null || r.strain != null || r.sleep != null)) {
       return h + '<div class="empty"><span class="e">📈</span><b>Данных пока нет</b>Подключи WHOOP — графики появятся после первой ночи с браслетом.</div>';
@@ -663,7 +666,9 @@
     return h;
   }
   async function loadSeries(n) {
-    try { S.series[n] = (await api('/api/series', { n })).series; if (S.tab === 'trends') render(false); } catch (e) { fail(e); }
+    S.seriesErr = null;
+    try { S.series[n] = (await api('/api/series', { n })).series; } catch (e) { fail(e); S.seriesErr = n; }
+    if (S.tab === 'trends') render(false);
   }
   async function loadProgress(make) {
     if (make) { if (S.progressing) return; S.progressing = true; haptic('tap'); render(false); }
@@ -701,6 +706,7 @@
   function coachView() {
     let h = hero('Тренер', 'Врач · тренер · питание', S.history && S.history.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
     const hist = S.history;
+    if (!hist && S.historyErr) return h + retryCard('Разговор не загрузился', 'history-retry');
     if (!hist) return h + '<div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div>';
     h += '<div class="chat">';
     if (!hist.length && !S.asking) h += '<div class="empty"><span class="e">💬</span><b>Спроси что угодно</b>Про тренировки, сон, питание и восстановление — отвечу по твоим данным WHOOP. Можно приложить скрин тренировки.</div>';
@@ -714,7 +720,9 @@
     return h;
   }
   async function loadHistory() {
-    try { S.history = (await api('/api/history', {})).history; if (S.tab === 'coach') render(); } catch (e) { fail(e); }
+    S.historyErr = false;
+    try { S.history = (await api('/api/history', {})).history; } catch (e) { fail(e); S.historyErr = true; }
+    if (S.tab === 'coach') render();
   }
   async function ask(q) {
     q = (q || '').trim(); if (!q || S.asking) return;
@@ -875,6 +883,8 @@
     else if (a === 'more') progressSheet();
     else if (a === 'day') shiftDay(Number(v));
     else if (a === 'range') { if (S.range === Number(v)) return; S.range = Number(v); haptic('select'); render(false); if (!S.series[S.range]) loadSeries(S.range); }
+    else if (a === 'series-retry') { S.seriesErr = null; render(false); loadSeries(S.range); }
+    else if (a === 'history-retry') { S.historyErr = false; render(false); loadHistory(); }
     else if (a === 'eat') eat();
     else if (a === 'photo') pickPhoto(v);
     else if (a === 'ask') { const q = $('#q'); ask(q && q.value); }

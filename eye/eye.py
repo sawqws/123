@@ -298,8 +298,11 @@ def seen_text(n=8):
     return card("👁", "Что видел", "\n".join(lines), "Спроси про любое — помню последние три часа.")
 
 
+BACK = {"text": "‹ Назад", "callback_data": "home"}
+
+
 def status_buttons():
-    return [[{"text": "🔄 Обновить", "callback_data": "status"}]]
+    return [[{"text": "🔄 Обновить", "callback_data": "status"}, BACK]]
 
 
 def setup_bot():
@@ -601,11 +604,14 @@ def on_photo(msg):
     else:
         fid = (msg.get("document") or {}).get("file_id")
     typing(chat, "upload_photo")
+    if not fid:
+        return send(chat, err("Не вижу картинки в сообщении — пришли фото или файл-картинку."))
     try:
         data, _ = download(fid)
+        rec = add_photo(data, source="chat")
     except Exception as e:
-        return send(chat, err(f"Не скачал фото: {e}"))
-    rec = add_photo(data, source="chat")
+        print("фото:", e)
+        return send(chat, err("Не открыл фото — пришли его ещё раз (лучше как фото, не файлом)."))
     wait = None if msg.get("media_group_id") else msg_id(send(chat, "👀 <b>Смотрю…</b>"))
     analyze(rec, (msg.get("caption") or "").strip(), chat, wait)
 
@@ -646,17 +652,23 @@ def on_video(msg):
 
 
 def reply_in_chat(chat, text, voice=False, wait=None):
-    """Ответ в чат. На голосовое сообщение с услышанным правится на месте в ответ."""
+    """Ответ в чат. На голосовое сообщение с услышанным правится на месте в ответ, на текст — заглушка
+    «💭 Думаю…» (Claude отвечает несколько секунд) правится в ответ. Любая ошибка — «⚠️ …» на месте заглушки."""
     typing(chat)
+    if not voice and not wait:
+        wait = msg_id(send(chat, "💭 <i>Думаю…</i>"))
     try:
         say, mp3 = answer(text)
     except ai.AIError as e:
-        return send(chat, err(e))
+        return put(chat, err(e), wait)
+    except Exception as e:
+        traceback.print_exc()
+        return put(chat, err(f"Не получилось ответить — попробуй ещё раз ({short(e, 120)})."), wait)
     push_event("talk", heard=text, say=say)
     if voice:
         put(chat, card("🎙", "Ответ", esc(say), f"«{text}»"), wait)
     else:
-        send(chat, card("💬", "Ответ", esc(say)))
+        put(chat, card("💬", "Ответ", esc(say)), wait)
     if voice and mp3:
         voice_reply(chat, mp3)
 
@@ -744,30 +756,40 @@ def on_callback(cb):
     «⚙️ Режим» / выбор режима — карточка правится на месте и приходит главное меню."""
     msg = cb.get("message") or {}
     chat = (msg.get("chat") or {}).get("id")
+    mid = msg.get("message_id")
     data = cb.get("data") or ""
-    note = ""
-    if not allowed((cb.get("from") or {}).get("id")):
-        note = "🔒 Это личный бот."
-    elif data == "new":
-        setting("history", [])
-        note = "🧹 Начали заново. Фото помню."
-    elif data == "status" and chat:
-        put(chat, status_text(), msg.get("message_id"), status_buttons())
-        note = "Обновлено"
-    elif data == "seen" and chat:
-        send(chat, seen_text())
-    elif data == "mode|ask" and chat:
-        send(chat, *mode_card())
-    elif data in ("mode|chat", "mode|app") and chat:
-        set_mode(data.split("|")[1])
-        put(chat, card("✅", "Режим: " + MODES[ui_mode()], note="Сменить — /mode или кнопка «⚙️ Режим»"),
-            msg.get("message_id"))
-        send(chat, help_text(), menu_buttons())
-        note = MODES[ui_mode()]
-    else:  # кнопка из старой версии бота — не молчим
-        note = "Кнопка устарела — нажми /start"
+    note, alert = "", False
     try:
-        tg("answerCallbackQuery", callback_query_id=cb["id"], text=note)
+        if not allowed((cb.get("from") or {}).get("id")):
+            note = "🔒 Это личный бот."
+        elif data == "new":
+            setting("history", [])
+            note = "🧹 Начали заново. Фото помню."
+        elif not chat:
+            note = "Кнопка устарела — /start"
+        elif data == "status":
+            put(chat, status_text(), mid, status_buttons())
+            note = "Обновлено"
+        elif data == "seen":  # меню → «Что видел» на месте, «‹ Назад» вернёт меню
+            put(chat, seen_text(), mid, [[BACK]])
+        elif data == "home":
+            put(chat, help_text(), mid, menu_buttons())
+        elif data == "mode|ask":
+            text, rows = mode_card()
+            put(chat, text, mid, rows)
+        elif data in ("mode|chat", "mode|app"):
+            set_mode(data.split("|")[1])
+            put(chat, card("✅", "Режим: " + MODES[ui_mode()], note="Сменить — /mode или кнопка «⚙️ Режим»"), mid)
+            send(chat, help_text(), menu_buttons())
+            note = MODES[ui_mode()]
+        else:  # кнопка от прошлой версии бота
+            note = "Кнопка устарела — /start"
+    except Exception as e:
+        print("callback:", e)
+        traceback.print_exc()
+        note, alert = "⚠️ Не получилось — попробуй ещё раз", True
+    try:
+        tg("answerCallbackQuery", callback_query_id=cb["id"], text=note, show_alert=alert)
     except Exception as e:
         print("callback:", e)
 
@@ -951,7 +973,10 @@ class Web(BaseHTTPRequestHandler):
                 m = str(body_json(raw).get("mode") or "")
                 set_mode(m)
                 if m == "chat" and chat_id():
-                    send(chat_id(), help_text(), menu_buttons())
+                    try:
+                        send(chat_id(), help_text(), menu_buttons())
+                    except Exception as e:  # режим уже сменён — меню придёт по /start
+                        print("режим → чат:", e)
                 return self.reply(200, {"mode": m})
             if path == "/api/where":
                 return self.reply(200, {"place": place_now()})
@@ -1115,6 +1140,18 @@ def https():
         time.sleep(20)
 
 
+def oops(u):
+    """Необработанная ошибка: сказать человеку, а не молчать."""
+    try:
+        if u.get("callback_query"):
+            tg("answerCallbackQuery", callback_query_id=u["callback_query"]["id"],
+               text="⚠️ Не получилось — попробуй ещё раз", show_alert=True)
+        elif (u.get("message") or {}).get("chat", {}).get("type") == "private":
+            send(u["message"]["chat"]["id"], err("Что-то пошло не так — попробуй ещё раз или /start"))
+    except Exception as e:
+        print("oops:", e)
+
+
 def main():
     global offset
     if not TOKEN:
@@ -1142,7 +1179,8 @@ def main():
 
 
 def handle(u):
-    """Одно обновление Telegram — так его разбирает цикл getUpdates (и проверка кнопок в тестах)."""
+    """Одно обновление Telegram — так его разбирает цикл getUpdates (и проверка кнопок в тестах).
+    Необработанная ошибка — человеку «⚠️ …» (oops), а не тишина."""
     if SUP and SUP.intercept(u):  # 🛠 /fix и ответы поддержке
         return
     try:
@@ -1153,6 +1191,7 @@ def handle(u):
     except Exception as e:
         print("update:", e)
         traceback.print_exc()
+        oops(u)
 
 
 if __name__ == "__main__":
