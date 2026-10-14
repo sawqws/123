@@ -129,7 +129,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(drafts.read(TASK), "Клетка делится митозом.")
         self.assertEqual(drafts.recent_edits()[-1]["before"], "Клетка делится митозом.\nЭто важно.")
 
-        bot.on_callback({"id": "1", "data": "send", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
         args = self.nodes[-1]
         self.assertEqual(args[:3], ("horo/answer.js", URL, drafts.text_path(TASK)))
         self.assertIn(os.path.join(drafts.files_dir(TASK), "hand.png"), args)
@@ -641,16 +641,16 @@ class BotTest(unittest.TestCase):
                 raise urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(b"Bad Request: can't parse inline keyboard button"))
             return {"ok": True, "result": {"message_id": 3}}
         with mock.patch.object(bot, "tg", tg), mock.patch.object(bot, "COLORS", [True]):
-            self.assertEqual(bot.send(CHAT, "x", markup=bot.DRAFT_KB), 3)
+            self.assertEqual(bot.send(CHAT, "x", markup=bot.draft_kb(TASK)), 3)
             self.assertNotIn("style", calls[-1]["reply_markup"])
-            self.assertIn('"send"', calls[-1]["reply_markup"])
+            self.assertIn(f'"send:{TASK}"', calls[-1]["reply_markup"])
             n = len(calls)
-            bot.send(CHAT, "y", markup=bot.DRAFT_KB)
+            bot.send(CHAT, "y", markup=bot.draft_kb(TASK))
             self.assertEqual(len(calls), n + 1)  # второй раз сразу без цветов
         def html_error(method, **p):
             raise urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(b"can't parse entities"))
         with mock.patch.object(bot, "tg", html_error), self.assertRaises(urllib.error.HTTPError):
-            bot.call("sendMessage", text="<b>", reply_markup=bot.DRAFT_KB)  # не про кнопки — ошибка дальше
+            bot.call("sendMessage", text="<b>", reply_markup=bot.draft_kb(TASK))  # не про кнопки — ошибка дальше
 
     def test_planner_install(self):
         tok = "8800000000:AAH" + "x" * 32
@@ -1046,7 +1046,7 @@ for _name in list(vars(BotTest)):
 
 
 class ParallelTest(BotTest):
-    """Несколько заданий сразу: до MAX_PARALLEL одновременно, остальные в очереди, черновики — по одному."""
+    """Несколько заданий сразу: до MAX_PARALLEL одновременно, остальные в очереди, черновиков — сколько угодно, каждый правится."""
     URL2 = URL.replace("2222-222222222222", "2222-333333333333")
     TASK2 = "22222222-2222-2222-2222-333333333333"
 
@@ -1096,19 +1096,85 @@ class ParallelTest(BotTest):
             second.join(10)
         self.assertEqual(sum("Баллы 5/5" in m for m, _ in self.msgs), 2)
 
-    def test_drafts_wait_in_line(self):
-        os.makedirs(drafts.task_dir(self.TASK2))
+    def task2(self):
+        os.makedirs(drafts.task_dir(self.TASK2), exist_ok=True)
         with open(os.path.join(drafts.task_dir(self.TASK2), "task.json"), "w") as f:
             json.dump({"data": {"type": "detailedAnswer", "title": "Конспект §6"}}, f)
-        bot.offer_draft(CHAT, TASK, URL)
-        bot.offer_draft(CHAT, self.TASK2, self.URL2)
-        self.assertEqual(bot.draft()["task"], TASK)
-        self.assertIn("Черновик в очереди", self.last()[0])
-        bot.on_callback({"id": "1", "data": "drop", "message": {"chat": {"id": CHAT}, "message_id": 5}})
-        self.assertEqual(bot.draft()["task"], self.TASK2)  # следующий показан сам
-        self.assertIn("Конспект §6", self.last()[0])
-        bot.on_callback({"id": "1", "data": "drop", "message": {"chat": {"id": CHAT}, "message_id": 6}})
+        drafts.write(self.TASK2, "Митоз — деление клетки.\nМейоз — деление половых клеток.")
+
+    def numbered(self):
+        """tg, у которого у каждого отправленного сообщения свой message_id (для ответов на карточку)."""
+        n = iter(range(100, 10**6))
+
+        def fake(method, **p):
+            r = self.fake_tg(method, **p)
+            return {"ok": True, "result": {"message_id": next(n)}} if method == "sendMessage" else r
+        return mock.patch.object(bot, "tg", fake)
+
+    def test_several_drafts_each_editable(self):
+        self.task2()
+        with self.numbered():
+            bot.offer_draft(CHAT, TASK, URL)
+            card1 = bot.draft(TASK)["mids"][-1]
+            bot.offer_draft(CHAT, self.TASK2, self.URL2)
+        self.assertEqual({d["task"] for d in bot.all_drafts()}, {TASK, self.TASK2})  # оба ждут, никто не в очереди
+        self.assertFalse(any("в очереди" in m.lower() for m, _ in self.msgs))
+        self.assertIn(f"send:{self.TASK2}", self.last()[1])  # у каждой карточки свои кнопки
+        self.assertIn("черновиков: 2", self.last()[0])
+        # правка без ответа — в последний показанный, ответом на карточку — в тот, на который ответил
+        self.say("убери второе")
+        self.assertIn("Конспект §6", self.prompts[-1])
+        self.assertIn(self.TASK2 + "/draft.txt", self.prompts[-1])
+        self.say("убери второе", reply_to_message={"message_id": card1})
+        self.assertIn(TASK + "/draft.txt", self.prompts[-1])
+        self.assertEqual(bot.draft()["task"], TASK)  # теперь текущий — он
+        # «✏️ Править» делает черновик текущим, кнопки не пропадают
+        bot.on_callback({"id": "1", "data": f"ed:{self.TASK2}", "message": {"chat": {"id": CHAT}, "message_id": 7}})
+        self.assertEqual(bot.draft()["task"], self.TASK2)
+        self.assertIn("Что поправить?", self.last()[0])
+        # отправка одного не трогает другой
+        bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual(self.nodes[-1][:2], ("horo/answer.js", URL))
+        self.assertEqual([d["task"] for d in bot.all_drafts()], [self.TASK2])
+        bot.on_callback({"id": "1", "data": f"drop:{self.TASK2}", "message": {"chat": {"id": CHAT}, "message_id": 6}})
         self.assertIsNone(bot.draft())
+        self.assertEqual(len(self.nodes), 1)
+
+    def test_old_settings_with_queue_are_kept(self):
+        self.task2()
+        bot.save_settings({"draft": {"task": TASK, "url": URL, "title": "Конспект §5", "pairs": [], "own_files": False},
+                           "draft_queue": [{"task": self.TASK2, "url": self.URL2}]})
+        self.assertEqual(bot.draft()["task"], TASK)
+        self.assertEqual([d["title"] for d in bot.all_drafts()], ["Конспект §5", "Конспект §6"])
+        bot.on_callback({"id": "1", "data": "drop", "message": {"chat": {"id": CHAT}, "message_id": 5}})  # старая кнопка
+        self.assertEqual(bot.draft()["task"], self.TASK2)
+        self.assertIn("Ещё черновики", self.last()[0])
+
+    def test_several_links_in_one_message(self):
+        self.say(f"сделай {URL} и {self.URL2} и ещё раз {URL}")
+        solved = [p for p in self.prompts if p.startswith("Задание:")]
+        self.assertEqual(len(solved), 2)
+        self.assertTrue(any(URL in p for p in solved) and any(self.URL2 in p for p in solved))
+        self.assertTrue(any("Беру 2 задания" in m for m, _ in self.msgs))
+
+    def test_edit_redraws_handwriting(self):
+        self.say(URL)
+        pathlib.Path(drafts.task_dir(TASK), "draw.py").write_text("# рисует решение\n")
+        seen = {}
+
+        def claude(prompt, tools, timeout=0, on_tool=None):
+            seen["tools"], seen["prompt"] = tools, prompt
+            pathlib.Path(drafts.files_dir(TASK), "hand.png").write_bytes(b"png2")  # перерисовал
+            os.utime(os.path.join(drafts.files_dir(TASK), "hand.png"), (1, 1))
+            return True, "Поправил ответ в №3"
+        sent = len(self.files)
+        with mock.patch.object(bot, "claude", claude):
+            self.say("в номере 3 ответ 7n/(n-m)")  # длиннее текста черновика — всё равно просьба, не новый текст
+        self.assertTrue(any(t.startswith("Bash(python3 ") and t.endswith(f"{TASK}/draw.py)") for t in seen["tools"]))
+        self.assertIn("draw.py", seen["prompt"])
+        self.assertEqual(drafts.read(TASK), "Клетка делится митозом.\nЭто важно.")  # текст не затёрт просьбой
+        self.assertGreater(len(self.files), sent)  # новые картинки пришли в чат
+        self.assertIn("Черновик для учителя", self.last()[0])
 
 
 def _day(n):

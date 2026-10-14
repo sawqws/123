@@ -447,7 +447,7 @@ class CrawlTest(unittest.TestCase):
         cbs = {d for k, d in done if k == "cb"}
         # должны были дойти до всех веток: меню «Ещё», режим, подготовка, черновик, фото, автотесты, почерк, поддержка
         for need in ("m:more", "m:help", "m:mode", "m:late", "m:hand", "m:check", "mode:chat", "mode:app",
-                     "pp:s:0", "pp:t:5", "pp:tz", "pp:back", "pp:more", "pp:deep", "send", "drop",
+                     "pp:s:0", "pp:t:5", "pp:tz", "pp:back", "pp:more", "pp:deep", f"send:{TASK}", f"drop:{TASK}", f"ed:{TASK}",
                      "ph:do", "ph:show", "ph:solve", "all:yes", "all:no", "hand:ok", "hand:mess:1", "sup|ask", "sup|no"):
             self.assertIn(need, cbs, f"обход не дошёл до {need}")
         self.assertTrue(self.w.support, "поддержка не получила просьбу")
