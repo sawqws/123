@@ -94,6 +94,7 @@ class Request(unittest.TestCase):
 class BotBase(unittest.TestCase):
     def setUp(self):
         self.sent = []
+        kpp.use(None)
         kpp.st = {"owner": 1, "jwt": "j", "yandex_token": "y", "place_id": 5, "building_id": 6, "address": "ЖК",
                   "mode": "chat"}
 
@@ -447,14 +448,19 @@ class Guests(BotBase):
         self.assertTrue(any("Аня теперь может" in t for t in self.texts()))  # владельцу сообщили
         self.start(f"/start inv_{code}", 43)  # ссылка одноразовая
         self.assertFalse(kpp.allowed(43))
-        for cmd in ("/login", "/logout", "/place", "/invite", "/update"):
+        for cmd in ("/invite", "/update", "/guests"):
             self.start(cmd, 42)
             self.assertIn("только владелец", self.texts()[-1])
-        self.assertEqual(kpp.st["jwt"], "j")  # /logout гостя ничего не стёр
+        for cmd in ("/place", "/auto"):
+            self.start(cmd, 42)
+            self.assertIn("на входе владельца", self.texts()[-1])
+        self.start("/logout", 42)
+        self.assertEqual(kpp.st["jwt"], "j")  # /logout гостя вход владельца не стёр
         with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}):
             self.start("А123ВС777", 42)
         self.assertIn("Пропуск заказан", self.texts()[-1])
-        self.assertEqual(kpp.api_post(42, "/api/login", {"text": "x"})[0], 403)
+        self.assertEqual(kpp.api_post(42, "/api/login", {"text": "x"})[0], 400)  # свой вход можно, но нужен токен
+        self.assertEqual(kpp.api_post(42, "/api/place", {"id": 5})[0], 403)
         self.assertEqual(kpp.api_post(42, "/api/invite", {})[0], 403)
         with mock.patch.object(kpp, "bot_username", return_value="Taxii111bot"):
             code, r = kpp.api_post(1, "/api/invite", {})
@@ -472,6 +478,101 @@ class Guests(BotBase):
         self.assertIn("Аня", self.texts()[-1])
         kpp.on_callback({"id": "q", "from": {"id": 1}, "data": "gdel|51", "message": {"chat": {"id": 1}, "message_id": 1}})
         self.assertFalse(kpp.allowed(51))
+
+
+class Separate(BotBase):
+    """У гостя (сестры) своя история: свой последний номер, недавние, режим и список пропусков."""
+
+    def setUp(self):
+        super().setUp()
+        kpp.st["guests"] = {"42": {"name": "Аня"}}
+        kpp.st["users"] = {"42": {}}
+        self.items = []
+
+        def create(c, plate, *a):
+            pid = 100 + len(self.items)
+            self.items.insert(0, {"id": pid, "title": "Такси", "subtitle": dl.pretty(plate),
+                                  "status": {"title": "Активен"}, "actions": [{"type": "cancel"}]})
+            return {"items": [{"id": pid}]}
+        self.p += [mock.patch.object(dl.Client, "create_taxi_pass", create),
+                   mock.patch.object(dl.Client, "passes", lambda c, *a: list(self.items))]
+        for x in self.p[-2:]:
+            x.start()
+
+    def say(self, text, uid):
+        kpp.on_message({"chat": {"id": uid, "type": "private"}, "from": {"id": uid, "first_name": "Аня"}, "text": text})
+
+    def cb(self, data, uid):
+        kpp.on_callback({"id": "q", "from": {"id": uid}, "data": data, "message": {"chat": {"id": uid}, "message_id": 1}})
+
+    def test_history_and_last_apart(self):
+        self.say("А123ВС777", 1)   # Глеб
+        self.say("М456ОР50", 42)   # сестра — на его вход
+        self.say("А123ВС777", 42)  # тот же номер, что у Глеба, — у неё не «уже заказан»
+        self.assertIn("Пропуск заказан", self.texts()[-1])
+        self.assertEqual(kpp.st["last"], "А123ВС777")
+        self.assertEqual(kpp.st["users"]["42"]["last"], "А123ВС777")
+        self.assertNotIn("М456ОР50", kpp.st.get("recent") or {})
+        kpp.use(42)
+        text, rows = kpp.passes_view()
+        self.assertIn("М\u00a0456", text)
+        self.assertEqual(text.count("Активен"), 2)  # только её два
+        kpp.use(1)
+        text, _ = kpp.passes_view()
+        self.assertEqual(text.count("Активен"), 1)  # у Глеба — только его
+        self.assertNotIn("М\u00a0456", text)
+        kpp.use(42)
+        self.assertEqual(len(kpp.app_state()["passes"]), 2)
+        self.assertEqual(kpp.app_state()["places"], [])  # адрес не её
+        self.assertTrue(kpp.app_state()["shared"])
+
+    def test_guest_cannot_cancel_owner_pass(self):
+        self.say("А123ВС777", 1)
+        gleb = self.items[0]["id"]
+        with mock.patch.object(dl.Client, "cancel") as cancel:
+            self.cb(f"x|{gleb}", 42)
+            self.assertEqual(kpp.api_post(42, "/api/cancel", {"id": gleb})[0], 403)
+            cancel.assert_not_called()
+            self.say("М456ОР50", 42)
+            self.cb(f"x|{self.items[0]['id']}", 42)
+            cancel.assert_called_once()
+
+    def test_mode_apart(self):
+        self.say("/mode", 42)
+        self.cb("mode:app", 42)
+        self.assertEqual(kpp.st["users"]["42"]["mode"], "app")
+        self.assertEqual(kpp.st["mode"], "chat")
+        self.cb("pl|5", 42)
+        self.assertIn("только владелец", self.sent[-1][1].get("text", ""))
+        kpp.use(42)
+        self.assertNotIn("sup|ask", str(kpp.menu_buttons()))
+
+    def test_guest_own_login(self):
+        places = [{"id": 8, "buildingId": 9, "placeTypeId": 1, "address": "Тверская ул, д. 1 кв 2"}]
+        with mock.patch.object(dl.Client, "login", lambda c: setattr(c, "jwt", "j2")), \
+                mock.patch.object(dl.Client, "me", return_value={"shortName": "Аня"}), \
+                mock.patch.object(dl.Client, "places", return_value=places), \
+                mock.patch.object(dl.Client, "calibrate", return_value=(1, 5)):
+            kpp.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "message_id": 3,
+                            "text": "https://x/#access_token=y0_AgAAAAAAbcdefghijklmnopqrstuvwxyz123456"})
+        u = kpp.st["users"]["42"]
+        self.assertEqual((u["jwt"], u["place_id"], u["address"]), ("j2", 8, "Тверская ул, д. 1"))
+        self.assertEqual((kpp.st["jwt"], kpp.st["place_id"]), ("j", 5))  # у Глеба ничего не поменялось
+        kpp.use(42)
+        self.assertFalse(kpp.shared())
+        self.assertEqual(kpp.client().jwt, "j2")
+        self.say("/logout", 42)
+        self.assertNotIn("jwt", kpp.st["users"]["42"])
+        self.assertEqual(kpp.st["jwt"], "j")
+        kpp.use(42)
+        self.assertTrue(kpp.shared())
+
+    def test_remove_guest_drops_data(self):
+        kpp.st["users"]["42"]["yandex_token"] = "y2"
+        self.cb("gdel|42", 1)
+        self.assertNotIn("42", kpp.st["users"])
+        self.say("А123ВС777", 42)
+        self.assertIn("личный бот", self.texts()[-1])
 
 
 class InitData(unittest.TestCase):
