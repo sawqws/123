@@ -87,7 +87,7 @@ function render() {
 function renderHead() {
   const when = S.loading ? 'обновляю с сайта…' : S.data ? `обновлено ${ago(S.data.at)}` : S.error ? 'не загрузилось' : 'загружаю…';
   q('#sub').textContent = when;
-  q('#refresh').classList.toggle('spin', !!S.loading);
+  q('#refresh').classList.toggle('loading', !!S.loading);
   const html = S.error && !S.loading ? `<div class="note err rise" style="margin-bottom:12px">⚠️ <span>${esc(S.error)}</span></div>` : '';
   const box = q('#err');
   if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
