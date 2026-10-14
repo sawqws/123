@@ -125,6 +125,14 @@ def parser():
     c.add_argument("--bots", nargs="+", help="только эти боты (username); без — все боты с сервера")
     c.add_argument("--auto", action="store_true", help="без подтверждения (Главный после создания бота)")
 
+    c = cmd("botpress", "проверка своего бота: написать текст или нажать кнопку и показать ответ (JSON)")
+    c.add_argument("bot", help="username своего бота")
+    c.add_argument("--text", help="что написать (без --click; по умолчанию /start)")
+    c.add_argument("--click", help="нажать кнопку с такой надписью (или её частью)")
+    c.add_argument("--msg", help="id сообщения с кнопкой (по умолчанию последнее с кнопками)")
+    c.add_argument("--wait", type=float, default=8, help="сколько ждать ответа, с")
+    c.add_argument("--force", action="store_true", help="нажать и кнопку, которая что-то делает по-настоящему")
+
     c = cmd("username", "свободен ли юзернейм (для канала): free, taken, fragment — продаётся на Fragment")
     c.add_argument("username")
     cmd("mychannels", "мои каналы (где я создатель): id, название, юзернейм")

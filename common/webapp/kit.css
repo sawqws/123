@@ -61,9 +61,6 @@ body::before {
   content: ""; position: fixed; inset: -20vh -30vw auto; height: 70vh; z-index: -1; pointer-events: none;
   background: radial-gradient(60% 55% at 50% 0%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 70%);
 }
-html[data-scheme="light"] body::before {
-  background: radial-gradient(60% 55% at 50% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%);
-}
 #app, .app { max-width: 560px; margin: 0 auto; }
 [hidden] { display: none !important; }
 a { color: var(--link); text-decoration: none; }
@@ -147,7 +144,6 @@ b, strong { font-weight: 650; }
   box-shadow: 0 10px 24px -12px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .28);
 }
 .btn.tonal { background: var(--accent-soft); color: var(--accent); }
-html[data-scheme="light"] .btn.tonal { color: color-mix(in srgb, var(--accent) 55%, #000); }
 .btn.ghost { background: transparent; color: var(--link); }
 .btn.danger { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .btn.sm { width: auto; min-height: 36px; padding: 0 14px; font-size: 14.5px; border-radius: 12px; }
@@ -343,108 +339,153 @@ body.has-tabbar .sup-fab { bottom: calc(82px + var(--bottom)); }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 
-/* ========== Стекло (как в iOS): полупрозрачные поверхности, размытие фона, блики по краю ========== */
-:root {
-  --g-base: color-mix(in srgb, var(--card) 42%, transparent);
-  --g-fill: linear-gradient(150deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .035) 52%, rgba(255, 255, 255, .08));
-  --g-edge: rgba(255, 255, 255, .15);
-  --g-hl: rgba(255, 255, 255, .26);
-  --g-blur: blur(26px) saturate(1.9);
-  --g-shadow: 0 20px 44px -24px rgba(0, 0, 0, .75), 0 2px 8px -3px rgba(0, 0, 0, .4);
-  --glass: color-mix(in srgb, var(--card) 50%, transparent);
-  --line: rgba(255, 255, 255, .09);
-  --r-xl: 28px; --r-lg: 22px; --r-md: 16px;
-}
-html[data-scheme="light"] {
-  --g-base: rgba(255, 255, 255, .5);
-  --g-fill: linear-gradient(150deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .4) 58%, rgba(255, 255, 255, .65));
-  --g-edge: rgba(255, 255, 255, .85);
-  --g-hl: #fff;
-  --g-shadow: 0 18px 40px -22px rgba(40, 50, 90, .38), 0 1px 4px rgba(40, 50, 90, .08);
-  --glass: rgba(255, 255, 255, .6);
-  --line: rgba(20, 30, 60, .08);
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root { --g-base: color-mix(in srgb, var(--card) 90%, transparent); --glass: var(--card); }
+/* ========== Пастель (как iPhone): светлый тёплый фон, белые карточки, мягкие тени, пастельный акцент ==========
+   Всегда светлая тема (kit.js ставит data-scheme="light" и красит шапку Telegram в --bg).
+   У бота свой только --accent; из него: --accent-soft (фон), --accent-pastel (заливка кнопки), --accent-deep (текст). */
+:root, html[data-scheme] {
+  color-scheme: light;
+  --bg: #f6f3ee;
+  --card: #ffffff;
+  --card-2: #faf8f4;
+  --text: #1f1b17;
+  --ink: #1f1b17;
+  --hint: #8f877e;
+  --link: var(--accent-deep);
+  --sep: rgba(70, 50, 30, .08);
+  --line: rgba(70, 50, 30, .065);
+  --field: #f2eee8;
+  --ok: #3f9d6b;
+  --warn: #c98327;
+  --err: #d0584c;
+  --accent-soft: color-mix(in srgb, var(--accent) 13%, #ffffff);
+  --accent-pastel: color-mix(in srgb, var(--accent) 30%, #ffffff);
+  --accent-line: color-mix(in srgb, var(--accent) 26%, #ffffff);
+  --accent-deep: color-mix(in srgb, var(--accent) 62%, #1f1b17);
+  --accent-2: color-mix(in srgb, var(--accent) 70%, #ffffff);
+  --r-xl: 26px; --r-lg: 22px; --r-md: 16px; --r-sm: 12px;
+  --shadow: 0 1px 1px rgba(70, 45, 20, .03), 0 12px 32px -16px rgba(70, 45, 20, .16);
+  --shadow-lg: 0 2px 4px rgba(70, 45, 20, .04), 0 24px 48px -20px rgba(70, 45, 20, .22);
+  --glass: #ffffff;
+  --serif: ui-serif, "New York", "Iowan Old Style", "Times New Roman", Georgia, serif;
 }
 
-/* цветные «капли» за стеклом — без них размывать нечего */
-body::after {
-  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background:
-    radial-gradient(60% 34% at 0% 34%, color-mix(in srgb, var(--accent) 36%, #7c5cff 64%) 0%, transparent 72%),
-    radial-gradient(58% 34% at 100% 52%, color-mix(in srgb, var(--accent) 42%, #22d3ee 58%) 0%, transparent 72%),
-    radial-gradient(70% 36% at 30% 100%, color-mix(in srgb, var(--accent) 45%, #ff5fa2 55%) 0%, transparent 72%);
-  opacity: .62;
+html, body { background: var(--bg); color: var(--text); }
+/* место под плавающей «Поддержкой», чтобы она не закрывала последнюю строку */
+body { padding-bottom: calc(84px + var(--bottom)); }
+/* едва заметная пастельная дымка акцента сверху — «лицо» бота */
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: 46vh; z-index: -1; pointer-events: none;
+  background: radial-gradient(90% 70% at 50% -10%, var(--accent-soft), transparent 72%);
 }
-html[data-scheme="light"] body::after { opacity: .5; }
+body::after { content: none; }
 
-/* фон — на html: иначе «капли» (z-index -1) прячутся под фоном body */
-body { background: transparent; }
-
-.card, .list, .stat, .chip, .seg, .tabbar, .toast, .sup-fab {
-  -webkit-backdrop-filter: var(--g-blur); backdrop-filter: var(--g-blur);
-}
-.card, .list, .stat {
-  background: var(--g-fill), var(--g-base); border: 1px solid var(--g-edge);
-  box-shadow: var(--g-shadow), inset 0 1px 0 var(--g-hl);
-}
-/* вложенное стекло не размываем второй раз */
-.card .stat, .card .list { -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
-.card .stat { background: color-mix(in srgb, var(--text) 7%, transparent); border: 0; }
-.card .list { background: transparent; border: 0; }
-.card.feature {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--g-edge));
-  background:
-    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--accent) 34%, transparent), transparent 62%),
-    var(--g-fill), color-mix(in srgb, var(--accent) 10%, var(--g-base));
-}
-.card.accent { background: linear-gradient(180deg, rgba(255, 255, 255, .3), transparent 55%), linear-gradient(150deg, var(--accent-2), var(--accent)); }
-
+/* шапка: заголовок с засечками (New York на iPhone), логотип — пастельная плитка */
+.hero { padding: 14px 2px 22px; }
 .hero .logo {
-  background: linear-gradient(180deg, rgba(255, 255, 255, .38), transparent 55%), linear-gradient(145deg, var(--accent-2), var(--accent));
-  box-shadow: 0 12px 26px -10px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 -1px 0 rgba(0, 0, 0, .12);
+  width: 54px; height: 54px; border-radius: 17px; font-size: 27px;
+  background: linear-gradient(160deg, #ffffff, var(--accent-pastel));
+  box-shadow: 0 10px 24px -14px var(--accent-deep), inset 0 0 0 1px rgba(255, 255, 255, .7);
 }
+.hero h1, .title-xl { font-family: var(--serif); font-weight: 600; letter-spacing: -.3px; }
+.hero h1 { font-size: 28px; }
+.hero .sub { color: var(--hint); }
+.title-lg { font-weight: 650; letter-spacing: -.3px; }
+.label { color: var(--hint); font-size: 12px; font-weight: 600; letter-spacing: .9px; margin: 26px 8px 10px; }
+.label .more { color: var(--accent-deep); }
 
-.btn { background: var(--g-fill), color-mix(in srgb, var(--text) 8%, transparent); border: 1px solid var(--g-edge);
-  box-shadow: inset 0 1px 0 var(--g-hl); }
+/* карточки и списки — белые, тонкая линия, мягкая тень */
+.card, .list, .stat { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.card { border-radius: var(--r-xl); padding: 20px; }
+.card > h2, .card > .card-title { font-weight: 650; letter-spacing: -.2px; }
+.card .stat { background: var(--card-2); border: 1px solid var(--line); box-shadow: none; }
+.card .list { background: transparent; border: 0; box-shadow: none; margin: 0 -20px -20px; }
+.card.flat { box-shadow: none; }
+.card.feature {
+  border-color: var(--accent-line);
+  background: linear-gradient(165deg, var(--accent-soft), #ffffff 70%);
+}
+.card.accent { background: linear-gradient(160deg, var(--accent-pastel), var(--accent-soft)); color: var(--ink); border-color: var(--accent-line); }
+.card.accent .hint, .card.accent .muted { color: color-mix(in srgb, var(--ink) 60%, transparent); }
+.stat { border-radius: var(--r-lg); }
+.stat .v, .big-num { color: var(--ink); }
+
+/* кнопки — капсулы; главная — пастельная заливка акцента с тёмным текстом */
+.btn { border-radius: 999px; background: var(--field); color: var(--ink); border: 0; box-shadow: none; font-weight: 600; }
 .btn.primary {
-  border-color: rgba(255, 255, 255, .28);
-  background: linear-gradient(180deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, 0) 52%), linear-gradient(180deg, var(--accent-2), var(--accent));
-  box-shadow: 0 12px 26px -12px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .12);
+  background: var(--accent-pastel); color: var(--ink); border: 0;
+  box-shadow: 0 10px 22px -14px var(--accent-deep), inset 0 0 0 1px rgba(255, 255, 255, .5);
 }
-.btn.tonal { background: var(--g-fill), var(--accent-soft); border-color: var(--accent-line); }
-.btn.ghost { background: transparent; border-color: transparent; box-shadow: none; }
-.btn.danger { background: var(--g-fill), color-mix(in srgb, var(--err) 14%, transparent); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+.btn.tonal { background: var(--accent-soft); color: var(--accent-deep); border: 0; }
+.btn.ghost { background: transparent; color: var(--accent-deep); box-shadow: none; }
+.btn.danger { background: color-mix(in srgb, var(--err) 10%, #ffffff); color: var(--err); border: 0; }
+.btn.sm { border-radius: 999px; }
 
+/* поля — тёплый «туман», без рамки; фокус — пастельное кольцо */
 input, textarea, select {
-  background: color-mix(in srgb, var(--text) 6%, transparent); border: 1px solid var(--g-edge);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .18); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  background: var(--field); border: 1px solid transparent; box-shadow: none; color: var(--ink);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
 }
-html[data-scheme="light"] input, html[data-scheme="light"] textarea, html[data-scheme="light"] select {
-  background: rgba(255, 255, 255, .55); box-shadow: inset 0 1px 3px rgba(40, 50, 90, .1);
+input:focus, textarea:focus, select:focus { background: #ffffff; border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-soft); }
+
+/* строки «как в Настройках» */
+.row + .row::before { background: var(--sep); }
+button.row:active, a.row:active, .row.tap:active { background: var(--card-2); }
+.row .ic { background: var(--accent-soft); color: var(--accent-deep); border-radius: 10px; box-shadow: none; }
+.row .ic.solid { background: var(--accent-pastel); color: var(--ink); }
+.row .title { font-weight: 560; }
+.row .chev::after { color: #c5beb5; opacity: 1; }
+
+/* метки, чипы, переключатели */
+.pill { background: var(--field); color: var(--hint); }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, #ffffff); }
+.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, #ffffff); }
+.pill.err { color: var(--err); background: color-mix(in srgb, var(--err) 11%, #ffffff); }
+.pill.accent { color: var(--accent-deep); background: var(--accent-soft); }
+.chip { background: var(--card); border: 1px solid var(--line); color: var(--ink); box-shadow: 0 1px 2px rgba(70, 45, 20, .04); }
+.chip.on { background: var(--accent-pastel); color: var(--ink); border-color: transparent; }
+.seg { background: var(--field); border: 0; box-shadow: none; border-radius: 13px; }
+.seg button { color: var(--hint); }
+.seg button.on { background: #ffffff; color: var(--ink); box-shadow: 0 1px 2px rgba(70, 45, 20, .06), 0 4px 12px -6px rgba(70, 45, 20, .2); }
+.switch { background: #e6e0d8; }
+.switch.on { background: color-mix(in srgb, var(--ok) 70%, #ffffff); }
+
+/* прогресс */
+.bar { background: var(--field); }
+.bar > i { background: linear-gradient(90deg, var(--accent-pastel), var(--accent)); }
+.ring { background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--field) 0); }
+
+/* нижние вкладки — белая капсула, как док iPhone */
+.tabbar {
+  background: rgba(255, 255, 255, .94); border: 1px solid var(--line); border-radius: 28px;
+  -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: 0 18px 40px -20px rgba(70, 45, 20, .3), 0 1px 2px rgba(70, 45, 20, .05);
 }
-input:focus, textarea:focus, select:focus { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.tabbar button { border-radius: 22px; color: var(--hint); }
+.tabbar button .i { filter: grayscale(1) opacity(.6); }
+.tabbar button.on { color: var(--accent-deep); background: var(--accent-soft); box-shadow: none; }
+.tabbar button.on .i { filter: none; }
 
-.chip { background: var(--g-fill), var(--g-base); border-color: var(--g-edge); box-shadow: inset 0 1px 0 var(--g-hl); }
-.chip.on { background: linear-gradient(180deg, rgba(255, 255, 255, .3), transparent 55%), var(--accent); border-color: transparent; }
-.seg { background: var(--g-base); border: 1px solid var(--g-edge); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .15); }
-.seg button.on { background: var(--g-fill), color-mix(in srgb, var(--text) 16%, transparent); box-shadow: 0 3px 10px -3px rgba(0, 0, 0, .35), inset 0 1px 0 var(--g-hl); }
-.pill { background: color-mix(in srgb, var(--text) 9%, transparent); }
+/* лист снизу */
+.sheet-backdrop { background: rgba(40, 30, 20, .22); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+.sheet {
+  background: var(--bg); border: 0; border-radius: 30px 30px 0 0;
+  -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 -12px 40px rgba(70, 45, 20, .16);
+}
+.sheet::before { background: #cfc7bd; opacity: 1; }
+.sheet h2 { font-family: var(--serif); font-weight: 600; letter-spacing: -.2px; }
+.sheet-x { background: var(--field); color: var(--hint); -webkit-backdrop-filter: none; backdrop-filter: none; }
 
-.tabbar { border-radius: 30px; background: var(--g-fill), var(--glass); border-color: var(--g-edge);
-  -webkit-backdrop-filter: blur(30px) saturate(2); backdrop-filter: blur(30px) saturate(2);
-  box-shadow: 0 20px 44px -18px rgba(0, 0, 0, .65), inset 0 1px 0 var(--g-hl); }
-.tabbar button { border-radius: 24px; }
-.tabbar button.on { background: var(--g-fill), color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 0 1px 0 var(--g-hl), 0 4px 14px -6px var(--accent); }
+/* уведомление и кнопка поддержки */
+.toast { background: #ffffff; color: var(--ink); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-lg);
+  -webkit-backdrop-filter: none; backdrop-filter: none; }
+.toast.err { color: var(--err); } .toast.ok { color: var(--ok); }
+.sup-fab { background: #ffffff; color: var(--ink); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+  -webkit-backdrop-filter: none; backdrop-filter: none; }
+.sup-x { background: var(--field); }
 
-.sheet { background: var(--g-fill), color-mix(in srgb, var(--bg) 66%, transparent); border-radius: 34px 34px 0 0;
-  border: 1px solid var(--g-edge); border-bottom: 0;
-  -webkit-backdrop-filter: blur(36px) saturate(1.9); backdrop-filter: blur(36px) saturate(1.9);
-  box-shadow: 0 -16px 50px rgba(0, 0, 0, .4), inset 0 1px 0 var(--g-hl); }
-.sheet-backdrop { background: rgba(0, 0, 0, .32); }
-.sheet-x { background: color-mix(in srgb, var(--text) 14%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-
-.toast { background: var(--g-fill), var(--glass); border-color: var(--g-edge); border-radius: 22px; box-shadow: var(--g-shadow), inset 0 1px 0 var(--g-hl); }
-.sup-fab { background: var(--g-fill), var(--glass); border-color: var(--g-edge); box-shadow: var(--g-shadow), inset 0 1px 0 var(--g-hl); }
-.row .ic { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22); }
+/* пусто, загрузка, заметки */
+.empty b { color: var(--ink); }
+.sk { background: var(--field); }
+.note { background: var(--accent-soft); color: var(--ink); }
+.note.err { background: color-mix(in srgb, var(--err) 10%, #ffffff); color: var(--err); }
+.note.ok { background: color-mix(in srgb, var(--ok) 10%, #ffffff); }

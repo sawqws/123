@@ -6,11 +6,10 @@
   const root = document.documentElement;
 
   function scheme() {
-    const dark = tg && tg.colorScheme ? tg.colorScheme === 'dark'
-      : window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
-    root.dataset.scheme = dark ? 'dark' : 'light';
+    // вид «пастель» всегда светлый, тема Telegram на него не влияет
+    root.dataset.scheme = 'light';
     // шапка и фон Telegram — в цвет страницы, чтобы не было полосы сверху
-    const bg = getComputedStyle(root).getPropertyValue('--tg-theme-secondary-bg-color').trim();
+    const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
     if (tg && bg) {
       try { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); if (tg.setBottomBarColor) tg.setBottomBarColor(bg); } catch (e) { /* старый клиент */ }
     }
@@ -152,7 +151,7 @@
     });
   }
 
-  // 🛠 Поддержка и пожелания: Kit.support('/api/support') — лист с полем и скриншотом,
+  // 🛠️ Поддержка и пожелания: Kit.support('/api/support') — лист с полем и скриншотом,
   // «Отправить» -> POST {text, photo?: base64} (+ bot, если даны цели: opts.targets = [{id, name}]);
   // opts.api(путь, тело) — свой запрос вместо Kit.api (общий для страницы — Kit.supportOpts = {api}).
   // Строка для своих экранов — Kit.supportRow(путь[, подпись]): клик по [data-support] открывает лист сам.
@@ -162,7 +161,7 @@
     const targets = opts.targets || [];
     let photo = null;
     let bot = opts.target || (targets[0] && targets[0].id) || '';
-    const el = sheet(`<h2>🛠 Поддержка и пожелания</h2>
+    const el = sheet(`<h2>🛠️ Поддержка и пожелания</h2>
       <p class="hint sup-lead">${esc(opts.hint || SUP_TEXT)}</p>
       ${targets.length ? `<div class="chips sup-targets">${targets.map((t) =>
         `<button class="chip${t.id === bot ? ' on' : ''}" data-bot="${esc(t.id)}">${esc(t.name)}</button>`).join('')}</div>` : ''}
@@ -214,7 +213,7 @@
   }
   function supportRow(apiPath, sub) {
     return `<div class="list sup-list"><button class="row tap" data-support="${esc(apiPath)}">` +
-      '<span class="ic">🛠</span><span class="main"><div class="title">Поддержка и пожелания</div>' +
+      '<span class="ic">🛠️</span><span class="main"><div class="title">Поддержка и пожелания</div>' +
       `<div class="meta">${esc(sub || 'Ошибка или идея — починю/добавлю')}</div></span><span class="end chev"></span></button></div>`;
   }
   document.addEventListener('click', (ev) => {
@@ -228,7 +227,7 @@
     if (o && o.open) return o.open();  // у приложения свой лист (Главный — с выбором бота)
     support(b.dataset.support);
   });
-  // Плавающая кнопка «🛠 Поддержка» на каждом экране: <body data-support="/api/support">.
+  // Плавающая кнопка «🛠️ Поддержка» на каждом экране: <body data-support="/api/support">.
   // Стоит над нижними вкладками, не зависит от того, что сейчас нарисовано.
   function supportFab() {
     const path = document.body.dataset.support;
@@ -238,7 +237,7 @@
     b.type = 'button';
     b.dataset.support = path;
     b.setAttribute('aria-label', 'Поддержка и пожелания');
-    b.innerHTML = '<span class="i">🛠</span><span class="t">Поддержка</span>';
+    b.innerHTML = '<span class="i">🛠️</span><span class="t">Поддержка</span>';
     document.body.appendChild(b);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', supportFab); else supportFab();

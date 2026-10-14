@@ -16,14 +16,6 @@ const PW = fs.existsSync('/opt/node-tools/node_modules/playwright')
   ? '/opt/node-tools/node_modules/playwright' : 'playwright';
 const { chromium } = require(PW);
 
-const [dir, fixFile, out] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const light = process.argv.includes('--light');
-if (!dir || !fixFile || !out) {
-  console.error('node shots.js <webapp> <fixtures.json> <out-prefix> [--light]');
-  process.exit(2);
-}
-const fix = JSON.parse(fs.readFileSync(fixFile, 'utf8'));
-const base = fix.base || '/';
 const ORIGIN = 'https://app.test';
 
 const THEMES = {
@@ -36,10 +28,9 @@ const THEMES = {
     header_bg_color: '#f7f7f7', section_separator_color: '#e0e0e3', destructive_text_color: '#ff3b30',
     subtitle_text_color: '#8e8e93', accent_text_color: '#007aff' },
 };
-const theme = light ? THEMES.light : THEMES.dark;
 
 // Заглушка telegram-web-app.js: то, чем пользуются наши приложения
-const STUB = `(() => {
+const stub = (light) => { const theme = light ? THEMES.light : THEMES.dark; return `(() => {
   const tp = ${JSON.stringify(theme)};
   const root = document.documentElement.style;
   for (const [k, v] of Object.entries(tp)) root.setProperty('--tg-theme-' + k.replace(/_/g, '-'), v);
@@ -60,23 +51,21 @@ const STUB = `(() => {
       selectionChanged: noop }, MainButton: btn(), SecondaryButton: btn(), BackButton: btn(), SettingsButton: btn(),
     CloudStorage: { getItem: (k, cb) => cb(null, ''), setItem: (k, v, cb) => cb && cb(null, true) },
   } };
-})();`;
+})();`; };
 
-(async () => {
-  const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2,
-    colorScheme: light ? 'light' : 'dark' });
-  page.on('pageerror', (e) => console.error('ОШИБКА СТРАНИЦЫ:', e.message));
-  page.on('console', (m) => { if (m.type() === 'error') console.error('console:', m.text()); });
+// Подменить сеть страницы: telegram.org → заглушка, API → ответы из примеров (onApi видит каждый запрос), файлы — из dir.
+async function serve(page, dir, fix, light, onApi) {
+  const base = fix.base || '/';
   await page.route('**/*', async (route) => {
     const req = route.request();
     const u = new URL(req.url());
-    if (u.hostname === 'telegram.org') return route.fulfill({ contentType: 'text/javascript', body: STUB });
+    if (u.hostname === 'telegram.org') return route.fulfill({ contentType: 'text/javascript', body: stub(light) });
     if (u.origin !== ORIGIN) return route.fulfill({ status: 204, body: '' });
     const p = u.pathname;
     const api = fix.api || {};
     const hit = api[`${req.method()} ${p}`] ?? api[p];
     if (hit !== undefined || /\/api\//.test(p)) {
+      if (onApi) onApi(req.method(), p, hit !== undefined);
       const wrapped = hit && typeof hit === 'object' && 'status' in hit && 'body' in hit;
       return route.fulfill({ status: wrapped ? hit.status : 200, contentType: 'application/json',
         body: JSON.stringify(wrapped ? hit.body : (hit ?? {})) });
@@ -91,7 +80,24 @@ const STUB = `(() => {
       '.png': 'image/png', '.json': 'application/json' }[path.extname(file)] || 'application/octet-stream';
     return route.fulfill({ contentType: type + '; charset=utf-8', body });
   });
-  await page.goto(ORIGIN + base);
+  return ORIGIN + base;
+}
+
+async function main() {
+  const [dir, fixFile, out] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+  const light = process.argv.includes('--light');
+  if (!dir || !fixFile || !out) {
+    console.error('node shots.js <webapp> <fixtures.json> <out-prefix> [--light]');
+    process.exit(2);
+  }
+  const fix = JSON.parse(fs.readFileSync(fixFile, 'utf8'));
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2,
+    colorScheme: light ? 'light' : 'dark' });
+  page.on('pageerror', (e) => console.error('ОШИБКА СТРАНИЦЫ:', e.message));
+  page.on('console', (m) => { if (m.type() === 'error') console.error('console:', m.text()); });
+  const url = await serve(page, dir, fix, light);
+  await page.goto(url);
   await page.waitForTimeout(fix.wait || 900);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   for (const s of fix.shots || [{ name: 'home' }]) {
@@ -106,4 +112,7 @@ const STUB = `(() => {
     console.log(file);
   }
   await browser.close();
-})();
+}
+
+module.exports = { serve, stub, THEMES, ORIGIN, chromium };
+if (require.main === module) main();

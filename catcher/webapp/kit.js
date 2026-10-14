@@ -4,12 +4,12 @@
 // tabs(элемент, fn(имя)) — переключатель .tabs > button[data-tab] · mainButton(текст, fn) / mainButton(null) — синяя
 // кнопка Telegram внизу · back(fn) / back(null) — кнопка «Назад» Telegram · sheet(html) → элемент, закрыть: .remove()
 // fmt(число) — «1 234,5» · poll(fn, сек) — обновлять, пока приложение видно.
-// 🛠 support() — лист «Поддержка и пожелания» (текст + скриншот → api('support') → Claude правит бота, ответ в чат);
+// 🛠️ support() — лист «Поддержка и пожелания» (текст + скриншот → api('support') → Claude правит бота, ответ в чат);
 // строка с ним сама встаёт внизу main (не нужна — <body data-no-support>), своя кнопка — data-support.
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
   tg.ready(); tg.expand();
-  try { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); } catch (e) { /* старый Telegram */ }
+  try { const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#f6f3ee'; tg.setHeaderColor(bg); tg.setBackgroundColor(bg); } catch (e) { /* старый Telegram */ }
 }
 const $ = (sel) => (sel[0] === '#' || sel[0] === '.' || sel.includes(' ') ? document.querySelector(sel) : document.getElementById(sel));
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -92,7 +92,7 @@ function poll(fn, sec = 30) {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) fn(); });
 }
 
-// ---------- 🛠 поддержка и пожелания (сервер — встроенный api('support') в botkit) ----------
+// ---------- 🛠️ поддержка и пожелания (сервер — встроенный api('support') в botkit) ----------
 function shrinkImage(file, max = 1600) {  // -> base64 JPEG (без «data:»), длинная сторона ≤ max
   return new Promise((resolve, reject) => {
     const rd = new FileReader();
@@ -113,7 +113,7 @@ function shrinkImage(file, max = 1600) {  // -> base64 JPEG (без «data:»), 
 
 function support() {
   let photo = null;
-  const s = sheet(`<h2>🛠 Поддержка и пожелания</h2>
+  const s = sheet(`<h2>🛠️ Поддержка и пожелания</h2>
     <p class="muted">Напиши, что сломалось или чего не хватает — починю/добавлю.</p>
     <textarea class="sup-text" rows="5" maxlength="4000" placeholder="Например: «кнопка не жмётся» или «добавь итог за неделю»"></textarea>
     <div class="sup-shot"><label class="btn small">📎 Скриншот<input type="file" accept="image/*" hidden></label><span class="sup-prev"></span></div>
@@ -148,7 +148,7 @@ document.addEventListener('click', (ev) => {
 });
 if (!document.body.hasAttribute('data-no-support')) {
   (document.querySelector('main') || document.body).insertAdjacentHTML('beforeend',
-    '<div class="list sup-list"><button class="row" data-support><span class="icon">🛠</span><span class="main">' +
+    '<div class="list sup-list"><button class="row" data-support><span class="icon">🛠️</span><span class="main">' +
     '<span class="name">Поддержка и пожелания</span><span class="meta">Ошибка или идея — починю/добавлю</span></span>' +
     '<span class="end">›</span></button></div>');
 }
