@@ -181,6 +181,23 @@ class BotTest(unittest.TestCase):
         bot.on_callback({"id": "1", "data": f"now:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 7}})
         self.assertEqual(self.nodes[-1][0], "horo/answer.js")
 
+    def test_delay_can_be_turned_off(self):
+        self.say("/delay off")
+        self.assertIn("выкл", self.last()[0])
+        self.assertFalse(bot.human_on())
+        self.say(URL)
+        with mock.patch.object(bot, "SEND_DELAY", "5-5"):  # выключено — уходит сразу, без таймера
+            bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual(self.nodes[-1][0], "horo/answer.js")
+        bot.on_more(CHAT, 9, "1", "human")  # кнопка в «Ещё» включает обратно
+        self.assertTrue(bot.human_on())
+        self.assertEqual(bot.ROUTES["/api/human"]({"on": False}), {"human": False})
+
+    def test_no_personal_info_in_tasks(self):
+        p = bot.prompt_for(URL, "", False)
+        self.assertIn("ничего личного о Глебе", p)
+        self.assertIn("не упоминай, что помогал ИИ".lower(), p.lower())
+
     def test_drop_and_ok_word(self):
         self.say(URL)
         bot.on_callback({"id": "1", "data": "drop", "message": {"chat": {"id": CHAT}, "message_id": 5}})

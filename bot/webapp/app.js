@@ -334,6 +334,8 @@ function settingsHtml() {
         <div class="meta">сайт, Claude, почерк — ответ в чат</div></span><span class="chev"></span></button>
       <button class="row" data-a="alphabet"><span class="ic">✍️</span><span class="main"><div class="title">Мой почерк</div>
         <div class="meta">${me.alphabet ? 'алфавит заполнен · прислать заново' : 'не заполнен — листы придут в чат'}</div></span><span class="chev"></span></button>
+      <button class="row" data-a="human"><span class="ic">⏳</span><span class="main"><div class="title">Сдача как человек: ${me.human === false ? 'выкл' : 'вкл'}</div>
+        <div class="meta">${me.human === false ? 'сдаю и отправляю сразу' : 'паузы в тестах, учителю — через 4–12 мин'} · нажми, чтобы переключить</div></span></button>
       <button class="row" data-support="/api/support"><span class="ic">🛠</span><span class="main"><div class="title">Поддержка и пожелания</div>
         <div class="meta">ошибка или идея — починю/добавлю</div></span><span class="chev"></span></button>
       <button class="row" data-a="chat"><span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>
@@ -406,6 +408,9 @@ const ACT = {
   seen: () => { S.seen = (S.state && S.state.last && S.state.last.at) || Date.now() / 1000; store('hdp.seen', S.seen); renderStatus(); },
   more: el => { const t = el.previousElementSibling; t.classList.add('open'); el.remove(); },
   draft: el => draftSheet(el.dataset.task),
+  human: async () => {
+    try { const r = await api('/api/human', { on: (S.me || {}).human === false }); S.me = { ...(S.me || {}), human: r.human }; settingsSheet(); toast(r.human ? 'Сдаю как человек' : 'Сдаю сразу', 'ok'); } catch (e) { toast(e.message, 'err'); }
+  },
   'draft-send': el => Kit.busy(el, async () => {
     try {
       await api('/api/draft/save', { task: S.draftTask, text: q('#draft-text').value });
