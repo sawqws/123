@@ -1,11 +1,12 @@
-/* Авито: общий вид — kit.css (пастель), здесь только акцент (пастельная мята) и своё: шаги, фото, гистограмма цен.
-   Насыщенная мята — только в мелочах (точки, галочки, медиана); заливки — --accent-soft / --accent-pastel. */
-:root, html[data-scheme] { --accent: #3fb592; --accent-ink: var(--ink); }
+/* Авито: общий вид — kit.css («Оникс-стекло»: чёрный, золото, SF Rounded), здесь акцент (мята) и своё:
+   шаги, фото, гистограмма цен. Фото товара — на белом, как есть; вокруг — тёмное стекло.
+   Мята — в мелочах (галочки, точки, столбики в зоне цены), золото — медиана и выбранная цена. */
+:root, html[data-scheme] { --accent: #4cc9a0; --accent-ink: var(--ink); --mint: #7fe0bd; }
 
 .center { text-align: center; }
 .lead { margin: 6px 0 16px; font-size: 14.5px; }
 .sep { height: 1px; background: var(--sep); margin: 16px -20px; }
-.k-title { font: 650 17px/1.25 var(--font-d); letter-spacing: -.2px; color: var(--ink); }
+.k-title { font: 750 17px/1.25 var(--round); letter-spacing: -.2px; color: var(--ink); }
 .card-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .card-row.top { align-items: flex-start; }
 .card-row > .main, .card-row > div:first-child { flex: 1; min-width: 0; }
@@ -28,27 +29,29 @@
 .step { display: flex; align-items: center; gap: 7px; color: var(--hint); font-size: 13.5px; font-weight: 600;
   white-space: nowrap; }
 .step .n { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px;
-  background: var(--field); color: var(--hint); flex: none; }
+  background: rgba(255, 255, 255, .07); color: var(--hint); flex: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
 .step.now { color: var(--text); }
-.step.now .n { background: #fff; color: var(--accent-deep); box-shadow: inset 0 0 0 1.5px var(--accent-2), 0 4px 10px -6px var(--accent-deep); }
+.step.now .n { background: var(--accent-soft); color: var(--mint); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
 .step.done { color: var(--ink); }
-.step.done .n { background: var(--accent-pastel); color: var(--accent-deep); font-weight: 700; }
+.step.done .n { background: var(--accent-pastel); color: var(--mint); font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16); }
 .step.skip { opacity: .5; }
 
 /* ---------- первый экран: загрузить фото ---------- */
 .start { text-align: center; padding: 22px 18px 18px; }
 .start .lead { max-width: 320px; margin-left: auto; margin-right: auto; }
 .drop { width: 112px; height: 112px; margin: 6px auto 18px; border-radius: 32px; display: grid; place-items: center;
-  font-size: 50px; cursor: pointer; background: var(--card);
-  border: 1.5px dashed var(--accent-2); box-shadow: 0 18px 36px -24px var(--accent-deep); }
+  font-size: 50px; cursor: pointer; background: rgba(255, 255, 255, .06);
+  border: 1.5px dashed var(--accent-line); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 18px 40px -22px var(--accent); }
 .drop span { transform: translateY(2px); }
 
 /* ---------- фото на белом ---------- */
 .gallery { display: grid; gap: 8px; margin-top: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .gallery.solo { grid-template-columns: minmax(0, 1fr); }
 .gallery.duo { grid-template-columns: 2fr 1fr; }
-.gallery .ph { position: relative; aspect-ratio: 1; border-radius: 16px; overflow: hidden; background: #fff;
-  border: 1px solid var(--line); cursor: pointer; min-width: 0; }
+/* фото товара — на белом, как в объявлении (это и есть результат); рамка — тонкий блик */
+.gallery .ph { position: relative; aspect-ratio: 1; border-radius: 18px; overflow: hidden; background: #fff;
+  border: 0; box-shadow: 0 0 0 1px rgba(255, 255, 255, .1), 0 14px 26px -18px rgba(0, 0, 0, .9); cursor: pointer; min-width: 0; }
 .gallery .ph.big { grid-column: span 2; grid-row: span 2; }
 .gallery.solo .ph.big { grid-column: auto; grid-row: auto; aspect-ratio: 4 / 3; }
 .gallery.duo .ph.big { grid-column: auto; grid-row: span 2; }
@@ -62,91 +65,97 @@
   background: linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--accent) 30%, transparent) 50%, transparent 80%);
   transform: translateX(-100%); animation: kit-shimmer 1.4s infinite; }
 .ph .tag { position: absolute; left: 6px; bottom: 6px; right: 6px; z-index: 1; padding: 3px 8px; border-radius: 8px;
-  background: rgba(255, 255, 255, .92); color: var(--ink); font-size: 11.5px; font-weight: 600; white-space: nowrap;
-  box-shadow: 0 2px 8px -2px rgba(70, 45, 20, .25);
+  background: rgba(16, 16, 18, .66); color: var(--ink); font-size: 11.5px; font-weight: 650; white-space: nowrap;
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12);
   overflow: hidden; text-overflow: ellipsis; width: fit-content; max-width: calc(100% - 12px); }
 .gallery .ph:not(.big) .tag { left: 5px; bottom: 5px; padding: 2px 6px; font-size: 10.5px; max-width: calc(100% - 10px); }
-.ph .tag.live::before { content: "● "; color: var(--accent); }
-.ph.add { display: grid; place-items: center; background: var(--accent-soft); border: 1.5px dashed var(--accent-2);
-  color: var(--accent-deep); font-size: 26px; font-weight: 300; font-family: inherit; padding: 0; cursor: pointer; }
+.ph .tag.live::before { content: "● "; color: var(--mint); }
+.ph.add { display: grid; place-items: center; background: var(--accent-soft); border: 1.5px dashed var(--accent-line);
+  color: var(--mint); box-shadow: none; font-size: 26px; font-weight: 300; font-family: inherit; padding: 0; cursor: pointer; }
 
 /* ---------- описание ---------- */
-.ad-title { margin: 0; flex: 1; min-width: 0; font: 600 23px/1.2 var(--serif); letter-spacing: -.2px; color: var(--ink);
+.ad-title { margin: 0; flex: 1; min-width: 0; font: 800 22px/1.2 var(--round); letter-spacing: -.3px; color: var(--ink);
   overflow-wrap: anywhere; }
-.desc-card .btn.icon { width: 36px; height: 36px; min-height: 36px; font-size: 17px; background: var(--card-2);
-  color: var(--hint); box-shadow: inset 0 0 0 1px var(--line); margin: -2px -4px 0 0; }
-.desc { margin-top: 14px; padding: 14px 16px; border-radius: var(--r-md); background: var(--card-2); font-size: 15px;
-  line-height: 1.5; color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+.desc-card .btn.icon { width: 36px; height: 36px; min-height: 36px; font-size: 17px; background: rgba(255, 255, 255, .08);
+  color: var(--ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px rgba(255, 255, 255, .07); margin: -2px -4px 0 0; }
+.desc { margin-top: 14px; padding: 14px 16px; border-radius: var(--r-md); background: rgba(255, 255, 255, .045); font-size: 15px;
+  line-height: 1.5; color: rgba(246, 241, 231, .9); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); white-space: pre-wrap; overflow-wrap: anywhere; }
 .desc.clamp { max-height: calc(1.5em * 7 + 28px); overflow: hidden;
   -webkit-mask: linear-gradient(180deg, #000 70%, transparent); mask: linear-gradient(180deg, #000 70%, transparent); }
-.more-link { background: none; border: 0; padding: 10px 2px 0; color: var(--accent-deep); font: 600 14px var(--font);
+.more-link { background: none; border: 0; padding: 10px 2px 0; color: var(--gold-ink); font: 650 14px var(--round);
   cursor: pointer; }
 .qs { margin-top: 12px; }
 .qs .hint { margin: 0 2px 6px; }
 .q { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; margin-top: 6px;
   border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--accent-soft); color: var(--ink);
-  font: 500 14.5px/1.3 var(--font); text-align: left; cursor: pointer; }
+  font: 550 14.5px/1.3 var(--round); text-align: left; cursor: pointer; }
 .q .chev { margin-left: auto; }
-.q .chev::after { content: "›"; color: var(--hint); font-size: 20px; line-height: 1; }
+.q .chev::after { content: "›"; color: rgba(240, 232, 215, .35); font-size: 20px; line-height: 1; }
 .note { margin-top: 12px; }
 
 /* ---------- цена ---------- */
-.price-now { font: 650 26px/1.15 var(--font-d); letter-spacing: -.5px; margin-top: 4px; color: var(--ink); }
-.price-now.none { font: 500 15px/1.4 var(--font); color: var(--hint); letter-spacing: 0; }
+.price-now { font: 800 28px/1.15 var(--round); letter-spacing: -.6px; margin-top: 4px; color: var(--ink); }
+.price-now.none { font: 550 15px/1.4 var(--round); color: var(--hint); letter-spacing: 0; }
 .mk-head { display: flex; align-items: flex-start; gap: 12px; }
 .mk-head .main { flex: 1; min-width: 0; }
 .mk-head .k { color: var(--hint); font-size: 13px; font-weight: 600; }
-.mk-head .big-num { margin-top: 6px; white-space: nowrap; color: var(--ink); font: 600 44px/1 var(--serif); letter-spacing: -.6px; }
+.mk-head .big-num { margin-top: 6px; white-space: nowrap; color: var(--ink); font: 800 44px/1 var(--round); letter-spacing: -1.2px; }
 .mk-head .pill { flex: none; margin-top: 2px; }
 
 .hist { position: relative; height: 92px; margin-top: 20px; }
 .hist .bars, .hist.sk-hist { display: flex; align-items: flex-end; gap: 3px; height: 100%; }
-.hist i { flex: 1; min-width: 0; border-radius: 6px 6px 3px 3px; background: color-mix(in srgb, var(--accent) 17%, #fbf9f5);
+.hist i { flex: 1; min-width: 0; border-radius: 999px 999px 4px 4px; background: rgba(255, 255, 255, .09);
   transition: height .5s var(--ease); }
-/* зона «быстро — дороже»: пастельная мята, сверху светлее */
-.hist i.in { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 34%, #fff), color-mix(in srgb, var(--accent) 52%, #fff)); }
-.hist.sk-hist i { background: var(--field); }
+/* зона «быстро — дороже»: мята, светится сверху вниз */
+.hist i.in { background: linear-gradient(180deg, var(--mint), color-mix(in srgb, var(--accent) 45%, transparent));
+  box-shadow: 0 0 14px -4px color-mix(in srgb, var(--accent) 60%, transparent); }
+.hist.sk-hist i { background: rgba(255, 255, 255, .07); box-shadow: none; }
 .hist.sk-hist i:nth-child(odd) { height: 40%; } .hist.sk-hist i:nth-child(even) { height: 70%; }
 .hist.sk-hist i:nth-child(3n) { height: 95%; } .hist.sk-hist i:nth-child(5n) { height: 25%; }
-.hist .med { position: absolute; top: -8px; bottom: -4px; width: 1.5px; margin-left: -.75px; border-radius: 2px;
-  background: var(--accent-deep); opacity: .8; }
-.hist .med::before { content: ""; position: absolute; top: -4px; left: -4.25px; width: 10px; height: 10px; border-radius: 50%;
-  background: #fff; box-shadow: inset 0 0 0 2.5px var(--accent-deep); }
+/* медиана — золотая нить с жемчужиной */
+.hist .med { position: absolute; top: -8px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: 2px;
+  background: linear-gradient(180deg, var(--gold-ink), color-mix(in srgb, var(--gold) 50%, transparent)); }
+.hist .med::before { content: ""; position: absolute; top: -5px; left: -4px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--gold-ink); box-shadow: 0 0 0 3px rgba(214, 178, 110, .25), 0 0 12px rgba(240, 215, 164, .6); }
 .axis { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--hint); font-size: 12.5px;
   font-weight: 560; }
 
 .picks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
 .pick { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 11px 11px 12px;
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--card-2); color: var(--ink);
+  border: 0; border-radius: var(--r-md); background: rgba(255, 255, 255, .055); color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1), inset 0 0 0 1px rgba(255, 255, 255, .06);
   font-family: inherit; cursor: pointer; text-align: left; transition: transform .16s var(--ease), background .2s; }
 .pick:active { transform: scale(.97); }
 .pick[disabled] { cursor: default; }
 .pick .k i { font-style: normal; }
 .pick .k { color: var(--hint); font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; max-width: 100%; }
-.pick b { font: 650 16px/1.1 var(--font-d); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.pick.mid { border-color: var(--accent-line); background: var(--accent-soft); }
-.pick.on { background: var(--accent-pastel); border-color: transparent; color: var(--ink);
-  box-shadow: 0 10px 20px -14px var(--accent-deep), inset 0 0 0 1px rgba(255, 255, 255, .5); }
-.pick.on .k { color: var(--accent-deep); }
+.pick b { font: 800 16.5px/1.1 var(--round); letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pick.mid { background: var(--accent-soft); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px var(--accent-line); }
+.pick.mid .k { color: var(--accent-deep); }
+/* выбранная цена — золотое стекло, как главная кнопка */
+.pick.on { background: linear-gradient(180deg, rgba(246, 222, 170, .42), rgba(196, 152, 78, .26)); color: #fff7e6;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 0 0 1px rgba(240, 210, 150, .45), 0 10px 24px -12px rgba(214, 178, 110, .7); }
+.pick.on .k { color: var(--gold-ink); }
 .mk > .hint.center { margin: 8px 0 0; }
 .mk-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; min-height: 36px; }
 .mk-foot .hint { flex: 1; }
 .mk-foot .btn { flex: none; }
-.similar { margin-top: 12px; border-radius: var(--r-md); background: var(--card-2); overflow: hidden;
-  box-shadow: inset 0 0 0 1px var(--line); }
+.similar { margin-top: 12px; border-radius: var(--r-md); background: rgba(255, 255, 255, .05); overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), inset 0 0 0 1px rgba(255, 255, 255, .05); }
 .similar summary { padding: 11px 14px; font-weight: 600; font-size: 14.5px; cursor: pointer; list-style: none;
   display: flex; justify-content: space-between; }
 .similar summary::-webkit-details-marker { display: none; }
-.similar summary::after { content: "›"; color: #c5beb5; font-size: 20px; line-height: 1; transition: transform .2s; }
+.similar summary::after { content: "›"; color: rgba(240, 232, 215, .35); font-size: 20px; line-height: 1; transition: transform .2s; }
 .similar[open] summary::after { transform: rotate(90deg); }
 .similar .list { margin: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .similar .row { padding: 10px 14px; font-size: 14.5px; }
 .similar .row .end { color: var(--ink); font-weight: 600; }
 
 /* ---------- все объявления ---------- */
-.thumb { flex: none; width: 48px; height: 48px; border-radius: 13px; background: #fff; overflow: hidden; display: grid;
-  place-items: center; border: 1px solid var(--line); font-size: 22px; box-shadow: 0 4px 10px -8px rgba(70, 45, 20, .3); }
+.thumb { flex: none; width: 48px; height: 48px; border-radius: 14px; background: #fff; overflow: hidden; display: grid;
+  place-items: center; border: 0; font-size: 22px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .1); }
+.thumb:has(> span) { background: rgba(255, 255, 255, .07); }  /* без фото — стеклянная плитка, а не белая */
 .thumb img { width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity .2s; }
 .thumb img.on { opacity: 1; }
 #hist .row + .row::before { left: 76px; }
@@ -160,9 +169,10 @@
 .sh-chips { margin-top: 10px; flex-wrap: wrap; overflow: visible; }
 .strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px 4px; padding: 0 16px; }
 .strip::-webkit-scrollbar { display: none; }
-.strip .ph { flex: none; width: 124px; aspect-ratio: 1; border-radius: 16px; background: #fff; overflow: hidden;
-  border: 1px solid var(--line); }
-.viewer { border-radius: var(--r-xl); background: #fff; overflow: hidden; aspect-ratio: 1; box-shadow: var(--shadow); }
+.strip .ph { flex: none; width: 124px; aspect-ratio: 1; border-radius: 18px; background: #fff; overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .1); }
+.viewer { border-radius: var(--r-xl); background: #fff; overflow: hidden; aspect-ratio: 1;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .1), 0 24px 50px -24px rgba(0, 0, 0, .95); }
 .viewer img { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0; transition: opacity .2s; }
 .viewer img.on { opacity: 1; }
 .sheet .viewer + .hint { margin: 10px 0 4px; }
@@ -177,3 +187,6 @@
   .hero h1 { font-size: 23px; }
 }
 .mode-list { margin-top: 8px; }  /* «💬 Перейти в чат» — под строкой поддержки */
+/* оригинал (фон ещё не убран или не получилось) — поля вокруг тёмные, белое — только у готовых фото */
+.gallery .ph.wait, .gallery .ph.err { background: rgba(255, 255, 255, .06); }
+.sheet .viewer { margin-top: 44px; }  /* фото не уходит под «✕» листа */
