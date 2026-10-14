@@ -1,80 +1,72 @@
-"""Рисует аватар и баннер бота: python3 tgbot/art/make.py (нужны Pillow, numpy и шрифт Inter Display)."""
+"""Рисует аватар и баннер бота: python3 tgbot/art/make.py (нужен Pillow; для баннера — шрифт Inter Display).
+Стиль «iPhone + пастель + люкс»: аватар — общий генератор common/avatar.py (палитра Главного: жемчуг и графит),
+баннер — тёплый жемчужный фон, тёмный текст, тонкие звёзды ✦."""
 import os
 
-import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
 FONT = "/usr/share/fonts/opentype/inter/InterDisplay-{}.otf"
-BG = (9, 11, 22)
-GLOWS = [((124, 92, 255), 0.22, 0.30, 0.55), ((34, 211, 238), 0.85, 0.75, 0.50), ((236, 72, 153), 0.80, 0.10, 0.35)]
 
 
-def aurora(w, h, glows=GLOWS, scale=1.0):
-    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
-    img = np.zeros((h, w, 3), np.float32) + BG
-    for color, cx, cy, r in glows:
-        d = ((x - cx * w) ** 2 + (y - cy * h) ** 2) / (r * max(w, h) * scale) ** 2
-        a = np.exp(-d * 2.2)[..., None] * 0.95
-        img = img * (1 - a) + np.array(color, np.float32) * a
-    noise = np.random.default_rng(7).normal(0, 2.2, (h, w, 1))  # лёгкое зерно, чтобы не было полос
-    return Image.fromarray(np.clip(img + noise, 0, 255).astype(np.uint8))
+def common_avatar():
+    import importlib.util
+    path = os.path.join(REPO, "common", "avatar.py")
+    spec = importlib.util.spec_from_file_location("common_avatar", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def sparkle(draw, cx, cy, r, fill, waist=0.16):
-    """Четырёхлучевая звезда ✦ с вогнутыми сторонами."""
-    pts = []
-    for i in range(64):
-        t = i / 64 * 2 * np.pi
-        # астроида: |x|^(2/3) + |y|^(2/3) = r^(2/3), чуть «потолще» за счёт waist
-        x = np.sign(np.cos(t)) * abs(np.cos(t)) ** 3
-        y = np.sign(np.sin(t)) * abs(np.sin(t)) ** 3
-        x = x * (1 - waist) + np.cos(t) * waist
-        y = y * (1 - waist) + np.sin(t) * waist
-        pts.append((cx + x * r, cy + y * r))
-    draw.polygon(pts, fill=fill)
-
-
-def glow_layer(size, painter, blur):
-    layer = Image.new("RGBA", size, (0, 0, 0, 0))
-    painter(ImageDraw.Draw(layer))
-    return layer.filter(ImageFilter.GaussianBlur(blur))
-
-
-def avatar(path, s=1024):
-    img = aurora(s, s, [((124, 92, 255), 0.25, 0.20, 0.60), ((34, 211, 238), 0.90, 0.95, 0.55),
-                        ((236, 72, 153), 0.95, 0.15, 0.30)]).convert("RGBA")
-    c = s / 2
-    ring = lambda d, w, a: d.ellipse((c - s * .33, c - s * .33, c + s * .33, c + s * .33), outline=(255, 255, 255, a), width=w)
-    img.alpha_composite(glow_layer(img.size, lambda d: ring(d, 18, 120), 18))
-    img.alpha_composite(glow_layer(img.size, lambda d: ring(d, 5, 150), 0))
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, c, c, s * .24, (255, 255, 255, 200)), 28))
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, c, c, s * .22, (255, 255, 255, 255)), 0))
-    # маленькая «спутник»-звезда на орбите
-    ox, oy = c + s * .33 * np.cos(-0.8), c + s * .33 * np.sin(-0.8)
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, ox, oy, s * .06, (255, 255, 255, 255)), 0))
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, ox, oy, s * .08, (190, 230, 255, 160)), 10))
-    img.convert("RGB").resize((640, 640), Image.LANCZOS).save(path, quality=95)
+def avatar(path):
+    common_avatar().render("hub", pil=True).save(path, quality=95)
 
 
 def banner(path, w=1280, h=640):
-    img = aurora(w, h).convert("RGBA")
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, 1010, 300, 150, (255, 255, 255, 170)), 30))
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, 1010, 300, 135, (255, 255, 255, 255)), 0))
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, 1150, 150, 36, (255, 255, 255, 230)), 0))
-    img.alpha_composite(glow_layer(img.size, lambda d: sparkle(d, 880, 470, 22, (255, 255, 255, 200)), 0))
-    text = Image.new("RGBA", img.size, (0, 0, 0, 0))  # полупрозрачное рисуем отдельным слоем и смешиваем
+    av = common_avatar()
+    bg1, bg2, ink, _ = av.palette("hub")
+    lav = av.rgb("#e4dcf3")  # лёгкая лаванда справа — чтобы жемчуг не был серым
+    small = Image.new("RGB", (64, 32))
+    px = []
+    for y in range(32):
+        for x in range(64):
+            t = x / 63 * 0.7 + y / 31 * 0.3
+            base = av.mix(bg1, bg2, t * 0.55)
+            g = max(0.0, 1 - ((x / 63 - 0.85) ** 2 + (y / 31 - 0.45) ** 2) ** 0.5 * 2.2)
+            px.append(av.mix(base, lav, g * 0.8))
+    small.putdata(px)
+    img = small.resize((w, h), Image.BICUBIC).filter(ImageFilter.GaussianBlur(12)).convert("RGBA")
+
+    # звёзды: большая контуром, две маленькие заливкой — тот же знак, что на аватаре
+    k = 3
+    mask = Image.new("L", (w * k, h * k), 0)
+    d = ImageDraw.Draw(mask)
+    big = [(x * k, y * k) for x, y in av.star(1010, 300, 150, 0.16)]
+    big = big[9:] + big[:10]  # шов контура — на вогнутой стороне, не на острие
+    d.line(big, fill=255, width=9 * k, joint="curve")
+    d.polygon([(x * k, y * k) for x, y in av.star(1158, 150, 34, 0.17)], fill=255)
+    d.polygon([(x * k, y * k) for x, y in av.star(872, 468, 20, 0.17)], fill=255)
+    mask = mask.resize((w, h), Image.LANCZOS)
+    shadow = mask.filter(ImageFilter.GaussianBlur(10)).point(lambda v: v * 0.14)
+    img.alpha_composite(Image.merge("RGBA", [Image.new("L", (w, h), v) for v in ink] + [shadow.transform(
+        (w, h), Image.AFFINE, (1, 0, 0, 0, 1, -8))]))
+    img.alpha_composite(Image.merge("RGBA", [Image.new("L", (w, h), v) for v in ink] + [mask]))
+
+    text = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(text)
-    d.text((88, 150), "АГЕНТ", font=ImageFont.truetype(FONT.format("SemiBold"), 30), fill=(255, 255, 255, 150))
-    d.text((84, 190), "Твой Telegram", font=ImageFont.truetype(FONT.format("Bold"), 92), fill="white")
-    d.text((84, 292), "на автопилоте", font=ImageFont.truetype(FONT.format("Bold"), 92), fill=(255, 255, 255, 215))
-    f = ImageFont.truetype(FONT.format("Medium"), 26)
+    soft = (*ink, 150)
+    d.text((88, 150), "АГЕНТ", font=ImageFont.truetype(FONT.format("Medium"), 26), fill=soft)
+    d.text((84, 190), "Твой Telegram", font=ImageFont.truetype(FONT.format("SemiBold"), 88), fill=(*ink, 255))
+    d.text((84, 290), "на автопилоте", font=ImageFont.truetype(FONT.format("Light"), 88), fill=(*ink, 230))
+    f = ImageFont.truetype(FONT.format("Medium"), 25)
     x = 88
     for chip in ("чаты", "группы", "папки", "расписание", "психолог"):
         tw = d.textlength(chip, font=f)
-        d.rounded_rectangle((x, 450, x + tw + 40, 500), radius=25, fill=(255, 255, 255, 30), outline=(255, 255, 255, 70), width=2)
-        d.text((x + 20, 459), chip, font=f, fill=(255, 255, 255, 235))
-        x += tw + 56
+        d.rounded_rectangle((x, 450, x + tw + 40, 498), radius=24, fill=(255, 255, 255, 170),
+                            outline=(*ink, 28), width=2)
+        d.text((x + 20, 459), chip, font=f, fill=(*ink, 220))
+        x += tw + 54
     img.alpha_composite(text)
     img.convert("RGB").save(path, quality=92)
 
