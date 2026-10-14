@@ -63,6 +63,8 @@ class Sheet(unittest.TestCase):
             self.assertEqual(Image.open(files[1]).size, (sheet.PAGE_W, sheet.PAGE_H))
             shot = Image.open(files[0]).convert('RGB')
             self.assertNotEqual(shot.getpixel((20, 20)), (255, 255, 255))   # фон скрина тёмный, не лист
+            page = Image.open(files[1]).convert('RGB')   # лист тёмный в клетку, как тёмные заметки iPad
+            self.assertLess(sum(page.getpixel((sheet.CELL // 2, sheet.CELL // 2))), 150)
 
     def test_answer_false_and_no_shot(self):
         with tempfile.TemporaryDirectory() as d:
