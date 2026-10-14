@@ -72,10 +72,30 @@ const { open, close, api, download, loadTask, htmlToText, images, TMP, EDU } = r
     if (d.type === 'detailedAnswer' && p.uuid) {
       const da = await api(s.page, `${EDU}/progress/${p.uuid}/detailed-answer-attempts`);
       console.log('\nОТВЕТЫ И КОММЕНТАРИИ УЧИТЕЛЯ:');
+      // файлы прошлых ответов (его фото/скрины решения) и пометки учителя — чтобы при доработке видеть,
+      // что уже сделано и что исправить. Сохраняются как prev<N>_<k>.<ext> и mark<N>_<k>.<ext>
+      const ext = f => (/png/i.test(f.contentType || f.fileName || '') ? 'png' : /pdf/i.test(f.contentType || f.fileName || '') ? 'pdf' : 'jpg');
+      const grab = async (f, name) => {
+        const src = f.original || f.url || f.location || f.thumbnail;
+        if (!src) return null;
+        const out = path.join(dir, `${name}.${ext(f)}`);
+        try { await download(s.page, src, out); return out; } catch (e) { return null; }
+      };
+      let n = 0;
       for (const a of da) {
+        n++;
         console.log(`  ${a.createdAt.slice(0, 16)} ${a.status} оценка=${a.review && a.review.grade ? a.review.grade.value : '-'}`);
         console.log(`    ответ: ${htmlToText(a.answer.text)} | файлов: ${a.answer.attachments.length}`);
+        for (const [k, f] of a.answer.attachments.entries()) {
+          const got = await grab(f, `prev${n}_${k + 1}`);
+          if (got) console.log(`    файл ответа: ${got}`);
+        }
         if (a.review && a.review.comment) console.log(`    учитель: ${htmlToText(a.review.comment)}`);
+        const marks = [...((a.review && a.review.attachments) || []), ...((a.review && a.review.highlightsReview && a.review.highlightsReview.highlightedImages) || [])];
+        for (const [k, f] of marks.entries()) {
+          const got = await grab(f, `mark${n}_${k + 1}`);
+          if (got) console.log(`    пометки учителя: ${got}`);
+        }
       }
     }
     console.log(`\nJSON: ${path.join(dir, 'task.json')}`);
