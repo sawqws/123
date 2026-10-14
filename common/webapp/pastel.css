@@ -35,7 +35,6 @@ body::before {
   content: ""; position: fixed; inset: 0 0 auto; height: 46vh; z-index: -1; pointer-events: none;
   background: radial-gradient(90% 70% at 50% -10%, var(--accent-soft), transparent 72%);
 }
-html[data-scheme] body::before { background: radial-gradient(90% 70% at 50% -10%, var(--accent-soft), transparent 72%); }
 body::after { content: none; }
 
 /* шапка: заголовок с засечками (New York на iPhone), логотип — пастельная плитка */
@@ -74,13 +73,13 @@ body::after { content: none; }
   background: var(--accent-pastel); color: var(--ink); border: 0;
   box-shadow: 0 10px 22px -14px var(--accent-deep), inset 0 0 0 1px rgba(255, 255, 255, .5);
 }
-.btn.tonal, html[data-scheme] .btn.tonal { background: var(--accent-soft); color: var(--accent-deep); border: 0; }
+.btn.tonal { background: var(--accent-soft); color: var(--accent-deep); border: 0; }
 .btn.ghost { background: transparent; color: var(--accent-deep); box-shadow: none; }
 .btn.danger { background: color-mix(in srgb, var(--err) 10%, #ffffff); color: var(--err); border: 0; }
 .btn.sm { border-radius: 999px; }
 
 /* поля — тёплый «туман», без рамки; фокус — пастельное кольцо */
-input, textarea, select, html[data-scheme] input, html[data-scheme] textarea, html[data-scheme] select {
+input, textarea, select {
   background: var(--field); border: 1px solid transparent; box-shadow: none; color: var(--ink);
   -webkit-backdrop-filter: none; backdrop-filter: none;
 }
