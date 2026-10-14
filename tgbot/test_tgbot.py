@@ -248,6 +248,19 @@ class Actions(unittest.TestCase):
         self.assertEqual(actions.bot_tokens([a, os.path.join(d, "nope.env")], made),
                          ["111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "222222:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"])
 
+    def test_botpress_only_own_bots_and_safe_buttons(self):
+        """botpress: чужих ботов и Студию сайтов не трогает; «Отправить», «Заказать», «Создать»… без force не жмёт."""
+        with mock.patch.object(actions, "probe_allowed", return_value=({"mybot", "botfather"}, {"sisbot"})):
+            with self.assertRaises(actions.Fail):
+                run(actions.botpress(Ctx(), {"bot": "@durov"}))
+            with self.assertRaises(actions.Fail):
+                run(actions.botpress(Ctx(), {"bot": "sisbot"}))
+        for risky in ("✅ Отправить", "Заказать пропуск", "🛠 Сделать бота", "⬆️ Обновить всех", "↩️ Откатить",
+                      "Решить и сдать", "⚡ Автотесты темы", "Да", "🗑 Удалить", "📱 Приложение"):
+            self.assertTrue(actions.RISKY.search(risky), risky)
+        for safe in ("🤖 Боты", "« Назад", "📊 Оценки", "⚙️ Ещё", "🛠 Поддержка", "Отмена", "📖 Подготовка", "Дальше"):
+            self.assertFalse(actions.RISKY.search(safe), safe)
+
     def test_dates(self):
         d = actions.date("2026-10-10 09:00")
         self.assertEqual(d.astimezone(UTC).hour, 6)
