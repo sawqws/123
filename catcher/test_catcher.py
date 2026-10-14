@@ -238,6 +238,40 @@ class Wish(Base):
         self.assertEqual((w["len"], w["style"], w["count"], w["theme"]), ("5", "word", 3, "космос"))
         self.assertIn("5 символов, одно слово, тема «космос», только буквы, поймать 3", self.t.last)
 
+    def test_buttons_fit_telegram(self):
+        """Каждый экран: не больше 3 кнопок в ряд, callback_data до 64 байт (кириллица — 2 байта)."""
+        app.set_wish("theme", "космические приключения")
+        self.agent.channels.append({"id": -1000000000000123, "title": "Очень длинное название моего канала", "username": ""})
+        for step in (lambda: self.t.send("/start"), lambda: self.t.send("/wish"), lambda: self.t.send("/settings"),
+                     lambda: self.t.press("channels"), lambda: self.t.send("/list"),
+                     lambda: self.t.send("придумай имена про космические приключения")):
+            step()
+            kb = (self.t.messages[-1].get("reply_markup") or {}).get("inline_keyboard") or []
+            for row in kb:
+                self.assertLessEqual(len(row), 3, [b["text"] for b in row])
+                for btn in row:
+                    self.assertLessEqual(len(btn.get("callback_data", "").encode()), 64)
+
+    def test_wish_theme_cancel_drops_wait(self):
+        self.t.send("/wish")
+        self.t.press("wtheme")
+        self.t.press("wish")  # «Отмена»
+        self.t.send("просто текст")
+        self.assertEqual(app.wish()["theme"], "")  # не записалось в тему
+
+    def test_ideas_error_does_not_hang(self):
+        with mock.patch.object(app, "check_ideas", side_effect=RuntimeError("сеть")):
+            self.t.press("ideas|космос")
+        self.assertIn("Не получилось придумать", self.t.last)
+        self.assertIn("🔁 Ещё раз", self.t.buttons)
+
+    def test_stale_grab_watch_buttons(self):
+        self.t.press("grab|")
+        self.assertIn("устарела", self.t.toasts[-1])
+        self.t.press("watch|busyname")
+        self.assertEqual(self.t.toasts[-1], "Проверяю…")
+        self.assertIn("слежу", self.t.last)
+
     def test_hunt_catches_until_count(self):
         self.t.press("wl|5")
         self.t.press("ws|word")

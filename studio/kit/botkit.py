@@ -104,7 +104,8 @@ def clip(text, n=24):
 
 def b(text, data, style=None):
     """Кнопка. style: primary (синяя) | success (зелёная) | danger (красная) — если Telegram не примет, будет без цвета."""
-    btn = {"text": clip(text), "callback_data": str(data)[:64]}
+    # Telegram: callback_data — до 64 БАЙТ (кириллица — 2 байта на букву), длиннее — 400 и сообщение не уходит
+    btn = {"text": clip(text), "callback_data": str(data).encode()[:64].decode("utf-8", "ignore")}
     if style:
         btn["style"] = style
     return btn
@@ -214,6 +215,16 @@ class Ctx:
         """Всплывашка на нажатую кнопку."""
         self._toast = (str(text)[:190], alert)
 
+    def ack(self, text="", alert=False):
+        """Ответить на нажатие сразу (крутилка у кнопки гаснет) — перед долгим делом в обработчике кнопки."""
+        if self.cq and not getattr(self, "_acked", False):
+            self._acked = True
+            try:
+                self.bot.call("answerCallbackQuery", callback_query_id=self.cq["id"], text=str(text)[:190] or None,
+                              show_alert=alert or None)
+            except Exception:
+                pass
+
     def ask(self, key, text, buttons=None, data=None):
         """Спросить и ждать ответ текстом: его получит @bot.reply(key), c.data — то, что передали сюда."""
         self.bot.waits[self.chat] = (key, data)
@@ -237,7 +248,7 @@ class Request:
     """Запрос мини-приложения: user (от Telegram, проверен), body (JSON или параметры адреса)."""
 
     def __init__(self, user, body):
-        self.user, self.body = user, body or {}
+        self.user, self.body = user, body if isinstance(body, dict) else {}
         self.uid = (user or {}).get("id")
 
 
@@ -545,8 +556,13 @@ class Bot:
     def _safe(self, fn, *a):
         try:
             fn(*a)
-        except Exception:
-            traceback.print_exc()
+        except Exception as e:  # фон: сказать в чат (Ctx среди аргументов или chat владельца первым), иначе тишина
+            chat = next((x.chat for x in a if isinstance(x, Ctx)), None)
+            if chat is None and a and isinstance(a[0], int) and a[0] == self.owner:
+                chat = a[0]
+            if chat is None and isinstance(e, Fail):
+                print("later:", e, flush=True)
+            self._fail(chat, e)
 
     # --- разбор апдейтов ---
 
@@ -562,14 +578,19 @@ class Bot:
             elif upd.get("callback_query"):
                 self._callback(upd["callback_query"])
         except Exception as e:
-            traceback.print_exc()
             chat = ((upd.get("message") or (upd.get("callback_query") or {}).get("message") or {}).get("chat") or {})
-            if chat.get("id"):
-                try:
-                    self.send(chat["id"], error(esc(e) if isinstance(e, Fail) else "Что-то пошло не так. Попробуй ещё раз."),
-                              [[b("‹ Главное", "home")]])
-                except Exception:
-                    pass
+            self._fail(chat.get("id"), e)
+
+    def _fail(self, chat, e):
+        """Ошибка в обработчике → в чат понятное «⚠️ …» с выходом на главный (Fail — его текст), в лог — трассировка."""
+        if not isinstance(e, Fail):
+            traceback.print_exc()
+        if chat:
+            try:
+                self.send(chat, error(esc(e) if isinstance(e, Fail) else "Что-то пошло не так. Попробуй ещё раз."),
+                          [[b("‹ Главное", "home")]])
+            except Exception:
+                pass
 
     def _message(self, msg):
         chat, user = msg["chat"]["id"], msg.get("from") or {}
@@ -619,37 +640,45 @@ class Bot:
         if not text.strip():
             return self.send(chat, "🎙 Тишина — повтори, пожалуйста.")
         self.send(chat, f"🎙 <i>«{esc(text.strip())}»</i>")
-        self._route_text(Ctx(self, chat, user, text=text.strip(), msg=msg))
+        try:
+            self._route_text(Ctx(self, chat, user, text=text.strip(), msg=msg))
+        except Exception as e:  # в фоне: без этого ошибка обработчика — тишина в чате
+            self._fail(chat, e)
 
     def _photo(self, chat, user, msg, caption):
         try:
             path = media().photo_path(self.token, msg, os.path.join(self.data_dir, "photos"))
         except Exception as e:
             return self.send(chat, error(esc(e) or "Не скачал фото."))
-        self.on_photo(Ctx(self, chat, user, text=caption, msg=msg, photo=path))
+        try:
+            self.on_photo(Ctx(self, chat, user, text=caption, msg=msg, photo=path))
+        except Exception as e:
+            self._fail(chat, e)
 
     def _callback(self, cq):
         msg, user = cq.get("message") or {}, cq.get("from") or {}
         chat = (msg.get("chat") or {}).get("id") or user.get("id")
         c = Ctx(self, chat, user, msg=msg, cq=cq, mid=msg.get("message_id"))
-        if not self.allowed(user.get("id")):
-            c.toast("🔒 Личный бот")
-        else:
-            prefix, *args = (cq.get("data") or "").split("|")
-            c.args = args
-            fn = self.handlers["button"].get(prefix)
-            if prefix == "home" and not fn:
-                self.waits.pop(chat, None)
-                fn = self.home_fn or self._default_home
-            if fn:
-                fn(c)
-            else:
-                c.toast("Эта кнопка устарела")
-        toast, alert = c._toast or ("", False)
         try:
-            self.call("answerCallbackQuery", callback_query_id=cq["id"], text=toast or None, show_alert=alert or None)
-        except Exception:
-            pass
+            if not self.allowed(user.get("id")):
+                c.toast("🔒 Личный бот")
+            else:
+                prefix, *args = (cq.get("data") or "").split("|")
+                c.args = args
+                fn = self.handlers["button"].get(prefix)
+                self.waits.pop(chat, None)  # нажал кнопку — ожидание ответа текстом («Отмена» и любая другая) снято
+                if prefix == "home" and not fn:
+                    fn = self.home_fn or self._default_home
+                if fn:
+                    fn(c)
+                else:
+                    c.toast("Эта кнопка устарела — открой /start")
+        except Exception as e:
+            c.toast("⚠️ " + (str(e) if isinstance(e, Fail) else "Не получилось — попробуй ещё раз"))
+            raise  # handle() пришлёт понятное «⚠️ …» с кнопкой «‹ Главное»
+        finally:
+            toast, alert = c._toast or ("", False)
+            c.ack(toast, alert)
 
     def _default_home(self, c):
         self.menu(c, f"{self.emoji} <b>{esc(self.name)}</b>", [esc(self.about)] if self.about else [])

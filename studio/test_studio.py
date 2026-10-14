@@ -404,6 +404,45 @@ class StudioFlow(unittest.TestCase):
         self.assertIn("api('mode', { mode: 'chat' })", js)
         self.assertIn("bot.menu(", read(os.path.join(HERE, "kit", "template", "bot.py")))
 
+    def test_bots_list_opens_sites_too(self):
+        """В «Моих ботах» есть и сайты: их кнопка ведёт на экран сайта, а не в «Бота уже нет»."""
+        studio.reg_set("water", {"name": "Вода", "slug": "water", "pm2": "bot-water", "dir": "/nope", "created": 2})
+        studio.site_set("cafe", {"kind": "site", "name": "Кофейня", "slug": "cafe", "dir": "/nope", "created": 1,
+                                 "access": "private", "key": "k"})
+        try:
+            self.t.send("/bots")
+            data = [btn["callback_data"] for btn in self.t.keyboard if "callback_data" in btn]
+            self.assertIn("site|cafe", data)
+            self.assertIn("bot|water", data)
+            self.t.press("site|cafe")
+            self.assertIn("Кофейня", self.t.last)
+            for gone in ("logs|nope", "restart|nope", "del?|nope", "sdel?|nope", "undo|water", "smode|cafe|xxx",
+                         "ans|zz|9|9", "name|zz|9", "skip|zz"):
+                self.t.press(gone)
+                self.assertTrue(self.t.toasts[-1], gone)  # на каждую устаревшую кнопку — ответ
+        finally:
+            studio.site_set("cafe", None)
+            studio.reg_set("water", None)
+
+    def test_go_while_claude_busy_says_so(self):
+        studio.put({"id": "ab", "stage": "plan", "name": "Вода", "idea": "вода", "qs": [], "plan": {"summary": "x"}})
+        self.assertTrue(studio.job.acquire(blocking=False))
+        try:
+            self.t.press("go")
+            self.assertIn("дорабатывает другого бота", self.t.toasts[-1])
+            self.assertEqual(studio.draft()["stage"], "plan")
+        finally:
+            studio.job.release()
+
+    def test_cancel_in_app_drops_unfinished_bot(self):
+        studio.reg_set("half", {"name": "Половина", "slug": "half", "pm2": "bot-half",
+                                "dir": os.path.join(studio.BOTS, "half"), "username": None})
+        studio.put({"id": "cd", "stage": "failed", "slug": "half", "name": "Половина", "qs": []})
+        code, _ = self.t.api("cancel")
+        self.assertEqual(code, 200)
+        self.assertNotIn("half", studio.registry())
+        self.assertEqual(self.t.api("answer", {"i": "x"})[0], 400)  # кривой номер вопроса — понятная ошибка
+
     def test_stranger(self):
         self.t.send("/start", uid=7)
         self.assertIn("личный", self.t.last)
@@ -562,6 +601,60 @@ class Kit(unittest.TestCase):
         self.assertEqual(kit.parse_days("сб,вс"), {5, 6})
         self.assertEqual(kit.rows([1, None, 2, 3], 2), [[1, 2], [3]])
 
+    def test_callback_data_fits_64_bytes(self):
+        """Кириллица в callback_data — 2 байта на букву: длиннее 64 байт Telegram не принимает всё сообщение."""
+        data = kit.b("x", "ideas|" + "космос" * 20)["callback_data"]
+        self.assertLessEqual(len(data.encode()), 64)
+        self.assertTrue(data.startswith("ideas|косм"))
+
+    def test_buttons_always_answered_and_waits_dropped(self):
+        b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp(), support=False)
+        t = b.testing(owner=5)
+
+        @b.button("boom")
+        def boom(c):
+            raise RuntimeError("сломалось")
+
+        @b.button("bad")
+        def bad(c):
+            raise kit.Fail("Нет такого")
+
+        @b.button("ask")
+        def ask(c):
+            c.ask("name", "Как назвать?", [[kit.b("Отмена", "back")]])
+
+        got = []
+        b.reply("name")(lambda c: got.append(c.text))
+        b.text(lambda c: got.append("free:" + c.text))
+        b.button("back")(lambda c: c.toast("ок"))
+
+        t.press("boom")
+        self.assertEqual(t.toasts[-1], "⚠️ Не получилось — попробуй ещё раз")  # крутилка не висит
+        self.assertIn("Что-то пошло не так", t.last)
+        self.assertEqual(t.buttons, ["‹ Главное"])
+        t.press("bad")
+        self.assertEqual(t.toasts[-1], "⚠️ Нет такого")
+        self.assertIn("⚠️ Нет такого", t.last)
+        t.press("old|1")
+        self.assertIn("устарела", t.toasts[-1])
+        t.press("ask")
+        t.press("back")  # своя «Отмена» тоже снимает ожидание
+        t.send("Вася")
+        self.assertEqual(got, ["free:Вася"])
+        t.press("ask")
+        t.send("Петя")
+        self.assertEqual(got[-1], "Петя")
+
+    def test_background_error_is_said(self):
+        b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp(), support=False)
+        t = b.testing(owner=5)
+
+        def slow(chat):
+            raise RuntimeError("сеть")
+        b._safe(slow, 5)  # фон (bot.later вне тестов): ошибка — в чат владельца, а не тишина
+        self.assertIn("Что-то пошло не так", t.last)
+        self.assertEqual(b.call_api("mode", {"id": 5}, ["не", "dict"])[0], 200)  # тело не объект — не 500
+
     def test_style_fallback(self):
         b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp())
         calls = []
@@ -688,7 +781,7 @@ studio.claude("сделай сайт для Глеба", os.environ["STUDIO_BOTS
 studio.claude("вопросы", os.environ["STUDIO_BOTS_DIR"], tools=False)
 studio.subprocess.Popen = orig
 st = studio.api_state(None)
-print(json.dumps({"support": studio.bot.support is None, "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
+print(json.dumps({"support": studio.bot.support is None and studio.bot.support_cfg is False, "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
                   "sites_only": st["sites_only"], "examples": st["examples"], "secretary": st["secretary"]}))
 """
         env = {**os.environ, "HERE": HERE, "STUDIO_MODE": "sites", "STUDIO_TG_NAME": "Site Studio",

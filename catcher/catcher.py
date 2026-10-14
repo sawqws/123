@@ -393,8 +393,13 @@ def ideas_card(theme, res):
 
 def run_ideas(c, theme):
     mid = c.say(kit.card("✨ <b>Думаю…</b>", ["Придумываю имена и проверяю, что свободно."]))
-    res = check_ideas(ideas(theme))
-    text, rows = ideas_card(theme, res)
+    try:
+        res = check_ideas(ideas(theme))
+        text, rows = ideas_card(theme, res)
+    except Exception as e:  # «Думаю…» не должно висеть вечно
+        print("ideas:", e, flush=True)
+        text = kit.error("Не получилось придумать — попробуй ещё раз.")
+        rows = [[kit.b("🔁 Ещё раз", f"ideas|{theme[:40]}", "primary"), kit.b("‹ Главное", "home")]]
     bot.edit(c.chat, mid, text, rows)
 
 
@@ -627,8 +632,10 @@ def add_btn(c):
 
 @bot.button("grab")
 def grab_btn(c):
-    u = c.args[0]
-    c.toast(f"Занимаю @{u}…")
+    u = c.args[0] if c.args else ""
+    if not parse_names(u):
+        return c.toast("Эта кнопка устарела")
+    c.ack(f"Занимаю @{u}…")  # захват идёт до полуторы минут — крутилку гасим сразу
     r = grab(u, say=False)
     if r == "ok":
         n = find(u)
@@ -641,9 +648,12 @@ def grab_btn(c):
 
 @bot.button("watch")
 def watch_btn(c):
-    st, line = add(c.args[0])
-    c.toast(line[:190])
-    c.say(kit.esc(line))
+    u = c.args[0] if c.args else ""
+    if not parse_names(u):
+        return c.toast("Эта кнопка устарела")
+    c.ack("Проверяю…")
+    st, line = add(u)
+    c.say(kit.esc(line), [[kit.b("📋 Список", "list"), kit.b("‹ Главное", "home")]])
 
 
 def add_many(c, text):
@@ -726,7 +736,7 @@ def wish_rows():
     rows += kit.rows([kit.b(mark(w["style"] == k, cap), f"ws|{k}") for k, cap in STYLES], 3)
     rows.append([kit.b(("🔤 Только буквы ✓" if w["letters"] else "🔤 Только буквы"), "wt"),
                  kit.b(f"✍️ Тема{': ' + w['theme'][:10] if w['theme'] else ''}", "wtheme")])
-    rows.append(kit.rows([kit.b(mark(w["count"] == n, f"поймать {n}"), f"wc|{n}") for n in COUNTS], 4)[0])
+    rows += kit.rows([kit.b(mark(w["count"] == n, f"поймать {n}"), f"wc|{n}") for n in COUNTS], 2)
     rows.append([kit.b("⏹ Стоп", "hunt|off", "danger") if h["on"] else kit.b("🚀 Ловить", "hunt|on", "success"),
                  kit.b("‹ Главное", "home")])
     return rows

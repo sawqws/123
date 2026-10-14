@@ -55,7 +55,7 @@ if SITES_ONLY:
                   short="Делает сайты по описанию",
                   commands=[("start", "Новый сайт"), ("sites", "Мои сайты"), ("cancel", "Отменить черновик")],
                   token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
-                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=None)
+                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=False)  # без /fix: чужой человек
 else:
     bot = kit.Bot("Студия", emoji="🏗", app_text="Студия",
                   about="Делаю красивых и простых ботов по твоей идее: уточню, покажу план, напишу код, "
@@ -491,11 +491,12 @@ def cancel_cmd(c):
 def cancel(c):
     d = draft()
     if d.get("stage") == "build":
-        return c.show(card("⏳ <b>Уже собираю</b>", ["Сборку не остановить — дождись, потом можно удалить."]))
+        return c.show(card("⏳ <b>Уже собираю</b>", ["Сборку не остановить — дождись, потом можно удалить."]),
+                      [[b("‹ Главное", "home")]])
     drop_unfinished(d)
     put({})
     c.toast("Черновик удалён")
-    c.show(card("🗑 <b>Черновик удалён</b>", ["Напиши новую идею, когда захочешь."]))
+    c.show(card("🗑 <b>Черновик удалён</b>", ["Напиши новую идею, когда захочешь."]), [[b("‹ Главное", "home")]])
 
 
 def drop_unfinished(d):
@@ -670,8 +671,11 @@ def on_answer(c):
     d = draft()
     if not c.args or c.args[0] != d.get("id"):
         return c.toast("Это старый вопрос")
-    i, k = int(c.args[1]), int(c.args[2])
-    opts = ((d.get("qs") or [{}] * (i + 1))[i] or {}).get("options") or []
+    try:
+        i, k = int(c.args[1]), int(c.args[2])
+        opts = (d.get("qs") or [])[i].get("options") or []
+    except (IndexError, ValueError, AttributeError):
+        return c.toast("Это старый вопрос")
     if k >= len(opts) or not answer(c.chat, opts[k], i):
         c.toast("Уже ответил")
 
@@ -679,7 +683,7 @@ def on_answer(c):
 @bot.button("skip")
 def on_skip(c):
     d = draft()
-    if c.args and c.args[0] == d.get("id") and answer(c.chat, "", int(c.args[1])):
+    if len(c.args) > 1 and c.args[0] == d.get("id") and c.args[1].isdigit() and answer(c.chat, "", int(c.args[1])):
         return
     c.toast("Уже ответил")
 
@@ -714,7 +718,11 @@ def on_name(c):
     d = draft()
     if not c.args or c.args[0] != d.get("id") or d.get("stage") != "name":
         return c.toast("Имя уже выбрано")
-    set_name(c.chat, (d.get("names") or [""])[int(c.args[1])])
+    names = d.get("names") or []
+    k = int(c.args[1]) if len(c.args) > 1 and c.args[1].isdigit() else -1
+    if not 0 <= k < len(names):
+        return c.toast("Этого варианта уже нет — напиши имя")
+    set_name(c.chat, names[k])
 
 
 def set_name(chat, name):
@@ -825,6 +833,8 @@ def on_go(c):
     d = draft()
     if d.get("stage") not in ("plan", "failed"):
         return c.toast("Уже собираю" if d.get("stage") == "build" else "Черновика нет")
+    if job.locked():  # Claude дорабатывает другого бота — иначе «Создаю» без сборки
+        return c.toast("⏳ Claude сейчас дорабатывает другого бота — нажми «Создать» через пару минут", alert=True)
     if c.mid and d.get("stage") == "plan":
         bot.edit(c.chat, c.mid, plan_card(d).rsplit("\n", 1)[0] + "\n✅ <b>Создаю</b>")
     confirm(c.chat)
@@ -1331,6 +1341,9 @@ def on_undo(c):
     info = registry().get(slug) or sites().get(slug)
     if not info:
         return c.toast("Бота уже нет")
+    if len(c.args) < 2 or not re.fullmatch(r"[0-9a-f]{4,40}", c.args[1]):
+        return c.toast("Эта кнопка устарела")
+    c.ack("Откатываю…")
     code, out = git(info["dir"], "-c", "user.name=Студия", "-c", "user.email=studio@localhost", "revert", "--no-edit",
                     c.args[1])
     if code != 0:
@@ -1371,7 +1384,8 @@ def mark(status):
 def show_bots(c):
     rows = bots_list()
     if not rows:
-        return c.show(card("🧩 <b>Мои боты</b>", ["Пока ни одного — напиши идею, сделаю первого."]))
+        return c.show(card("🧩 <b>Мои боты</b>", ["Пока ни одного — напиши идею, сделаю первого."]),
+                      [[b("‹ Главное", "home")]])
     lines = []
     for r in rows:
         lines.append(f"{mark(r['status'])} {r['emoji']} <b>{esc(r['name'])}</b>"
@@ -1379,7 +1393,8 @@ def show_bots(c):
         if r["summary"]:
             lines.append(f"<i>{esc(r['summary'])}</i>")
     c.show(card(f"🧩 <b>Мои боты</b> · {len(rows)}", lines),
-           kit.rows([b(f"{r['emoji']} {r['name']}", f"bot|{r['slug']}") for r in rows]) + [[b("‹ Главное", "home")]])
+           kit.rows([b(f"{r['emoji']} {r['name']}", f"{'site' if r.get('kind') == 'site' else 'bot'}|{r['slug']}")
+                     for r in rows]) + [[b("‹ Главное", "home")]])
 
 
 @bot.button("bot")
@@ -1402,23 +1417,30 @@ def show_bot(c):
 @bot.button("logs")
 def on_logs(c):
     info = registry().get(c.args[0] if c.args else "")
-    if info:
-        c.say(f"📜 <b>{esc(info['name'])}</b>\n<pre>{esc(logs(info['pm2']))}</pre>",
-              [[b("✏️ Починить", f"fix|{info['slug']}", "primary")]])
+    if not info:
+        return c.toast("Бота уже нет")
+    c.ack()
+    c.say(f"📜 <b>{esc(info['name'])}</b>\n<pre>{esc(logs(info['pm2']))}</pre>",
+          [[b("✏️ Починить", f"fix|{info['slug']}", "primary"), b("‹ Назад", f"bot|{info['slug']}")]])
 
 
 @bot.button("restart")
 def on_restart(c):
     info = registry().get(c.args[0] if c.args else "")
-    if info:
-        sh("pm2", "restart", info["pm2"], timeout=60)
-        c.toast("Перезапустил")
-        show_bot(c)
+    if not info:
+        return c.toast("Бота уже нет")
+    c.ack("Перезапускаю…")
+    code, out = sh("pm2", "restart", info["pm2"], timeout=60)
+    if code != 0:
+        c.say(kit.error(f"Не перезапустился: <code>{esc(out[-300:])}</code>"), [[b("📜 Логи", f"logs|{info['slug']}")]])
+    show_bot(c)
 
 
 @bot.button("del?")
 def on_del_ask(c):
     info = registry().get(c.args[0] if c.args else "")
+    if not info:
+        return c.toast("Бота уже нет")
     if info:
         c.show(card(f"🗑 <b>Удалить «{esc(info['name'])}»?</b>", ["Бот остановится, код и данные сотрутся."]),
                [[b("Да, удалить", f"del|{info['slug']}", "danger"), b("Нет", f"bot|{info['slug']}")]])
@@ -1683,8 +1705,8 @@ def set_access(slug, mode):
 
 @bot.button("smode")
 def on_smode(c):
-    if len(c.args) < 2:
-        return
+    if len(c.args) < 2 or c.args[1] not in ACCESS_NAMES:
+        return c.toast("Эта кнопка устарела")
     info = set_access(c.args[0], c.args[1])
     if not info:
         return c.toast("Сайта уже нет")
@@ -1707,6 +1729,8 @@ def on_spub_ask(c):
 @bot.button("sdel?")
 def on_sdel_ask(c):
     info = sites().get(c.args[0] if c.args else "")
+    if not info:
+        return c.toast("Сайта уже нет")
     if info:
         c.show(card(f"🗑 <b>Удалить сайт «{esc(info['name'])}»?</b>", ["Файлы сайта сотрутся, ссылка перестанет работать."]),
                [[b("Да, удалить", f"sdel|{info['slug']}", "danger"), b("Нет", f"site|{info['slug']}")]])
@@ -1768,7 +1792,11 @@ def api_idea(r):
 def api_answer(r):
     d = draft()
     need(d, "ask")
-    if not answer(owner_chat(), str(r.body.get("text") or ""), int(r.body.get("i", d.get("qi", 0)))):
+    try:
+        i = int(r.body.get("i", d.get("qi", 0)))
+    except (TypeError, ValueError):
+        raise kit.Fail("Обнови — вопрос сменился")
+    if not answer(owner_chat(), str(r.body.get("text") or ""), i):
         raise kit.Fail("Этот вопрос уже прошли")
     return api_state(r)
 
@@ -1813,8 +1841,10 @@ def api_confirm(r):
 
 @bot.api("cancel")
 def api_cancel(r):
-    if draft().get("stage") == "build":
+    d = draft()
+    if d.get("stage") == "build":
         raise kit.Fail("Сборку не остановить")
+    drop_unfinished(d)  # как в чате: недособранный бот не остаётся в «Моих ботах»
     put({})
     return api_state(r)
 
