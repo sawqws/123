@@ -11,7 +11,7 @@
 высоты строчной буквы (x от левого края, y вверх от строки), ключ + 'w' — ширина.
 
 usage:
-  python3 horo/alphabet.py template <лист 1..4> out.png
+  python3 horo/alphabet.py template <лист 1..3> out.png       листы v3: русский, английский (все 26), цифры и знаки
   python3 horo/alphabet.py ingest img1.png [img2.jpg ...]   печатает, какие буквы добавлены
   python3 horo/alphabet.py preview out.png                  пример текста его почерком
   python3 horo/alphabet.py sample out.png                   пример решённого задания (со стилем из hand_style.json)
@@ -41,10 +41,20 @@ PAGES = [  # (заголовок, символы, парами: большая+�
     ('цифры и знаки', '0123456789+-=()/<>.,:;!?%√≠≤≥×÷', False),
 ]
 CODE0 = 4                  # номер листа на метках = индекс + CODE0 (1..3 были у старого алфавита)
+# Листы v3 (их шлёт бот с 14.10): каждый алфавит — один лист, все листы оформлены одинаково: сетка 6×6,
+# клетка на букву, в клетке две строки — сверху большая, снизу маленькая (так Глеб сам заполнял старые листы).
+# Английский — полный, все 26 букв. На метках номер = индекс + CODE3 (4-я метка справа).
+PAGES3 = [
+    ('русский алфавит', 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя', True),
+    ('английский алфавит', 'abcdefghijklmnopqrstuvwxyz', True),
+    ('цифры и знаки', '0123456789+-=()/<>.,:;!?%√≠≤≥×÷', False),
+]
+CODE3 = 8
+UP, LOW = 0.48, 0.86       # строки в клетке v3 (доля высоты клетки): большая и маленькая
 # старый лист 2 (цифры и знаки, сетка 6×6) тоже годится: там в каждой клетке один знак
 OLD_DIGITS = ('0123456789+-=()/<>.,:;!?%', 6)  # ² ³ √ ≠ ≤ ≥ · × ÷ со старого листа не берём: там они были не на своих местах
 # старые листы букв 1 и 3 (сетка 6×6, одна клетка на букву). Глеб заполнил их так: большая — на линии строки,
-# маленькая — ниже, на нижней рамке клетки (хвосты уходят за рамку). Латинские a c e o p x не берём — как у новых листов
+# маленькая — ниже, на нижней рамке клетки (хвосты уходят за рамку). Латиницу берём всю (Глеб: английский — полный)
 OLD_LETTERS = {'old-ru': 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя', 'old-lat': 'abcdefghijklmnopqrstuvwxyz'}
 W, H = 1640, 2360          # лист как скриншот iPad
 COLS, ROWS = 8, 6
@@ -65,7 +75,7 @@ def corners():
 
 def bits():
     """Центры меток номера листа (двоичный код page+CODE0)."""
-    return [(W / 2 + (i - 1) * 90, 20 + MARK / 2) for i in range(3)]
+    return [(W / 2 + (i - 1) * 90, 20 + MARK / 2) for i in range(4)]  # 4-я — у листов v3
 
 
 def cell(i, cols=COLS, rows=ROWS):
@@ -164,6 +174,8 @@ def straighten(img):
         box = out[int(cy - BIT / 4):int(cy + BIT / 4), int(cx - BIT / 4):int(cx + BIT / 4)]
         if _magenta(box).mean() > 0.5:
             code |= 1 << k
+    if CODE3 <= code < CODE3 + len(PAGES3):
+        return out, ('v3', code - CODE3)
     if code == 2:
         return out, 'old-digits'
     if code in (1, 3):
@@ -268,7 +280,14 @@ def ingest(paths):
             errors.append(f'{os.path.basename(path)}: {e}')
             continue
         m = ink(sheet)
-        if page in OLD_LETTERS or page == 'old-digits':
+        if isinstance(page, tuple):  # v3
+            head, chars, paired = PAGES3[page[1]]
+            cell_h = (H - TOP - BOTTOM) / 6
+            glyphs = (two_lines(m, chars, UP, LOW, 14, cell_h - 2) if paired  # подсказки серые — их маска не берёт
+                      else signs3(m, chars))
+            if img.width < SHARP and 'файлом' not in ' '.join(ingest.tips):
+                ingest.tips.append('лист пришёл сжатым — если буквы выйдут неровными, пришли листы файлом (📎 → Файл)')
+        elif page in OLD_LETTERS or page == 'old-digits':
             # старые листы клетки мельче: сжатый Telegram лист даёт кривые буквы (9 как «?», B как «!») —
             # они бы испортили и хорошие буквы банка. Такой лист не берём совсем
             if img.width < SHARP:
@@ -316,29 +335,83 @@ def old_letters(m, page, small=True):
     Делим по пятнам: что выше линии (+25 px) — большая, ниже — маленькая.
     small=False: маленькие не берём."""
     seq = OLD_LETTERS[page]
-    keep = set(PAGES[2][1].lower()) if page == 'old-lat' else set(seq)
+    cell_h = (H - TOP - BOTTOM) / 6
+    return two_lines(m, seq, 0.68, (cell_h - 8) / cell_h, 70, cell_h + 55, small)  # хвосты маленьких уходят за рамку
+
+
+def two_lines(m, seq, up, low, top, bottom, small=True):
+    """Сетка 6×6, клетка на букву: большая на строке up, маленькая на строке low (доли высоты клетки);
+    берём клетку от top до bottom px от её верха. Делим по пятнам: что выше строки up (+25 px) — большая."""
     cell_h = (H - TOP - BOTTOM) / 6
     out = []
     for i, ch in enumerate(seq):
-        if ch not in keep:
-            continue
-        x0, x1, y0, base = cell(i, 6, 6)
-        y_top, y_bot = int(y0 + 70), int(min(H, y0 + cell_h + 55))  # хвосты маленьких уходят за рамку
+        x0, x1, y0, _ = cell(i, 6, 6)
+        base = y0 + cell_h * up
+        y_top, y_bot = int(y0 + top), int(min(H, y0 + bottom))
         sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
         lab, n = ndimage.label(sub, np.ones((3, 3)))
         if not n:
             continue
         ys = [c[0] for c in ndimage.center_of_mass(sub, lab, range(1, n + 1))]
         split = base - y_top + 25
-        up = np.isin(lab, [k + 1 for k, y in enumerate(ys) if y < split])
+        upper = np.isin(lab, [k + 1 for k, y in enumerate(ys) if y < split])
         down = np.isin(lab, [k + 1 for k, y in enumerate(ys) if y >= split])
         if not small or ch == 'ё' and ndimage.label(down, np.ones((3, 3)))[1] < 2:
             down[:] = False  # маленькую ё без точек не берём: была бы просто «е»
-        for mask, c, b in ((up, ch.upper(), base - y_top), (down, ch, y0 + cell_h - 8 - y_top)):
+        for mask, c, b in ((upper, ch.upper(), base - y_top), (down, ch, y0 + cell_h * low - y_top)):
             g = glyph_from(mask, b)
             if g is not None:
                 out.append((c, g[0], g[1]))
     return out
+
+
+def signs3(m, chars):
+    """Лист v3 цифр и знаков: знак на верхней строке клетки."""
+    cell_h = (H - TOP - BOTTOM) / 6
+    out = []
+    for i, ch in enumerate(chars):
+        x0, x1, y0, _ = cell(i, 6, 6)
+        base = y0 + cell_h * UP
+        y_top, y_bot = int(y0 + 14), int(y0 + cell_h - 2)
+        g = glyph_from(m[y_top:y_bot, int(x0 + 14):int(x1 - 14)], base - y_top, tiny=ch in '.,:;')
+        if g is not None:
+            out.append((ch, g[0], g[1]))
+    return out
+
+
+def template3(page, out):
+    """Лист v3: сетка 6×6, в клетке подсказка «Аа» и две строки — для большой и для маленькой буквы."""
+    head, chars, paired = PAGES3[page]
+    im = Image.new('RGB', (W, H), BG)
+    d = ImageDraw.Draw(im)
+    for cx, cy in corners():
+        d.rectangle([cx - MARK / 2, cy - MARK / 2, cx + MARK / 2, cy + MARK / 2], fill=MAGENTA)
+    code = page + CODE3
+    for k, (cx, cy) in enumerate(bits()):
+        if code >> k & 1:
+            d.rectangle([cx - BIT / 2, cy - BIT / 2, cx + BIT / 2, cy + BIT / 2], fill=MAGENTA)
+    small = ImageFont.truetype(FONT, 34)
+    hint, hint2 = ImageFont.truetype(FONT, 34), ImageFont.truetype(FONT2, 40)
+    blank = bytes(hint.getmask('\uffff'))
+    d.text((W / 2, 125), f'Лист {page + 1} из {len(PAGES3)}: {head}', font=small, fill=HINT, anchor='mm')
+    d.text((W / 2, 175), 'в клетке: на верхней строке большая буква, на нижней — маленькая' if paired
+           else 'каждый знак — на верхней строке своей клетки', font=small, fill=HINT, anchor='mm')
+    cell_h = (H - TOP - BOTTOM) / 6
+    for i, ch in enumerate(chars):
+        x0, x1, y0, _ = cell(i, 6, 6)
+        d.rectangle([x0 + 6, y0 + 6, x1 - 6, y0 + cell_h - 6], outline=LINE, width=2)
+        label = ch.upper() + ch if paired else ch
+        if ch == '√':  # его нет ни в одном из шрифтов — рисуем линиями
+            d.line([(x0 + 18, y0 + 34), (x0 + 24, y0 + 31), (x0 + 30, y0 + 46), (x0 + 38, y0 + 16), (x0 + 60, y0 + 16)], fill=HINT, width=3)
+        else:
+            f = hint if bytes(hint.getmask(ch)) != blank else hint2
+            d.text((x0 + 18, y0 + 12), label, font=f, fill=HINT, anchor='la')
+        for k in ((UP, LOW) if paired else (UP,)):
+            base = y0 + cell_h * k
+            d.line([x0 + 14, base, x1 - 14, base], fill=LINE, width=3)
+            for x in np.arange(x0 + 14, x1 - 14, 22):  # пунктир высоты строчной
+                d.line([x, base - XH, x + 10, base - XH], fill=LINE, width=2)
+    im.save(out)
 
 
 def retry(folder):
@@ -413,7 +486,9 @@ def sample(out):
 
 if __name__ == '__main__':
     cmd, args = sys.argv[1], sys.argv[2:]
-    if cmd == 'template':
+    if cmd == 'template':  # листы v3 (1..3); старый вид v2 — template2
+        template3(int(args[0]) - 1, args[1])
+    elif cmd == 'template2':
         template(int(args[0]) - 1, args[1])
     elif cmd == 'ingest':
         added, errors = ingest(args)

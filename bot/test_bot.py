@@ -404,7 +404,7 @@ class BotTest(unittest.TestCase):
              mock.patch.object(bot, "download", lambda fid: (b"jpg", "s.jpg")), \
              mock.patch.object(bot, "ALPHA_DIR", self.tmp.name):
             self.say(bot.BTN_HAND)
-            self.assertEqual(len(self.files), 4)
+            self.assertEqual(len(self.files), 3)  # русский, английский, цифры — одинаковые листы
             self.say(photo=[{"file_id": "a"}])
             self.assertTrue(any("Добавил знаков: 2" in m and "а б" in m for m, _ in self.msgs))
             self.say("готово")
