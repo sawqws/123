@@ -183,23 +183,29 @@ class BotTest(unittest.TestCase):
 
     def test_delay_can_be_turned_off(self):
         self.say("/delay off")
-        self.assertIn("выкл", self.last()[0])
+        self.assertIn("сразу", self.last()[0])
         self.assertFalse(bot.human_on())
         self.say(URL)
         with mock.patch.object(bot, "SEND_DELAY", "5-5"):  # выключено — уходит сразу, без таймера
             bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
         self.assertEqual(self.nodes[-1][0], "horo/answer.js")
-        bot.on_more(CHAT, 9, "1", "human")  # кнопка в «Ещё» включает обратно
+        bot.on_more(CHAT, 9, "1", "human")  # кнопка в «Ещё» открывает настройку отправки
+        bot.on_callback({"id": "1", "data": "sd:tests", "message": {"chat": {"id": CHAT}, "message_id": 9}})
         self.assertTrue(bot.human_on())
         self.assertEqual(bot.ROUTES["/api/human"]({"on": False}), {"human": False})
 
-    def test_delay_button_on_keyboard(self):
-        self.assertIn(bot.BTN_DELAY_ON, bot.menu_kb())  # отдельная кнопка у поля ввода, не только /delay
-        self.say(bot.BTN_DELAY_ON)
+    def test_send_setting_button_on_keyboard(self):
+        self.assertIn("⏳ Отправка: сразу", bot.menu_kb())  # отдельная кнопка у поля ввода
+        self.say("⏳ Отправка: сразу")
+        self.assertIn("Отправка", self.last()[0])
+        self.assertIn("sd:4-12", self.last()[1])
+        bot.on_callback({"id": "1", "data": "sd:15-40", "message": {"chat": {"id": CHAT}, "message_id": 9}})
+        self.assertEqual(bot.delay_range(), "15-40")
+        self.assertIn("⏳ Отправка: 15–40 мин", bot.menu_kb())
+        bot.on_callback({"id": "1", "data": "sd:tests", "message": {"chat": {"id": CHAT}, "message_id": 9}})
         self.assertFalse(bot.human_on())
-        self.assertIn(bot.BTN_DELAY_OFF, self.last()[1])  # клавиатура пришла с новым состоянием
-        self.say(bot.BTN_DELAY_OFF)
-        self.assertTrue(bot.human_on())
+        self.say(bot.BTN_DELAY_ON)  # старая надпись на клавиатуре тоже открывает настройку
+        self.assertIn("Отправка", self.last()[0])
 
     def test_restart_resumes_tasks(self):
         bot.mark_active(TASK, {"chat": CHAT, "url": URL, "text": "", "show": False})  # решалось, когда бот перезапустили
@@ -225,6 +231,40 @@ class BotTest(unittest.TestCase):
         p = bot.prompt_for(URL, "", False)
         self.assertIn("ничего личного о Глебе", p)
         self.assertIn("не упоминай, что помогал ИИ".lower(), p.lower())
+
+    def test_each_draft_chooses_how_to_send(self):
+        self.say(URL)
+        self.assertIn(f"later:{TASK}", self.last()[1])
+        self.assertIn(f"atq:{TASK}", self.last()[1])
+        # ⏳ С задержкой — даже если в настройке «сразу»
+        bot.on_callback({"id": "1", "data": f"later:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual(self.nodes, [])
+        self.assertIn("Отправлю", self.last()[0])
+        left = bot.draft(TASK)["send_at"] - __import__("time").time()
+        self.assertTrue(4 * 60 - 5 <= left <= 12 * 60 + 5)
+        # 🕐 Ко времени: варианты кнопками и своё время текстом
+        bot.on_callback({"id": "1", "data": f"atq:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 6}})
+        self.assertIn("Ко скольки", self.last()[0])
+        self.assertIn(f"at:{TASK}:", self.last()[1])
+        self.say("в 23:59")
+        self.assertIn("23:59", self.last()[0])
+        self.assertEqual(self.nodes, [])  # текст ушёл во время, а не в черновик
+        self.assertEqual(drafts.read(TASK), "Клетка делится митозом.\nЭто важно.")
+        bot.due_sends(bot.draft(TASK)["send_at"] + 1)
+        self.assertEqual(self.nodes[-1][0], "horo/answer.js")
+
+    def test_time_buttons_and_parse(self):
+        import datetime
+        now = datetime.datetime(2026, 10, 14, 15, 10, tzinfo=bot.MSK)
+        labels = [lab for lab, _ in bot.time_choices(now)]
+        self.assertEqual(labels[:3], ["через 30 мин", "через 1 ч", "через 2 ч"])
+        self.assertIn("в 19:00", labels)
+        at = datetime.datetime.fromtimestamp(bot.parse_time("в 19.40", now), bot.MSK)
+        self.assertEqual((at.day, at.hour, at.minute), (14, 19, 40))
+        at = datetime.datetime.fromtimestamp(bot.parse_time("7:30", now), bot.MSK)
+        self.assertEqual((at.day, at.hour), (15, 7))  # прошло — значит, завтра
+        self.assertEqual(bot.parse_time("через 40 минут", now), int((now + datetime.timedelta(minutes=40)).timestamp()))
+        self.assertIsNone(bot.parse_time("25:99", now))
 
     def test_drop_and_ok_word(self):
         self.say(URL)

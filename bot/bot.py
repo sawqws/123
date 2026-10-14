@@ -113,13 +113,15 @@ BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
 BTN_PREP = "📖 Подготовка"
 BTN_MODE = "⚙️ Режим"
-BTN_DELAY_ON, BTN_DELAY_OFF = "⏳ Задержка: вкл", "⏳ Задержка: выкл"  # сдача «как человек» — надпись по состоянию
+BTN_DELAY_ON, BTN_DELAY_OFF = "⏳ Задержка: вкл", "⏳ Задержка: выкл"  # старые надписи (клавиатура обновится сама)
+SEND_CHOICES = [("0", "сразу"), ("2-5", "2–5 мин"), ("4-12", "4–12 мин"), ("15-40", "15–40 мин")]  # отправка учителю
+SEND_LABELS = {f"⏳ Отправка: {lab}" for _, lab in SEND_CHOICES}
 ALIASES = {  # старые надписи кнопок (клавиатура у Глеба обновится со следующим сообщением)
     "📋 Что надо сделать": BTN_LIST, "⚡ Сдать все автотесты": BTN_ALL, "💬 Комментарии учителя": BTN_COMM,
     "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
 BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
-           BTN_APP, BTN_MORE, BTN_PREP, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF}
+           BTN_APP, BTN_MORE, BTN_PREP, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF, *SEND_LABELS}
 
 
 def menu_kb():
@@ -171,7 +173,7 @@ COMMANDS = [  # меню команд у поля ввода
     ("mode", "Чат или приложение"),
     ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
-    ("delay", "Сдача как человек: вкл/выкл"),
+    ("send", "Когда отправлять учителю"), ("delay", "Сдача как человек: вкл/выкл"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
 ]
 ABOUT = ("Помощник по HDP. Решаю и сдаю задания по ссылке, пишу ответы учителю твоим почерком, "
@@ -1015,7 +1017,9 @@ def _run_task(chat, url, text, show, mid, task):
 # последний показанный или тот, где он нажал «✏️ Править».
 
 def draft_kb(task):
-    return kb([("✅ Отправить учителю", f"send:{task}", "success")],  # главное — во всю ширину
+    """Главное — «Отправить» (как в настройке «⏳ Отправка»), ниже — как отправить именно это задание."""
+    return kb([("✅ Отправить учителю", f"send:{task}", "success")],
+              [("⚡ Сразу", f"now:{task}"), ("⏳ С задержкой", f"later:{task}"), ("🕐 Ко времени", f"atq:{task}")],
               [("✏️ Править", f"ed:{task}"), ("Не отправлять", f"drop:{task}")])
 
 
@@ -1222,43 +1226,112 @@ def set_human(on):
         save_settings(s)
 
 
-def human_card():
-    on = human_on()
-    return card("Сдача как человек: " + ("вкл" if on else "выкл"),
-                "Тесты: пауза 20–45 с на вопрос, ответы учителю уходят через 4–12 мин после «Отправить»." if on else
-                "Тесты сдаю сразу, ответы учителю — сразу после «Отправить».", "Переключить — /delay или «⚙️ Ещё»", "⏳")
+def delay_range():
+    """Сколько ждать перед отправкой учителю («от-до» минут, «0» — сразу): настройка «⏳ Отправка»."""
+    v = load_settings().get("send_delay")
+    if v is None:  # ещё не выбирал — как раньше: «как человек» вкл — HDP_SEND_DELAY, выкл — сразу
+        v = SEND_DELAY if human_on() else "0"
+    return v
+
+
+def set_delay_range(v):
+    with settings_lock:
+        s = load_settings()
+        s["send_delay"] = v
+        save_settings(s)
+
+
+def delay_label(v=None):
+    v = delay_range() if v is None else v
+    return dict(SEND_CHOICES).get(v, f"{v} мин")
 
 
 def btn_delay():
-    return BTN_DELAY_ON if human_on() else BTN_DELAY_OFF
+    return f"⏳ Отправка: {delay_label()}"
 
 
-def send_delay():
-    if not human_on():
-        return 0
+def send_card():
+    """Настройка отправки: задержка ответа учителю и паузы в тестах."""
+    on = human_on()
+    return card("Отправка", f"Ответ учителю после «Отправить»: <b>{delay_label()}</b>\n"
+                f"Тесты: {'пауза 20–45 с на вопрос, как человек' if on else 'сдаю сразу'}",
+                "На каждом черновике можно выбрать иначе: ⚡ Сразу · ⏳ С задержкой · 🕐 Ко времени", "⏳")
+
+
+def send_kb():
+    cur = delay_range()
+    return kb([((("✓ " if v == cur else "") + lab), f"sd:{v}") for v, lab in SEND_CHOICES[:2]],
+              [((("✓ " if v == cur else "") + lab), f"sd:{v}") for v, lab in SEND_CHOICES[2:]],
+              [("🧪 Паузы в тестах: " + ("вкл" if human_on() else "выкл"), "sd:tests")])
+
+
+def send_delay(rng=None):
     try:
-        lo, _, hi = SEND_DELAY.partition("-")
+        lo, _, hi = (rng or delay_range()).partition("-")
         lo = float(lo)
         return random.uniform(lo, float(hi or lo)) * 60
     except ValueError:
         return 0
 
 
-def schedule_send(chat, task=None):
-    """«✅ Отправить учителю»: назначает отправку через пару минут (или сразу, если задержка 0)."""
+def schedule_send(chat, task=None, secs=None, at=None):
+    """Назначить отправку: через secs секунд, к моменту at (epoch) или по настройке «⏳ Отправка» (0 — сразу)."""
     d = draft(task)
     if not d:
         send(chat, "⚠️ Черновика уже нет", menu=True)
         return
-    secs = send_delay()
-    if secs <= 0:
-        submit_draft(chat, d["task"])
-        return
-    d["send_at"] = time.time() + secs
+    if at is None:
+        secs = send_delay() if secs is None else secs
+        if secs <= 0:
+            submit_draft(chat, d["task"])
+            return
+        at = time.time() + secs
+    d["send_at"] = at
     set_draft(d)
-    at = datetime.datetime.fromtimestamp(d["send_at"], MSK).strftime("%H:%M")
-    send(chat, card(f"Отправлю в {at}", note=f"{esc(d['title'])} · как будто ты сам отправил чуть позже", icon="⏳"),
+    when = datetime.datetime.fromtimestamp(at, MSK)
+    day = "" if when.date() == datetime.datetime.now(MSK).date() else " завтра"
+    send(chat, card(f"Отправлю{day} в {when.strftime('%H:%M')}", note=f"{esc(d['title'])} · как будто ты сам отправил",
+                    icon="⏳"),
          markup=kb([("⚡ Сейчас", f"now:{d['task']}"), ("✖ Отменить", f"hold:{d['task']}")]), raw_html=True)
+
+
+def time_choices(now=None):
+    """Варианты «🕐 Ко времени»: (подпись, epoch) — через полчаса/час/два и ближайшие вечерние часы."""
+    now = now or datetime.datetime.now(MSK)
+    out = [("через 30 мин", now + datetime.timedelta(minutes=30)), ("через 1 ч", now + datetime.timedelta(hours=1)),
+           ("через 2 ч", now + datetime.timedelta(hours=2))]
+    for hh, mm in ((17, 0), (19, 0), (20, 30), (22, 0)):
+        t = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if t > now + datetime.timedelta(minutes=40):
+            out.append((f"в {t:%H:%M}", t))
+    out.append(("завтра 7:30", (now + datetime.timedelta(days=1)).replace(hour=7, minute=30, second=0, microsecond=0)))
+    jitter = lambda t: t + datetime.timedelta(seconds=random.randint(0, 240))  # не ровно в :00 — как человек
+    return [(lab, int(jitter(t).timestamp())) for lab, t in out[:6]]
+
+
+def ask_time(chat, d):
+    ch = time_choices()
+    rows = [[(lab, f"at:{d['task']}:{ts}") for lab, ts in ch[i:i + 3]] for i in range(0, len(ch), 3)]
+    mode[chat] = "at:" + d["task"]
+    send(chat, card("Ко скольки отправить?", note=f"{esc(d['title'])} · или напиши время, например 19:40",
+                    icon="🕐"), markup=kb(*rows, [("✖ Отмена", f"hold:{d['task']}")]), raw_html=True)
+
+
+def parse_time(text, now=None):
+    """«19:40», «в 7.30», «через 40 минут», «через 2 часа» -> epoch или None."""
+    now = now or datetime.datetime.now(MSK)
+    t = text.lower().strip()
+    m = re.search(r"через\s+(\d+)\s*(мин|ч)", t)
+    if m:
+        n = int(m.group(1))
+        return int((now + (datetime.timedelta(hours=n) if m.group(2) == "ч" else datetime.timedelta(minutes=n))).timestamp())
+    m = re.search(r"(?<!\d)(\d{1,2})[:.](\d{2})(?!\d)", t)
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return None
+    at = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+    if at <= now or "завтра" in t:
+        at += datetime.timedelta(days=1)
+    return int(at.timestamp())
 
 
 def due_sends(now=None):
@@ -1387,6 +1460,15 @@ def on_callback(cq):
         pending.pop(chat, None)
         edit(chat, mid, card("Отменил", note="Выбери действие внизу или пришли ссылку на задание", icon="👌"))
         return
+    if data.startswith("sd:"):  # ⏳ Отправка: задержка и паузы в тестах
+        quiet("answerCallbackQuery", callback_query_id=cq["id"])
+        v = data[3:]
+        if v == "tests":
+            set_human(not human_on())
+        elif v in dict(SEND_CHOICES):
+            set_delay_range(v)
+        edit(chat, mid, send_card(), send_kb())
+        return
     if data.startswith("hand:"):
         try:
             tg("answerCallbackQuery", callback_query_id=cq["id"])
@@ -1427,6 +1509,22 @@ def on_callback(cq):
         on_photo_button(chat, data[3:])
         return
     act, _, task = data.partition(":")
+    if act in ("later", "atq", "at"):  # ⏳ С задержкой · 🕐 Ко времени (варианты) · время выбрано
+        if act == "at":
+            task, _, ts = task.partition(":")
+        d = draft(task or None)
+        if not d:
+            send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
+        elif act == "later":  # своя задержка, даже если в настройке «сразу»
+            rng = delay_range()
+            threading.Thread(target=schedule_send, args=(chat, d["task"], send_delay(rng if rng != "0" else "4-12")),
+                             daemon=True).start()
+        elif act == "atq":
+            ask_time(chat, d)
+        elif ts.isdigit():
+            mode.pop(chat, None)
+            schedule_send(chat, d["task"], at=int(ts))
+        return
     if act in ("now", "hold"):  # отправка по таймеру: «⚡ Сейчас» / «✖ Отменить»
         d = draft(task or None)
         if not d:
@@ -1434,6 +1532,8 @@ def on_callback(cq):
             return
         d.pop("send_at", None)
         set_draft(d)
+        if mode.get(chat, "").startswith("at:"):
+            mode.pop(chat, None)
         if act == "now":
             threading.Thread(target=submit_draft, args=(chat, d["task"]), daemon=True).start()
         else:
@@ -1466,7 +1566,7 @@ def more_kb():
         [("❗ Просрочки", "m:late"), ("🛠 Поддержка", "sup|ask")],  # sup|… ловит support.Support
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
         [("❓ Помощь", "m:help"), ("⚙️ Режим", "m:mode")] + app,
-        [("⏳ Как человек: " + ("вкл" if human_on() else "выкл"), "m:human")],
+        [(btn_delay(), "m:human")],
     ]
     return kb(*rows)
 
@@ -1485,9 +1585,8 @@ def on_more(chat, mid, cq_id, key):
         threading.Thread(target=send_alphabet, args=(chat,), daemon=True).start()
     elif key == "check":
         threading.Thread(target=check, args=(chat,), daemon=True).start()
-    elif key == "human":  # ⏳ задержка при сдаче: вкл/выкл, меню правится на месте
-        set_human(not human_on())
-        edit(chat, mid, human_card(), more_kb())
+    elif key == "human":  # ⏳ Отправка — настройка на месте меню
+        edit(chat, mid, send_card(), send_kb())
 
 
 # ---------- Почерк ----------
@@ -2281,11 +2380,26 @@ def handle(msg):
                  markup=cancel_kb(), raw_html=True)
             return
         mode.pop(chat)
-    if text.startswith("/delay") or text in (BTN_DELAY_ON, BTN_DELAY_OFF):  # /delay [on|off] или кнопка у поля ввода
-        arg = text[6:].strip().lower() if text.startswith("/delay") else ""
-        set_human(arg in ("on", "вкл", "1") if arg else not human_on())
-        send(chat, human_card(), menu=True, raw_html=True)  # клавиатура обновится: на кнопке новое состояние
+    if text in SEND_LABELS or text in (BTN_DELAY_ON, BTN_DELAY_OFF) or text == "/send":  # ⏳ Отправка
+        send(chat, send_card(), markup=send_kb(), raw_html=True)
         return
+    if text.startswith("/delay"):  # /delay on|off — всё «как человек» сразу (задержка 4–12 мин и паузы в тестах)
+        arg = text[6:].strip().lower()
+        on = arg in ("on", "вкл", "1") if arg else not human_on()
+        set_human(on)
+        set_delay_range(SEND_DELAY if on else "0")
+        send(chat, send_card(), menu=True, raw_html=True)  # клавиатура обновится: на кнопке новое состояние
+        return
+    if mode.get(chat, "").startswith("at:") and text and not text.startswith("/") and text not in BUTTONS:
+        at = parse_time(text)
+        task = mode.pop(chat)[3:]
+        if at and draft(task):
+            schedule_send(chat, task, at=at)
+            return
+        if at is None and re.search(r"\d", text):
+            send(chat, card("Не понял время", note="Напиши, например, 19:40 или «через 40 минут»", icon="🤔"), raw_html=True)
+            mode[chat] = "at:" + task
+            return
     if text.startswith("/style"):
         threading.Thread(target=send_sample, args=(chat,), daemon=True).start()
         return
