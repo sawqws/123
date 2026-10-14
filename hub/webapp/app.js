@@ -208,9 +208,10 @@
       <div class="stat"><div class="v">${st.jobs.length}</div><div class="k">${plural(st.jobs.length, 'расписание', 'расписания', 'расписаний')}</div></div></div>`;
   }
 
-  const GRADS = [['#f5b83d', '#ef7d32'], ['#7c5cff', '#22d3ee'], ['#ec4899', '#7c5cff'], ['#22d3ee', '#34d399'],
-    ['#6366f1', '#a855f7'], ['#14b8a6', '#3b82f6'], ['#f97316', '#ef4444']];
-  const grad = (id) => { const g = GRADS[Math.abs(Number(id) || 0) % GRADS.length]; return `background:linear-gradient(135deg,${g[0]},${g[1]})`; };
+  // пастельные аватарки: [фон, буквы] — как у Секретаря (tgbot/webapp/app.js)
+  const AVAS = [['#f6e3c4', '#8a6324'], ['#e4ddf3', '#5f4f97'], ['#f4dbe0', '#97475a'], ['#d8ebe3', '#3f7a64'],
+    ['#dbe5f2', '#3f6491'], ['#f5dfcf', '#985b36'], ['#e3e9d3', '#5d6f35']];
+  const grad = (id) => { const g = AVAS[Math.abs(Number(id) || 0) % AVAS.length]; return `background:linear-gradient(160deg,#fff -40%,${g[0]});color:${g[1]}`; };
 
   function chatsBlock() {
     const st = S.sec;
@@ -484,12 +485,12 @@
     const used = run.reduce((s, b) => s + (b.mem || 0), 0);
     const memPct = d.server.mem_total ? Math.round((1 - d.server.mem_free / d.server.mem_total) * 100) : null;
     const upd = updatingNow(d);
-    const head = !d.pm2 ? { e: '⚠️', t: 'pm2 не отвечает', s: 'Состояние неизвестно — проверю ещё раз' }
-      : down ? { e: '🔴', t: `${down} ${plural(down, 'бот не работает', 'бота не работают', 'ботов не работают')}`, s: `Работают ${on.length} из ${run.length}` }
-        : { e: '🟢', t: 'Все боты работают', s: `${num(on.length, 'бот', 'бота', 'ботов')} · ${mem(used)}` };
+    const head = !d.pm2 ? { e: 'warn', t: 'pm2 не отвечает', s: 'Состояние неизвестно — проверю ещё раз' }
+      : down ? { e: 'err', t: `${down} ${plural(down, 'бот не работает', 'бота не работают', 'ботов не работают')}`, s: `Работают ${on.length} из ${run.length}` }
+        : { e: 'ok', t: 'Все боты работают', s: `${num(on.length, 'бот', 'бота', 'ботов')} · ${mem(used)}` };
     const liveText = upd && d.live && d.live.text ? d.live.text : upd ? 'Обновляю…' : '';
     return hero('🤖', 'Боты', `${num(bots.length, 'бот', 'бота', 'ботов')}${memPct != null ? ` · память ${memPct}%` : ''}`) +
-      `<section class="card feature rise"><div class="state"><span class="state-e">${head.e}</span><div class="main">
+      `<section class="card feature rise"><div class="state"><span class="state-e ${head.e}"><i></i></span><div class="main">
         <div class="state-t">${esc(head.t)}</div><div class="hint">${esc(head.s)}</div></div></div>
         ${liveText ? `<div class="note live-note"><span class="spin"></span><span>${esc(liveText)}</span></div>` : ''}
         <button class="btn primary" data-act="update" ${upd ? 'disabled' : ''}>${upd ? 'Обновляю…' : '⬆️ Обновить всех'}</button></section>
