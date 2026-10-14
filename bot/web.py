@@ -255,7 +255,7 @@ class Web(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         try:
-            n = int(self.headers.get("Content-Length") or 0)
+            n = max(0, int(self.headers.get("Content-Length") or 0))  # -1 — не ждать тело до закрытия связи
             limit = 16_000_000 if path == "/api/support" else 1_000_000  # в поддержке — скриншот
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
         except ValueError:

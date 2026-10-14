@@ -1001,7 +1001,12 @@ def edit_draft(chat, text):
 
 def add_draft_photo(chat, msg):
     d = draft()
-    data, name = download(attachment(msg))
+    try:
+        data, name = download(attachment(msg))
+    except Exception as e:  # сеть моргнула или файл больше 20 МБ — сказать, а не молчать
+        print("draft photo:", e)
+        send(chat, err("Не получилось скачать фото, пришли ещё раз"), markup=DRAFT_KB, raw_html=True)
+        return
     drafts.add_file(d["task"], data, name, replace=not d["own_files"])  # первое своё фото заменяет мои картинки
     d["own_files"] = True
     set_draft(d)
@@ -1257,7 +1262,12 @@ def take_alphabet(chat, msg):
         send(chat, BUSY)
         return
     try:
-        data, name = download(attachment(msg))
+        try:
+            data, name = download(attachment(msg))
+        except Exception as e:
+            print("alphabet sheet:", e)
+            send(chat, err("Не получилось скачать лист, пришли ещё раз"), raw_html=True)
+            return
         path = os.path.join(ALPHA_DIR, f"in_{int(time.time() * 1000)}_{name}")
         with open(path, "wb") as f:
             f.write(data)
@@ -1847,6 +1857,9 @@ def handle(msg):
     if text.startswith("/update"):
         update(chat)
         return
+    if (mode.get(chat) or "").startswith("agent_") and (text in BUTTONS or text.startswith("/")) \
+            and text != "/cancel" and not text.startswith("/agent"):
+        agent.pop(chat, None); mode.pop(chat, None)  # кнопка или другая команда — шаг /agent закончен, выполняем её
     if text.startswith("/agent") or (mode.get(chat) or "").startswith("agent_"):
         threading.Thread(target=agent_step, args=(chat, text, msg.get("message_id")), daemon=True).start()
         return
@@ -1892,8 +1905,9 @@ def handle(msg):
         return
     if mode.get(chat) == "emoji":
         mode.pop(chat)
-        save_emoji(chat, msg)
-        return
+        if text not in BUTTONS and not text.startswith("/"):  # кнопка или команда вместо эмодзи — выполняем её
+            save_emoji(chat, msg)
+            return
     if text.startswith("/alphabet_reset"):
         ok, out = py("horo/alphabet.py", "reset")
         send(chat, out if ok else err(out), menu=True, raw_html=not ok)
@@ -1931,12 +1945,14 @@ def handle(msg):
         mode.pop(chat)
     if mode.get(chat) == "confirm_all":
         mode.pop(chat)
-        rows = pending.pop(chat, [])
         if text.lower() in ("да", "yes", "ок", "давай"):
-            threading.Thread(target=run_all, args=(chat, rows), daemon=True).start()
-        else:
+            threading.Thread(target=run_all, args=(chat, pending.pop(chat, [])), daemon=True).start()
+            return
+        if text and text not in BUTTONS and not text.startswith("/") and not LINK.search(text):
+            pending.pop(chat, None)
             send(chat, "👌 Отменил", menu=True)
-        return
+            return
+        # другая кнопка, команда, ссылка или фото — выполняем их; «Сдать все» под списком по-прежнему работает
     if draft() and attachment(msg):
         threading.Thread(target=add_draft_photo, args=(chat, msg), daemon=True).start()
         return
@@ -2387,9 +2403,15 @@ def app_prep_run(b):
     """Подготовить из приложения: предмет, темы (uuid), минуты, своё ТЗ. more — ещё вопросы к последней."""
     busy_check()
     chat = owner()
-    minutes = int(b.get("minutes") or 5)
+    try:
+        minutes = int(b.get("minutes") or 5)
+    except (TypeError, ValueError):
+        minutes = 0
     if minutes not in prep.MINUTES:
         raise ValueError("Время — 1, 5 или 10 минут")
+    uuids = b.get("topics") or []
+    if not isinstance(uuids, list):
+        raise ValueError("Темы — списком")
     if b.get("more"):
         if not PREP_CTX.get(chat):
             raise ValueError("Сначала подготовься — потом будут ещё вопросы")
@@ -2399,7 +2421,7 @@ def app_prep_run(b):
     if not (b.get("again") and PREP_CTX.get(chat)):  # again: «Подробнее (10 мин)» — те же темы и ТЗ
         if not subj and not tz:
             raise ValueError("Выбери предмет или напиши своё ТЗ")
-        prep_ctx(chat, subj, tz, uuids=[str(u) for u in b.get("topics") or []] or None)
+        prep_ctx(chat, subj, tz, uuids=[str(u) for u in uuids] or None)
     threading.Thread(target=prep_run, args=(chat, minutes), daemon=True).start()
     return {"ok": True}
 
@@ -2525,7 +2547,8 @@ def main():
             print("startup:", e)
     global SUP
     SUP = sup = support.Support(TOKEN, "HDP", folders=["bot", "horo"], pm2="horo-bot",
-                                allowed=lambda uid: uid == owner(), tests=["python3 bot/test_bot.py"])
+                                allowed=lambda uid: uid == owner(),
+                                tests=["python3 bot/test_bot.py", "python3 bot/test_buttons.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=60)
@@ -2535,29 +2558,34 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
-            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
-                continue
-            cq = u.get("callback_query")
-            if cq:
-                if cq.get("from", {}).get("id") == owner() and cq.get("message"):
-                    try:
-                        on_callback(cq)
-                    except Exception as e:
-                        print("callback:", e)
-                continue
-            msg = u.get("message") or {}
-            uid = msg.get("from", {}).get("id")
-            if "chat" not in msg:
-                continue
-            if not owner() and (msg.get("text") or "").startswith("/start"):
-                s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
-                print("Владелец бота:", uid)
-            if uid != owner():
-                continue
+            on_update(u, sup)
+
+
+def on_update(u, sup=None):
+    """Одно обновление Telegram (из цикла main; тесты зовут его же): поддержка, кнопка или сообщение."""
+    if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
+        return
+    cq = u.get("callback_query")
+    if cq:
+        if cq.get("from", {}).get("id") == owner() and cq.get("message"):
             try:
-                handle(msg)
+                on_callback(cq)
             except Exception as e:
-                print("handle:", e)
+                print("callback:", e)
+        return
+    msg = u.get("message") or {}
+    uid = msg.get("from", {}).get("id")
+    if "chat" not in msg:
+        return
+    if not owner() and (msg.get("text") or "").startswith("/start"):
+        s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
+        print("Владелец бота:", uid)
+    if uid != owner():
+        return
+    try:
+        handle(msg)
+    except Exception as e:
+        print("handle:", e)
 
 
 if __name__ == "__main__":
