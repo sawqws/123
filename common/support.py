@@ -129,12 +129,13 @@ class Support:
                 data = (cq.get("data") or "").split("|")
                 if data[0] != "sup":
                     return False
-                ok = self.allowed((cq.get("from") or {}).get("id"))
-                if ok:
-                    self.on_button(cq, data)
-                try:  # гость (КПП) видит «🛠 Поддержка» в меню — без ответа кнопка казалась сломанной
-                    self.tg("answerCallbackQuery", callback_query_id=cq["id"],
-                            **({} if ok else {"text": "Поддержка — только для владельца бота"}))
+                note = None
+                if not self.allowed((cq.get("from") or {}).get("id")):
+                    note = "🔒 Поддержка — только для владельца бота"  # гость (КПП) видит кнопку в меню
+                elif not self.on_button(cq, data):
+                    note = "Кнопка устарела — /fix"  # старая или битая кнопка: не молчим
+                try:
+                    self.tg("answerCallbackQuery", callback_query_id=cq["id"], **({"text": note} if note else {}))
                 except Exception:
                     pass
                 return True
@@ -220,6 +221,7 @@ class Support:
         self.start(chat, text, w.get("shots"))
 
     def on_button(self, cq, data):
+        """True — кнопка понятна и обработана; False — старая или битая."""
         msg = cq.get("message") or {}
         chat, mid = (msg.get("chat") or {}).get("id"), msg.get("message_id")
         if data[1:2] == ["ask"]:
@@ -227,19 +229,23 @@ class Support:
         elif data[1:2] == ["no"]:
             self.waiting.pop(chat, None)
             self.edit(chat, mid, "🛠 Поддержка — отменено.")
-        elif data[1:2] == ["undo"] and len(data) > 2:
+        elif data[1:2] == ["undo"] and len(data) > 2 and re.fullmatch(r"[0-9a-f]{6,40}", data[2]):
             threading.Thread(target=self.undo, args=(chat, data[2]), daemon=True).start()
+        else:
+            return False
+        return True
 
     def web(self, uid, body):
         """Просьба из мини-приложения (Kit.support): {"text", "photo": base64 картинки?} -> {"ok": True}.
         Чат владельца — его id (личка). PermissionError — не владелец, ValueError — пустой текст или битое фото."""
         if not self.allowed(uid):
             raise PermissionError("Поддержка — только для владельца")
-        text = str((body or {}).get("text") or "").strip()[:4000]
+        body = body if isinstance(body, dict) else {}  # список, число, мусор из JSON — как пустая просьба
+        text = str(body.get("text") or "").strip()[:4000]
         if not text:
             raise ValueError("Напиши, что поправить")
         shots = []
-        photo = (body or {}).get("photo")
+        photo = body.get("photo")
         if photo:
             shots.append(self.save_photo(photo))
         self.start(uid, text + "\n\n(написано в мини-приложении)", shots)

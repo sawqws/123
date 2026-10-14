@@ -764,6 +764,8 @@ def on_callback(cb):
             msg.get("message_id"))
         send(chat, help_text(), menu_buttons())
         note = MODES[ui_mode()]
+    else:  # кнопка из старой версии бота — не молчим
+        note = "Кнопка устарела — нажми /start"
     try:
         tg("answerCallbackQuery", callback_query_id=cb["id"], text=note)
     except Exception as e:
@@ -817,6 +819,16 @@ def asset_version():
         with open(os.path.join(WEB, f), "rb") as fh:
             h.update(fh.read())
     return h.hexdigest()[:10]
+
+
+def body_json(raw):
+    """Тело запроса страницы — JSON-объект; пустое — {}; другое (список, число, мусор) — ValueError → 400."""
+    data = json.loads(raw or b"{}")
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("ждём JSON-объект")
+    return data
 
 
 VERSION = asset_version() if os.path.isdir(WEB) else "0"
@@ -882,7 +894,10 @@ class Web(BaseHTTPRequestHandler):
                                     "mode": ui_mode()})
         if path == "/api/events":
             page_seen[0] = time.time()
-            after = int(q.get("after") or 0)
+            try:
+                after = int(q.get("after") or 0)
+            except ValueError:
+                return self.reply(400, {"error": "after — число"})
             with ev_lock:
                 new = [e for e in events if e["id"] > after]
             return self.reply(200, {"events": new})
@@ -924,7 +939,7 @@ class Web(BaseHTTPRequestHandler):
                            "audio/ogg": ".ogg", "audio/mpeg": ".mp3"}.get(ctype, ".wav")
                     heard = speech.hear(raw, ext)
                 else:
-                    heard = str((json.loads(raw or b"{}") or {}).get("text") or "").strip()
+                    heard = str(body_json(raw).get("text") or "").strip()
                 if not heard:
                     return self.reply(200, {"heard": "", "say": ""})
                 say, mp3 = answer(heard, where)
@@ -933,7 +948,7 @@ class Web(BaseHTTPRequestHandler):
                 setting("history", [])
                 return self.reply(200, {"ok": True})
             if path == "/api/mode":  # «💬 Перейти в чат» со страницы (или обратно): в чат сразу приходит главное меню
-                m = str((json.loads(raw or b"{}") or {}).get("mode") or "")
+                m = str(body_json(raw).get("mode") or "")
                 set_mode(m)
                 if m == "chat" and chat_id():
                     send(chat_id(), help_text(), menu_buttons())
@@ -944,7 +959,7 @@ class Web(BaseHTTPRequestHandler):
                 if not SUP:
                     return self.reply(503, {"error": "Поддержка ещё запускается — попробуй через минуту"})
                 user = check_init_data(self.headers.get("X-Init-Data") or "")
-                return self.reply(200, SUP.web(user["id"] if user else owner(), json.loads(raw or b"{}")))
+                return self.reply(200, SUP.web(user["id"] if user else owner(), body_json(raw)))
         except PermissionError as e:
             return self.reply(403, {"error": str(e)})
         except (ai.AIError, speech.SpeechError) as e:
@@ -1112,7 +1127,7 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     print(f"{NAME} запущен")
     global SUP
-    SUP = sup = support.Support(TOKEN, "Глаз", folders=["eye"], pm2="eye-bot", allowed=allowed,
+    SUP = support.Support(TOKEN, "Глаз", folders=["eye"], pm2="eye-bot", allowed=allowed,
                                 tests=["python3 eye/test_eye.py"])
     while True:
         try:
@@ -1123,16 +1138,21 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
-            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
-                continue
-            try:
-                if u.get("message"):
-                    on_message(u["message"])
-                elif u.get("callback_query"):
-                    on_callback(u["callback_query"])
-            except Exception as e:
-                print("update:", e)
-                traceback.print_exc()
+            handle(u)
+
+
+def handle(u):
+    """Одно обновление Telegram — так его разбирает цикл getUpdates (и проверка кнопок в тестах)."""
+    if SUP and SUP.intercept(u):  # 🛠 /fix и ответы поддержке
+        return
+    try:
+        if u.get("message"):
+            on_message(u["message"])
+        elif u.get("callback_query"):
+            on_callback(u["callback_query"])
+    except Exception as e:
+        print("update:", e)
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
