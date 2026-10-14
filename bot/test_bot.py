@@ -338,6 +338,32 @@ class BotTest(unittest.TestCase):
         self.assertIn("prev*.jpg", p)
         self.assertIn("ТОЛЬКО то, что просит", p)
 
+    def test_handwriting_is_rechecked_for_grade8(self):
+        self.assertIn("8 класса", bot.prompt_for(URL, "", False))  # решать методами 8 класса
+
+        def claude(prompt, tools, timeout=0, on_tool=None):
+            self.prompts.append(prompt)
+            if prompt.startswith("Задание:"):  # решение от руки: draw.py + картинки
+                d = drafts.files_dir(TASK)
+                os.makedirs(d, exist_ok=True)
+                pathlib.Path(d, "1_task.jpg").write_bytes(b"jpg")
+                pathlib.Path(drafts.task_dir(TASK), "draw.py").write_text("# решение\n")
+                drafts.write(TASK, "Решил № 1–2")
+                return True, "Решил № 1–2"
+            self.tools = tools
+            return True, "Подставил x = 2, 3.\nПРОВЕРКА: исправил № 2 — потерян знак минус"
+        with mock.patch.object(bot, "claude", claude):
+            self.say(URL)
+        check = [p for p in self.prompts if p.startswith("Ты проверяешь")]
+        self.assertEqual(len(check), 1)
+        self.assertIn("8 класса", check[0])
+        self.assertTrue(any(t.endswith("/check.py)") for t in self.tools))
+        self.assertTrue(any("Проверка: исправил № 2 — потерян знак минус" in m for m, _ in self.msgs))
+
+    def test_no_recheck_without_handwriting(self):
+        self.say(URL)  # обычный черновик без draw.py — без лишней проверки
+        self.assertFalse(any(p.startswith("Ты проверяешь") for p in self.prompts))
+
     def test_errors_are_short(self):
         trace = "Error: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x\n    at open (/root/horo/horo/lib.js:40:11)"
         self.assertEqual(bot.explain(trace), "⚠️ Не получилось: page.goto: net::ERR_NAME_NOT_RESOLVED at https://x")
