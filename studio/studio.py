@@ -367,6 +367,9 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
   экранов несколько). Только классы kit.css и функции kit.js; своё — немного в app.css. Кнопки в ряд — .actions
   или .grid (не свои flex/grid: у .btn + .btn есть отступ сверху). Пустые состояния —
   .empty с эмодзи. Действия — через @bot.api, после действия — свежее состояние в ответе.
+- Вид приложения — как iPhone: минимализм, пастель, «люкс», всегда светлая тема (это уже даёт kit.css). В app.css задай
+  только --accent — спокойный оттенок под характер бота; фон, карточки, текст и тени не переопределяй. Без тёмных фонов,
+  неона, «стекла» и ярких градиентов; насыщенный акцент — только в мелочах (точки, полоски, кольца). Много воздуха.
 - Данные — bot.db. Время — kit.now() (Москва). Напоминания — bot.daily / bot.every.
 - Голосовые уже работают: распознанный текст приходит в @bot.text / @bot.reply. Фото — @bot.photo.
 - Поддержка уже встроена (/fix в меню, Claude чинит бота по просьбе Глеба). В /help последней строкой:
@@ -918,6 +921,51 @@ def commit(cwd, message):
     if code != 0:
         return None
     return git(cwd, "rev-parse", "--short=10", "HEAD")[1].strip()
+
+
+KIT_FILES = ("kit.css", "kit.js")
+
+
+def sync_kits():
+    """Общий дизайн у уже сделанных ботов: kit.css и kit.js из заготовки — в webapp/ каждого бота из реестра, если
+    отличаются. Только эти два файла (app.css, код и данные бота не трогаем), только папки внутри BOTS; в git бота —
+    отдельным коммитом только этих файлов, чтобы /fix и «Откатить» не приняли их за правку. -> [slug, …]"""
+    src = os.path.join(KIT, "template", "webapp")
+    fresh = {}
+    for f in KIT_FILES:
+        with open(os.path.join(src, f), "rb") as fh:
+            fresh[f] = fh.read()
+    root = os.path.realpath(BOTS) + os.sep
+    done = []
+    for slug, info in registry().items():
+        path = info.get("dir") or os.path.join(BOTS, slug)
+        web = os.path.join(path, "webapp")
+        if info.get("kind") == "site" or not os.path.realpath(web).startswith(root) or os.path.islink(web) \
+                or not os.path.isdir(web):
+            continue
+        changed = []
+        for f, data in fresh.items():
+            dst = os.path.join(web, f)
+            if os.path.islink(dst):
+                continue
+            try:
+                with open(dst, "rb") as fh:
+                    if fh.read() == data:
+                        continue
+            except OSError:
+                pass
+            with open(dst + ".tmp", "wb") as fh:
+                fh.write(data)
+            os.replace(dst + ".tmp", dst)
+            changed.append("webapp/" + f)
+        if not changed:
+            continue
+        if os.path.isdir(os.path.join(path, ".git")):
+            git(path, "add", "--", *changed)
+            git(path, "-c", "user.name=Студия", "-c", "user.email=studio@localhost", "commit", "-q",
+                "-m", "Общий дизайн: kit.css и kit.js из Студии", "--", *changed)
+        done.append(slug)
+    return done
 
 
 def run_tests(path):
@@ -1837,8 +1885,14 @@ def main():
     if not bot.token:
         sys.exit("Нет STUDIO_TOKEN (/etc/studio-bot.env)")
     os.makedirs(BOTS, exist_ok=True)
-    for f in ("kit.css", "kit.js"):  # общий дизайн — тот же, что у сделанных ботов
+    for f in KIT_FILES:  # общий дизайн — тот же, что у сделанных ботов
         shutil.copy(os.path.join(KIT, "template", "webapp", f), os.path.join(HERE, "webapp", f))
+    try:  # и у уже сделанных ботов — новый общий вид (после «Обновить всех» Студия перезапускается)
+        upd = sync_kits()
+        if upd:
+            print("Общий дизайн обновлён у ботов:", ", ".join(upd), flush=True)
+    except Exception as e:
+        print("sync_kits:", e, flush=True)
     d = draft()
     if d.get("stage") == "build":  # перезапуск посреди сборки — сборку не продолжить
         d.update(stage="failed", error="Студия перезапустилась во время сборки")

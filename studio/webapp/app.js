@@ -23,10 +23,12 @@ function render(s) {
   S = s;
   if (s.sites_only) {  // «Студия сайтов»: шапка и вкладка — про сайты
     document.title = 'Сайты';
-    document.querySelector('.top .title').textContent = '🌐 Сайты';
+    document.querySelector('.top .title').innerHTML = '<span class="emo">🌐</span> Сайты';
     document.querySelector('.subtitle').textContent = 'Опиши сайт — уточню, покажу план и соберу сам.';
     const t = document.querySelector('[data-tab="bots"]');
     if (t) t.textContent = 'Мои сайты';
+    const nt = document.querySelector('[data-tab="new"]');
+    if (nt) nt.textContent = 'Новый сайт';
   }
   const n = s.bots.length, word = s.sites_only ? ['сайт', 'сайта', 'сайтов'] : ['бот', 'бота', 'ботов'];
   $('count').textContent = n ? n + ' ' + (n === 1 ? word[0] : n < 5 ? word[1] : word[2]) : '';
@@ -163,7 +165,7 @@ function openBot(slug) {
   if (!b) return;
   if (b.kind === 'site') return openSite(b);
   const status = b.status === 'online' ? '<span class="badge ok">работает</span>' : b.status ? '<span class="badge bad">не работает</span>' : '<span class="badge">не запущен</span>';
-  const sh = sheet(`<div style="font-size:44px">${esc(b.emoji || '🧩')}</div><h2>${esc(b.name)}</h2>` +
+  const sh = sheet(`<div class="sheet-icon">${esc(b.emoji || '🧩')}</div><h2>${esc(b.name)}</h2>` +
     `<div style="margin-bottom:8px">${status}${b.username ? ' <span class="muted">@' + esc(b.username) + '</span>' : ''}</div>` +
     `<p class="muted">${esc(b.summary || '')}</p>` +
     (b.username ? `<button class="btn primary" data-open="${esc(b.username)}">▶️ Открыть бота</button>` : '') +
@@ -189,7 +191,7 @@ const ACCESS = { private: '🔑 по ссылке-ключу', password: '🔒 �
 
 function openSite(b) {
   const slug = b.slug;
-  const sh = sheet(`<div style="font-size:44px">${esc(b.emoji || '🌐')}</div><h2>${esc(b.name)}</h2>` +
+  const sh = sheet(`<div class="sheet-icon">${esc(b.emoji || '🌐')}</div><h2>${esc(b.name)}</h2>` +
     `<div style="margin-bottom:8px"><span class="badge ${b.access === 'public' ? 'ok' : ''}">${ACCESS[b.access] || ''}</span></div>` +
     `<p class="muted">${esc(b.summary || '')}</p>` +
     (b.password ? `<p>Пароль: <b>${esc(b.password)}</b></p>` : '') +
