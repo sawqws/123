@@ -121,8 +121,8 @@ BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, 
 
 
 def menu_kb():
-    """Клавиатура у поля ввода: главное действие первым, редкое — в «Ещё» (там же просрочки, почерк,
-    проверка и помощь). Старые кнопки (❗ Просрочки…) по-прежнему понимаются текстом. Сам бот не пишет (сводку убрали).
+    """Клавиатура у поля ввода: главное действие первым, редкое — в «Ещё» (там же просрочки,
+    проверка и помощь; «✍️ Почерк» — и там, и на клавиатуре). Старые кнопки (❗ Просрочки…) по-прежнему понимаются текстом. Сам бот не пишет (сводку убрали).
     В режиме «📱 приложение» главная кнопка — открыть приложение (web_app) и 2–3 самых нужных действия;
     в режиме «💬 чат» приложение не предлагается (кнопка «HDP» слева от поля ввода остаётся)."""
     b = lambda text, style=None: {"text": text, **({"style": style} if style else {})}
@@ -136,7 +136,7 @@ def menu_kb():
         rows = [
             [b(BTN_DO, "primary"), b(BTN_SHOW)],
             [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
-            [b(BTN_PREP), b(BTN_ALL)],
+            [b(BTN_PREP), b(BTN_ALL), b(BTN_HAND)],  # почерк — на виду (Глеб искал его, когда он был только в «Ещё»)
             [b(BTN_MODE), b(BTN_MORE)],
         ]
     return json.dumps({
@@ -462,11 +462,12 @@ def plain(x):
     return html.unescape(re.sub(r"<[^>]+>", "", str(x or ""))).strip()
 
 
-def send_file(chat, path, caption=""):
-    """Картинку — фото, остальное (и если фото не приняли) — файлом."""
+def send_file(chat, path, caption="", as_file=False):
+    """Картинку — фото, остальное (и если фото не приняли) — файлом. as_file: картинку тоже файлом (без сжатия)."""
     with open(path, "rb") as f:
         data = f.read()
-    kinds = ([("sendPhoto", "photo")] if drafts.IMAGE.search(path) and not path.lower().endswith(".pdf") else []) + [("sendDocument", "document")]
+    photo = drafts.IMAGE.search(path) and not path.lower().endswith(".pdf") and not as_file
+    kinds = ([("sendPhoto", "photo")] if photo else []) + [("sendDocument", "document")]
     for method, field in kinds:
         b = uuid.uuid4().hex
         body = b""
@@ -1131,7 +1132,7 @@ GLEB_EXTRA = os.path.join(REPO, "horo", "tmp", "fonts", "gleb_extra.npz")  # б�
 def send_alphabet(chat):
     os.makedirs(ALPHA_DIR, exist_ok=True)
     send(chat, card("Алфавит твоим почерком",
-                    "1. Сохрани 4 листа ниже: русские буквы (2 листа), латиница, цифры и знаки.\n"
+                    "1. Сохрани 4 листа ниже (они файлами — в полном размере): русские буквы (2 листа), латиница, цифры и знаки.\n"
                     "2. На iPad открой лист в «Фото» → Править → Разметка.\n"
                     "3. Пиши синим или белым на линии: слева большая буква, справа маленькая. Пустые клетки можно оставить.\n"
                     "4. Не обрезай лист: розовые квадраты по углам должны быть видны.",
@@ -1142,7 +1143,7 @@ def send_alphabet(chat):
         if not ok:
             send(chat, err(why), menu=True, raw_html=True)
             return
-        send_file(chat, out)
+        send_file(chat, out, as_file=True)  # фото Telegram сжимает до 1280 px — маленькие буквы выходят пятнами
     mode[chat] = "alphabet"
 
 
@@ -1239,8 +1240,10 @@ def take_alphabet(chat, msg):
         added = next((l.split(":", 1)[1].split() for l in lines if l.startswith("Добавил:")), [])
         added = [] if added == ["ничего"] else added
         errors = [l.split(":", 1)[1].strip() for l in lines if l.startswith("Ошибка:")]
+        tips = [l.split(":", 1)[1].strip() for l in lines if l.startswith("Совет:")]
         if added:
-            send(chat, card(f"Добавил знаков: {len(added)}", esc(" ".join(added)), icon="✅"), raw_html=True)
+            send(chat, card(f"Добавил знаков: {len(added)}", esc(" ".join(added)), esc(" ".join(tips)), icon="✅"),
+                 raw_html=True)
         for e in errors:
             send(chat, err(f"Лист не разобрал: {e}"), raw_html=True)
         if not ok and not errors:
@@ -1251,6 +1254,22 @@ def take_alphabet(chat, msg):
                 send_file(chat, prev, "Так теперь пишу твоим почерком. Пришли ещё лист или напиши «готово».")
     finally:
         lock.release()
+
+
+def retry_alphabet():
+    """Листы старого алфавита, которые раньше отклонялись («это лист старого алфавита»), теперь разбираются:
+    один раз при старте (alphabet.py retry помнит разобранные) — и Глебу приходит, что взял и как теперь пишу."""
+    ok, out = py("horo/alphabet.py", "retry", ALPHA_DIR, timeout=600)
+    lines = out.strip().splitlines()
+    added = next((l.split(":", 1)[1].split() for l in lines if l.startswith("Добавил:")), [])
+    if not ok or not added or added == ["ничего"] or not owner():
+        return
+    tips = [l.split(":", 1)[1].strip() for l in lines if l.startswith("Совет:")]
+    send(owner(), card(f"Разобрал твои листы алфавита: {len(added)} букв", esc(" ".join(added)),
+                       esc(" ".join(tips)), "✍️"), raw_html=True)
+    prev = os.path.join(ALPHA_DIR, "preview.png")
+    if py("horo/alphabet.py", "preview", prev)[0]:
+        send_file(owner(), prev, "Так теперь пишу твоим почерком")
 
 
 # ---------- Проверка ----------
@@ -2469,6 +2488,7 @@ def main():
     web.start(TOKEN, owner, ROUTES, on_app_url)
     print("Бот запущен")
     print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
+    threading.Thread(target=retry_alphabet, daemon=True).start()
     s = load_settings()
     if s.pop("updated", None):  # поднялись после /update
         save_settings(s)

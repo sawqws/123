@@ -43,7 +43,7 @@ class BotTest(unittest.TestCase):
             mock.patch.object(drafts, "EDITS", os.path.join(t, "style", "edits.jsonl")),
             mock.patch.object(bot.threading, "Thread", Sync),
             mock.patch.object(bot, "tg", self.fake_tg),
-            mock.patch.object(bot, "send_file", lambda chat, path, caption="": self.files.append(path)),
+            mock.patch.object(bot, "send_file", lambda chat, path, caption="", **kw: self.files.append(path)),
             mock.patch.object(bot, "claude", self.fake_claude),
             mock.patch.object(bot, "node", self.fake_node),
             mock.patch.object(bot, "INBOX", os.path.join(t, "inbox")),

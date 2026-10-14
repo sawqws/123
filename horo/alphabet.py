@@ -16,6 +16,7 @@ usage:
   python3 horo/alphabet.py preview out.png                  пример текста его почерком
   python3 horo/alphabet.py sample out.png                   пример решённого задания (со стилем из hand_style.json)
   python3 horo/alphabet.py renorm                           один раз подогнать по буквам старый банк (бот делает при старте)
+  python3 horo/alphabet.py retry [папка]                    разобрать присланные раньше листы старого алфавита (бот делает при старте)
   python3 horo/alphabet.py reset                            удалить добавленные буквы
 """
 import functools
@@ -42,6 +43,9 @@ PAGES = [  # (заголовок, символы, парами: большая+�
 CODE0 = 4                  # номер листа на метках = индекс + CODE0 (1..3 были у старого алфавита)
 # старый лист 2 (цифры и знаки, сетка 6×6) тоже годится: там в каждой клетке один знак
 OLD_DIGITS = ('0123456789+-=()/<>.,:;!?%', 6)  # ² ³ √ ≠ ≤ ≥ · × ÷ со старого листа не берём: там они были не на своих местах
+# старые листы букв 1 и 3 (сетка 6×6, одна клетка на букву). Глеб заполнил их так: большая — на линии строки,
+# маленькая — ниже, на нижней рамке клетки (хвосты уходят за рамку). Латинские a c e o p x не берём — как у новых листов
+OLD_LETTERS = {'old-ru': 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя', 'old-lat': 'abcdefghijklmnopqrstuvwxyz'}
 W, H = 1640, 2360          # лист как скриншот iPad
 COLS, ROWS = 8, 6
 TOP, SIDE, BOTTOM = 230, 70, 110
@@ -162,8 +166,8 @@ def straighten(img):
             code |= 1 << k
     if code == 2:
         return out, 'old-digits'
-    if 1 <= code < CODE0:
-        raise ValueError('это лист старого алфавита — нажми «✍️ Мой почерк» и заполни новые листы')
+    if code in (1, 3):
+        return out, 'old-ru' if code == 1 else 'old-lat'
     if not CODE0 <= code < CODE0 + len(PAGES):
         raise ValueError('не понял, какой это лист алфавита')
     return out, code - CODE0
@@ -173,7 +177,7 @@ def ink(a):
     """Маска написанного: цветное или светлое, в отличие от серого шаблона."""
     a = a.astype(int)
     chroma = a.max(-1) - a.min(-1)
-    return ((chroma > 55) & ~_magenta(a)) | (a.mean(-1) > 185)
+    return ((chroma > 22) & ~_magenta(a)) | (a.mean(-1) > 185)  # 22: тонкие линии после сжатия Telegram бледнеют
 
 
 def glyph_from(mask, base, tiny=False):
@@ -251,6 +255,7 @@ def ingest(paths):
     """Разбирает листы, дописывает буквы в EXTRA. Возвращает (добавленные буквы, ошибки)."""
     bank = dict(np.load(EXTRA)) if os.path.exists(EXTRA) else {}
     added, errors = [], []
+    ingest.tips = []  # советы: что прислать иначе (печатаются строкой «Совет: …»)
     for path in paths:
         try:
             img = Image.open(path)
@@ -263,21 +268,14 @@ def ingest(paths):
             errors.append(f'{os.path.basename(path)}: {e}')
             continue
         m = ink(sheet)
-        if page == 'old-digits':
-            chars, cols = OLD_DIGITS
+        if page in OLD_LETTERS:
+            sharp = img.width >= SHARP
+            glyphs = old_letters(m, page, small=sharp)
+            if not sharp and 'файлом' not in ' '.join(ingest.tips):
+                ingest.tips.append('большие буквы взял, а маленькие Telegram сжал до пятен — пришли эти же листы '
+                                   'файлом (📎 → Файл), тогда возьму и маленькие')
         else:
-            chars, cols = PAGES[page][1], COLS
-        rows = ROWS if cols == COLS else 6
-        cell_h = (H - TOP - BOTTOM) / rows
-        glyphs = []
-        for i, ch in enumerate(chars):
-            x0, x1, y0, base = cell(i, cols, rows)
-            # подсказку в левом верхнем углу не берём: обрезаем верх клетки; края — рамки
-            y_top, y_bot = int(y0 + 70), int(y0 + cell_h - 14)
-            sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
-            g = glyph_from(sub, base - y_top, tiny=ch in '.,:;')
-            if g is not None:
-                glyphs.append((ch, g[0], g[1]))
+            glyphs = cells(m, page)
         for ch, pts, w in normalize(glyphs):
             k = ord(ch)
             n = sum(1 for key in bank if key.split('_')[0] == str(k) and not key.endswith('w'))
@@ -287,6 +285,81 @@ def ingest(paths):
         os.makedirs(os.path.dirname(EXTRA), exist_ok=True)
         np.savez_compressed(EXTRA, **bank)
         open(EXTRA + '.v2', 'w').close()
+    return added, errors
+
+
+def cells(m, page):
+    """Лист «знак в клетке» (новые листы и старый лист цифр) -> [(знак, точки, ширина)]."""
+    chars, cols = OLD_DIGITS if page == 'old-digits' else (PAGES[page][1], COLS)
+    rows = ROWS if cols == COLS else 6
+    cell_h = (H - TOP - BOTTOM) / rows
+    out = []
+    for i, ch in enumerate(chars):
+        x0, x1, y0, base = cell(i, cols, rows)
+        # подсказку в левом верхнем углу не берём: обрезаем верх клетки; края — рамки
+        y_top, y_bot = int(y0 + 70), int(y0 + cell_h - 14)
+        sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
+        g = glyph_from(sub, base - y_top, tiny=ch in '.,:;')
+        if g is not None:
+            out.append((ch, g[0], g[1]))
+    return out
+
+
+SHARP = 1300  # ширина присланной картинки, с которой маленькие буквы старого листа ещё читаются
+
+
+def old_letters(m, page, small=True):
+    """Старый лист букв: в клетке две буквы — большая на линии строки и маленькая на нижней рамке.
+    Делим по пятнам: что выше линии (+25 px) — большая, ниже — маленькая.
+    small=False: маленькие не берём (Telegram сжал лист — от них остались пятна в 15 px)."""
+    seq = OLD_LETTERS[page]
+    keep = set(PAGES[2][1].lower()) if page == 'old-lat' else set(seq)
+    cell_h = (H - TOP - BOTTOM) / 6
+    out = []
+    for i, ch in enumerate(seq):
+        if ch not in keep:
+            continue
+        x0, x1, y0, base = cell(i, 6, 6)
+        y_top, y_bot = int(y0 + 70), int(min(H, y0 + cell_h + 55))  # хвосты маленьких уходят за рамку
+        sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
+        lab, n = ndimage.label(sub, np.ones((3, 3)))
+        if not n:
+            continue
+        ys = [c[0] for c in ndimage.center_of_mass(sub, lab, range(1, n + 1))]
+        split = base - y_top + 25
+        up = np.isin(lab, [k + 1 for k, y in enumerate(ys) if y < split])
+        down = np.isin(lab, [k + 1 for k, y in enumerate(ys) if y >= split])
+        if not small or ch == 'ё' and ndimage.label(down, np.ones((3, 3)))[1] < 2:
+            down[:] = False  # маленькую ё без точек не берём: была бы просто «е»
+        for mask, c, b in ((up, ch.upper(), base - y_top), (down, ch, y0 + cell_h - 8 - y_top)):
+            g = glyph_from(mask, b)
+            if g is not None:
+                out.append((c, g[0], g[1]))
+    return out
+
+
+def retry(folder):
+    """Листы старого алфавита, которые бот раньше не разбирал («это лист старого алфавита»), — разобрать один раз.
+    Разобранные отмечаются в <папка>/.old_done. Возвращает (добавленные буквы, ошибки)."""
+    done_file = os.path.join(folder, '.old_done')
+    done = set()
+    if os.path.exists(done_file):
+        with open(done_file) as f:
+            done = set(f.read().split())
+    todo = []
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not name.startswith('in_') or name in done:
+            continue
+        try:
+            page = straighten(Image.open(os.path.join(folder, name)))[1]
+        except Exception:
+            continue
+        if page in OLD_LETTERS:
+            todo.append(os.path.join(folder, name))
+    added, errors = ingest(todo) if todo else ([], [])
+    with open(done_file, 'a') as f:
+        for p in todo:
+            f.write(os.path.basename(p) + '\n')
     return added, errors
 
 
@@ -344,11 +417,21 @@ if __name__ == '__main__':
         print('Добавил:', ' '.join(added) if added else 'ничего')
         for e in errors:
             print('Ошибка:', e)
+        for t in ingest.tips:
+            print('Совет:', t)
         sys.exit(0 if added or not errors else 1)
     elif cmd == 'preview':
         preview(args[0])
     elif cmd == 'sample':
         sample(args[0])
+    elif cmd == 'retry':
+        ingest.tips = []
+        added, errors = retry(args[0] if args else os.path.join(HERE, 'tmp', 'alphabet'))
+        print('Добавил:', ' '.join(added) if added else 'ничего')
+        for e in errors:
+            print('Ошибка:', e)
+        for t in ingest.tips:
+            print('Совет:', t)
     elif cmd == 'renorm':
         print('Подогнал знаков:', renorm())
     elif cmd == 'reset':
