@@ -111,8 +111,11 @@ def seeded(path=None, days=40):
     db.user(U, "Глеб")
     db.save_token(U, "acc", "ref", time.time() + 3600)
     fw = FakeWhoop(fake_whoop(days))
+    # sync берёт окно от настоящего «сейчас», а данные — до TODAY: окно растягиваем на прошедшие с TODAY дни,
+    # иначе с каждым днём после TODAY первые дни выпадают (test_progress ждал 40 дней, получал 39)
+    behind = max(0, (datetime.date.today() - TODAY).days)
     with mock.patch.object(whoop.Client, "get", fw.get):
-        whoop.sync(db, U, "cid", "sec", days=days + 2)
+        whoop.sync(db, U, "cid", "sec", days=days + 2 + behind)
     return db, fw
 
 
