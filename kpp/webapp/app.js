@@ -168,6 +168,13 @@ function placeView() {
     </section>`;
 }
 
+// Тонкие значки плиток (вместо эмодзи — спокойнее в пастели)
+const IC = {
+  paste: '<svg viewBox="0 0 24 24"><rect x="6" y="4.5" width="12" height="16" rx="2.5"/><path d="M9.5 4.5h5v2.5h-5z"/><path d="M9.5 12h5M9.5 15.5h3.5"/></svg>',
+  shot: '<svg viewBox="0 0 24 24"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.3l1.4-2h5.6l1.4 2h1.3A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.6"/></svg>',
+  again: '<svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></svg>',
+};
+
 function orderCard() {
   if (result) return resultCard();
   const last = S.last;
@@ -180,9 +187,9 @@ function orderCard() {
       <div class="plate-hint" id="plate-hint">${plate ? esc(pretty(plate)) : 'Номер машины из Яндекс Go'}</div>
       <button id="go" class="btn primary go">Оформить пропуск</button>
       <div class="quick">
-        <button class="tile" id="q-paste"${canPaste() ? '' : ' disabled'}><span class="i">📋</span><span>Вставить</span><small>из буфера</small></button>
-        <button class="tile" id="q-shot"><span class="i">📷</span><span>Скриншот</span><small>Яндекс Go</small></button>
-        <button class="tile" id="q-last"${last ? '' : ' disabled'}><span class="i">🔁</span><span>Повторить</span>
+        <button class="tile" id="q-paste"${canPaste() ? '' : ' disabled'}><span class="i">${IC.paste}</span><span>Вставить</span><small>из буфера</small></button>
+        <button class="tile" id="q-shot"><span class="i">${IC.shot}</span><span>Скриншот</span><small>Яндекс Go</small></button>
+        <button class="tile" id="q-last"${last ? '' : ' disabled'}><span class="i">${IC.again}</span><span>Повторить</span>
           <small class="clip">${last ? esc(last.pretty) : 'последний'}</small></button>
       </div>
     </section>`;
@@ -204,7 +211,7 @@ function resultCard() {
   }
   if (r.kind === 'repeat') {
     return `<section class="card feature result rise">
-        <div class="tick warn" aria-hidden="true">☑️</div>
+        <div class="tick warn" aria-hidden="true"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M26 15v11l7 5"/></svg></div>
         <h2 class="title-lg">Уже заказан</h2>
         <div class="res-plate">${big}</div>
         <div class="res-meta"><span class="pill warn dot">${esc(r.when)}</span></div>
@@ -214,7 +221,7 @@ function resultCard() {
       </section>`;
   }
   return `<section class="card feature result err rise">
-      <div class="tick err" aria-hidden="true">!</div>
+      <div class="tick err" aria-hidden="true"><svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M26 15v14M26 36.5v.5"/></svg></div>
       <h2 class="title-lg">Пропуск не оформлен</h2>
       <div class="res-plate">${big}</div>
       <div class="note err">${esc(r.error)}</div>
