@@ -1,35 +1,33 @@
-/* «Глаз» — поверх общего kit.css (пастель): лавандовый акцент, перламутровый орб, пузыри, лента «Что видел». */
+/* «Глаз» — поверх общего kit.css (оникс-стекло): лавандовый акцент в мелочах, орб — тёмное стекло
+   с цветным свечением состояния, пузыри на стекле, лента «Что видел». */
 :root {
-  --accent: #9f7ff0;          /* пастельная лаванда: из неё kit делает soft / pastel / deep */
-  --accent-ink: var(--ink);
-  --listen: #a58cf2;          /* состояние: слушаю — лаванда */
-  --think: #e3a3d6;           /* думаю — орхидея */
-  --speak: #8fb0ec;           /* говорю — дымчато-голубой */
+  --accent: #a98bff;          /* лаванда: kit делает из неё soft / pastel / deep */
+  --listen: #b59cff;          /* состояние: слушаю — лаванда */
+  --think: #f2a7e2;           /* думаю — орхидея */
+  --speak: #8ec3ff;           /* говорю — голубой */
   --st: var(--listen);
-  --pearl: #fffdfb;
 }
 body[data-mode="think"] { --st: var(--think); }
 body[data-mode="speak"] { --st: var(--speak); }
 body.mic-err { --st: var(--err); }
-/* насыщенный оттенок состояния — для текста и значков (считается на body, где уже выбран --st) */
-body { --st-deep: color-mix(in srgb, var(--st) 55%, #29213a); }
+/* светлый тон состояния — для текста и значков на тёмном (считается на body, где уже выбран --st) */
+body { --st-deep: color-mix(in srgb, var(--st) 70%, #ffffff); }
 svg { fill: currentColor; }
 
 /* ---------- главная карточка: орб и состояние ---------- */
 .card.stage {
   display: flex; flex-direction: column; align-items: center; text-align: center; padding: 40px 20px 20px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, #ffffff), #ffffff 62%);
-  border-color: var(--line);
+  background: linear-gradient(170deg, color-mix(in srgb, var(--accent) 12%, transparent), rgba(255, 255, 255, .04) 60%);
 }
 .orb { position: relative; width: 164px; height: 164px; display: grid; place-items: center; flex: none; }
 .orb > span { position: absolute; border-radius: 50%; pointer-events: none; }
-/* мягкое свечение вокруг — пастельная дымка, не неон */
-.halo { inset: -30px; opacity: .55; transition: opacity .5s;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--st) 26%, transparent), transparent);
+/* свечение вокруг — цвет состояния, мягко */
+.halo { inset: -34px; opacity: .6; transition: opacity .5s;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--st) 34%, transparent), transparent);
   animation: eye-breathe 5s ease-in-out infinite; }
 body[data-mode="listen"] .halo, body[data-mode="speak"] .halo { opacity: 1; }
-body[data-mode="think"] .halo { opacity: .85; }
-.wave { inset: 0; border: 1px solid color-mix(in srgb, var(--st) 55%, #ffffff); opacity: 0; }
+body[data-mode="think"] .halo { opacity: .9; }
+.wave { inset: 0; border: 1px solid color-mix(in srgb, var(--st) 60%, transparent); opacity: 0; }
 body[data-mode="listen"] .wave, body[data-mode="speak"] .wave { animation: eye-ripple 2.8s var(--ease) infinite; }
 body[data-mode="speak"] .wave { animation-duration: 1.9s; }
 .wave:nth-child(3) { animation-delay: .93s !important; }
@@ -37,33 +35,34 @@ body[data-mode="speak"] .wave { animation-duration: 1.9s; }
 body[data-mode="speak"] .wave:nth-child(3) { animation-delay: .63s !important; }
 body[data-mode="speak"] .wave:nth-child(4) { animation-delay: 1.26s !important; }
 /* уровень голоса — тонкое кольцо */
-.lvl { inset: -10px; border: 2px solid color-mix(in srgb, var(--st) 50%, #ffffff); opacity: 0;
+.lvl { inset: -10px; border: 2px solid color-mix(in srgb, var(--st) 75%, transparent); opacity: 0;
   transition: opacity .25s, transform .08s linear; }
 body[data-mode="listen"] .lvl { opacity: 1; }
 .arc { inset: -10px; opacity: 0; transition: opacity .25s;
-  background: conic-gradient(from 0deg, transparent 0 50%, color-mix(in srgb, var(--st) 80%, #ffffff));
+  background: conic-gradient(from 0deg, transparent 0 50%, var(--st));
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
           mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px)); }
 body[data-mode="think"] .arc { opacity: 1; animation: kit-spin 1.2s linear infinite; }
-/* сам «глаз»: перламутровая жемчужина с переливом цвета состояния */
+/* сам «глаз»: шар из тёмного стекла — блик сверху, внутри светится цвет состояния */
 .core { inset: 0; display: grid; place-items: center; color: var(--st-deep);
   background:
-    radial-gradient(circle at 32% 24%, #ffffff 0, rgba(255, 255, 255, .95) 14%, rgba(255, 255, 255, 0) 42%),
-    radial-gradient(circle at 78% 72%, color-mix(in srgb, var(--st) 46%, transparent), transparent 58%),
-    radial-gradient(circle at 18% 82%, rgba(255, 220, 204, .75), transparent 50%),
-    radial-gradient(circle at 86% 22%, rgba(206, 228, 255, .7), transparent 46%),
-    linear-gradient(160deg, var(--pearl), color-mix(in srgb, var(--st) 22%, #ffffff));
+    radial-gradient(64% 40% at 50% 4%, rgba(255, 255, 255, .26), rgba(255, 255, 255, .05) 60%, transparent 74%),
+    radial-gradient(circle at 50% 92%, color-mix(in srgb, var(--st) 55%, transparent), transparent 58%),
+    radial-gradient(circle at 50% 50%, rgba(36, 33, 44, .55), rgba(10, 9, 14, .78) 72%);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   box-shadow:
-    0 26px 44px -22px color-mix(in srgb, var(--st) 70%, #6b4f3a),
-    0 2px 6px rgba(70, 45, 20, .06),
-    inset 0 -10px 24px color-mix(in srgb, var(--st) 22%, transparent),
-    inset 0 0 0 1px rgba(255, 255, 255, .9);
-  transition: background .5s, box-shadow .5s, color .5s; }
-body[data-mode="off"] .core { color: color-mix(in srgb, var(--accent) 62%, #2a2238); }
+    inset 0 1px 0 rgba(255, 255, 255, .28),
+    inset 0 0 0 1px rgba(255, 255, 255, .1),
+    inset 0 -16px 30px color-mix(in srgb, var(--st) 30%, transparent),
+    0 0 46px -6px color-mix(in srgb, var(--st) 55%, transparent),
+    0 24px 44px -20px rgba(0, 0, 0, .9);
+  transition: box-shadow .5s, color .5s; }
+body[data-mode="off"] .core { color: var(--accent-deep); }
 body.mic-err .core { color: var(--st-deep); }
 .core > * { grid-area: 1 / 1; transition: opacity .25s, transform .3s var(--ease); }
-.mic { width: 54px; height: 54px; }
-.bars, .dots { display: flex; align-items: center; gap: 6px; opacity: 0; transform: scale(.6); }
+.mic { width: 54px; height: 54px; filter: drop-shadow(0 0 10px color-mix(in srgb, var(--st) 60%, transparent)); }
+.bars, .dots { display: flex; align-items: center; gap: 6px; opacity: 0; transform: scale(.6);
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--st) 60%, transparent)); }
 .bars i { width: 6px; height: 42px; border-radius: 4px; background: currentColor; transform: scaleY(.3); }
 .dots i { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
 body[data-mode="speak"] .mic, body[data-mode="think"] .mic { opacity: 0; transform: scale(.6); }
@@ -78,7 +77,7 @@ body[data-mode="think"] .dots i { animation: eye-hop 1s ease-in-out infinite; }
 .dots i:nth-child(2) { animation-delay: .15s !important; }
 .dots i:nth-child(3) { animation-delay: .3s !important; }
 
-.state { margin-top: 36px; font: 600 28px/1.1 var(--serif); letter-spacing: -.3px; max-width: 100%;
+.state { margin-top: 38px; font: 800 28px/1.1 var(--round); letter-spacing: -.4px; max-width: 100%;
   overflow-wrap: anywhere; color: var(--ink); transition: color .3s; }
 body:not([data-mode="off"]) .state, body.mic-err .state { color: var(--st-deep); }
 .st-hint { margin-top: 8px; color: var(--hint); font-size: 15px; max-width: 100%; overflow-wrap: anywhere; }
@@ -95,45 +94,47 @@ body[data-mode="speak"] .stop { display: inline-flex; animation: kit-rise .3s va
 
 .actions { width: 100%; margin-top: 30px; flex-wrap: nowrap; }
 .actions .talk { flex: 1 1 auto; min-height: 58px; font-size: 17px; flex-direction: column; gap: 0; }
-.actions .talk small { font-size: 12px; font-weight: 500; opacity: .7; line-height: 1.2; }
+.actions .talk small { font-size: 12px; font-weight: 500; opacity: .75; line-height: 1.2; }
 .actions .talk small:empty { display: none; }
 .actions .pick { flex: none; width: 58px; min-height: 58px; padding: 0; }
 .pick svg, .add-ic svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7;
   stroke-linecap: round; stroke-linejoin: round; }
-body.talking .talk, body.talking .talk.primary { background: color-mix(in srgb, var(--err) 11%, #ffffff); color: var(--err);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 18%, transparent); }
+body.talking .talk, body.talking .talk.primary { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err);
+  text-shadow: none; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px color-mix(in srgb, var(--err) 32%, transparent); }
 
-/* ---------- разговор: пузыри как в «Сообщениях», только пастельные ---------- */
+/* ---------- разговор: пузыри на стекле ---------- */
 .chat { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.chat .sk { border-radius: 20px; }
-.bubble { max-width: 84%; min-width: 0; padding: 11px 15px; border-radius: 22px; font-size: 15.5px;
-  line-height: 1.42; white-space: pre-line; overflow-wrap: anywhere; color: var(--ink); animation: kit-rise .3s var(--ease); }
-.bubble.me { align-self: flex-end; border-bottom-right-radius: 7px;
-  background: var(--accent-pastel); box-shadow: 0 8px 20px -16px var(--accent-deep); }
-.bubble.ai { align-self: flex-start; background: var(--card); border: 1px solid var(--line);
-  border-bottom-left-radius: 7px; box-shadow: var(--shadow); }
+.chat .sk { border-radius: 22px; }
+.bubble { max-width: 84%; min-width: 0; padding: 11px 15px; border-radius: 24px; font-size: 15.5px;
+  line-height: 1.42; white-space: pre-line; overflow-wrap: anywhere; color: var(--ink); animation: kit-rise .3s var(--ease);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.bubble.me { align-self: flex-end; border-bottom-right-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px var(--accent-line); }
+.bubble.ai { align-self: flex-start; background: var(--card); border-bottom-left-radius: 8px; box-shadow: var(--shadow); }
 .chat .empty, .feed .empty { width: 100%; }
-.chat .empty { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--shadow); }
+.chat .empty { background: var(--card); border-radius: var(--r-xl); box-shadow: var(--shadow);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
 
 /* ---------- что видел ---------- */
-.card.add { background: var(--card); border-color: var(--line); }
 .add-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; min-width: 0; }
 .add-ic { flex: none; width: 50px; height: 50px; border-radius: 16px; display: grid; place-items: center;
-  background: var(--accent-soft); color: var(--accent-deep); }
+  background: var(--accent-soft); color: var(--accent-deep); box-shadow: inset 0 0 0 1px var(--accent-line); }
 .add-txt { min-width: 0; }
-.add-txt b { display: block; font-size: 17px; font-weight: 650; letter-spacing: -.2px; margin-bottom: 2px; }
-.count { font-weight: 600; letter-spacing: 0; color: var(--hint); }
+.add-txt b { display: block; font-size: 17px; font-weight: 750; letter-spacing: -.2px; margin-bottom: 2px; }
+.count { font-weight: 650; letter-spacing: 0; color: var(--hint); }
 .feed .row { align-items: flex-start; padding-top: 14px; padding-bottom: 14px; }
 .feed .main > span { display: block; }
-.feed .title { font-weight: 600; }
+.feed .title { font-weight: 650; }
 .feed .row + .row::before { left: 86px; }
-.thumb { position: relative; flex: none; width: 58px; height: 58px; border-radius: 16px; overflow: hidden;
-  background: var(--field); box-shadow: inset 0 0 0 1px rgba(70, 45, 20, .05); }
+.thumb { position: relative; flex: none; width: 58px; height: 58px; border-radius: 18px; overflow: hidden;
+  background: var(--field); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
 .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .thumb img:not([src]) { display: none; }
 .thumb .vid { position: absolute; right: 4px; bottom: 4px; width: 20px; height: 20px; border-radius: 50%;
   display: grid; place-items: center; padding: 0 0 0 2px; font-size: 9px; line-height: 1;
-  background: rgba(255, 255, 255, .88); color: var(--ink); box-shadow: 0 2px 6px rgba(70, 45, 20, .16); }
+  background: rgba(10, 9, 12, .62); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .feed .meta.two { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .feed .where { margin-top: 4px; font-size: 12.5px; color: var(--hint); white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
@@ -141,7 +142,7 @@ body.talking .talk, body.talking .talk.primary { background: color-mix(in srgb, 
 
 /* лист с фото */
 .shot { display: block; width: 100%; max-height: 44vh; object-fit: cover; border-radius: var(--r-lg);
-  background: var(--field); margin-bottom: 18px; aspect-ratio: 4 / 3; box-shadow: var(--shadow); }
+  background: var(--field); margin-bottom: 18px; aspect-ratio: 4 / 3; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
 .sheet .txt { font-size: 16px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; margin: 0 2px 10px; }
 .sheet .where { color: var(--hint); font-size: 13.5px; margin: 0 2px 18px; overflow-wrap: anywhere; }
 .sheet .btn + .btn { margin-top: 8px; }
