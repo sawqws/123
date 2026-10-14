@@ -516,6 +516,53 @@ class Sites(StudioFlow):
         self.assertEqual(studio.sites(), {})
 
 
+class KitSync(unittest.TestCase):
+    """Новый общий вид доходит до уже сделанных ботов: только kit.css/kit.js, только внутри папки ботов."""
+    def setUp(self):
+        shutil.rmtree(os.path.join(TMP, "bots"), ignore_errors=True)
+        self.src = os.path.join(HERE, "kit", "template", "webapp")
+
+    def make(self, slug, git=True, **info):
+        path = os.path.join(studio.BOTS, slug)
+        os.makedirs(os.path.join(path, "webapp"))
+        for name, text in (("kit.css", "/* старый */"), ("kit.js", "// старый"), ("app.css", ":root{--accent:#f00}")):
+            with open(os.path.join(path, "webapp", name), "w") as f:
+                f.write(text)
+        if git:
+            studio.git(path, "init", "-q")
+            studio.commit(path, "Первая версия")
+        studio.reg_set(slug, {"name": slug, "slug": slug, "dir": path, **info})
+        return path
+
+    def test_copies_only_kit_and_commits(self):
+        path = self.make("water")
+        with open(os.path.join(path, "bot.py"), "w") as f:
+            f.write("# правка в работе")  # чужая незакоммиченная правка — не в коммит Студии
+        self.assertEqual(studio.sync_kits(), ["water"])
+        for name in ("kit.css", "kit.js"):
+            self.assertEqual(read(os.path.join(path, "webapp", name)), read(os.path.join(self.src, name)))
+        self.assertEqual(read(os.path.join(path, "webapp", "app.css")), ":root{--accent:#f00}")
+        self.assertIn("Общий дизайн", studio.git(path, "log", "-1", "--format=%s")[1])
+        self.assertEqual(studio.git(path, "show", "--name-only", "--format=", "HEAD")[1].split(),
+                         ["webapp/kit.css", "webapp/kit.js"])
+        self.assertIn("bot.py", studio.git(path, "status", "--porcelain")[1])
+        self.assertEqual(studio.sync_kits(), [])  # второй раз — уже одинаковые, без коммита
+        self.assertEqual(studio.git(path, "rev-list", "--count", "HEAD")[1].strip(), "2")
+
+    def test_skips_outside_sites_and_links(self):
+        outside = os.path.join(TMP, "outside")
+        os.makedirs(os.path.join(outside, "webapp"), exist_ok=True)
+        with open(os.path.join(outside, "webapp", "kit.css"), "w") as f:
+            f.write("чужое")
+        studio.reg_set("evil", {"name": "evil", "dir": outside})
+        site = self.make("site", git=False, kind="site")
+        nogit = self.make("nogit", git=False)
+        self.assertEqual(studio.sync_kits(), ["nogit"])
+        self.assertEqual(read(os.path.join(outside, "webapp", "kit.css")), "чужое")
+        self.assertEqual(read(os.path.join(site, "webapp", "kit.css")), "/* старый */")
+        self.assertEqual(read(os.path.join(nogit, "webapp", "kit.js")), read(os.path.join(self.src, "kit.js")))
+
+
 class Kit(unittest.TestCase):
     def test_style_helpers(self):
         self.assertEqual(kit.clip("x" * 30), "x" * 23 + "…")

@@ -81,9 +81,10 @@
     return `${n} ${a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many}`;
   };
   const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-  const GRADS = [['#7c5cff', '#22d3ee'], ['#ec4899', '#7c5cff'], ['#22d3ee', '#34d399'], ['#f59e0b', '#ec4899'],
-    ['#6366f1', '#a855f7'], ['#14b8a6', '#3b82f6'], ['#f97316', '#ef4444']];
-  const gradFor = (id) => { const g = GRADS[Math.abs(Number(id) || 0) % GRADS.length]; return `background:linear-gradient(135deg,${g[0]},${g[1]})`; };
+  // пастельные аватарки: [фон, буквы] — как у Главного (hub/webapp/app.js)
+  const AVAS = [['#f6e3c4', '#8a6324'], ['#e4ddf3', '#5f4f97'], ['#f4dbe0', '#97475a'], ['#d8ebe3', '#3f7a64'],
+    ['#dbe5f2', '#3f6491'], ['#f5dfcf', '#985b36'], ['#e3e9d3', '#5d6f35']];
+  const gradFor = (id) => { const g = AVAS[Math.abs(Number(id) || 0) % AVAS.length]; return `background:linear-gradient(160deg,#fff -40%,${g[0]});color:${g[1]}`; };
 
   async function api(path, body) {
     const r = await fetch(path, {
@@ -465,7 +466,7 @@
     } else {
       hero.append(h('div', { class: 'hero-name', text: 'Подключите Telegram' }),
         h('div', { class: 'hero-sub', text: 'Чтобы я вёл ваши чаты, нажмите /login в чате. На вопросы отвечаю и без этого.' }),
-        h('button', { class: 'btn glass', onclick: closeToChat }, icon('chat'), 'Открыть чат'));
+        h('button', { class: 'btn tonal', onclick: closeToChat }, icon('chat'), 'Открыть чат'));
     }
     const tile = (em, title, sub, fn) => h('button', { class: 'tile', onclick: fn },
       h('span', { class: 'em', text: em }), h('b', { text: title }), h('span', { text: sub }));
@@ -747,10 +748,10 @@
   }
 
   // ---------- запуск ----------
+  // вид «пастель» всегда светлый (как у Главного): шапка и фон Telegram — в цвет страницы
   function theme() {
-    const light = tg && tg.colorScheme ? tg.colorScheme === 'light' : window.matchMedia('(prefers-color-scheme: light)').matches;
-    document.body.classList.toggle('light', light);
-    try { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); if (tg.setBottomBarColor) tg.setBottomBarColor('secondary_bg_color'); } catch (e) { /* */ }
+    const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#f6f3ee';
+    try { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); if (tg.setBottomBarColor) tg.setBottomBarColor(bg); } catch (e) { /* */ }
   }
 
   if (tg) {

@@ -796,7 +796,7 @@ async def newbot(ctx, a):
 # ---------- все боты Глеба: «Начать» и папка ----------
 
 ENV_FILES = ["/etc/horo-bot.env", "/etc/hub-bot.env", "/etc/planner-bot.env", "/etc/coach-bot.env", "/etc/kpp-bot.env",
-             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env", "/etc/catcher-bot.env"]
+             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env", "/etc/catcher-bot.env", "/etc/studio-bot.env"]
 MADE_BOTS = "/root/bots"  # боты, которые сделал Главный (hub/maker.py): /root/bots/<slug>/.env
 
 
@@ -874,6 +874,143 @@ async def bottoken(ctx, a):
             await conv.send_message("/cancel")
             raise Fail("BotFather не дал токен: " + cut(r.raw_text, 200))
     return f"TOKEN {m.group(0)} @{u}"
+
+
+# ---------- проверка своих ботов: написать и нажать кнопки (Claude проверяет ботов «руками») ----------
+
+# Студию сайтов первым /start занимает владелец (сестра Глеба) — с аккаунта Глеба её не трогаем никогда
+NO_PROBE_ENV = ["/etc/studio-sites.env"]
+# кнопки, которые что-то делают по-настоящему (сдать задание, заказать пропуск, создать бота, обновить сервер…)
+RISKY = re.compile(
+    r"отправ|удал|сдат|сдай|реш[иа]|заказ|оформ|повтор|выложи|откат|обнов|перезап|рестарт|restart|стоп|stop|"
+    r"выйти|выход|войти|вход|логин|создат|созда[йю]|постав|установ|занят|займи|лови|купи|оплат|сброс|очист|"
+    r"автотест|сделать|сделай|подтверд|^да\b|✅|🗑|режим|в чате|приложени|чаты|психолог|все чаты|доработ|"
+    r"токен|ключ|пароль|для всех|опублик|запуст|начать сбор|собрать|включ|выключ|отключ|продал|продано", re.I)
+
+
+def probe_allowed():
+    """Свои боты Глеба с сервера (без Студии сайтов) и @BotFather — им можно писать и жать кнопки."""
+    deny = set(bot_usernames(bot_tokens(NO_PROBE_ENV, made=None)))
+    names = [u for u in bot_usernames(bot_tokens()) if u not in deny]
+    return {u.lower() for u in names} | {"botfather"}, {u.lower() for u in deny}
+
+
+def btn_kind(b):
+    """Вид кнопки: cb, url, app, inline, phone, geo, text… (в новых слоях Telegram вид — в b.type)."""
+    n = type(getattr(b, "type", None) or b).__name__
+    for key, kind in (("Callback", "cb"), ("WebView", "app"), ("Url", "url"), ("SwitchInline", "inline"),
+                      ("RequestPhone", "phone"), ("RequestGeo", "geo"), ("Copy", "copy"), ("Default", "text"),
+                      ("KeyboardButton", "text")):
+        if key in n:
+            return kind
+    return n
+
+
+def msg_view(m):
+    """Сообщение бота для проверки: текст, кнопки (надпись, вид, url), правки."""
+    rows = []
+    for row in (m.buttons or []):
+        rows.append([{"text": b.text, "kind": btn_kind(b.button),
+                      **({"url": b.url} if getattr(b, "url", None) else {})} for b in row])
+    return {"id": m.id, "text": cut(m.raw_text or ("[" + type(m.media).__name__ + "]" if m.media else ""), 1500),
+            "buttons": rows, "edited": bool(m.edit_date)}
+
+
+async def bot_wait(ctx, peer, last, watch, wait, quiet=2.5):
+    """Ждать ответа бота: новые сообщения после last и правки сообщения watch. Останавливается, когда после ответа
+    quiet секунд тихо, или через wait секунд. → (новые сообщения, изменённое сообщение или None)."""
+    import asyncio
+    before = None
+    if watch:
+        w = await ctx.client.get_messages(peer, ids=watch)
+        before = (w.raw_text, w.edit_date, str(w.reply_markup)) if w else None
+    deadline, got_at, new, edited = time.monotonic() + wait, None, {}, None
+    while time.monotonic() < deadline:
+        await asyncio.sleep(1)
+        for m in await ctx.client.get_messages(peer, limit=15, min_id=last):
+            if not m.out and m.id > last:
+                if m.id not in new or (m.raw_text, m.edit_date) != (new[m.id].raw_text, new[m.id].edit_date):
+                    got_at = time.monotonic()
+                new[m.id] = m
+        if watch:
+            w = await ctx.client.get_messages(peer, ids=watch)
+            if w and before and (w.raw_text, w.edit_date, str(w.reply_markup)) != before:
+                if edited is None or (w.raw_text, w.edit_date) != (edited.raw_text, edited.edit_date):
+                    got_at = time.monotonic()
+                edited = w
+        if got_at and time.monotonic() - got_at >= quiet:
+            # «живой статус» (⏳/думаю…) — ждём дальше, пока бот не допишет
+            texts = " ".join((m.raw_text or "") for m in list(new.values()) + ([edited] if edited else []))
+            if not re.search(r"⏳|думаю|секунд|подожд|загруж|ищу|смотрю|работаю", texts, re.I):
+                break
+    return sorted(new.values(), key=lambda m: m.id), edited
+
+
+@command("botpress")
+async def botpress(ctx, a):
+    """Проверка своего бота «руками»: написать текст (text) или нажать кнопку (click — надпись или её часть;
+    msg — id сообщения, по умолчанию последнее с кнопками), дождаться ответа (wait, с) и вернуть, что ответил бот:
+    новые сообщения и правки, кнопки, всплывашку на нажатие. Только свои боты Глеба и @BotFather; кнопки, которые
+    что-то делают по-настоящему (RISKY), — только с force."""
+    allowed, deny = await __import__("asyncio").to_thread(probe_allowed)
+    u = a["bot"].lstrip("@").lower()
+    if u in deny or u not in allowed:
+        raise Fail(f"@{u} — не свой бот (или Студия сайтов): проверять можно только {', '.join(sorted(allowed))}")
+    peer = await ctx.client.get_input_entity(u)
+    wait = float(a.get("wait") or 8)
+    last = (await ctx.client.get_messages(peer, limit=1) or [None])[0]
+    last_id = last.id if last else 0
+    out = {"bot": "@" + u}
+    if a.get("click"):
+        label = a["click"].strip().lower()
+        msgs = [await ctx.client.get_messages(peer, ids=int(a["msg"]))] if a.get("msg") else \
+            [m for m in await ctx.client.get_messages(peer, limit=20) if not m.out and m.buttons]
+        target = btn = None
+        for m in msgs:
+            for row in (m.buttons or []) if m else []:
+                for b in row:
+                    if b.text.strip().lower() == label or (btn is None and label in b.text.lower()):
+                        target, btn = m, b
+                        if b.text.strip().lower() == label:
+                            break
+            if btn:
+                break
+        if not btn:
+            raise Fail(f"кнопки «{a['click']}» нет в последних сообщениях бота")
+        if RISKY.search(btn.text) and not a.get("force"):
+            raise Fail(f"«{btn.text}» делает что-то по-настоящему — не жму (нужен force)")
+        kind = btn_kind(btn.button)
+        if kind in ("url", "app", "inline", "phone", "geo"):
+            return {**out, "pressed": btn.text, "kind": kind, "url": getattr(btn, "url", None),
+                    "note": "такие кнопки не жму: открывают ссылку/приложение"}
+        t0 = time.monotonic()
+        try:
+            ans = await btn.click()
+        except errors.BotResponseTimeoutError:
+            ans = "TIMEOUT"
+        except errors.RPCError as e:
+            ans = f"ERROR {type(e).__name__}"
+        out["pressed"] = btn.text
+        out["msg"] = target.id
+        if kind == "cb":
+            out["answer"] = ("⚠️ бот не ответил на нажатие (крутилка у кнопки)" if ans == "TIMEOUT" else ans) \
+                if isinstance(ans, str) else ({"text": ans.message, "alert": ans.alert} if ans and ans.message else None)
+        new, edited = await bot_wait(ctx, peer, last_id, target.id, wait)
+        out["secs"] = round(time.monotonic() - t0, 1)
+    else:
+        text = a.get("text") or "/start"
+        t0 = time.monotonic()
+        await ctx.client.send_message(peer, text)
+        last_id = (await ctx.client.get_messages(peer, limit=1))[0].id
+        out["sent"] = text
+        new, edited = await bot_wait(ctx, peer, last_id, None, wait)
+        out["secs"] = round(time.monotonic() - t0, 1)
+    out["new"] = [msg_view(m) for m in new]
+    if edited is not None:
+        out["edited"] = msg_view(edited)
+    if not new and edited is None:
+        out["silent"] = f"⚠️ бот ничего не ответил за {wait:g} с"
+    return out
 
 
 # ---------- юзернеймы: проверить и занять на канал (бот «Ловец», catcher/) ----------

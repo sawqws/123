@@ -1,26 +1,29 @@
-/* HDP — общий вид из kit.css, здесь только акцент и особенное: ссылка на задание, оценки, живая работа. */
-:root {
-  --accent: #6e7bff;
+/* HDP — общий вид из kit.css (пастель как iPhone), здесь только акцент и особенное: ссылка на задание, оценки, живая работа.
+   Акцент — спокойный индиго; насыщенный цвет только в мелочах (кольца, точки, полоски), крупное — пастель. */
+:root, html[data-scheme] {
+  --accent: #6d74de;
   --accent-ink: #ffffff;
-  --g5: #30c463;
-  --g4: #4f9dff;
-  --g3: #ff9f0a;
-  --g2: #ff4d4f;
+  /* оценки: приглушённые тона; плитка — пастель, цифра — глубокий тон */
+  --g5: #4f9d78;
+  --g4: #6b86cf;
+  --g3: #d0954a;
+  --g2: #d0705f;
 }
-html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #e5393b; }
 
-.hero .btn.icon { background: var(--card); border: 1px solid var(--line); color: var(--text); font-size: 19px; }
+.hero .btn.icon { background: var(--card); border: 1px solid var(--line); color: var(--ink); font-size: 19px;
+  box-shadow: 0 1px 2px rgba(70, 45, 20, .05), 0 8px 18px -12px rgba(70, 45, 20, .25); }
 .hero .btn.icon.spin span { display: inline-block; animation: kit-spin 1s linear infinite; }
 .hero h1 { font-size: 28px; }
 
 /* ---------- главное действие: ссылка на задание ---------- */
 .solve { padding: 20px; }
-.solve .t { font: 700 22px/1.15 var(--font-d); letter-spacing: -.4px; }
+.solve .t { font: 600 24px/1.15 var(--serif); letter-spacing: -.3px; color: var(--ink); }
 .solve .hint { margin: 4px 0 16px; font-size: 14px; }
 .link-box { position: relative; margin-bottom: 12px; }
-.link-box input { padding-right: 56px; height: 54px; font-size: 16px; background: color-mix(in srgb, var(--card) 70%, var(--field)); }
+.link-box input { padding-right: 56px; height: 54px; font-size: 16px; border-radius: 16px; background: var(--field); }
 .link-box .btn.icon { position: absolute; right: 7px; top: 7px; width: 40px; height: 40px; min-height: 40px;
-  border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 17px; margin: 0; }
+  border-radius: 12px; background: var(--card); color: var(--accent-deep); font-size: 17px; margin: 0;
+  box-shadow: 0 1px 2px rgba(70, 45, 20, .06); }
 .link-box.ok input { border-color: var(--accent-line); }
 .btn.big { min-height: 58px; font-size: 17px; border-radius: 16px; }
 .solve .btn + .btn { margin-top: 10px; }
@@ -28,30 +31,35 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 /* ---------- цифры ---------- */
 .stats3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
 .stats3.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.stat .v { font-variant-numeric: tabular-nums; }
-.stat.late .v { color: var(--err); }
-.stat.warn .v { color: var(--warn); }
-.stat.good .v { color: var(--ok); }
+.stats3 .stat { padding: 14px 14px 13px; }
+.stat .v { font: 600 30px/1.05 var(--serif); letter-spacing: -.4px; font-variant-numeric: lining-nums tabular-nums; }
+.stat .k { font-size: 13px; }
+/* цвет — только точкой в углу, цифры остаются тёмными */
+.stats3 .stat { position: relative; }
+.stat.late::after, .stat.warn::after, .stat.good::after { content: ""; position: absolute; top: 16px; right: 16px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 4px color-mix(in srgb, var(--dot) 14%, #fff); }
+.stat.late { --dot: var(--err); } .stat.warn { --dot: var(--warn); } .stat.good { --dot: var(--ok); }
+.stat.late .v { color: color-mix(in srgb, var(--err) 80%, var(--ink)); }
 
 /* ---------- списки заданий ---------- */
 .label .n { margin-left: 6px; color: var(--hint); font-weight: 600; }
 .label.late { color: var(--err); }
-.ic.subj { background: hsl(var(--h) 70% 55% / .16); font-size: 18px; }
+.ic.subj, .row .ic.subj { background: hsl(var(--h) 45% 92%); font-size: 18px; }
 .row .title.two { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; overflow-wrap: anywhere; line-height: 1.3; }
 .row .meta { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 4px; }
 .row .meta .s { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tag { flex: none; padding: 2px 7px; border-radius: 6px; font-size: 12px; font-weight: 650; line-height: 1.35;
-  color: var(--accent); background: var(--accent-soft); }
-.tag.reworking { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
-.tag.failed { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
-.tag.auto { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.tag { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.4;
+  color: var(--accent-deep); background: var(--accent-soft); }
+.tag.reworking { color: color-mix(in srgb, var(--warn) 80%, var(--ink)); background: color-mix(in srgb, var(--warn) 13%, #fff); }
+.tag.failed { color: var(--err); background: color-mix(in srgb, var(--err) 11%, #fff); }
+.tag.auto { color: color-mix(in srgb, var(--ok) 85%, var(--ink)); background: color-mix(in srgb, var(--ok) 12%, #fff); }
 .when { flex: none; min-width: 64px; justify-content: center; font-variant-numeric: tabular-nums; }
 .row .end { align-self: center; }
 
 .auto-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
 .auto-card .ic { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
-  font-size: 20px; background: color-mix(in srgb, var(--ok) 15%, transparent); }
+  font-size: 20px; background: color-mix(in srgb, var(--ok) 13%, #fff); }
 .auto-card .main { flex: 1; min-width: 0; }
 .auto-card .title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .auto-card .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -63,7 +71,7 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 .live-h .title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spin { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
   background: var(--accent-soft); }
-.spin::after { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--accent);
+.spin::after { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--accent);
   border-right-color: transparent; animation: kit-spin .8s linear infinite; }
 .clock { flex: none; width: 52px; text-align: right; color: var(--hint); font-size: 14px; font-variant-numeric: tabular-nums; }
 .steps { list-style: none; margin: 14px 0 12px; padding: 0; font-size: 14.5px; }
@@ -71,7 +79,8 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 .steps li span { min-width: 0; overflow-wrap: anywhere; }
 .steps li::before { content: "✓"; flex: none; width: 16px; color: var(--ok); font-weight: 700; }
 .steps li.now { color: var(--text); font-weight: 600; }
-.steps li.now::before { content: "›"; color: var(--accent); }
+.steps li.now::before { content: "›"; color: var(--accent-deep); }
+.live .bar { height: 6px; }
 .bar.indet > i { width: 35% !important; animation: indet 1.3s ease-in-out infinite; }
 @keyframes indet { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
 .live-f { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--hint); font-size: 13px; }
@@ -89,16 +98,16 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 .res-h { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .res-h .main { flex: 1; min-width: 0; }
 .res-h .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.score { font: 750 30px/1.05 var(--font-d); letter-spacing: -.8px; font-variant-numeric: tabular-nums; }
-.score small { font-size: 17px; color: var(--hint); font-weight: 650; letter-spacing: 0; }
-.res-title { font: 650 18px/1.2 var(--font-d); }
+.score { font: 600 34px/1.05 var(--serif); letter-spacing: -.4px; color: var(--ink); font-variant-numeric: lining-nums tabular-nums; }
+.score small { font: 500 17px/1 var(--font); color: var(--hint); letter-spacing: 0; }
+.res-title { font: 600 20px/1.2 var(--serif); color: var(--ink); }
 .ring { background: conic-gradient(var(--c, var(--accent)) calc(var(--p) * 1%), var(--field) 0); }
-.ring-v { font-weight: 750; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ring-v { font-weight: 650; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .res-ic { flex: none; width: 60px; height: 60px; border-radius: 18px; display: grid; place-items: center; font-size: 28px;
   background: var(--accent-soft); }
 .x { flex: none; width: 32px !important; height: 32px !important; min-height: 32px !important; font-size: 14px !important;
   color: var(--hint) !important; align-self: flex-start; }
-.res-text { margin: 14px 0 0; padding: 12px 14px; border-radius: var(--r-md); background: var(--field); white-space: pre-wrap;
+.res-text { margin: 16px 0 0; padding: 14px 16px; border-radius: var(--r-md); background: var(--card-2); border: 1px solid var(--line); white-space: pre-wrap;
   overflow-wrap: anywhere; font: 15px/1.45 var(--font); max-height: 190px; overflow: hidden; position: relative; }
 .res-text.open { max-height: none; }
 .more { margin-top: 6px; }
@@ -106,23 +115,24 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 /* ---------- оценки ---------- */
 .gpa { display: flex; align-items: center; gap: 16px; padding: 20px; }
 .gpa .main { flex: 1; min-width: 0; }
-.gpa .big-num { font-variant-numeric: tabular-nums; font-size: 56px; color: var(--gc, var(--text)); }
-.gpa .hint { margin-top: 6px; font-size: 14px; }
+.gpa .big-num { font: 600 60px/1 var(--serif); letter-spacing: -1px; font-variant-numeric: lining-nums tabular-nums; color: var(--ink) !important; }
+.gpa .hint { margin-top: 8px; font-size: 13px; }
 .dist { flex: none; display: grid; grid-template-columns: repeat(2, auto); gap: 8px 10px; }
 .dist > div { display: flex; align-items: center; gap: 6px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .dist > div > b { min-width: 14px; text-align: left; }
-.gb { flex: none; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center;
-  font: 750 18px/1 var(--font-d); color: #fff; font-variant-numeric: tabular-nums;
-  background: linear-gradient(150deg, color-mix(in srgb, var(--gc) 75%, #fff 25%), var(--gc));
-  box-shadow: 0 6px 14px -8px var(--gc); }
-.dist .gb { width: 26px; height: 26px; border-radius: 8px; font-size: 14px; }
+.gb { flex: none; width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+  font: 600 19px/1 var(--serif); font-variant-numeric: lining-nums tabular-nums;
+  color: color-mix(in srgb, var(--gc) 70%, var(--ink)); background: color-mix(in srgb, var(--gc) 16%, #fff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gc) 18%, transparent); }
+.dist .gb { width: 28px; height: 28px; border-radius: 9px; font-size: 15px; }
+.dist > div > b { color: var(--ink); font-weight: 600; }
 .g5 { --gc: var(--g5); } .g4 { --gc: var(--g4); } .g3 { --gc: var(--g3); } .g2 { --gc: var(--g2); }
 .grade-row { align-items: center; }
 .grade-row .title { margin-bottom: 7px; }
 .lvl { position: relative; height: 6px; overflow: visible; }
 .lvl > i { background: var(--gc) !important; }
-.lvl > b { position: absolute; top: -2px; width: 2px; height: 10px; border-radius: 1px; background: var(--hint); opacity: .45; }
-.lvl-num { flex: none; width: 40px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lvl > b { position: absolute; top: -2px; width: 2px; height: 10px; border-radius: 1px; background: #d6cec4; }
+.lvl-num { flex: none; width: 40px; text-align: right; font: 600 18px/1 var(--serif); color: var(--ink); font-variant-numeric: lining-nums tabular-nums; }
 .foot { text-align: center; margin: 14px 8px 0; }
 
 /* ---------- учителя ---------- */
@@ -132,9 +142,11 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 .c-head .main { flex: 1; min-width: 0; }
 .c-head .title { font-weight: 650; overflow-wrap: anywhere; line-height: 1.3; }
 .c-head .ic { flex: none; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; }
-.quote { margin-top: 12px; padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 4px 12px 12px 4px;
-  background: var(--field); font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
-.quote.none { color: var(--hint); font-style: italic; border-left-color: var(--line); }
+.quote { position: relative; margin-top: 14px; padding: 12px 16px 12px 22px; border-radius: var(--r-md);
+  background: var(--card-2); border: 1px solid var(--line); color: var(--ink); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.quote::before { content: ""; position: absolute; left: 10px; top: 13px; bottom: 13px; width: 3px; border-radius: 2px; background: var(--accent-line); }
+.quote.none { color: var(--hint); font-style: italic; }
+.quote.none::before { background: #e4ddd4; }
 
 /* ---------- листы ---------- */
 .sheet .s-sub { color: var(--hint); font-size: 14px; margin: 4px 2px 0; }
@@ -151,7 +163,8 @@ html[data-scheme="light"] { --g5: #1fa84f; --g4: #2f7cf0; --g3: #e08600; --g2: #
 /* бейджи на нижних вкладках */
 .tabbar button { position: relative; }
 .tabbar .badge { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px;
-  border-radius: 9px; background: var(--err); color: #fff; font: 700 11px/18px var(--font); text-align: center;
+  border-radius: 9px; background: var(--err); color: #fff; font: 650 11px/18px var(--font); text-align: center;
+  box-shadow: 0 0 0 2px #fff;
   font-variant-numeric: tabular-nums; }
 
 .sk.row-sk { height: 64px; margin-bottom: 8px; border-radius: var(--r-lg); }
