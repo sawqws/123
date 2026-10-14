@@ -139,6 +139,8 @@ b, strong { font-weight: 650; }
 .btn:active { transform: scale(.97); }
 .btn[disabled], .btn.busy { opacity: .55; pointer-events: none; }
 .btn + .btn { margin-top: 8px; }
+/* кнопки в ряд (шапка, .btns) — без отступа сверху, иначе вторая «уплывает» вниз */
+.hero .end > .btn + .btn, .btn.icon + .btn.icon, .btns > .btn + .btn { margin-top: 0; }
 .btn.primary {
   background: linear-gradient(180deg, var(--accent-2), var(--accent)); color: var(--accent-ink);
   box-shadow: 0 10px 24px -12px var(--accent), inset 0 1px 0 rgba(255, 255, 255, .28);
@@ -288,6 +290,8 @@ body.has-tabbar { padding-bottom: calc(100px + var(--bottom)); }
 }
 .sup-fab .i { font-size: 16px; line-height: 1; }
 .sup-fab:active { transform: scale(.95); }
+.sup-fab { transition: transform .38s var(--ease, ease), opacity .28s ease; will-change: transform; }
+.sup-fab.away { transform: translateY(calc(100% + 28px)) scale(.92); opacity: 0; pointer-events: none; }
 body.has-tabbar .sup-fab { bottom: calc(82px + var(--bottom)); }
 .sheet-backdrop.open ~ .sup-fab, body:has(textarea:not(.sheet textarea)) .sup-fab, body.sheet-open .sup-fab { opacity: 0; pointer-events: none; }
 .sheet .sup-lead { margin: -6px 2px 12px; }
