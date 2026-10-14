@@ -304,8 +304,18 @@ class RemoteTest(Base):
         self.assertEqual(r.returncode, 3)
         self.assertEqual(r.stdout, "привет\nготово\n")
         texts = [kw.get("text", "") for _, kw in self.sent]
-        self.assertTrue(any("Claude выполняет" in t and "echo привет" in t for t in texts))
+        # по умолчанию молча (Глеб 14.10): команда только в журнале «📜 Что делал»
+        self.assertFalse(any("Claude выполняет" in t or "кодом 3" in t for t in texts))
+        self.assertIn("echo привет", hub.CMDLOG[-1][1])
+        hub.setting("remote_notify", True)
+        self.remote("sh", "echo снова; exit 3")
+        texts = [kw.get("text", "") for _, kw in self.sent]
+        self.assertTrue(any("Claude выполняет" in t and "echo снова" in t for t in texts))
         self.assertTrue(any("кодом 3" in t for t in texts))
+        hub.setting("remote_notify", False)
+        hub.on_callback({"id": "2", "from": {"id": U}, "data": "cl|log", "message": {"chat": {"id": U}, "message_id": 3}})
+        self.assertTrue(any("Что делал Claude" in kw.get("text", "") and "echo снова" in kw.get("text", "")
+                            for _, kw in self.sent))
         self.assertEqual(self.remote("say", "проверка связи").returncode, 0)
         self.assertIn("🤖 <b>Claude:</b> проверка связи", [kw.get("text") for _, kw in self.sent])
         r = self.remote("status", key="bad")
