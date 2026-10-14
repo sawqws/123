@@ -695,6 +695,7 @@ STEPS = [  # (что в команде или пути, подпись шага,
     ("shot.js", "Снимаю задание", 0.45),
     ("answers.json", "Записываю ответы", 0.6),
     ("draft.txt", "Пишу ответ учителю", 0.6),
+    ("check.py", "Перепроверяю решение", 0.85),
     ("draw.py", "Пишу от руки", 0.75),
 ]
 
@@ -748,6 +749,28 @@ HANDWRITE = (
     "(числитель, знаменатель); переносы модуль делает сам), в конце `w.save()`. Получится {d}/draft_files/1_task.jpg "
     "(скрин, справа от каждого примера только ответ) и 2_sheet.jpg… (всё решение на тёмном листе в клетку). Скрин сам "
     "не рисуй, не обрезай и не расширяй. Посмотри картинки через Read: ответ не налез на пример, дроби читаются.\n"
+    + "{grade}"
+)
+GRADE8 = (  # Глеб в 8 классе: решение должно быть таким, какое он сам мог написать (и какое ждёт учитель)
+    "Решай только тем, что проходят до конца 8 класса (школа РФ): алгебра — дроби и действия с ними, степени, формулы "
+    "сокращённого умножения, разложение на множители, квадратные корни, квадратные уравнения (дискриминант, теорема "
+    "Виета), дробно-рациональные уравнения (с проверкой, что знаменатель ≠ 0), линейные неравенства и системы, функции "
+    "y = kx + b, y = k/x, y = x², y = √x; геометрия — четырёхугольники, площади, теорема Пифагора, подобие, sin/cos/tg "
+    "острого угла, вписанные и центральные углы. Без производных, логарифмов, тригонометрии сверх 8 класса, векторов "
+    "и метода координат, если в условии их нет, и без приближённых ответов, если ответ можно записать точно.\n"
+)
+CHECK = (  # вторая, независимая проверка решения от руки — после того как решение нарисовано
+    "Ты проверяешь решение ученика 8 класса перед отправкой учителю. Папка задания: {d}. Условие — {d}/task.json и "
+    "картинки в {d} (посмотри через Read, shot.png — снимок условия), решение — {d}/draw.py (w.solve(номер, строки), "
+    "ответ на скрине — последний кусок после «=» или answer=...), картинки — {d}/draft_files/.\n"
+    "Проверь КАЖДЫЙ решённый номер заново, сам, не веря решению: условие переписано верно, каждый переход верный, "
+    "ответ правильный и в той форме, что просят (сокращён, корни все, посторонние отброшены). Числа и выражения "
+    "проверь подстановкой: напиши {d}/check.py (только стандартная библиотека Python: fractions, math) — например, "
+    "подставь 2–3 значения переменных в исходное выражение и в ответ — и запусти `python3 {d}/check.py`.\n"
+    + GRADE8 +
+    "Нашёл ошибку или метод не из 8 класса — исправь {d}/draw.py и запусти `python3 {d}/draw.py` (картинки "
+    "перерисуются), посмотри их через Read. Ошибок нет — ничего не меняй.\n"
+    "Последней строкой ответа напиши «ПРОВЕРКА: всё верно» или «ПРОВЕРКА: исправил № … — что было не так» (коротко)."
 )
 REWORK = (
     "Если статус задания reworking или failed (на доработке / не зачтено) и учитель в «ОТВЕТЫ И КОММЕНТАРИИ УЧИТЕЛЯ» "
@@ -778,13 +801,31 @@ def prompt_for(url, text, show):
            "Алфавит почерка Глеба ещё не заполнен: цифры, знаки и латиница — его настоящие, русские буквы — похожим "
            "шрифтом. Решение от руки всё равно рисуй, а в ответе последней строкой напомни: «русские буквы пока не "
            "мои — заполни алфавит (✍️ Почерк)».\n")
-        + HANDWRITE.format(url=url, d=d)
+        + HANDWRITE.format(url=url, d=d, grade=GRADE8)
         + REWORK.format(url=url, d=d)
         + f"Сначала прочитай {os.path.relpath(drafts.STYLE, REPO)}, если он есть: это правила Глеба по его прошлым правкам, "
         "они важнее общих. Бот сам покажет черновик Глебу: в ответе текст черновика не повторяй, напиши 1–2 строки, что сделал.\n"
         "Ответ пиши для Telegram, коротко, без markdown-таблиц: что написал по каждому вопросу. Если работа сдана и сайт "
         "показал результат, самой первой строкой напиши его в виде «БАЛЛЫ: 6/7» (или «БАЛЛЫ: 85%»), без других слов."
     )
+
+
+def hand_fresh(task, since):
+    """В этом решении нарисовано решение от руки (draw.py задания)?"""
+    draw = os.path.join(drafts.task_dir(task), "draw.py")
+    return os.path.exists(draw) and os.path.getmtime(draw) >= since - 1 and bool(drafts.files(task))
+
+
+def verify(task, on_tool=None):
+    """Независимая перепроверка решения от руки (8 класс): ошибки Claude исправляет в draw.py и перерисовывает.
+    -> строка для Глеба («Проверка: всё верно» / «Проверка: исправил № 3 — …») или None."""
+    d = os.path.relpath(drafts.task_dir(task), REPO)
+    ok, out = claude(CHECK.format(d=d), ["Read", "Write", "Edit", f"Bash(python3 {d}/check.py)", f"Bash(python3 {d}/draw.py)"],
+                     timeout=600, on_tool=on_tool)
+    if not ok:
+        return "Перепроверить не вышло — посмотри решение сам"
+    m = re.findall(r"ПРОВЕРКА:\s*(.+)", out)
+    return "Проверка: " + (m[-1].strip() if m else "готово")
 
 
 def solve(url, text="", show=False, on_tool=None):
@@ -873,6 +914,11 @@ def _run_task(chat, url, text, show, mid, task):
         live.step("Запускаю Claude", 0.05)
         try:
             ok, out = solve(url, text, show, on_tool=live.tool)
+            if ok and hand_fresh(task, t0):  # решение от руки — перепроверить отдельно, как учитель
+                live.step("Перепроверяю решение", 0.8)
+                checked = verify(task, on_tool=live.tool)
+                if checked:
+                    out = f"{out.rstrip()}\n\n🔎 {checked}"
         finally:
             live.done()
         title = drafts.task_info(task)[1]
@@ -903,124 +949,212 @@ def _run_task(chat, url, text, show, mid, task):
 
 
 # ---------- Черновики для учителя ----------
+# Черновиков может быть несколько сразу (Глеб присылает 2–3 задания подряд): каждый показан своей карточкой со своими
+# кнопками. Правка (текст, просьба, голос, фото) идёт в черновик, на который он ответил (reply), иначе — в «текущий»:
+# последний показанный или тот, где он нажал «✏️ Править».
 
-DRAFT_KB = kb([("✅ Отправить учителю", "send", "success")], [("Не отправлять", "drop")])  # главное — во всю ширину
+def draft_kb(task):
+    return kb([("✅ Отправить учителю", f"send:{task}", "success")],  # главное — во всю ширину
+              [("✏️ Править", f"ed:{task}"), ("Не отправлять", f"drop:{task}")])
 
 
-def draft():
-    return load_settings().get("draft")
+def _drafts(s):
+    """{задание: черновик} в настройках; старый вид (один «draft» + «draft_queue») переводит сам."""
+    ds = s.setdefault("drafts", {})
+    old = s.pop("draft", None)
+    if isinstance(old, dict) and old.get("task"):
+        ds.setdefault(old["task"], old)
+        s.setdefault("draft_on", old["task"])
+    for x in s.pop("draft_queue", None) or []:
+        if isinstance(x, dict) and x.get("task"):
+            ds.setdefault(x["task"], {"task": x["task"], "url": x.get("url", ""), "title": drafts.task_info(x["task"])[1],
+                                      "pairs": [], "own_files": False})
+    return ds
 
 
-def set_draft(d):
+def all_drafts():
+    return list(_drafts(load_settings()).values())
+
+
+def draft(task=None):
+    """Черновик задания task, без task — текущий (куда идут правки). None — нет такого."""
     s = load_settings()
-    if d:
-        s["draft"] = d
-    else:
-        s.pop("draft", None)
-    save_settings(s)
+    ds = _drafts(s)
+    if task:
+        return ds.get(task)
+    return ds.get(s.get("draft_on")) or (list(ds.values())[-1] if ds else None)
+
+
+def set_draft(d, active=False):
+    with settings_lock:
+        s = load_settings()
+        _drafts(s)[d["task"]] = d
+        if active:
+            s["draft_on"] = d["task"]
+        save_settings(s)
+
+
+def drop_draft(task):
+    with settings_lock:
+        s = load_settings()
+        ds = _drafts(s)
+        ds.pop(task, None)
+        if s.get("draft_on") == task or s.get("draft_on") not in ds:
+            s.pop("draft_on", None)
+            if ds:
+                s["draft_on"] = list(ds)[-1]
+        save_settings(s)
+
+
+def draft_of(msg):
+    """Черновик, на сообщение которого (карточку или картинку) ответил Глеб, иначе текущий."""
+    rid = (msg.get("reply_to_message") or {}).get("message_id")
+    if rid:
+        for d in all_drafts():
+            if rid in (d.get("mids") or []):
+                return d
+    return draft()
+
+
+def remember_mids(task, *mids):
+    """id сообщений черновика — чтобы ответ на любое из них правил именно его."""
+    with settings_lock:
+        d = draft(task)
+        if d:
+            d["mids"] = ((d.get("mids") or []) + [m for m in mids if m])[-30:]
+            set_draft(d)
+
+
+def file_mid(r):
+    return ((r or {}).get("result") or {}).get("message_id")
+
+
+def send_draft_files(chat, task):
+    remember_mids(task, *[file_mid(send_file(chat, f)) for f in drafts.files(task)])
 
 
 def offer_draft(chat, task, url):
-    """Черновик для учителя. Если другой уже ждёт решения — этот встаёт в очередь и покажется после."""
+    """Черновик для учителя: картинки + карточка со своими кнопками. Другие черновики остаются — их тоже можно править."""
     title = drafts.task_info(task)[1]
-    with settings_lock:
-        cur = draft()
-        if cur and cur.get("task") != task:
-            s = load_settings()
-            q = [x for x in s.get("draft_queue") or [] if x.get("task") != task]
-            s["draft_queue"] = q + [{"task": task, "url": url}]
-            save_settings(s)
-            send(chat, card("Черновик в очереди", note=f"{esc(title)} — покажу, когда разберёмся с «{esc(cur['title'])}»",
-                            icon="📄"), raw_html=True)
-            return
-        set_draft({"task": task, "url": url, "title": title, "pairs": [], "own_files": False})
-    for f in drafts.files(task):
-        send_file(chat, f)
-    show_draft(chat)
+    old = draft(task) or {}
+    set_draft({"task": task, "url": url, "title": title, "pairs": old.get("pairs") or [], "own_files": False,
+               "mids": []}, active=True)
+    send_draft_files(chat, task)
+    show_draft(chat, task)
 
 
-def show_draft(chat):
-    d = draft()
+def show_draft(chat, task=None):
+    d = draft(task)
+    if not d:
+        return
     text = drafts.read(d["task"])
     n = len(drafts.files(d["task"]))
-    note = " · ".join(x for x in (esc(d["title"]), f"{n} {plural(n, 'картинка', 'картинки', 'картинок')} выше" if n else "",
-                                  "поправить — пришли текст, просьбу или фото") if x)
-    send(chat, card("Черновик для учителя", esc(text) if text else "<i>(без текста)</i>", note, "📄"),
-         markup=DRAFT_KB, raw_html=True)
+    many = len(all_drafts())
+    note = " · ".join(x for x in (
+        esc(d["title"]), f"{n} {plural(n, 'картинка', 'картинки', 'картинок')} выше" if n else "",
+        f"черновиков: {many} — правлю тот, на который ответишь, или этот" if many > 1 else
+        "поправить — пришли текст, просьбу или фото") if x)
+    remember_mids(d["task"], send(chat, card("Черновик для учителя", esc(text) if text else "<i>(без текста)</i>", note, "📄"),
+                                  markup=draft_kb(d["task"]), raw_html=True))
 
 
-def finish_draft(chat):
-    """Текущий черновик отправлен или отменён — показать следующий из очереди."""
-    with settings_lock:
-        s = load_settings()
-        s.pop("draft", None)
-        q = s.get("draft_queue") or []
-        nxt = q.pop(0) if q else None
-        s["draft_queue"] = q
-        save_settings(s)
-    if nxt:
-        offer_draft(chat, nxt["task"], nxt["url"])
+def finish_draft(chat, task=None):
+    """Черновик отправлен или отменён. Остальные остаются; правки дальше идут в последний из них."""
+    d = draft(task)
+    if d:
+        drop_draft(d["task"])
+    left = all_drafts()
+    if left and chat:
+        nxt = draft()
+        send(chat, card("Ещё черновики", note=f"{len(left)} ждут — правки теперь идут в «{esc(nxt['title'])}». "
+                                              "Другой — ответь на его карточку или нажми «✏️ Править»", icon="📄"),
+             markup=draft_kb(nxt["task"]), raw_html=True)
 
 
 def plural(n, one, few, many):
     return one if n % 10 == 1 and n % 100 != 11 else few if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else many
 
 
-def edit_draft(chat, text):
-    """Глеб прислал готовый текст или просьбу («убери последний абзац»): просьбу применяет Claude."""
-    d = draft()
+edit_lock = threading.Lock()  # правки — по одной, но не ждут, пока решаются задания (места для решения не занимают)
+
+
+def edit_draft(chat, text, task=None):
+    """Глеб прислал готовый текст или просьбу («убери последний абзац», «в №3 ответ другой»).
+    Просьбу применяет Claude: он правит текст, а решение от руки — через draw.py задания (картинки перерисуются)."""
+    d = draft(task)
+    if not d:
+        send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
+        return
+    set_draft(d, active=True)
     before = drafts.read(d["task"])
-    if len(text) < 0.6 * len(before):
-        if not lock.acquire(blocking=False):
-            send(chat, BUSY)
-            return
-        try:
-            live = Live(chat, "Правлю черновик", esc(text[:80]), progress=False)
+    draw = os.path.join(drafts.task_dir(d["task"]), "draw.py")
+    hand = os.path.exists(draw) and not d.get("own_files")
+    shot = {f: os.path.getmtime(f) for f in drafts.files(d["task"])}
+    if hand or not before or len(text) < 0.6 * len(before):
+        with edit_lock:
+            live = Live(chat, "Правлю черновик", esc(f"{d['title']}: {text[:80]}"), progress=False)
             path = os.path.relpath(drafts.text_path(d["task"]), REPO)
+            rel = os.path.relpath(draw, REPO)
             try:
                 ok, out = claude(
-                    f"В {path} черновик ответа учителю. Глеб написал про него: «{text}».\n"
+                    f"В {path} черновик ответа учителю по заданию «{d['title']}». Глеб написал про него: «{text}».\n"
                     f"Если это готовый новый текст ответа, запиши его в {path} как есть. Если это просьба что-то изменить, "
-                    f"измени {path} по ней и больше ничего не трогай. Каждая строка файла — абзац. В ответе одна строка: что сделал.",
-                    ["Read", "Write", "Edit"], timeout=300)
+                    f"измени {path} по ней и больше ничего не трогай. Каждая строка файла — абзац.\n"
+                    + (f"Решение от руки нарисовано скриптом {rel} (horo/sheet.py: Work.solve по номерам, save). Если "
+                       f"просьба про решение или ответы на картинках, поправь {rel} и запусти `python3 {rel}` — картинки "
+                       "перерисуются; посмотри их через Read. Если просьба только про текст — картинки не трогай.\n"
+                       if hand else "")
+                    + "В ответе одна строка: что сделал.",
+                    ["Read", "Write", "Edit"] + ([f"Bash(python3 {rel})"] if hand else []), timeout=600)
             finally:
                 live.done()
-        finally:
-            lock.release()
         if not ok:
-            send(chat, err(out, "Черновик не изменился — можно поправить ещё раз"), markup=DRAFT_KB, raw_html=True)
+            send(chat, err(out, "Черновик не изменился — можно поправить ещё раз"), markup=draft_kb(d["task"]), raw_html=True)
             return
     else:
         drafts.write(d["task"], text)
     after = drafts.read(d["task"])
+    d = draft(d["task"]) or d
     if drafts.record_edit(d["task"], d["title"], before, after):
         d["pairs"].append([before, after, text])
         set_draft(d)
-    show_draft(chat)
+    if {f: os.path.getmtime(f) for f in drafts.files(d["task"])} != shot:  # решение перерисовано — новые картинки
+        send_draft_files(chat, d["task"])
+    show_draft(chat, d["task"])
 
 
-def add_draft_photo(chat, msg):
-    d = draft()
+def add_draft_photo(chat, msg, task=None):
+    d = draft(task)
+    if not d:
+        send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
+        return
     try:
         data, name = download(attachment(msg))
     except Exception as e:  # сеть моргнула или файл больше 20 МБ — сказать, а не молчать
         print("draft photo:", e)
-        send(chat, err("Не получилось скачать фото, пришли ещё раз"), markup=DRAFT_KB, raw_html=True)
+        send(chat, err("Не получилось скачать фото, пришли ещё раз"), markup=draft_kb(d["task"]), raw_html=True)
         return
     drafts.add_file(d["task"], data, name, replace=not d["own_files"])  # первое своё фото заменяет мои картинки
     d["own_files"] = True
-    set_draft(d)
+    set_draft(d, active=True)
     n = len(drafts.files(d["task"]))
-    send(chat, card("Фото добавил", note=f"Всего {n} {plural(n, 'картинка', 'картинки', 'картинок')}. "
-                                          "Когда всё — «Отправить учителю»", icon="🖼"), markup=DRAFT_KB, raw_html=True)
+    remember_mids(d["task"], msg.get("message_id"), send(
+        chat, card("Фото добавил", note=f"{esc(d['title'])} · всего {n} {plural(n, 'картинка', 'картинки', 'картинок')}. "
+                                         "Когда всё — «Отправить учителю»", icon="🖼"),
+        markup=draft_kb(d["task"]), raw_html=True))
 
 
-def submit_draft(chat):
-    if not lock.acquire(blocking=False):
-        send(chat, BUSY, markup=DRAFT_KB)
+def submit_draft(chat, task=None):
+    d = draft(task)
+    if not d:
+        send(chat, "⚠️ Черновика уже нет", menu=True)
         return
+    if not lock.acquire(blocking=False):  # все места заняты решением — отправим, как только одно освободится
+        send(chat, card("Отправлю чуть позже", note=f"{esc(d['title'])} — сейчас решаю {MAX_PARALLEL} задания, "
+                                                    "отправлю, как только одно закончу", icon="⏳"), raw_html=True)
+        lock.acquire()
     try:
-        d = draft()
+        d = draft(d["task"])
         if not d:
             send(chat, "⚠️ Черновика уже нет", menu=True)
             return
@@ -1033,11 +1167,12 @@ def submit_draft(chat):
             live.done()
         remember(d["title"], ok, "Отправлено учителю" if ok else plain(out), url=d["url"], kind="sent")
         if not ok:
-            send(chat, err(out, "Не отправилось. Черновик остался — можно нажать ещё раз"), markup=DRAFT_KB, raw_html=True)
+            send(chat, err(out, "Не отправилось. Черновик остался — можно нажать ещё раз"), markup=draft_kb(d["task"]),
+                 raw_html=True)
             return
         send(chat, card("Отправлено учителю", esc(out.strip()), esc(d["title"]), "📬"),
              menu=True, raw_html=True, effect=EFFECT_LIKE)
-        finish_draft(chat)  # следующий черновик из очереди, если есть
+        finish_draft(chat, d["task"])
         if d["pairs"]:
             live = Live(chat, "Запоминаю твои правки", progress=False)
             try:
@@ -1079,6 +1214,19 @@ def on_callback(cq):
     if data.startswith("pp:"):  # 📖 подготовка: шаги правятся на месте
         on_prep_button(chat, mid, cq["id"], data[3:])
         return
+    if data.startswith("ed:"):  # ✏️ Править: этот черновик — текущий, кнопки остаются
+        d = draft(data[3:])
+        try:
+            tg("answerCallbackQuery", callback_query_id=cq["id"], text="Пиши правку" if d else "Черновика уже нет")
+        except urllib.error.HTTPError as e:
+            print("callback:", e)
+        if not d:
+            send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
+        else:
+            set_draft(d, active=True)
+            remember_mids(d["task"], send(chat, card("Что поправить?", note=f"{esc(d['title'])} · пришли текст, просьбу "
+                                                     "(«в №3 ответ другой»), голосовое или фото", icon="✏️"), raw_html=True))
+        return
     if data.startswith("hand:"):
         try:
             tg("answerCallbackQuery", callback_query_id=cq["id"])
@@ -1111,13 +1259,18 @@ def on_callback(cq):
     if data.startswith("ph:"):  # задание, найденное на фото
         on_photo_button(chat, data[3:])
         return
-    if not draft():
+    act, _, task = data.partition(":")
+    d = draft(task or None)
+    if act not in ("send", "drop"):
+        send(chat, card("Кнопка устарела", note="Пришли ссылку на задание ещё раз", icon="🤔"), menu=True, raw_html=True)
+    elif not d:
         send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
-    elif data == "send":
-        threading.Thread(target=submit_draft, args=(chat,), daemon=True).start()
-    elif data == "drop":
-        send(chat, card("Не отправляю", note="Передумаешь — пришли ссылку ещё раз", icon="👌"), menu=True, raw_html=True)
-        finish_draft(chat)
+    elif act == "send":
+        threading.Thread(target=submit_draft, args=(chat, d["task"]), daemon=True).start()
+    else:
+        send(chat, card("Не отправляю", note=f"{esc(d['title'])} · передумаешь — пришли ссылку ещё раз", icon="👌"),
+             menu=True, raw_html=True)
+        finish_draft(chat, d["task"])
 
 
 # ---------- Меню «Ещё»: редкие действия, правится на месте ----------
@@ -1953,14 +2106,15 @@ def handle(msg):
             send(chat, "👌 Отменил", menu=True)
             return
         # другая кнопка, команда, ссылка или фото — выполняем их; «Сдать все» под списком по-прежнему работает
-    if draft() and attachment(msg):
-        threading.Thread(target=add_draft_photo, args=(chat, msg), daemon=True).start()
+    target = draft_of(msg)  # ответ на карточку черновика — правка именно его
+    if target and attachment(msg):
+        threading.Thread(target=add_draft_photo, args=(chat, msg, target["task"]), daemon=True).start()
         return
-    if draft() and text and not text.startswith("/") and text not in BUTTONS and not LINK.search(text):
+    if target and text and not text.startswith("/") and text not in BUTTONS and not LINK.search(text):
         if text.lower().strip(".! ") in ("ок", "ok", "да", "отправляй", "отправь"):
-            threading.Thread(target=submit_draft, args=(chat,), daemon=True).start()
+            threading.Thread(target=submit_draft, args=(chat, target["task"]), daemon=True).start()
         else:
-            edit_draft(chat, text)
+            threading.Thread(target=edit_draft, args=(chat, text, target["task"]), daemon=True).start()
         return
     if kind == "photo":  # черновика нет: ищем на фото задание
         threading.Thread(target=look_photo, args=(msg,), daemon=True).start()
@@ -2001,13 +2155,18 @@ def handle(msg):
         threading.Thread(target=find_auto_tests, args=(chat,), daemon=True).start()
         return
 
-    m = LINK.search(text)
-    if not m:
+    links = list({drafts.task_id(u): u for u in LINK.findall(text)}.values())  # несколько ссылок — каждое задание
+    if not links:
         send(chat, card("Не понял", note="Пришли ссылку на задание или выбери действие внизу", icon="🤔"),
              menu=True, raw_html=True)
         return
     show = mode.pop(chat, None) == "show"
-    threading.Thread(target=run_task, args=(chat, m.group(0), text, show, msg.get("message_id")), daemon=True).start()
+    if len(links) > 1:
+        send(chat, card(f"Беру {len(links)} задания", note=f"До {MAX_PARALLEL} решаю сразу, остальные — следом. "
+                        "Черновики учителю придут каждый своей карточкой, править можно любой", icon="📚"), raw_html=True)
+    for u in links:
+        threading.Thread(target=run_task, args=(chat, u, text if len(links) == 1 else "", show, msg.get("message_id")),
+                         daemon=True).start()
 
 
 # ---------- Приложение внутри Telegram (Mini App, bot/webapp/) ----------
@@ -2059,6 +2218,11 @@ def refresh_overview():
         site_lock.release()
 
 
+def app_draft_info(d):
+    return {"task": d["task"], "title": d["title"], "url": d["url"], "text": drafts.read(d["task"]),
+            "files": len(drafts.files(d["task"]))}
+
+
 def app_state(_=None):
     """Что сейчас происходит: опрашивается приложением раз в пару секунд."""
     d = draft()
@@ -2067,8 +2231,8 @@ def app_state(_=None):
         "busy": lock.locked(),
         "live": Live.active.state() if Live.active and lock.locked() else None,
         "last": LAST or None,
-        "draft": {"title": d["title"], "url": d["url"], "text": drafts.read(d["task"]),
-                  "files": len(drafts.files(d["task"]))} if d else None,
+        "draft": app_draft_info(d) if d else None,
+        "drafts": [app_draft_info(x) for x in all_drafts()],
         "at": ov["at"] if ov else 0,
         "loading": OV["loading"],
         "error": OV["error"],
@@ -2115,15 +2279,15 @@ def app_auto(_):
 
 def app_draft(action):
     def fn(b):
-        d = draft()
+        d = draft(str(b.get("task") or "") or None)
         if not d:
             raise ValueError("Черновика уже нет")
         if action == "send":
-            busy_check()
-            threading.Thread(target=submit_draft, args=(owner(),), daemon=True).start()
+            threading.Thread(target=submit_draft, args=(owner(), d["task"]), daemon=True).start()
         elif action == "drop":
-            send(owner(), card("Не отправляю", note="Черновик отменён в приложении", icon="👌"), menu=True, raw_html=True)
-            finish_draft(owner())
+            send(owner(), card("Не отправляю", note=f"{esc(d['title'])} — отменён в приложении", icon="👌"), menu=True,
+                 raw_html=True)
+            finish_draft(owner(), d["task"])
         elif action == "save":
             text = str(b.get("text") or "").strip()
             before = drafts.read(d["task"])
