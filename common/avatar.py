@@ -1,13 +1,15 @@
-"""Аватары ботов в стиле «iPhone + пастель + люкс»: мягкий пастельный градиент и тонкий знак по центру.
+"""Аватары ботов в стиле «Оникс-стекло» (как iOS 26): почти чёрный фон с мягким свечением цвета бота,
+стеклянный диск с бликом по краю и золотой знак по центру.
 
   python3 common/avatar.py preview out.png          лист со всеми аватарами (крупно и как в списке чатов)
   python3 common/avatar.py make <бот> out.png       один аватар (боты — BOTS ниже, `list` — список)
-  python3 common/avatar.py custom out.png <буква> [#цвет1 #цвет2]   для ботов Студии: монограмма, цвета смягчаются
+  python3 common/avatar.py custom out.png <буква> [#цвет1 #цвет2]   для ботов Студии: золотая округлая буква,
+                                                    свечение — из цветов плана
   python3 common/avatar.py apply [бот ...] [--dry-run]   поставить аватары ботам на этом сервере (токены из /etc/*.env)
 
 Знаки рисуются векторно (никаких эмодзи и шрифтов), поэтому на сервере выглядят так же, как здесь. 640×640 —
-Telegram сам скруглит в круг, знак держится в центральной половине. С Pillow — сглаживание 3×, мягкая тень и
-светлый «тиснёный» край; без Pillow — тот же рисунок своим растеризатором (стандартная библиотека, медленнее)."""
+Telegram сам скруглит в круг, знак держится в центральной половине. С Pillow — сглаживание 3×, тень, золотое
+свечение и блик стекла; без Pillow — тот же рисунок своим растеризатором (стандартная библиотека, без теней)."""
 import importlib.util
 import json
 import math
@@ -28,30 +30,25 @@ STROKE = 0.08         # толщина линии в единицах знака
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
-# Палитры: bg — две пастели (светлая сверху слева → глубже снизу справа), ink — цвет знака (глубокий тон того же цвета).
+# glow — цвет мягкого свечения за стеклом (у каждого бота свой), знак у всех — золото (GOLD*).
 BOTS = {
-    "hdp": dict(title="HDP · задания", bg=("#eceaff", "#c9c8f2"), ink="#4a4aa0", mark="book",
-                env=("/etc/horo-bot.env", "TELEGRAM_TOKEN")),
-    "planner": dict(title="Ритм · планер", bg=("#fff1e8", "#f9c9ae"), ink="#b0583a", mark="sunrise",
+    "hdp": dict(title="HDP · задания", glow="#6b6fd6", mark="book", env=("/etc/horo-bot.env", "TELEGRAM_TOKEN")),
+    "planner": dict(title="Ритм · планер", glow="#e3906b", mark="sunrise",
                     env=("/etc/planner-bot.env", "PLANNER_TOKEN")),
-    "coach": dict(title="Форма · тренер", bg=("#eef3ea", "#c3d5bd"), ink="#4c6b4d", mark="pulse",
-                  env=("/etc/coach-bot.env", "COACH_TOKEN")),
-    "kpp": dict(title="КПП · пропуск", bg=("#fff6dc", "#f3d891"), ink="#93660f", mark="ticket",
-                env=("/etc/kpp-bot.env", "KPP_TOKEN")),
-    "avito": dict(title="Авито · продажи", bg=("#e6f7ef", "#b5e0cd"), ink="#2b7559", mark="tag",
-                  env=("/etc/avito-bot.env", "AVITO_TOKEN")),
-    "eye": dict(title="Глаз · очки", bg=("#f2edfc", "#d3c6f0"), ink="#64499f", mark="eye",
-                env=("/etc/eye-bot.env", "EYE_TOKEN")),
-    "hub": dict(title="Главный · Секретарь", bg=("#f7f6f3", "#d6d3cd"), ink="#43403c", mark="sparkle",
-                env=("/etc/hub-bot.env", "HUB_TOKEN")),
+    "coach": dict(title="Форма · тренер", glow="#7fa37c", mark="pulse", env=("/etc/coach-bot.env", "COACH_TOKEN")),
+    "kpp": dict(title="КПП · пропуск", glow="#d9a93a", mark="ticket", env=("/etc/kpp-bot.env", "KPP_TOKEN")),
+    "avito": dict(title="Авито · продажи", glow="#4fb38f", mark="tag", env=("/etc/avito-bot.env", "AVITO_TOKEN")),
+    "eye": dict(title="Глаз · очки", glow="#9a7fd9", mark="eye", env=("/etc/eye-bot.env", "EYE_TOKEN")),
+    "hub": dict(title="Главный · Секретарь", glow="#c9a15e", mark="sparkle", env=("/etc/hub-bot.env", "HUB_TOKEN")),
     "agent": dict(title="Секретарь (свой бот)", like="hub", env=("/etc/tg-agent.env", "TG_AGENT_TOKEN")),
-    "studio": dict(title="Студия", bg=("#f3e9fb", "#f2cde0"), ink="#7f4b86", mark="wand",
-                   env=("/etc/studio-bot.env", "STUDIO_TOKEN")),
-    "catcher": dict(title="Ловец · имена", bg=("#e9f2fc", "#bfd5ee"), ink="#3a5f8c", mark="at",
-                    env=("/etc/catcher-bot.env", "CATCHER_TOKEN")),
-    "sites": dict(title="Студия сайтов", bg=("#fff0f3", "#f5c8d4"), ink="#a84a68", mark="globe",
-                  env=("/etc/studio-sites.env", "STUDIO_TOKEN")),
+    "studio": dict(title="Студия", glow="#c58ad0", mark="wand", env=("/etc/studio-bot.env", "STUDIO_TOKEN")),
+    "catcher": dict(title="Ловец · имена", glow="#6f9bd6", mark="at", env=("/etc/catcher-bot.env", "CATCHER_TOKEN")),
+    "sites": dict(title="Студия сайтов", glow="#e08aa5", mark="globe", env=("/etc/studio-sites.env", "STUDIO_TOKEN")),
 }
+ONYX = (12, 11, 10)                     # фон: тёплый почти чёрный
+EMBER = (110, 76, 38)                   # второе свечение снизу слева — тёмное золото, как в образце
+GOLD_HI, GOLD, GOLD_LO = (250, 232, 186), (222, 184, 112), (160, 116, 56)   # золото знака: сверху светлее
+DISC = 0.39                             # радиус стеклянного диска (доля стороны)
 ALIASES = {"horo": "hdp", "bot": "hdp", "ritm": "planner", "форма": "coach", "trainer": "coach", "главный": "hub",
            "secretary": "hub", "tgbot": "agent", "studio-sites": "sites", "site": "sites"}
 
@@ -81,24 +78,41 @@ def lum(c):
     return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
 
 
-def pastelize(c1, c2):
-    """Любые два цвета (из плана Студии) → пастельный фон и глубокий цвет знака того же оттенка."""
-    a, b = rgb(c1), rgb(c2)
-    white, ink_dark = (255, 255, 255), (28, 24, 22)
-    bg1, bg2 = mix(a, white, 0.86), mix(b, white, 0.66)
-    ink = mix(a, ink_dark, 0.42)
-    for _ in range(6):  # знак должен читаться: контраст к светлой части фона не меньше ~4.5
-        if (lum(bg1) + 0.05) / (lum(ink) + 0.05) >= 4.5:
-            break
-        ink = mix(ink, ink_dark, 0.25)
-    return bg1, bg2, ink
+def tones(c1, c2=None):
+    """Цвета плана Студии → свечение за стеклом: не кислотное и не тёмное (на чёрном должно светиться мягко)."""
+    out = []
+    for c in (c1, c2 or c1):
+        c = rgb(c)
+        g = sum(c) / 3
+        c = tuple(round(v + (g - v) * 0.25) for v in c)          # чуть приглушить насыщенность
+        while lum(c) < 0.18:
+            c = mix(c, (255, 255, 255), 0.15)
+        out.append(c)
+    return out[0], out[1]
 
 
 def palette(name):
+    """(свечение, второе свечение, знак) бота."""
     p = BOTS[name]
     if p.get("like"):
         p = {**BOTS[p["like"]], **{k: v for k, v in p.items() if k != "like"}}
-    return rgb(p["bg"][0]), rgb(p["bg"][1]), rgb(p["ink"]), p["mark"]
+    return rgb(p["glow"]), EMBER, p["mark"]
+
+
+def gold_at(y):
+    """Цвет золота по высоте (0 — верх знака, 1 — низ)."""
+    y = min(1.0, max(0.0, y))
+    return mix(GOLD_HI, GOLD, y / 0.45) if y < 0.45 else mix(GOLD, GOLD_LO, (y - 0.45) / 0.55)
+
+
+def bg_at(x, y, glow, glow2):
+    """Фон в точке (доли стороны): оникс + два мягких пятна света."""
+    c = list(ONYX)
+    for col, cx, cy, r, k in ((glow, 0.86, 0.1, 1.0, 0.88), (glow2, 0.08, 0.96, 0.72, 0.45)):
+        d = math.hypot(x - cx, y - cy) / r
+        a = max(0.0, 1 - d) ** 2.2 * k
+        c = [c[i] + (col[i] - c[i]) * a for i in range(3)]
+    return c
 
 
 # ---------- геометрия знаков (единицы: центр 0,0, радиус знака ≈ 1, y вниз) ----------
@@ -230,25 +244,56 @@ def _pil():
         return False
 
 
-def _background(c1, c2):
-    from PIL import Image, ImageFilter
-    n = 48
+def _background(glow, glow2):
+    from PIL import Image, ImageChops, ImageFilter
+    n = 64
     small = Image.new("RGB", (n, n))
-    px = []
-    for y in range(n):
-        for x in range(n):
-            t = (x * 0.55 + y * 0.45) / (n - 1)          # диагональ, чуть круче вниз
-            t = t * t * (3 - 2 * t)                         # мягкие края перехода
-            base = [c1[i] + (c2[i] - c1[i]) * t for i in range(3)]
-            d = math.hypot(x / n - 0.26, y / n - 0.18)      # жемчужный блик слева сверху
-            g = max(0.0, 1 - d * 1.7) ** 2 * 0.55
-            px.append(tuple(int(v + (255 - v) * g) for v in base))
-    small.putdata(px)
-    img = small.resize((SIZE, SIZE), Image.BICUBIC).filter(ImageFilter.GaussianBlur(10))
-    from PIL import ImageChops
-    noise = Image.effect_noise((SIZE, SIZE), 2.2).convert("L")  # зерно ±2 против полос градиента
-    grain = Image.merge("RGB", [noise] * 3)
-    return ImageChops.add(img, grain, 1.0, -128)
+    small.putdata([tuple(int(v) for v in bg_at(x / (n - 1), y / (n - 1), glow, glow2))
+                   for y in range(n) for x in range(n)])
+    img = small.resize((SIZE, SIZE), Image.BICUBIC).filter(ImageFilter.GaussianBlur(8))
+    noise = Image.effect_noise((SIZE, SIZE), 2.0).convert("L")  # зерно ±2 против полос в тёмном градиенте
+    return ImageChops.add(img, Image.merge("RGB", [noise] * 3), 1.0, -128)
+
+
+def _vgrad(top, bottom, y0=0.0, y1=1.0, mode="RGB"):
+    """Вертикальный градиент SIZE×SIZE: до y0 — top, после y1 — bottom (доли стороны); top может быть функцией t."""
+    from PIL import Image
+    col = Image.new(mode, (1, 256))
+    vals = []
+    for i in range(256):
+        t = min(1.0, max(0.0, (i / 255 - y0) / max(1e-6, y1 - y0)))
+        if callable(top):
+            vals.append(top(t))
+        elif mode == "RGB":
+            vals.append(tuple(int(round(top[k] + (bottom[k] - top[k]) * t)) for k in range(3)))
+        else:
+            vals.append(int(round(top + (bottom - top) * t)))
+    col.putdata(vals)
+    return col.resize((SIZE, SIZE), Image.BICUBIC)
+
+
+def _glass(img, ss=3):
+    """Стеклянный диск: еле заметная заливка, светлый блик сверху и тонкая кромка (ярче сверху, золотится снизу)."""
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter
+    big, r = SIZE * ss, DISC * SIZE * ss
+    c = big / 2
+    disc = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(disc).ellipse((c - r, c - r, c + r, c + r), fill=255)
+    rim = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(rim).ellipse((c - r, c - r, c + r, c + r), outline=255, width=int(2.2 * ss))
+    disc, rim = disc.resize((SIZE, SIZE), Image.LANCZOS), rim.resize((SIZE, SIZE), Image.LANCZOS)
+    white = Image.new("L", (SIZE, SIZE), 255)
+    fill = ImageChops.multiply(disc, _vgrad(24, 5, 0.12, 0.6, "L"))          # сверху ~9% белого, к середине ~2%
+    img.alpha_composite(Image.merge("RGBA", [white] * 3 + [fill]))
+    sheen = Image.new("L", (big, big), 0)                                     # блик: мягкий серп у верхнего края
+    ImageDraw.Draw(sheen).ellipse((c - r * 0.78, c - r * 0.97, c + r * 0.78, c - r * 0.25), fill=255)
+    sheen = sheen.resize((SIZE, SIZE), Image.LANCZOS).filter(ImageFilter.GaussianBlur(18))
+    sheen = ImageChops.multiply(ImageChops.multiply(sheen, disc), _vgrad(40, 0, 0.12, 0.42, "L"))
+    img.alpha_composite(Image.merge("RGBA", [white] * 3 + [sheen]))
+    color = _vgrad((255, 250, 238), GOLD, 0.15, 0.85)                         # кромка: белая сверху, золотая снизу
+    alpha = ImageChops.multiply(rim, _vgrad(150, 64, 0.12, 0.88, "L"))
+    img.alpha_composite(Image.merge("RGBA", list(color.split()) + [alpha]))
+    return img
 
 
 def _mask_pil(shapes, ss=3, stroke=STROKE, offset=(0.0, 0.0)):
@@ -277,7 +322,7 @@ def _mask_pil(shapes, ss=3, stroke=STROKE, offset=(0.0, 0.0)):
 
 def _letter_mask(letter, ss=3):
     """Монограмма шрифтом (только для ботов Студии). None — подходящего шрифта нет."""
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
     big = SIZE * ss
     for path in FONTS:
         if not os.path.exists(path):
@@ -292,19 +337,26 @@ def _letter_mask(letter, ss=3):
         d = ImageDraw.Draw(m)
         x0, y0, x1, y1 = d.textbbox((0, 0), letter, font=font)
         d.text(((big - (x1 - x0)) / 2 - x0, (big - (y1 - y0)) / 2 - y0), letter, font=font, fill=255)
+        # округлые концы и углы, как у SF Rounded: размыть и снова отсечь по середине (с мягким краем)
+        m = m.filter(ImageFilter.GaussianBlur(big * 0.0055)).point(lambda v: max(0, min(255, (v - 128) * 6 + 128)))
         return m.resize((SIZE, SIZE), Image.LANCZOS)
     return None
 
 
-def _compose_pil(c1, c2, ink, mask):
+def _compose_pil(glow, glow2, mask):
     from PIL import Image, ImageChops, ImageFilter
-    img = _background(c1, c2).convert("RGBA")
-    # мягкая тень знака (тем же цветом, очень прозрачно) и светлый край сверху — как тиснение на бумаге
-    shadow = ImageChops.offset(mask, 0, 9).filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.16))
-    img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, v) for v in ink] + [shadow]))
-    light = ImageChops.offset(mask, 0, -3).point(lambda v: int(v * 0.55))
-    img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, 255)] * 3 + [light]))
-    img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, v) for v in ink] + [mask]))
+    img = _glass(_background(glow, glow2).convert("RGBA"))
+    black = Image.new("L", mask.size, 0)
+    # тень под знаком, тёплое золотое свечение, само золото (градиент сверху вниз) и светлая верхняя кромка
+    shadow = ImageChops.offset(mask, 0, 8).filter(ImageFilter.GaussianBlur(10)).point(lambda v: int(v * 0.6))
+    img.alpha_composite(Image.merge("RGBA", [black] * 3 + [shadow]))
+    halo = mask.filter(ImageFilter.GaussianBlur(16)).point(lambda v: int(v * 0.32))
+    img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, v) for v in GOLD] + [halo]))
+    box = mask.getbbox() or (0, 0, SIZE, SIZE)
+    gold = _vgrad(gold_at, None, box[1] / SIZE, box[3] / SIZE)
+    img.alpha_composite(Image.merge("RGBA", list(gold.split()) + [mask]))
+    edge = ImageChops.subtract(mask, ImageChops.offset(mask, 0, 3)).point(lambda v: int(v * 0.7))
+    img.alpha_composite(Image.merge("RGBA", [Image.new("L", mask.size, 255)] * 3 + [edge]))
     return img.convert("RGB")
 
 
@@ -374,7 +426,7 @@ class Raster:
                     self._put(x, y, min(1.0, v))
 
 
-def _plain(c1, c2, ink, shapes):
+def _plain(glow, glow2, shapes):
     r = Raster()
     k = SIZE * SCALE
     c = SIZE / 2
@@ -388,20 +440,29 @@ def _plain(c1, c2, ink, shapes):
             pts = [(c + x * k, c + y * k) for x, y in s[1]]
             for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
                 r.segment(x0, y0, x1, y1, w)
-    rows = []
+    rows_y = [y for y in range(SIZE) if any(r.a[y * SIZE:(y + 1) * SIZE])] or [0, SIZE - 1]
+    top, bottom = rows_y[0], rows_y[-1]
+    R = DISC * SIZE
     rnd = random.Random(7)
+    rows = []
     for y in range(SIZE):
         row = bytearray(b"\x00")
+        gold = gold_at((y - top) / max(1, bottom - top))
+        fy = y / SIZE
         for x in range(SIZE):
-            t = (x * 0.55 + y * 0.45) / (SIZE - 1)
-            t = t * t * (3 - 2 * t)
-            g = max(0.0, 1 - math.hypot(x / SIZE - 0.26, y / SIZE - 0.18) * 1.7) ** 2 * 0.55
+            v = bg_at(x / SIZE, fy, glow, glow2)
+            d = math.hypot(x + 0.5 - c, y + 0.5 - c)
+            if d < R:  # стекло: лёгкая заливка, сверху светлее
+                g = 0.02 + 0.07 * max(0.0, min(1.0, (0.6 - fy) / 0.48))
+                v = [v[i] + (255 - v[i]) * g for i in range(3)]
+            rim = 1.6 - abs(d - R)
+            if rim > 0:
+                a = min(1.0, rim) * (0.58 - 0.33 * max(0.0, min(1.0, (fy - 0.12) / 0.76)))
+                v = [v[i] + (255 - v[i]) * a for i in range(3)]
             a = r.a[y * SIZE + x]
-            n = rnd.uniform(-1.2, 1.2)
+            n = rnd.uniform(-1.0, 1.0)
             for i in range(3):
-                v = c1[i] + (c2[i] - c1[i]) * t
-                v = v + (255 - v) * g + n
-                row.append(max(0, min(255, int(v + (ink[i] - v) * a))))
+                row.append(max(0, min(255, int(v[i] + (gold[i] - v[i]) * a + n))))
         rows.append(bytes(row))
     return _png(b"".join(rows))
 
@@ -427,11 +488,11 @@ def _save(img_or_bytes, out):
 
 def render(name, pil=None):
     """PIL.Image (если есть Pillow) или байты PNG — аватар бота по имени из BOTS."""
-    c1, c2, ink, mark = palette(resolve(name))
+    glow, glow2, mark = palette(resolve(name))
     shapes = mark_shapes(mark)
     if pil if pil is not None else _pil():
-        return _compose_pil(c1, c2, ink, _mask_pil(shapes))
-    return _plain(c1, c2, ink, shapes)
+        return _compose_pil(glow, glow2, _mask_pil(shapes))
+    return _plain(glow, glow2, shapes)
 
 
 def make(name, out, pil=None):
@@ -439,15 +500,15 @@ def make(name, out, pil=None):
 
 
 def render_custom(letter="", c1="#7c5cff", c2="#22d3ee", pil=None):
-    """Для ботов Студии: цвета плана смягчаются до пастели, по центру тонкая буква (нет шрифта — знак ✦)."""
-    bg1, bg2, ink = pastelize(c1, c2)
+    """Для ботов Студии: свечение из цветов плана, по центру золотая округлая буква (нет шрифта — знак ✦)."""
+    glow, _ = tones(c1, c2)
     letter = (letter or "").strip()[:1].upper()
     if pil if pil is not None else _pil():
         mask = _letter_mask(letter) if letter else None
         if mask is None:
             mask = _mask_pil(mark_shapes("sparkle"))
-        return _compose_pil(bg1, bg2, ink, mask)
-    return _plain(bg1, bg2, ink, mark_shapes("sparkle"))
+        return _compose_pil(glow, EMBER, mask)
+    return _plain(glow, EMBER, mark_shapes("sparkle"))
 
 
 def custom(out, letter="", c1="#7c5cff", c2="#22d3ee", pil=None):
@@ -470,7 +531,7 @@ def preview(out):
               ("Бот Студии: «Заметки»", render_custom("З", "#f97316", "#ec4899", pil=True))]
     cell, big, small, cols = 300, 236, 56, 4
     rows = (len(items) + cols - 1) // cols
-    sheet = Image.new("RGB", (cols * cell, rows * cell + 40), (246, 243, 238))
+    sheet = Image.new("RGB", (cols * cell, rows * cell + 40), (18, 16, 14))
     d = ImageDraw.Draw(sheet)
     font = None
     for p in ("/usr/share/fonts/opentype/inter/Inter-Medium.otf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
@@ -487,7 +548,7 @@ def preview(out):
             a, m = a.resize((size, size), Image.LANCZOS), m.resize((size, size), Image.LANCZOS)
             sheet.paste(a, (x + ox, y + oy), m)
         tw = d.textlength(title, font=font)
-        d.text((x + (cell - tw) / 2 - 18, y + big + 18), title, font=font, fill=(60, 55, 50))
+        d.text((x + (cell - tw) / 2 - 18, y + big + 18), title, font=font, fill=(236, 226, 206))
     return _save(sheet, out)
 
 
