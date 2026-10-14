@@ -347,7 +347,7 @@ def ask_keys(chat, mid=None):
         ui.save()
     ui.show(chat, mid, ui.fmt("🔑 Подключить чаты Авито", KEYS_HELP,
                               "Нужна подписка «Максимальный»: без неё Авито не даёт API чатов."),
-            [[{"text": "Открыть avito.ru/professionals/api", "url": "https://www.avito.ru/professionals/api"}],
+            [[{"text": "🔑 Получить ключи", "url": "https://www.avito.ru/professionals/api"}],
              [ui.b("Отмена", "nowait")]])
 
 
@@ -456,6 +456,8 @@ def send_own(chat, k, text):
     with ui.lock:
         ui.st.pop("wait", None)
         ui.save()
+    if not cid:  # ключ чата вытеснен (их храним 300) — не слать в /chats/None
+        return ui.send(chat, ui.fail("Чат устарел — открой /chats"))
     try:
         send_text(cid, text)
     except AvitoError as e:

@@ -129,10 +129,12 @@ class Support:
                 data = (cq.get("data") or "").split("|")
                 if data[0] != "sup":
                     return False
-                if self.allowed((cq.get("from") or {}).get("id")):
+                ok = self.allowed((cq.get("from") or {}).get("id"))
+                if ok:
                     self.on_button(cq, data)
-                try:
-                    self.tg("answerCallbackQuery", callback_query_id=cq["id"])
+                try:  # гость (КПП) видит «🛠 Поддержка» в меню — без ответа кнопка казалась сломанной
+                    self.tg("answerCallbackQuery", callback_query_id=cq["id"],
+                            **({} if ok else {"text": "Поддержка — только для владельца бота"}))
                 except Exception:
                     pass
                 return True
