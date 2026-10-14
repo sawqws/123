@@ -146,8 +146,9 @@ class SyncTest(unittest.TestCase):
         data["workout"].append({"id": "w-new", "start": "2026-10-11T12:00:00.000Z", "end": "2026-10-11T13:30:00.000Z",
                                 "timezone_offset": "+03:00", "sport_name": "boxing", "score_state": "SCORED",
                                 "score": {"strain": 14.2, "kilojoule": 3000, "average_heart_rate": 150, "max_heart_rate": 190}})
+        behind = max(0, (datetime.date.today() - TODAY).days)  # окно sync — от настоящего «сейчас», данные — до TODAY
         with mock.patch.object(whoop.Client, "get", FakeWhoop(data).get):
-            fresh = whoop.sync(db, U, "cid", "sec", days=3)
+            fresh = whoop.sync(db, U, "cid", "sec", days=3 + behind)
         self.assertEqual([(k, r["id"]) for k, r in fresh], [("workout", "w-new")])
         self.assertEqual(fresh[0][1]["_day"], "2026-10-11")
 
