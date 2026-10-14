@@ -65,7 +65,8 @@ const I = {
   x: '<svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>',
   flag: '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
 };
-const COLORS = { violet: '#8b7cff', blue: '#4da3ff', teal: '#2dd4bf', green: '#4ade80', amber: '#fbbf24', orange: '#fb923c', rose: '#fb7185', pink: '#f472b6' };
+// пастельная палитра целей: насыщенно — только кольца, точки и полоски, текст темнее (в app.css)
+const COLORS = { violet: '#9a88d8', blue: '#6d9fd6', teal: '#5fb3a6', green: '#7cb38a', amber: '#dcae5a', orange: '#e3906b', rose: '#de8a93', pink: '#cf8fb8' };
 const EMOJI = ['🎯', '🏆', '🥊', '💪', '🏃', '📚', '🧠', '💡', '💻', '🚀', '🎨', '🎵', '🎮', '📈', '💰', '🏠', '✈️', '🌱', '🧘', '❤️', '😴', '🍎', '💧', '📝', '🎓', '🗣️', '🤝', '🎉', '⭐', '🔥', '⚡', '🌍'];
 const HZ = { week: 'Неделя', month: 'Месяц', year: 'Год', none: 'Без срока' };
 const gc = g => COLORS[g && g.color] || COLORS.violet;
@@ -156,7 +157,7 @@ function taskRow(t, day, opts = {}) {
   const g = t.goal && S.goals.get(t.goal);
   const meta = [];
   if (opts.showDate && t.date && !t.repeat) meta.push(`<span>${I.cal}${rel(t.date) || dms(t.date)}</span>`);
-  if (g && !opts.noGoal) meta.push(`<span style="color:${gc(g)}"><em>${esc(g.emoji)} ${esc(g.title)}</em></span>`);
+  if (g && !opts.noGoal) meta.push(`<span class="g" style="--gc:${gc(g)}"><em>${esc(g.emoji)} ${esc(g.title)}</em></span>`);
   if (t.repeat) meta.push(`<span>${I.repeat}${repeatText(t.repeat)}</span>`);
   if (t.time && t.remind >= 0) meta.push(`<span>${I.bell}${t.remind ? t.remind + ' мин' : 'вовремя'}</span>`);
   if (t.note) meta.push(`<span>${I.note}<em>${esc(t.note.split('\n')[0].slice(0, 60))}</em></span>`);
@@ -481,7 +482,7 @@ function toast(text, action, fn) {
 function confetti() {
   const c = $('#confetti'), x = c.getContext('2d'), dpr = devicePixelRatio || 1;
   c.width = innerWidth * dpr; c.height = innerHeight * dpr; x.scale(dpr, dpr);
-  const cols = ['#ff7a45', '#ffb38a', '#fbbf24', '#34c759', '#4da3ff', '#f472b6'];
+  const cols = ['#e3906b', '#f2c1a6', '#dcae5a', '#7cb38a', '#6d9fd6', '#cf8fb8'];
   const ps = Array.from({ length: 140 }, () => ({
     x: innerWidth / 2 + (Math.random() - .5) * 80, y: innerHeight * .45, vx: (Math.random() - .5) * 13, vy: -Math.random() * 15 - 5,
     r: Math.random() * 6 + 4, c: cols[Math.random() * cols.length | 0], a: Math.random() * 6, va: (Math.random() - .5) * .4,
