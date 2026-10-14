@@ -183,6 +183,32 @@ def edit(chat, msg_id, text, buttons=None):
                        link_preview_options={"is_disabled": True})
 
 
+def show(chat, msg_id, text, buttons=None):
+    """Экран на месте старого сообщения; не вышло (сообщение удалено, слишком старое, без текста) — новым."""
+    if msg_id:
+        try:
+            return edit(chat, msg_id, text, buttons)
+        except TgError as e:
+            if e.code != 400:
+                raise
+    return send(chat, text, buttons)
+
+
+def answer(cq_id, text=""):
+    """Ответ на нажатие (крутилка у кнопки гаснет). Старое нажатие Telegram уже не примет — это не ошибка."""
+    try:
+        tg("answerCallbackQuery", callback_query_id=cq_id, text=text[:190])
+    except Exception as e:
+        print("answerCallbackQuery:", e)
+
+
+HOME = "home"  # «‹ Меню»: главный экран на месте текущего сообщения
+
+
+def home_btn():
+    return btn("‹ Меню", HOME)
+
+
 def app_button(text="🗓 Открыть планер", path="", style=None, always=False):
     """Кнопка «открыть планер» (web_app). В режиме «💬 чат» не ставится — кроме явной просьбы (/app, always)."""
     if not public_url or (ui_mode() == "chat" and not always):
@@ -334,17 +360,17 @@ def menu_rows(uid, today):
 def view_for(uid, name, today):
     """Экраны чата по имени — для команд и кнопок главного меню одинаково."""
     if name == "week":
-        return week_text(uid, today), with_app([[btn("📅 Отметить сегодня", f"d|{today.isoformat()}")]],
+        return week_text(uid, today), with_app([[btn("📅 Отметить сегодня", f"d|{today.isoformat()}"), home_btn()]],
                                                "🗓 Неделя в планере", "/week")
     if name == "month":
-        return month_text(uid, today), with_app([], "📅 Месяц в планере", "/month")
+        return month_text(uid, today), with_app([[home_btn()]], "📅 Месяц в планере", "/month")
     if name == "goals":
         return goals_view(uid)
     if name == "notes":
         return notes_view(uid)
     if name == "settings":
         return settings_view(uid)
-    raise KeyError(name)
+    raise ValueError(f"нет экрана {name}")
 
 
 def check_init_data(init_data, token=None, max_age=7 * 86400):
@@ -438,6 +464,7 @@ def day_view(uid, day):
         nav.append(btn("Сегодня", f"d|{today.isoformat()}"))
     nav.append(btn(day_label(nxt, today) + " ›", f"d|{nxt.isoformat()}"))
     rows.append(nav)
+    rows.append([home_btn()])
     return text, with_app(rows, "🗓 Открыть в планере", f"/day/{day.isoformat()}")
 
 
@@ -506,7 +533,7 @@ def goals_view(uid):
     goals = [g for g in db.goals(uid) if g["status"] == "active"]
     if not goals:
         return (card("🎯", "Целей пока нет", "Напиши: <i>цель на месяц: прочитать 2 книги</i>",
-                     "Или поставь в планере — вкладка «Цели»"), with_app([], "🎯 Открыть цели", "/goals"))
+                     "Или поставь в планере — вкладка «Цели»"), with_app([[home_btn()]], "🎯 Открыть цели", "/goals"))
     lines = []
     for hz in ("week", "month", "year", "none"):
         part = [g for g in goals if g["horizon"] == hz]
@@ -521,13 +548,14 @@ def goals_view(uid):
             row = []
     if row:
         rows.append(row)
+    rows.append([home_btn()])
     return card("🎯", "Мои цели", lines, "Нажми на цель — шаги и заметки"), with_app(rows, "🎯 Открыть цели", "/goals")
 
 
 def goal_view(uid, gid):
     g = db.goal(uid, gid)
     if not g:
-        return card("🎯", "Цели больше нет"), [[btn("‹ Все цели", "gl")]]
+        return card("🎯", "Цели больше нет", note="Её удалили — список ниже"), [[btn("‹ Все цели", "gl"), home_btn()]]
     p = db.progress(uid, g)
     steps = [t for t in db.tasks(uid) if t["goal"] == gid and not t["repeat"]]
     notes = [n for n in db.notes(uid) if n["goal"] == gid]
@@ -556,7 +584,7 @@ def notes_view(uid):
     goals = {g["id"]: g for g in db.goals(uid)}
     if not notes:
         return card("📝", "Заметок пока нет", "Напиши: <i>заметка: купить подарок маме</i>", "Можно голосом"), \
-            with_app([], "📝 Открыть заметки", "/notes")
+            with_app([[home_btn()]], "📝 Открыть заметки", "/notes")
     lines = []
     for n in notes[:8]:
         g = goals.get(n["goal"])
@@ -564,7 +592,7 @@ def notes_view(uid):
         when = n["created"][8:10].lstrip("0") + " " + MONTHS_GEN[int(n["created"][5:7]) - 1][:3]
         lines.append(f"• {tag}{esc(short(n['text'], 110))} <i>{when}</i>")
     more = f"Ещё {len(notes) - 8} — в планере" if len(notes) > 8 else "Новая: «заметка: …»"
-    return card("📝", "Заметки", lines, more), with_app([], "📝 Все заметки", "/notes")
+    return card("📝", "Заметки", lines, more), with_app([[home_btn()]], "📝 Все заметки", "/notes")
 
 
 REMINDS = [-1, 0, 10, 15, 30, 60]
@@ -580,7 +608,7 @@ def settings_view(uid):
             f"⏰ Задачи со временем — {remind_text(u['remind'])}", f"🌍 {esc(u['tz'])}"]
     rows = [[btn(("☀️ Выключить" if u["morning"] else "☀️ Включить") + " утро", "s|m"),
              btn(("🌙 Выключить" if u["evening"] else "🌙 Включить") + " вечер", "s|e")],
-            [btn("⏰ " + remind_text(u["remind"]).capitalize() + " ›", "s|r")]]
+            [btn("⏰ " + remind_text(u["remind"]).capitalize() + " ›", "s|r")], [home_btn()]]
     tz = "пояс: /tz Europe/Moscow" if ui_mode() == "chat" else "пояс — в планере"
     return (card("⚙️", "Настройки", body, f"Время: /morning 08:00, /evening 22:00 · {tz}"),
             with_app(rows, "⚙️ Все настройки", "/settings"))
@@ -600,8 +628,13 @@ SUP_NOTE = "\n\n🛠 <b>Поддержка</b> — напиши, что слом
 
 
 def welcome(chat, name, today=None):
-    """Главный экран по режиму. В режиме «📱 приложение» — коротко: открыть планер и пара действий;
-    в режиме «💬 чат» — полное меню кнопками. chat — личный чат, то же, что uid."""
+    """Главный экран по режиму — новым сообщением. chat — личный чат, то же, что uid."""
+    send(chat, *home_view(chat, name, today))
+
+
+def home_view(chat, name, today=None):
+    """Главный экран по режиму: (текст, кнопки). В режиме «📱 приложение» — коротко: открыть планер и пара действий;
+    в режиме «💬 чат» — полное меню кнопками."""
     today = today or datetime.date.today()
     title = f"Привет{', ' + esc(name) if name else ''}! Я {NAME}"
     if ui_mode() == "app":
@@ -619,7 +652,7 @@ def welcome(chat, name, today=None):
         body = ["Пиши задачи как есть: <i>завтра в 18:00 тренировка</i>", "Можно голосом, фото или видео."]
         note = mode_note()
         rows = menu_rows(chat, today)
-    send(chat, card("👋", title, body, note), rows)
+    return card("👋", title, body, note), rows
 
 
 def add_task(uid, text, today):
@@ -739,11 +772,29 @@ def status(chat, text):
 
 
 def replace(chat, mid, text, buttons=None):
-    return edit(chat, mid, text, buttons) if mid else send(chat, text, buttons)
+    return show(chat, mid, text, buttons)
 
 
-def on_voice(chat, uid, msg):
-    mid = status(chat, "🎙 <i>Слушаю…</i>")
+def guarded(fn):
+    """Голос, фото, видео: любая неожиданная ошибка — понятное «⚠️» вместо вечного «Слушаю…»."""
+    def run(chat, uid, msg):
+        box = {}
+        try:
+            return fn(chat, uid, msg, box)
+        except Exception as e:
+            print("media:", e)
+            traceback.print_exc()
+            try:
+                replace(chat, box.get("mid"), "⚠️ Не получилось разобрать — попробуй ещё раз или напиши текстом")
+            except Exception:
+                pass
+    run.__name__ = fn.__name__
+    return run
+
+
+@guarded
+def on_voice(chat, uid, msg, box):
+    mid = box["mid"] = status(chat, "🎙 <i>Слушаю…</i>")
     try:
         text = media.voice_text(TOKEN, msg)
     except media.MediaError as e:
@@ -806,8 +857,9 @@ def task_lines(answer):
     return out[:20]
 
 
-def on_photo(chat, uid, msg):
-    mid = status(chat, "📷 <i>Читаю фото…</i>")
+@guarded
+def on_photo(chat, uid, msg, box):
+    mid = box["mid"] = status(chat, "📷 <i>Читаю фото…</i>")
     today = today_of(uid)
     work = tempfile.mkdtemp(prefix="planner-ai-")
     try:
@@ -839,9 +891,10 @@ def report_tasks(chat, mid, emoji, tasks, today, heard=None):
             with_app([], "🗓 Открыть в планере", f"/day/{first}" if first else "/week"))
 
 
-def on_video(chat, uid, msg):
+@guarded
+def on_video(chat, uid, msg, box):
     """Видео и кружки: кадры (что на них написано) + речь — как фото и голосовое вместе."""
-    mid = status(chat, "🎬 <i>Смотрю видео…</i>")
+    mid = box["mid"] = status(chat, "🎬 <i>Смотрю видео…</i>")
     today = today_of(uid)
     work = tempfile.mkdtemp(prefix="planner-ai-")
     try:
@@ -947,7 +1000,7 @@ def on_message(msg):
         spawn(on_video, chat, uid, msg)
     elif text:
         handle_text(chat, uid, text)
-    elif any(k in msg for k in ("document", "sticker", "location", "contact", "poll")):
+    else:  # стикер, файл, место, опрос… — не молчим
         send(chat, card("🤔", "Это я не разберу", "Пришли текст, голосовое, фото списка или видео — "
                                                    "выпишу задачи"))
 
@@ -959,7 +1012,7 @@ def on_callback(cq):
     data = (cq.get("data") or "").split("|")
     note = ""
     if not allowed(uid) or not chat:
-        tg("answerCallbackQuery", callback_query_id=cq["id"])
+        answer(cq["id"], "🔒 Это личный планер" if chat else "")
         return
     today = today_of(uid)
     kind = data[0]
@@ -967,30 +1020,32 @@ def on_callback(cq):
         if kind == "mode":  # 💬 чат / 📱 приложение
             if data[1] in MODES:
                 set_mode(data[1])
-                edit(chat, mid, card("✅", "Режим: " + MODES[data[1]], note="Сменить — /mode или кнопка «⚙️ Режим»"))
+                show(chat, mid, card("✅", "Режим: " + MODES[data[1]], note="Сменить — /mode или кнопка «⚙️ Режим»"))
                 welcome(chat, cq["from"].get("first_name"), today)
             else:
-                send(chat, *mode_card())
-        elif kind == "v":  # главное меню чата: экран новым сообщением, меню остаётся выше
-            send(chat, *view_for(uid, data[1], today))
+                show(chat, mid, *mode_card())
+        elif kind == HOME:  # «‹ Меню» — главный экран на месте
+            show(chat, mid, *home_view(chat, cq["from"].get("first_name"), today))
+        elif kind == "v":  # главное меню чата: экран на месте меню, назад — «‹ Меню»
+            show(chat, mid, *view_for(uid, data[1], today))
         elif kind == "t":  # галочка в плане дня
             new = db.toggle(uid, int(data[1]), data[2])
             note = "Сделано ✨" if new else "Снял отметку"
-            edit(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[2])))
+            show(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[2])))
         elif kind == "d":  # листаем дни
-            edit(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[1])))
+            show(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[1])))
         elif kind == "u":  # отменить быстрое добавление
             t = db.task(uid, int(data[1]))
             db.delete_task(uid, int(data[1]))
-            edit(chat, mid, card("↩️", "Отменено", f"<s>{esc(t['title'])}</s>" if t else None))
+            show(chat, mid, card("↩️", "Отменено", f"<s>{esc(t['title'])}</s>" if t else None))
         elif kind == "m":  # перенести
             t = db.save_task(uid, {"id": int(data[1]), "date": None if data[2] == "-" else data[2]})
-            edit(chat, mid, added_text(t, today), added_buttons(t, today))
+            show(chat, mid, added_text(t, today), added_buttons(t, today))
             note = "Перенёс"
         elif kind == "r":  # «сделано» из напоминания
             t = db.task(uid, int(data[1]))
             db.toggle(uid, int(data[1]), data[2], done=True)
-            edit(chat, mid, card("✅", "Сделано", f"<s>{esc(t['title'])}</s>" if t else None, "Отлично!"))
+            show(chat, mid, card("✅", "Сделано", f"<s>{esc(t['title'])}</s>" if t else None, "Отлично!"))
         elif kind == "c":  # перенести несделанное на завтра (из вечерних итогов)
             day = datetime.date.fromisoformat(data[1])
             nxt = (day + datetime.timedelta(days=1)).isoformat()
@@ -1002,27 +1057,27 @@ def on_callback(cq):
                     moved += 1
             note = f"Перенёс {moved} на завтра" if moved else "Нечего переносить"
             text = evening_text(uid, day, tasks, moved) if tasks else card("➡️", f"Перенёс на завтра: {moved}")
-            edit(chat, mid, text, with_app([], "🗓 План на завтра", f"/day/{nxt}"))
+            show(chat, mid, text, with_app([], "🗓 План на завтра", f"/day/{nxt}"))
         elif kind == "g":  # открыть цель
-            edit(chat, mid, *goal_view(uid, int(data[1])))
+            show(chat, mid, *goal_view(uid, int(data[1])))
         elif kind == "gl":  # назад к целям
-            edit(chat, mid, *goals_view(uid))
+            show(chat, mid, *goals_view(uid))
         elif kind == "gs":  # шаг цели — галочка
             new = db.toggle(uid, int(data[1]))
             note = "Сделано ✨" if new else "Снял отметку"
-            edit(chat, mid, *goal_view(uid, int(data[2])))
+            show(chat, mid, *goal_view(uid, int(data[2])))
         elif kind in ("gd", "ga"):  # цель достигнута / снова в работе
             db.save_goal(uid, {"id": int(data[1]), "status": "done" if kind == "gd" else "active"})
             note = "Цель достигнута! 🏆" if kind == "gd" else "Снова в работе"
-            edit(chat, mid, *goal_view(uid, int(data[1])))
+            show(chat, mid, *goal_view(uid, int(data[1])))
         elif kind == "un":  # отменить заметку
             n = db.note(uid, int(data[1]))
             db.delete_note(uid, int(data[1]))
-            edit(chat, mid, card("↩️", "Заметка удалена", f"<s>{esc(short(n['text'], 200))}</s>" if n else None))
+            show(chat, mid, card("↩️", "Заметка удалена", f"<s>{esc(short(n['text'], 200))}</s>" if n else None))
         elif kind == "ug":  # отменить цель
             g = db.goal(uid, int(data[1]))
             db.delete_goal(uid, int(data[1]))
-            edit(chat, mid, card("↩️", "Цель удалена", f"<s>{esc(g['title'])}</s>" if g else None))
+            show(chat, mid, card("↩️", "Цель удалена", f"<s>{esc(g['title'])}</s>" if g else None))
         elif kind == "s":  # настройки из чата
             u = db.user(uid)
             if data[1] == "r":
@@ -1032,15 +1087,69 @@ def on_callback(cq):
                 key, default = ("morning", "07:30") if data[1] == "m" else ("evening", "21:30")
                 db.update_settings(uid, {key: "" if u[key] else default})
             note = "Сохранил"
-            edit(chat, mid, *settings_view(uid))
+            show(chat, mid, *settings_view(uid))
+        else:
+            note = "⚠️ Кнопка устарела — открой /start"
+    except KeyError as e:  # задачу/цель/заметку уже удалили (кнопка из старого сообщения)
+        reason = str(e).strip("'\"") or "этого уже нет"
+        note = f"⚠️ {reason[:1].upper() + reason[1:]} — экран обновлён"
+        refresh_after_gone(chat, mid, uid, kind, data, today)
+    except (ValueError, IndexError) as e:
+        print("callback:", data, e)
+        note = "⚠️ Кнопка устарела — открой /start"
     except Exception as e:
         print("callback:", e)
         traceback.print_exc()
-        note = "⚠️ Не получилось"
-    tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
+        note = "⚠️ Не получилось — попробуй ещё раз"
+    answer(cq["id"], note)
+
+
+def refresh_after_gone(chat, mid, uid, kind, data, today):
+    """Нажали на то, чего уже нет: перерисовать экран без этой кнопки (не вышло — не страшно)."""
+    try:
+        if kind == "t":
+            show(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[2])))
+        elif kind == "gs":
+            show(chat, mid, *goal_view(uid, int(data[2])))
+        elif kind in ("g", "gd", "ga"):
+            show(chat, mid, *goals_view(uid))
+        elif kind in ("m", "r", "u"):
+            show(chat, mid, card("↩️", "Задачи больше нет", note="Её уже удалили"), [[home_btn()]])
+    except Exception as e:
+        print("refresh:", e)
+
+
+def handle_update(u, sup=None):
+    """Одно обновление Telegram. Ошибка не роняет бота: нажатие гаснет, в чат — понятное «⚠️»."""
+    try:
+        if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
+            return
+        if u.get("callback_query"):
+            on_callback(u["callback_query"])
+        elif u.get("message"):
+            on_message(u["message"])
+    except Exception as e:
+        print("update:", e)
+        traceback.print_exc()
+        cq, msg = u.get("callback_query"), u.get("message")
+        if cq:
+            answer(cq["id"], "⚠️ Не получилось — попробуй ещё раз")
+        elif msg and msg.get("chat", {}).get("type") == "private":
+            try:
+                send(msg["chat"]["id"], "⚠️ Что-то пошло не так — попробуй ещё раз. Не выйдет — /fix")
+            except Exception:
+                pass
 
 
 def export(chat, uid):
+    try:
+        _export(chat, uid)
+    except Exception as e:
+        print("export:", e)
+        send(chat, "⚠️ Не получилось прислать файл — попробуй ещё раз через минуту")
+
+
+def _export(chat, uid):
     import uuid
     data = db.export_json(uid).encode()
     b = uuid.uuid4().hex
@@ -1258,9 +1367,9 @@ class Web(BaseHTTPRequestHandler):
             self.reply(403, {"error": str(e)})
         except (ValueError, KeyError) as e:
             self.reply(400, {"error": str(e).strip("'")})
-        except Exception as e:
-            traceback.print_exc()
-            self.reply(500, {"error": str(e)})
+        except Exception:
+            traceback.print_exc()  # подробности — в pm2 logs, человеку — понятное
+            self.reply(500, {"error": "Сервер споткнулся — попробуй ещё раз через минуту"})
 
 
 def route(uid, path, b):
@@ -1578,16 +1687,7 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
-            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
-                continue
-            try:
-                if u.get("callback_query"):
-                    on_callback(u["callback_query"])
-                elif u.get("message"):
-                    on_message(u["message"])
-            except Exception as e:
-                print("update:", e)
-                traceback.print_exc()
+            handle_update(u, sup)
 
 
 if __name__ == "__main__":
