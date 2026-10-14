@@ -408,6 +408,21 @@ class Buttons(unittest.TestCase):
         self.assertEqual(kpp.st["jwt"], "j")  # гость ничего не сломал
         Buttons.report["гость"] = (c.n_send, c.n_press)
 
+    def test_guest_own_login(self):
+        """Гость со своим входом в Домиленд и своей историей (режим приложения): все его кнопки."""
+        st = full_state("chat")
+        now = time.time()
+        st["users"] = {"42": {"yandex_token": "y0_guest", "jwt": "jg", "places": [dict(p) for p in PLACES[1:]],
+                              "place_id": 7, "building_id": 8, "address": PLACES[1]["title"], "mode": "app",
+                              "last": PLATE2, "recent": {PLATE2: {"ts": now - 30, "id": 10}},
+                              "mine": [{"id": 10, "plate": PLATE2, "ts": int(now), "shared": False}]}}
+        with Harness(st) as h:
+            c = Crawler(h.tg, lambda t: h.send(t, uid=42), lambda d, ch, mid: h.press(d, 42, mid, uid=42),
+                        "гость со своим входом").run(commands() + SEED_TEXTS + ["/login", "/logout"])
+        self.assertEqual(c.problems, [], "\n\n".join(c.problems[:15]))
+        self.assertEqual(kpp.st["jwt"], "j")
+        Buttons.report["гость со своим входом"] = (c.n_send, c.n_press)
+
     def test_stranger(self):
         with Harness(full_state("chat")) as h:
             c = Crawler(h.tg, lambda t: h.send(t, uid=99), lambda d, ch, mid: h.press(d, 99, mid, uid=99), "чужой")
@@ -477,11 +492,12 @@ class WebApi(unittest.TestCase):
                         code, raw = self.http(base, path)
                         if code == 500:
                             fails.append(f"GET {path}: {code} {raw[:200]!r}")
-                    for path in POST_ROUTES:
-                        for body in bodies:
-                            code, raw = self.http(base, path, body)
-                            if code == 500:
-                                fails.append(f"POST {path} {body[:80]!r}: {code} {raw[:200]!r}")
+                    for uid in (OWNER, 42):  # владелец и гость (в full_state он есть)
+                        for path in POST_ROUTES:
+                            for body in bodies:
+                                code, raw = self.http(base, path, body, uid=uid)
+                                if code == 500:
+                                    fails.append(f"POST {path} от {uid} {body[:80]!r}: {code} {raw[:200]!r}")
                     for body, ctype in ((b"", "image/png"), (b"\x89PNG" + bytes(200), "image/png"),
                                         (b"garbage", "text/plain"), (b"{}", "application/json")):
                         code, raw = self.http(base, "/api/photo", body, ctype)
