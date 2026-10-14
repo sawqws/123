@@ -931,6 +931,8 @@ def profile_view(uid, title="Профиль"):
             v = GOAL_WORDS.get(v, v)
         elif k == "morning" and v == "off":
             v = "выключен"
+        elif isinstance(v, float):  # рост и вес хранятся числом: «172», «61,5», а не «172.0», «61.5»
+            v = num(v) if not v.is_integer() else int(v)
         lines.append(f"• {label} — {esc(v)}")
     return (box("👤", title, "\n".join(lines) or "Пока пусто — расскажи о себе, советы станут точнее.",
                 note="Изменить — кнопкой: «вес 61, рост 170», «спорт бокс», «цель масса», «пол парень»…"),
@@ -1599,6 +1601,8 @@ class Web(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})
+        if not isinstance(body, dict):
+            return self.reply(400, {"error": "bad json"})
         self.api(path, body)
 
     def api(self, path, body):
@@ -1615,7 +1619,7 @@ class Web(BaseHTTPRequestHandler):
             self.reply(403, {"error": str(e)})
         except ai.AIError as e:
             self.reply(503, {"error": str(e)})
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, TypeError) as e:  # TypeError — поле не того типа ({"id": null}, "d": 5)
             self.reply(400, {"error": str(e).strip("'")})
         except Exception as e:
             traceback.print_exc()
@@ -1957,7 +1961,7 @@ def main():
     print(f"{NAME} запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
-                                tests=["python3 coach/test_coach.py"])
+                                tests=["python3 coach/test_coach.py", "python3 coach/test_buttons.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

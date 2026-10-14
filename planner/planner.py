@@ -974,8 +974,11 @@ def on_callback(cq):
         elif kind == "v":  # главное меню чата: экран новым сообщением, меню остаётся выше
             send(chat, *view_for(uid, data[1], today))
         elif kind == "t":  # галочка в плане дня
-            new = db.toggle(uid, int(data[1]), data[2])
-            note = "Сделано ✨" if new else "Снял отметку"
+            if db.task(uid, int(data[1])):
+                new = db.toggle(uid, int(data[1]), data[2])
+                note = "Сделано ✨" if new else "Снял отметку"
+            else:  # кнопка из старого сообщения, задачу уже удалили — просто обновим план
+                note = "Этой задачи уже нет"
             edit(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[2])))
         elif kind == "d":  # листаем дни
             edit(chat, mid, *day_view(uid, datetime.date.fromisoformat(data[1])))
@@ -989,8 +992,10 @@ def on_callback(cq):
             note = "Перенёс"
         elif kind == "r":  # «сделано» из напоминания
             t = db.task(uid, int(data[1]))
-            db.toggle(uid, int(data[1]), data[2], done=True)
-            edit(chat, mid, card("✅", "Сделано", f"<s>{esc(t['title'])}</s>" if t else None, "Отлично!"))
+            if t:
+                db.toggle(uid, int(data[1]), data[2], done=True)
+            edit(chat, mid, card("✅", "Сделано", f"<s>{esc(t['title'])}</s>", "Отлично!") if t
+                 else card("🗑", "Этой задачи уже нет"))
         elif kind == "c":  # перенести несделанное на завтра (из вечерних итогов)
             day = datetime.date.fromisoformat(data[1])
             nxt = (day + datetime.timedelta(days=1)).isoformat()
@@ -1008,12 +1013,16 @@ def on_callback(cq):
         elif kind == "gl":  # назад к целям
             edit(chat, mid, *goals_view(uid))
         elif kind == "gs":  # шаг цели — галочка
-            new = db.toggle(uid, int(data[1]))
-            note = "Сделано ✨" if new else "Снял отметку"
+            if db.task(uid, int(data[1])):
+                new = db.toggle(uid, int(data[1]))
+                note = "Сделано ✨" if new else "Снял отметку"
+            else:
+                note = "Этого шага уже нет"
             edit(chat, mid, *goal_view(uid, int(data[2])))
         elif kind in ("gd", "ga"):  # цель достигнута / снова в работе
-            db.save_goal(uid, {"id": int(data[1]), "status": "done" if kind == "gd" else "active"})
-            note = "Цель достигнута! 🏆" if kind == "gd" else "Снова в работе"
+            if db.goal(uid, int(data[1])):
+                db.save_goal(uid, {"id": int(data[1]), "status": "done" if kind == "gd" else "active"})
+                note = "Цель достигнута! 🏆" if kind == "gd" else "Снова в работе"
             edit(chat, mid, *goal_view(uid, int(data[1])))
         elif kind == "un":  # отменить заметку
             n = db.note(uid, int(data[1]))
@@ -1242,6 +1251,8 @@ class Web(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})
+        if not isinstance(body, dict):
+            return self.reply(400, {"error": "bad json"})
         self.api(path, body)
 
     def api(self, path, body):
@@ -1256,7 +1267,7 @@ class Web(BaseHTTPRequestHandler):
             self.reply(200, route(uid, path, body))
         except PermissionError as e:
             self.reply(403, {"error": str(e)})
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, TypeError) as e:  # TypeError — поле не того типа ({"id": null}, "date": 5)
             self.reply(400, {"error": str(e).strip("'")})
         except Exception as e:
             traceback.print_exc()
@@ -1568,7 +1579,7 @@ def main():
     print(f"{NAME} запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "Планер «Ритм»", folders=["planner"], pm2="planner-bot",  # только владелец
-                                allowed=can_support, tests=["python3 planner/test_planner.py"])
+                                allowed=can_support, tests=["python3 planner/test_planner.py", "python3 planner/test_buttons.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

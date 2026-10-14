@@ -4,6 +4,7 @@ usage: python3 planner/test_planner.py
 import datetime
 import hashlib
 import hmac
+import io
 import json
 import os
 import sys
@@ -172,6 +173,24 @@ class BotTest(unittest.TestCase):
                              "data": f"t|{t['id']}|{today.isoformat()}"})
         self.assertEqual(self.db.task(U, t["id"])["done"], 1)
         self.assertIn("Всё сделано", self.texts()[-1])
+
+    def test_stale_buttons(self):
+        """Кнопки старого сообщения, а задачу/цель уже удалили: понятный ответ и свежий экран, без ошибки в логе."""
+        today = planner.today_of(U).isoformat()
+        t = self.db.save_task(U, {"title": "Бокс", "date": today})
+        g = self.db.save_goal(U, {"title": "Спарринг", "horizon": "week"})
+        self.db.delete_task(U, t["id"])
+        self.db.delete_goal(U, g["id"])
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", out):
+            for data in (f"t|{t['id']}|{today}", f"gs|{t['id']}|{g['id']}", f"r|{t['id']}|{today}", f"gd|{g['id']}"):
+                self.cb(data)
+        self.assertEqual(out.getvalue(), "")
+        notes = [p.get("text") for m, p in self.sent if m == "answerCallbackQuery"]
+        self.assertEqual(notes, ["Этой задачи уже нет", "Этого шага уже нет", "", ""])
+        self.assertIn("Пусто", self.texts()[0])
+        self.assertIn("Этой задачи уже нет", self.texts()[2])
+        self.assertIn("Цели больше нет", self.texts()[3])
 
     def test_week_goals_help(self):
         self.db.save_goal(U, {"title": "Спарринг", "emoji": "🥊", "horizon": "week"})
@@ -610,6 +629,8 @@ class WebTest(unittest.TestCase):
             code, body = self.get("/api/task", {"X-Init-Data": signed({"id": 42}), "Content-Type": "application/json"},
                                   json.dumps({"title": ""}).encode())
             self.assertEqual(code, 400)
+            for raw in (b"[1]", b"null", b'{"id": null}', b'{"title": "x", "date": 5}'):  # не объект, не тот тип — 400
+                self.assertEqual(self.get("/api/task", {"X-Init-Data": signed({"id": 42})}, raw)[0], 400, raw)
         with mock.patch.object(planner, "PUBLIC", False), mock.patch.object(planner, "ALLOWED", {1}):
             self.assertEqual(self.get("/api/all", {"X-Init-Data": signed({"id": 42})})[0], 403)
 
