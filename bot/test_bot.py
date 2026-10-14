@@ -193,6 +193,28 @@ class BotTest(unittest.TestCase):
         self.assertTrue(bot.human_on())
         self.assertEqual(bot.ROUTES["/api/human"]({"on": False}), {"human": False})
 
+    def test_delay_button_on_keyboard(self):
+        self.assertIn(bot.BTN_DELAY_ON, bot.menu_kb())  # отдельная кнопка у поля ввода, не только /delay
+        self.say(bot.BTN_DELAY_ON)
+        self.assertFalse(bot.human_on())
+        self.assertIn(bot.BTN_DELAY_OFF, self.last()[1])  # клавиатура пришла с новым состоянием
+        self.say(bot.BTN_DELAY_OFF)
+        self.assertTrue(bot.human_on())
+
+    def test_restart_resumes_tasks(self):
+        bot.mark_active(TASK, {"chat": CHAT, "url": URL, "text": "", "show": False})  # решалось, когда бот перезапустили
+        bot.resume_active()
+        self.assertTrue(any("Продолжаю после перезапуска" in m for m, _ in self.msgs))
+        self.assertTrue(any(p.startswith("Задание:") and URL in p for p in self.prompts))
+        self.assertEqual(bot.load_settings().get("active"), {})  # решено — из списка ушло
+        s = bot.load_settings()
+        s["active"] = {TASK: {"chat": CHAT, "url": URL, "tries": 2}}  # роняет бота — третий раз не берём
+        bot.save_settings(s)
+        n = len(self.prompts)
+        bot.resume_active()
+        self.assertEqual(len(self.prompts), n)
+        self.assertIn("Не доделал", self.last()[0])
+
     def test_no_personal_info_in_tasks(self):
         p = bot.prompt_for(URL, "", False)
         self.assertIn("ничего личного о Глебе", p)
