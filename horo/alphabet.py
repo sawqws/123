@@ -62,6 +62,7 @@ TOP, SIDE, BOTTOM = 230, 70, 110
 CELL_W = (W - 2 * SIDE) / COLS
 CELL_H = (H - TOP - BOTTOM) / ROWS
 XH = 80                    # высота строчной буквы в шаблоне, px
+ZOOM = 4                   # буквы со листа увеличиваем перед скелетом: линия плавная, а не лесенкой
 MARK = 60                  # размер угловой метки
 BIT = 34                   # размер метки номера страницы
 BG, LINE, HINT, MAGENTA = (30, 30, 32), (78, 78, 82), (120, 120, 126), (230, 0, 200)
@@ -203,10 +204,15 @@ def glyph_from(mask, base, tiny=False):
     keep = np.isin(lab, 1 + np.nonzero(area >= (4 if tiny else 25))[0])   # убрать пылинки от сжатия
     if keep.sum() < (6 if tiny else 60):
         return None
-    ys, xs = np.nonzero(skeletonize(keep))
+    # скелет мелкой буквы прямо по пикселям листа выходит угловатым («р», «к», «ж» превращались в другие буквы):
+    # маску увеличиваем в ZOOM раз и сглаживаем края — скелет идёт плавной линией, как перо
+    big = ndimage.gaussian_filter(ndimage.zoom(keep.astype(np.float32), ZOOM, order=1), ZOOM * 0.6) > 0.45
+    if not big.any():
+        return None
+    ys, xs = np.nonzero(skeletonize(big))
     x0 = xs.min()
-    pts = np.stack([(xs - x0) / XH, (base - ys) / XH], 1).astype(np.float32)
-    return pts, float((xs.max() - x0) / XH)
+    pts = np.stack([(xs - x0) / (XH * ZOOM), (base * ZOOM - ys) / (XH * ZOOM)], 1).astype(np.float32)
+    return pts, float((xs.max() - x0) / (XH * ZOOM))
 
 
 # Пишут кто крупнее, кто мельче линеек, и одну букву больше, другую меньше. Поэтому каждая буква
@@ -299,6 +305,8 @@ def ingest(paths):
         else:
             glyphs = cells(m, page)
         for ch, pts, w in normalize(glyphs):
+            if ch in ',.':  # его запятая и точка со листа выходят как «>» и клякса — их рисует hand.GLYPHS
+                continue
             k = ord(ch)
             n = sum(1 for key in bank if key.split('_')[0] == str(k) and not key.endswith('w'))
             bank[f'{k}_{n}'], bank[f'{k}_{n}w'] = pts, np.float32(w)
