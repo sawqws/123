@@ -218,6 +218,42 @@ class AgentOverBotApi(unittest.TestCase):
             self.assertTrue(tg.sent("answerCallbackQuery"))
         self.run_agent(tg, scenario)
 
+    def test_every_button_is_answered(self):
+        """Устаревшая кнопка, упавший обработчик, чужой человек — крутилка на кнопке не висит, есть понятный ответ."""
+        tg = FakeTelegram()
+
+        async def scenario(a):
+            await self.until(lambda: tg.sent("setMyCommands"))
+            tg.push_button("zz:старое", tg.mid)  # кнопка из прошлой версии
+            await self.until(lambda: tg.sent("answerCallbackQuery"))
+            self.assertIn("устарела", tg.sent("answerCallbackQuery")[-1]["text"])
+            n = len(tg.sent("answerCallbackQuery"))
+            with mock.patch.object(a, "dashboard", mock.AsyncMock(side_effect=RuntimeError("Telegram не ответил"))):
+                tg.push_button("m:home", tg.mid)
+                await self.until(lambda: len(tg.sent("answerCallbackQuery")) > n)
+            ans = tg.sent("answerCallbackQuery")[-1]
+            self.assertIn("⚠️", ans["text"])
+            self.assertIn("Telegram не ответил", ans["text"])
+            n = len(tg.sent("answerCallbackQuery"))
+            tg.updates.append({"update_id": 9001, "callback_query": {"id": "q2", "from": {"id": 5}, "data": "m:home",
+                                                                     "message": {"message_id": 1, "chat": {"id": 5}}}})
+            await self.until(lambda: len(tg.sent("answerCallbackQuery")) > n)
+            self.assertIn("личный", tg.sent("answerCallbackQuery")[-1]["text"])
+            n = len(tg.sent("answerCallbackQuery"))
+            tg.push_button("j:rm:нет-такого", tg.mid)  # расписание уже удалено в приложении
+            await self.until(lambda: len(tg.sent("answerCallbackQuery")) > n)
+            self.assertIn("уже нет", tg.sent("answerCallbackQuery")[-1]["text"])
+        self.run_agent(tg, scenario)
+
+    def test_jobs_buttons_three_in_row(self):
+        a = agent.Agent.__new__(agent.Agent)
+        a.jobs = mock.Mock(load=lambda: [{"id": str(i), "next": "2026-10-15T07:00:00+03:00", "chats": [{"id": 1, "name": "Мама"}],
+                                          "time": "07:00", "days": [], "text": "привет", "sent": 0} for i in range(7)])
+        with mock.patch.object(agent.jobs, "describe", lambda j: "07:00 → Мама"):
+            _, rows = a.jobs_card()
+        self.assertTrue(all(len(r) <= 3 for r in rows))
+        self.assertEqual(sum(len(r) for r in rows), 7)
+
     def test_colors_fall_back_when_rejected(self):
         tg = FakeTelegram(reject_style=True)
 

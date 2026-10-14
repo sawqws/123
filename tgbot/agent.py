@@ -25,6 +25,7 @@ tgbot/tg.py -> этот агент -> Telethon. Всё, что меняет Tele
 Два равноправных интерфейса: чат с кнопками и мини-приложение (tgbot/webapp/, кнопка слева от поля ввода, /app).
 """
 import asyncio
+import contextlib
 import datetime
 import json
 import os
@@ -386,30 +387,41 @@ class Agent:
 
     async def on_callback(self, ev):
         if ev.sender_id != self.owner():
+            await ev.answer("🔒 Это личный секретарь")
             return
         data = ev.data.decode()
         kind, _, arg = data.partition(":")
         try:
-            if kind in ("ok", "no", "all"):
-                await self.on_answer(ev, kind, arg)
-            elif kind == "stop":
-                await ev.answer("Останавливаю…")
-                await self.stop(quiet=True)
-            elif kind == "k":
-                await self.on_key(ev, arg)
-            elif kind == "m":
-                await self.on_menu(ev, arg)
-            elif kind == "j":
-                await self.on_jobs(ev, arg)
-            elif kind == "login":
-                await ev.answer()
-                await self.on_login_choice(ev, arg)
-            elif kind == "psy":
-                await self.on_psy_button(ev, arg)
+            await self.on_button(ev, kind, arg)
         except BotError as e:
-            if not e.not_modified:
-                raise
+            if not e.not_modified:  # сообщение удалено/устарело и т. п. — сказать, а не молчать
+                print("callback:", data, repr(e), flush=True)
+                await ev.answer("⚠️ Сообщение устарело — откройте меню заново (/start)", alert=True)
+        except Exception as e:
+            print("callback:", data, repr(e), flush=True)
+            await ev.answer(f"⚠️ Не получилось: {str(e)[:150] or type(e).__name__}", alert=True)
+        finally:
+            await ev.answer()  # крутилка на кнопке не висит никогда (второй ответ — пустой, botapi его пропустит)
+
+    async def on_button(self, ev, kind, arg):
+        if kind in ("ok", "no", "all"):
+            await self.on_answer(ev, kind, arg)
+        elif kind == "stop":
+            await ev.answer("Останавливаю…")
+            await self.stop(quiet=True)
+        elif kind == "k":
+            await self.on_key(ev, arg)
+        elif kind == "m":
+            await self.on_menu(ev, arg)
+        elif kind == "j":
+            await self.on_jobs(ev, arg)
+        elif kind == "login":
             await ev.answer()
+            await self.on_login_choice(ev, arg)
+        elif kind == "psy":
+            await self.on_psy_button(ev, arg)
+        else:  # кнопка из старой версии бота
+            await ev.answer("Кнопка устарела — откройте меню заново (/start)")
 
     async def on_answer(self, ev, ans, cid):
         fut = self.waiting.get(cid)
@@ -552,7 +564,7 @@ class Agent:
         if len(js) > len(shown):
             lines.append(f"<i>…и ещё {len(js) - len(shown)} — полный список в приложении</i>")
         dels = [Button.inline(f"🗑 {i}", f"j:ask:{j['id']}") for i, j in enumerate(shown, 1)]
-        return card("⏰ Расписание", "\n\n".join(lines), "чтобы добавить — просто напишите мне"), [dels[i:i + 4] for i in range(0, len(dels), 4)]
+        return card("⏰ Расписание", "\n\n".join(lines), "чтобы добавить — просто напишите мне"), [dels[i:i + 3] for i in range(0, len(dels), 3)]
 
     async def on_jobs(self, ev, arg):
         op, _, jid = arg.partition(":")
@@ -565,6 +577,8 @@ class Agent:
         if op == "rm" and j:
             self.jobs.remove(jid)
             await ev.answer("Удалено")
+        elif op in ("ask", "rm"):  # старая кнопка: расписания уже нет — показываем актуальный список
+            await ev.answer("Этого расписания уже нет")
         text, buttons = self.jobs_card()
         await ev.edit(text, buttons=buttons or None, parse_mode="html")
 
@@ -1102,6 +1116,9 @@ class Agent:
         except errors.RPCError as e:
             self.login = None
             await self.say(oops(self.login_error(e)))
+        except Exception as e:  # сеть, my.telegram.org и т. п.: не оставлять человека в тишине посреди входа
+            print("login:", repr(e), flush=True)
+            await self.say(oops(f"Вход прервался: {e}. Попробуйте ещё раз или начните заново: /login"))
 
     async def reset_session(self):
         """Удалить файл сессии аккаунта (только когда вход не выполнен): испорченный ключ даёт AUTH_KEY_*."""
@@ -1357,7 +1374,12 @@ class Agent:
         if not text and self.is_voice(ev.message) and not self.login:
             asyncio.create_task(self.on_voice(ev))
             return
-        await self.route(ev, text)
+        try:
+            await self.route(ev, text)
+        except Exception as e:  # Telegram/сеть/файлы: понятное «⚠️ …» вместо тишины
+            print("message:", repr(e), flush=True)
+            with contextlib.suppress(Exception):
+                await self.say(oops(f"Не получилось: {e}. Попробуйте ещё раз."))
 
     @staticmethod
     def visual_prompt(kind, caption, paths, speech="", seconds=0):
@@ -1467,7 +1489,7 @@ class Agent:
             await self.start_login()
         elif text == "/logout":
             await self.say(card("Выйти из аккаунта?", "Агент забудет вход, расписания встанут."),
-                           buttons=[[Button.inline("Да, выйти", "m:logout!", style="danger")]])
+                           buttons=[[Button.inline("Да, выйти", "m:logout!", style="danger"), Button.inline("Нет", "m:home")]])
         elif text == "/new":
             self.new_conversation()
             await self.say(card("🆕 Начинаем с чистого листа"))

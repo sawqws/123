@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 import urllib.request
 
 ui = None
@@ -336,6 +337,9 @@ def make(chat, tz):
         return ui.send(chat, "⏳ Claude ещё занят прошлым ботом — пришли ТЗ, когда закончит.")
     try:
         _make(chat, tz)
+    except Exception as e:  # иначе статус «Делаю бота» висит вечно, а человек ждёт
+        traceback.print_exc()
+        ui.send(chat, ui.card("⚠️ <b>Бот не собрался</b>", [ui.esc(str(e)[:300])]), [[ui.b("🔁 Ещё раз", "mk")]])
     finally:
         job.release()
 
@@ -492,6 +496,9 @@ def fix(chat, pm2, tz):
         return ui.send(chat, "⏳ Claude ещё занят прошлой задачей — пришли правку, когда закончит.")
     try:
         _fix(chat, pm2, tz)
+    except Exception as e:
+        traceback.print_exc()
+        ui.send(chat, ui.card("⚠️ <b>Доработка упала</b>", [ui.esc(str(e)[:300])]), [[ui.b("🔁 Ещё раз", f"fix|{pm2}")]])
     finally:
         job.release()
 
@@ -626,10 +633,12 @@ def on_callback(chat, mid, data):
         ask_make(chat, mid)
     elif data[0] == "mkr":
         info = made().get(data[1])
-        if info:
-            set_made(data[1], None)
-            shutil.rmtree(info["dir"], ignore_errors=True)
-            threading.Thread(target=make, args=(chat, info["tz"]), daemon=True).start()
+        if not info:
+            return "Этого бота уже нет — начни заново: 🛠 Сделать бота"
+        set_made(data[1], None)
+        shutil.rmtree(info["dir"], ignore_errors=True)
+        threading.Thread(target=make, args=(chat, info["tz"]), daemon=True).start()
+        return "Делаю заново…"
     elif data[0] == "fix":
         ask_fix(chat, mid, data[1] if len(data) > 1 else None)
     elif data[0] in ("mkh", "fixh"):
