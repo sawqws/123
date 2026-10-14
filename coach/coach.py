@@ -17,6 +17,7 @@
 Только стандартная библиотека Python.
 """
 import datetime
+import functools
 import base64
 import hashlib
 import hmac
@@ -106,6 +107,23 @@ def err(text):
 
 
 BUSY = "⏳ Ещё думаю над прошлым сообщением — секунду."
+OOPS = "Что-то пошло не так — попробуй ещё раз. Не проходит — /fix, починю."
+
+
+def bg(target, *args, chat=None):
+    """Долгое дело в фоне: упало — в чат понятное «⚠️ …», а не тишина (трассировка — только в лог)."""
+    @functools.wraps(target)  # имя дела в логах и тестах — как у самой функции
+    def run(*a):
+        try:
+            target(*a)
+        except Exception:
+            traceback.print_exc()
+            if chat:
+                try:
+                    send(chat, err(OOPS))
+                except Exception as e:
+                    print("oops:", e)
+    threading.Thread(target=run, args=args, daemon=True).start()
 
 
 # ---------- Telegram ----------
@@ -451,16 +469,17 @@ def first_sync(uid):
                     app_button(uid, "👤 Профиль", "/profile") or btn("👤 Профиль", "pf|")]))
     except Exception as e:
         traceback.print_exc()
-        send(uid, err(f"Не получилось загрузить данные WHOOP: {esc(str(e)[:200])}"))
+        send(uid, err("Не получилось загрузить данные WHOOP — повтори через пару минут."), kb([btn("🔄 Загрузить", "s|")]))
 
 
-def sync_user(uid, days=3, quiet=False):
+def sync_user(uid, days=3, quiet=False, notify=True):
     cid, sec = creds()
     try:
         fresh = whoop.sync(db, uid, cid, sec, days=days)
     except whoop.NotConnected:
         db.drop_token(uid)
-        send(uid, err("WHOOP отключился — вход истёк. Подключи заново: /connect"))
+        if notify:
+            send(uid, err("WHOOP отключился — вход истёк. Подключи заново: /connect"))
         return []
     if not quiet:
         react(uid, fresh)
@@ -931,6 +950,8 @@ def profile_view(uid, title="Профиль"):
             v = GOAL_WORDS.get(v, v)
         elif k == "morning" and v == "off":
             v = "выключен"
+        elif isinstance(v, float):  # рост и вес хранятся числом: «172», «61,5», а не «172.0», «61.5»
+            v = num(v) if not v.is_integer() else int(v)
         lines.append(f"• {label} — {esc(v)}")
     return (box("👤", title, "\n".join(lines) or "Пока пусто — расскажи о себе, советы станут точнее.",
                 note="Изменить — кнопкой: «вес 61, рост 170», «спорт бокс», «цель масса», «пол парень»…"),
@@ -967,13 +988,13 @@ def edit_profile(chat, uid, text):
     data = parse_profile(text)
     if not data:
         awaiting(uid, "profile")
-        send(chat, err("Не понял. Например: «вес 61, рост 170, спорт бокс» — или /profile"))
+        send(chat, err("Не понял. Например: «вес 61, рост 170, спорт бокс» — или /profile"), CANCEL)
         return
     try:
         db.save_profile(uid, data)
     except ValueError as e:
         awaiting(uid, "profile")
-        send(chat, err(f"{esc(e)}. Попробуй ещё раз"))
+        send(chat, err(f"{esc(e)}. Попробуй ещё раз"), CANCEL)
         return
     send(chat, *profile_view(uid, "Профиль обновлён"))
 
@@ -1134,6 +1155,15 @@ def awaiting(uid, what=None):
     return kind if time.time() - int(at or 0) < 15 * 60 else None
 
 
+CANCEL = [[{"text": "✖️ Отмена", "callback_data": "w|cancel"}]]  # под каждым «✍️ Напиши …»
+
+
+def brief_now(uid, chat):
+    """«🧠 Разбор дня» / /today: занят прошлым ответом — так и сказать, а не молчать."""
+    if not morning_brief(uid, chat):
+        send(chat, BUSY)
+
+
 def set_morning(chat, uid, value):
     try:
         db.save_profile(uid, {"morning": value})
@@ -1145,7 +1175,16 @@ def set_morning(chat, uid, value):
 
 
 def sync_now(chat, uid, mid):
-    sync_user(uid, days=7)
+    """«🔄 Обновить» / /sync: статус в том же сообщении, без вечного «Обновляю…» при ошибке."""
+    try:
+        sync_user(uid, days=7, notify=False)
+    except Exception as e:
+        print("sync:", e)
+        replace(chat, mid, err("WHOOP сейчас не отвечает — попробуй через пару минут."), kb([btn("🔄 Ещё раз", "s|")]))
+        return
+    if not db.token(uid):
+        replace(chat, mid, err("Вход в WHOOP истёк — подключи заново."), kb([btn("🔌 Подключить WHOOP", "c|", "success")]))
+        return
     _, t = context(uid)
     replace(chat, mid, box("✅", "WHOOP обновлён", headline(t)), with_app(uid, [], "📱 Открыть"))
 
@@ -1194,9 +1233,9 @@ def on_message(msg):
     elif cmd == "/whoop":
         save_creds(chat, uid, msg, text)
     elif cmd == "/today":
-        threading.Thread(target=morning_brief, args=(uid, chat), daemon=True).start()
+        bg(brief_now, uid, chat, chat=chat)
     elif cmd == "/progress":
-        threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
+        bg(progress_report, uid, chat, chat=chat)
     elif cmd == "/food":
         send(chat, food_text(uid), with_app(uid, [], "📱 Питание", "/food"))
     elif cmd == "/water":
@@ -1222,22 +1261,22 @@ def on_message(msg):
             connect(chat, uid)
         else:
             mid = mid_of(send(chat, "🔄 Обновляю WHOOP…"))
-            threading.Thread(target=sync_now, args=(chat, uid, mid), daemon=True).start()
+            bg(sync_now, chat, uid, mid, chat=chat)
     elif cmd == "/new":
         db.clear_history(uid)
         send(chat, box("🧹", "Новый разговор", note="Данные, цели и профиль на месте."))
     elif cmd == "/status":
-        threading.Thread(target=status, args=(chat, uid), daemon=True).start()
+        bg(status, chat, uid, chat=chat)
     elif cmd == "/update" and is_admin(uid):
         update(chat)
     elif cmd:
         send(chat, err("Такой команды нет — что я умею: /help"))
     elif kind == "photo":  # скачивание и Claude — не в главном цикле
-        threading.Thread(target=on_photo, args=(chat, uid, msg, text), daemon=True).start()
+        bg(on_photo, chat, uid, msg, text, chat=chat)
     elif kind == "video":
-        threading.Thread(target=on_video, args=(chat, uid, msg, wait), daemon=True).start()
+        bg(on_video, chat, uid, msg, wait, chat=chat)
     elif kind == "voice":
-        threading.Thread(target=on_voice, args=(chat, uid, msg, wait), daemon=True).start()
+        bg(on_voice, chat, uid, msg, wait, chat=chat)
     elif text:
         on_text(chat, uid, text, wait)
     else:
@@ -1258,9 +1297,9 @@ def on_text(chat, uid, text, wait=None):
         return
     m = FOOD_WORDS.match(text)
     if m and len(text) > len(m.group(0)) + 1:
-        threading.Thread(target=log_meal, args=(chat, uid, text), daemon=True).start()
+        bg(log_meal, chat, uid, text, chat=chat)
     else:
-        threading.Thread(target=answer, args=(chat, uid, text), daemon=True).start()
+        bg(answer, chat, uid, text, chat=chat)
 
 
 def media_failed(chat, uid, what, e, wait=None):
@@ -1368,17 +1407,40 @@ def on_callback(cq):
     uid = cq["from"]["id"]
     msg = cq.get("message") or {}
     chat, mid = msg.get("chat", {}).get("id"), msg.get("message_id")
-    data = (cq.get("data") or "").split("|")
+    data = (cq.get("data") or "").split("|") + ["", "", ""]  # устаревшая/обрезанная кнопка не роняет разбор
+    note = ""
+    try:
+        note = callback(uid, chat, mid, data, cq.get("from") or {})
+    except Exception:
+        traceback.print_exc()
+        note = "⚠️ Не вышло — попробуй ещё раз"
+        try:
+            send(chat, err(OOPS))
+        except Exception as e:
+            print("oops:", e)
+    try:  # крутилка на кнопке не должна висеть ни в одной ветке
+        tg("answerCallbackQuery", callback_query_id=cq["id"], text=note or "")
+    except Exception as e:
+        print("answerCallbackQuery:", e)
+
+
+def rid(x):
+    """id из кнопки; битый — 0 (такой записи нет → «Уже удалено»)."""
+    return int(x) if x.isdigit() else 0
+
+
+def callback(uid, chat, mid, data, frm):
+    """Кнопка → текст всплывашки (пусто — без неё)."""
     note = ""
     if not allowed(uid):
         note = "Нет доступа"
     elif data[0] == "c":
         connect(chat, uid)
     elif data[0] == "b":
-        threading.Thread(target=morning_brief, args=(uid, chat), daemon=True).start()
+        bg(brief_now, uid, chat, chat=chat)
         note = "Готовлю разбор…"
     elif data[0] == "p":
-        threading.Thread(target=progress_report, args=(uid, chat), daemon=True).start()
+        bg(progress_report, uid, chat, chat=chat)
         note = "Разбираю прогресс…"
     elif data[0] == "q":
         send(chat, "💬 Спроси текстом или голосом.\n<i>Например: «что съесть перед тренировкой?»</i>")
@@ -1386,7 +1448,7 @@ def on_callback(cq):
         if data[1] in MODES:
             set_mode(uid, data[1])
             replace(chat, mid, box("✅", "Режим: " + MODES[data[1]], note="Сменить — /mode или кнопка «⚙️ Режим»"))
-            welcome(chat, uid, cq["from"].get("first_name"))
+            welcome(chat, uid, frm.get("first_name"))
             note = MODES[data[1]]
         else:
             ask_mode(chat)
@@ -1403,49 +1465,55 @@ def on_callback(cq):
         u = db.user(uid)
         send(chat, morning_text(u), morning_buttons(u))
     elif data[0] == "pf":
-        if data[1:] == ["edit"]:
+        if data[1] == "edit":
             awaiting(uid, "profile")
-            send(chat, "✍️ Напиши, что поменять, одним сообщением.\n<i>Например: «вес 61, рост 170, спорт бокс».</i>")
+            send(chat, "✍️ Напиши, что поменять, одним сообщением.\n<i>Например: «вес 61, рост 170, спорт бокс».</i>",
+                 CANCEL)
         else:
             send(chat, *profile_view(uid))
     elif data[0] == "sum":
-        threading.Thread(target=summary_report, args=(chat, uid, data[1] if len(data) > 1 else "week"),
-                         daemon=True).start()
+        bg(summary_report, chat, uid, data[1] or "week", chat=chat)
         note = "Считаю сводку…"
     elif data[0] == "g" and data[1] == "add":
         awaiting(uid, "goal")
-        send(chat, "✍️ Напиши цель одним сообщением.\n<i>Например: «ложиться до 23:00».</i>")
+        send(chat, "✍️ Напиши цель одним сообщением.\n<i>Например: «ложиться до 23:00».</i>", CANCEL)
     elif data[0] == "g" and data[1] == "del":
-        if db.delete_goal(uid, int(data[2])):
-            note = "Удалено"
-        edit(chat, mid, *goals_view(uid))
+        note = "Удалено" if db.delete_goal(uid, rid(data[2])) else "Уже удалено"
+        replace(chat, mid, *goals_view(uid))
     elif data[0] == "mt":
         try:
             db.save_profile(uid, {"morning": data[1]})
             u = db.user(uid)
-            edit(chat, mid, morning_text(u), morning_buttons(u))
+            replace(chat, mid, morning_text(u), morning_buttons(u))
             note = "Выключено" if data[1] == "off" else f"Разбор с {data[1]}"
         except ValueError as e:
             note = str(e)
     elif data[0] == "s":
         if db.token(uid):
             note = "Обновляю WHOOP…"
-            threading.Thread(target=sync_user, args=(uid, 3), daemon=True).start()
+            bg(sync_now, chat, uid, mid_of(send(chat, "🔄 Обновляю WHOOP…")), chat=chat)
         else:
             connect(chat, uid)
     elif data[0] == "wa" and data[1] == "add":
         log_water(chat, uid, int(data[2]), mid)
         note = f"+{data[2]} мл"
     elif data[0] == "wa" and data[1] == "del":
-        if db.delete_water(uid, int(data[2])):
+        if db.delete_water(uid, rid(data[2])):
             text, last = water_text(uid, title="↩️ <b>Отменил</b>")
-            edit(chat, mid, text, water_buttons(uid, last))
+            replace(chat, mid, text, water_buttons(uid, last))
             note = "Отменил"
+        else:
+            note = "Уже отменено"
     elif data[0] == "m" and data[1] == "del":
-        if db.delete_meal(uid, int(data[2])):
-            edit(chat, mid, "🗑 <s>Удалено</s>")
-            note = "Удалено"
-    tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
+        note = "Удалено" if db.delete_meal(uid, rid(data[2])) else "Уже удалено"
+        replace(chat, mid, "🗑 <s>Удалено</s>")
+    elif data[0] == "w" and data[1] == "cancel":  # «✖️ Отмена» под «✍️ Напиши …»
+        awaiting(uid)
+        replace(chat, mid, "✖️ <i>Отменил</i>")
+        note = "Отменил"
+    else:
+        note = "Кнопка устарела — открой /start"
+    return note
 
 
 def status(chat, uid):
@@ -1599,6 +1667,8 @@ class Web(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})
+        if not isinstance(body, dict):
+            return self.reply(400, {"error": "bad json"})
         self.api(path, body)
 
     def api(self, path, body):
@@ -1615,11 +1685,15 @@ class Web(BaseHTTPRequestHandler):
             self.reply(403, {"error": str(e)})
         except ai.AIError as e:
             self.reply(503, {"error": str(e)})
-        except (ValueError, KeyError) as e:
+        except KeyError as e:
+            field = str(e).strip("'")
+            self.reply(400 if field != "нет такого метода" else 404,
+                       {"error": field if field == "нет такого метода" else f"не хватает поля «{field}»"})
+        except (ValueError, TypeError) as e:  # TypeError — поле не того типа ({"id": null}, "d": 5)
             self.reply(400, {"error": str(e).strip("'")})
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
-            self.reply(500, {"error": str(e)})
+            self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз. Не проходит — «Поддержка» внизу"})
 
 
 def day_payload(uid, day):
@@ -1780,7 +1854,13 @@ def route(uid, path, b):
     if path == "/api/sync":
         if not db.token(uid):
             raise ValueError("WHOOP не подключён")
-        sync_user(uid, days=7, quiet=True)
+        try:
+            sync_user(uid, days=7, quiet=True, notify=False)
+        except (RuntimeError, OSError) as e:  # ответ WHOOP с ошибкой или нет сети
+            print("sync:", e)
+            raise ValueError("WHOOP сейчас не отвечает — попробуй через пару минут") from None
+        if not db.token(uid):
+            raise ValueError("вход в WHOOP истёк — подключи заново в профиле")
         return {"ok": True}
     if path == "/api/connect":
         link = connect_link(uid)
@@ -1957,7 +2037,7 @@ def main():
     print(f"{NAME} запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
-                                tests=["python3 coach/test_coach.py"])
+                                tests=["python3 coach/test_coach.py", "python3 coach/test_buttons.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -1977,6 +2057,12 @@ def main():
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()
+                chat = ((u.get("message") or {}).get("chat") or {}).get("id")
+                if chat:
+                    try:
+                        send(chat, err(OOPS))
+                    except Exception as e2:
+                        print("oops:", e2)
 
 
 if __name__ == "__main__":

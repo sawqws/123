@@ -46,7 +46,7 @@ const CLICKABLES = `(() => {
 })()`;
 
 const SIGNATURE = `(() => {
-  const h = [...document.querySelectorAll('h1, h2, .title-lg, .sheet h2, .tabbar .on, .tabs .on, .seg .on')]
+  const h = [...document.querySelectorAll('h1, h2, .title-lg, .sheet h2, .sheet h3, .tabbar .on, .tabs .on, .seg .on')]
     .filter((e) => e.offsetParent).map((e) => e.innerText.trim().slice(0, 30)).join('|');
   return h + '#' + location.pathname + location.search;
 })()`;

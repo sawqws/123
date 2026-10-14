@@ -142,6 +142,7 @@ function loginView() {
 }
 
 async function login() {
+  if (!$('token') || $('do-login').disabled) return;  // вход уже идёт (вставка + нажатие) — второй не нужен
   const text = $('token').value.trim();
   if (!text) { haptic('error'); toast('Вставь адрес страницы после входа', true); return; }
   await busy($('do-login'), async () => {
@@ -410,7 +411,11 @@ document.addEventListener('click', async (ev) => {
         toast('Пропуск отменён', 'ok');
         if (result && String(result.id) === t.dataset.cancel) result = null;
         await refresh();
-      } catch (e) { haptic('error'); toast(e.message, true); }
+      } catch (e) {
+        haptic('error');
+        toast(e.message, true);
+        if (e.data && e.data.login) refresh();  // вход устарел — экран входа
+      }
     });
   }
 });
@@ -437,6 +442,7 @@ async function refresh() {
     $('passes').innerHTML = passesHtml();
     return render0();
   }
+  if (!S.login && $('token')) return;  // экран входа уже открыт — не стираем вставленный адрес
   render();
 }
 function render0() {  // только шапка

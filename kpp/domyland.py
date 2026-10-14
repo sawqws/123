@@ -53,6 +53,10 @@ class AuthError(Error):
     """Токен не подходит или истёк — нужно войти заново."""
 
 
+class NetError(Error):
+    """Сеть или сам Домиленд (5xx) — временно: вход тут ни при чём, надо просто повторить."""
+
+
 # ---------- токен Яндекса ----------
 
 _TOKEN_RE = re.compile(r"(y[0-3]_[A-Za-z0-9_-]{20,})")
@@ -147,9 +151,9 @@ class Client:
             text = e.read().decode("utf-8", "replace")[:300]
             if e.code in (401, 403):
                 raise AuthError(f"{e.code}: {text}")
-            raise Error(f"{method} {path} → HTTP {e.code}: {text}")
+            raise (NetError if e.code >= 500 else Error)(f"{method} {path} → HTTP {e.code}: {text}")
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise Error(f"Сеть: {e}")
+            raise NetError(f"Сеть: {e}")
         try:
             res = json.loads(text) if text.strip() else {}
         except ValueError:
@@ -161,14 +165,14 @@ class Client:
     # --- вход ---
 
     def login(self):
-        """Яндекс-токен → JWT Домиленда. Любой отказ здесь — проблема токена."""
+        """Яндекс-токен → JWT Домиленда. Отказ здесь — проблема токена (AuthError); сеть и 5xx — NetError."""
         body = {"deviceModel": "KPP bot", "deviceOSName": "Linux", "deviceOSVersion": "1",
                 "deviceVendor": "KPP", "token": self.yandex_token}
         try:
             data = self.request("POST", "/auth/yandex/scenario", body, auth=False, place=False)
             self.jwt = data["payload"]["authData"]["token"]
-        except AuthError:
-            raise
+        except (AuthError, NetError):
+            raise  # сбой сети или 5xx — не повод считать вход устаревшим
         except (Error, KeyError, TypeError) as e:
             raise AuthError(str(e))
         return self.jwt

@@ -463,6 +463,7 @@ $('feed').addEventListener('click', (ev) => {
 let last = 0;
 let polling = false;
 async function poll() {
+  if (!linked) return load();
   if (polling) return;
   polling = true;
   try {
@@ -483,9 +484,11 @@ async function poll() {
   polling = false;
 }
 
+let linked = false;  // /api/state хоть раз ответил; нет — poll() пробует снова, «Нет связи» не навсегда
 async function load() {
   try {
     const s = await api('/api/state');
+    if (!linked) { linked = true; setMode(mode); }  // вернуть «Готов слушать» вместо «Нет связи»
     if (!last) last = s.last;
     safari = s.safari || '';
     uiMode = s.mode || '';
@@ -499,6 +502,7 @@ async function load() {
 }
 
 function noLink(why) {
+  linked = false;
   $('state').textContent = 'Нет связи';
   $('hint').textContent = why;
   document.body.classList.add('mic-err');

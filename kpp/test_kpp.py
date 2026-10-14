@@ -94,6 +94,7 @@ class Request(unittest.TestCase):
 class BotBase(unittest.TestCase):
     def setUp(self):
         self.sent = []
+        kpp.use(None)
         kpp.st = {"owner": 1, "jwt": "j", "yandex_token": "y", "place_id": 5, "building_id": 6, "address": "ЖК",
                   "mode": "chat"}
 
@@ -447,14 +448,19 @@ class Guests(BotBase):
         self.assertTrue(any("Аня теперь может" in t for t in self.texts()))  # владельцу сообщили
         self.start(f"/start inv_{code}", 43)  # ссылка одноразовая
         self.assertFalse(kpp.allowed(43))
-        for cmd in ("/login", "/logout", "/place", "/invite", "/update"):
+        for cmd in ("/invite", "/update", "/guests"):
             self.start(cmd, 42)
             self.assertIn("только владелец", self.texts()[-1])
-        self.assertEqual(kpp.st["jwt"], "j")  # /logout гостя ничего не стёр
+        for cmd in ("/place", "/auto"):
+            self.start(cmd, 42)
+            self.assertIn("на входе владельца", self.texts()[-1])
+        self.start("/logout", 42)
+        self.assertEqual(kpp.st["jwt"], "j")  # /logout гостя вход владельца не стёр
         with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}):
             self.start("А123ВС777", 42)
         self.assertIn("Пропуск заказан", self.texts()[-1])
-        self.assertEqual(kpp.api_post(42, "/api/login", {"text": "x"})[0], 403)
+        self.assertEqual(kpp.api_post(42, "/api/login", {"text": "x"})[0], 400)  # свой вход можно, но нужен токен
+        self.assertEqual(kpp.api_post(42, "/api/place", {"id": 5})[0], 403)
         self.assertEqual(kpp.api_post(42, "/api/invite", {})[0], 403)
         with mock.patch.object(kpp, "bot_username", return_value="Taxii111bot"):
             code, r = kpp.api_post(1, "/api/invite", {})
@@ -472,6 +478,101 @@ class Guests(BotBase):
         self.assertIn("Аня", self.texts()[-1])
         kpp.on_callback({"id": "q", "from": {"id": 1}, "data": "gdel|51", "message": {"chat": {"id": 1}, "message_id": 1}})
         self.assertFalse(kpp.allowed(51))
+
+
+class Separate(BotBase):
+    """У гостя (сестры) своя история: свой последний номер, недавние, режим и список пропусков."""
+
+    def setUp(self):
+        super().setUp()
+        kpp.st["guests"] = {"42": {"name": "Аня"}}
+        kpp.st["users"] = {"42": {}}
+        self.items = []
+
+        def create(c, plate, *a):
+            pid = 100 + len(self.items)
+            self.items.insert(0, {"id": pid, "title": "Такси", "subtitle": dl.pretty(plate),
+                                  "status": {"title": "Активен"}, "actions": [{"type": "cancel"}]})
+            return {"items": [{"id": pid}]}
+        self.p += [mock.patch.object(dl.Client, "create_taxi_pass", create),
+                   mock.patch.object(dl.Client, "passes", lambda c, *a: list(self.items))]
+        for x in self.p[-2:]:
+            x.start()
+
+    def say(self, text, uid):
+        kpp.on_message({"chat": {"id": uid, "type": "private"}, "from": {"id": uid, "first_name": "Аня"}, "text": text})
+
+    def cb(self, data, uid):
+        kpp.on_callback({"id": "q", "from": {"id": uid}, "data": data, "message": {"chat": {"id": uid}, "message_id": 1}})
+
+    def test_history_and_last_apart(self):
+        self.say("А123ВС777", 1)   # Глеб
+        self.say("М456ОР50", 42)   # сестра — на его вход
+        self.say("А123ВС777", 42)  # тот же номер, что у Глеба, — у неё не «уже заказан»
+        self.assertIn("Пропуск заказан", self.texts()[-1])
+        self.assertEqual(kpp.st["last"], "А123ВС777")
+        self.assertEqual(kpp.st["users"]["42"]["last"], "А123ВС777")
+        self.assertNotIn("М456ОР50", kpp.st.get("recent") or {})
+        kpp.use(42)
+        text, rows = kpp.passes_view()
+        self.assertIn("М\u00a0456", text)
+        self.assertEqual(text.count("Активен"), 2)  # только её два
+        kpp.use(1)
+        text, _ = kpp.passes_view()
+        self.assertEqual(text.count("Активен"), 1)  # у Глеба — только его
+        self.assertNotIn("М\u00a0456", text)
+        kpp.use(42)
+        self.assertEqual(len(kpp.app_state()["passes"]), 2)
+        self.assertEqual(kpp.app_state()["places"], [])  # адрес не её
+        self.assertTrue(kpp.app_state()["shared"])
+
+    def test_guest_cannot_cancel_owner_pass(self):
+        self.say("А123ВС777", 1)
+        gleb = self.items[0]["id"]
+        with mock.patch.object(dl.Client, "cancel") as cancel:
+            self.cb(f"x|{gleb}", 42)
+            self.assertEqual(kpp.api_post(42, "/api/cancel", {"id": gleb})[0], 403)
+            cancel.assert_not_called()
+            self.say("М456ОР50", 42)
+            self.cb(f"x|{self.items[0]['id']}", 42)
+            cancel.assert_called_once()
+
+    def test_mode_apart(self):
+        self.say("/mode", 42)
+        self.cb("mode:app", 42)
+        self.assertEqual(kpp.st["users"]["42"]["mode"], "app")
+        self.assertEqual(kpp.st["mode"], "chat")
+        self.cb("pl|5", 42)
+        self.assertIn("только владелец", self.sent[-1][1].get("text", ""))
+        kpp.use(42)
+        self.assertNotIn("sup|ask", str(kpp.menu_buttons()))
+
+    def test_guest_own_login(self):
+        places = [{"id": 8, "buildingId": 9, "placeTypeId": 1, "address": "Тверская ул, д. 1 кв 2"}]
+        with mock.patch.object(dl.Client, "login", lambda c: setattr(c, "jwt", "j2")), \
+                mock.patch.object(dl.Client, "me", return_value={"shortName": "Аня"}), \
+                mock.patch.object(dl.Client, "places", return_value=places), \
+                mock.patch.object(dl.Client, "calibrate", return_value=(1, 5)):
+            kpp.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "message_id": 3,
+                            "text": "https://x/#access_token=y0_AgAAAAAAbcdefghijklmnopqrstuvwxyz123456"})
+        u = kpp.st["users"]["42"]
+        self.assertEqual((u["jwt"], u["place_id"], u["address"]), ("j2", 8, "Тверская ул, д. 1"))
+        self.assertEqual((kpp.st["jwt"], kpp.st["place_id"]), ("j", 5))  # у Глеба ничего не поменялось
+        kpp.use(42)
+        self.assertFalse(kpp.shared())
+        self.assertEqual(kpp.client().jwt, "j2")
+        self.say("/logout", 42)
+        self.assertNotIn("jwt", kpp.st["users"]["42"])
+        self.assertEqual(kpp.st["jwt"], "j")
+        kpp.use(42)
+        self.assertTrue(kpp.shared())
+
+    def test_remove_guest_drops_data(self):
+        kpp.st["users"]["42"]["yandex_token"] = "y2"
+        self.cb("gdel|42", 1)
+        self.assertNotIn("42", kpp.st["users"])
+        self.say("А123ВС777", 42)
+        self.assertIn("личный бот", self.texts()[-1])
 
 
 class InitData(unittest.TestCase):
@@ -605,6 +706,124 @@ class App(BotBase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class Errors(BotBase):
+    """Каждое нажатие отвечено, ошибки — понятным «⚠️ …», повторное нажатие не дублирует пропуск."""
+
+    def cb(self, data, mid=3):
+        kpp.on_callback({"id": "c", "from": {"id": 1}, "data": data, "message": {"chat": {"id": 1}, "message_id": mid}})
+        return [p for m, p in self.sent if m == "answerCallbackQuery"]
+
+    def test_every_callback_answered_once(self):
+        for data in ("x|5", "again|А123ВС777", "rp|А123ВС777", "pl|999", "ap|1", "m|passes", "m|home", "mode",
+                     "mode:chat", "gdel|2", "zzz", "x", "m", ""):
+            self.sent.clear()
+            with mock.patch.object(dl.Client, "cancel", side_effect=dl.NetError("Сеть: timed out")), \
+                    mock.patch.object(dl.Client, "passes", return_value=[]), \
+                    mock.patch.object(dl.Client, "autopass", return_value={}), \
+                    mock.patch.object(dl.Client, "set_autopass", return_value={}), \
+                    mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 1}]}):
+                answers = self.cb(data)
+            self.assertEqual(len(answers), 1, data)
+
+    def test_stale_and_unknown_buttons(self):
+        kpp.st["places"] = [{"id": 5, "building": 6, "title": "ЖК", "flat": True}]
+        self.assertIn("устарела", self.cb("zzz|1")[0]["text"])
+        self.sent.clear()
+        a = self.cb("pl|999")[0]  # адреса больше нет — показать список заново
+        self.assertTrue(a["show_alert"])
+        self.assertIn("Куда заказывать", self.texts()[-1])
+
+    def test_cancel_network_error_explained(self):
+        with mock.patch.object(dl.Client, "cancel", side_effect=dl.NetError("Сеть: timed out")):
+            answers = self.cb("x|5")
+        self.assertEqual(answers[0]["text"], "⏳ Отменяю…")  # часики ушли сразу
+        self.assertIn("⚠️ Домиленд не ответил", self.texts()[-1])
+
+    def test_again_button_used_once(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
+            self.cb("again|А123ВС777", mid=11)
+        self.assertEqual(cr.call_count, 1)
+        self.assertIn(("editMessageReplyMarkup", {"chat_id": 1, "message_id": 11,
+                                                  "reply_markup": {"inline_keyboard": []}}), self.sent)
+
+    def test_rp_twice_no_duplicate(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}) as cr:
+            self.cb("rp|А123ВС777")
+            self.cb("rp|А123ВС777")
+        self.assertEqual(cr.call_count, 1)
+        self.assertIn("уже заказан", self.texts()[-1])
+
+    def test_order_errors_in_chat(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.NetError("Сеть: timed out")):
+            self.msg("А123ВС777")
+        self.assertIn("⚠️ Не получилось заказать", self.texts()[-1])
+        self.assertIn("again|А123ВС777", json.dumps(self.sent[-1][1]["reply_markup"], ensure_ascii=False))
+        self.sent.clear()
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.AuthError("401")), \
+                mock.patch.object(dl.Client, "login", side_effect=dl.AuthError("401")):
+            self.msg("М456ОР50")
+        self.assertIn("Вход в Домиленд устарел", self.texts()[-1])
+        self.assertEqual(kpp.st["pending"], "М456ОР50")
+
+    def test_login_network_error_is_not_bad_token(self):
+        def boom(req, timeout=0):
+            raise OSError("timed out")
+        with mock.patch("urllib.request.urlopen", boom):
+            with self.assertRaises(dl.NetError):
+                dl.Client("y0_tok").login()
+        with mock.patch.object(dl.Client, "login", side_effect=dl.NetError("Сеть: timed out")):
+            code, res = kpp.api_post(1, "/api/login", {"text": "y0_abcdefghijklmnopqrstuvwxyz0123"})
+        self.assertEqual(code, 502)
+        self.assertIn("не ответил", res["error"])
+        self.assertIn("не ответил", self.texts()[-1])
+        with mock.patch.object(dl.Client, "login", side_effect=dl.AuthError("401")):
+            code, res = kpp.api_post(1, "/api/login", {"text": "y0_abcdefghijklmnopqrstuvwxyz0123"})
+        self.assertEqual((code, res["login"]), (401, True))
+
+    def test_pending_not_ordered_after_failed_login(self):
+        kpp.st["pending"] = "А123ВС777"
+        with mock.patch.object(dl.Client, "login", side_effect=dl.AuthError("401")), \
+                mock.patch.object(dl.Client, "create_taxi_pass") as cr:
+            self.msg("y0_abcdefghijklmnopqrstuvwxyz0123")
+        cr.assert_not_called()
+        self.assertIn("не принял вход", self.texts()[-1])
+
+    def test_media_crash_is_reported(self):
+        done = []
+        with mock.patch.object(kpp.threading, "Thread",
+                               side_effect=lambda target, daemon: done.append(target) or mock.Mock()):
+            kpp.spawn(lambda chat: 1 / 0, 1)
+        with mock.patch.object(kpp.traceback, "print_exc"), mock.patch("builtins.print"):
+            done[0]()
+        self.assertIn("Не получилось разобрать", self.texts()[-1])
+
+    def test_unhandled_error_answered(self):
+        kpp.oops({"callback_query": {"id": "c"}})
+        kpp.oops({"message": {"chat": {"id": 1, "type": "private"}}})
+        self.assertEqual(self.sent[0][0], "answerCallbackQuery")
+        self.assertIn("Что-то пошло не так", self.texts()[-1])
+
+    def test_place_buttons_short_but_distinct(self):
+        kpp.st["places"] = [{"id": 1, "building": 6, "title": "ЖК «Домиленд+», корпус 2, кв. 148", "flat": True},
+                            {"id": 2, "building": 7, "title": "ЖК «Домиленд+», корпус 5, кладовая 12", "flat": True}]
+        kpp.st["place_id"] = 1
+        self.msg("/place")
+        rows = self.sent[-1][1]["reply_markup"]["inline_keyboard"]
+        labels = [b["text"] for r in rows for b in r]
+        self.assertEqual(labels, ["✓ корпус 2, кв. 148", "корпус 5, кладовая 12", "‹ Назад"])
+        self.assertTrue(all(len(t) <= 24 for t in labels))
+        self.assertIn("ЖК «Домиленд+», корпус 5, кладовая 12", self.texts()[-1])  # полностью — в тексте
+
+    def test_button_limits(self):
+        kpp.st["last"] = "А123ВС777"
+        for mode in ("chat", "app"):
+            kpp.st["mode"] = mode
+            for row in kpp.menu_buttons():
+                self.assertLessEqual(len(row), 3)
+                for b in row:
+                    self.assertLessEqual(len(b["text"]), 24, b["text"])
 
 
 class Style(unittest.TestCase):

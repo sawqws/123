@@ -87,11 +87,12 @@ def load():
 def scrub(st):
     """Номер квартиры из уже сохранённых адресов (сохранены до того, как его стали вырезать)."""
     changed = False
-    if st.get("address") and dl.no_flat(st["address"]) != st["address"]:
-        st["address"], changed = dl.no_flat(st["address"]), True
-    for p in st.get("places") or []:
-        if p.get("title") and dl.no_flat(p["title"]) != p["title"]:
-            p["title"], changed = dl.no_flat(p["title"]), True
+    for a in [st, *(st.get("users") or {}).values()]:
+        if a.get("address") and dl.no_flat(a["address"]) != a["address"]:
+            a["address"], changed = dl.no_flat(a["address"]), True
+        for p in a.get("places") or []:
+            if p.get("title") and dl.no_flat(p["title"]) != p["title"]:
+                p["title"], changed = dl.no_flat(p["title"]), True
     return changed
 
 
@@ -106,22 +107,62 @@ def save(st):
 
 st = {}
 
+# ---------- у каждого своё: владелец — корень st, гость — st["users"][id] ----------
+# Личное (режим, последний номер, недавние, история пропусков «mine») — у каждого своё. Вход в Домиленд: у владельца
+# свой; гость по умолчанию заказывает на вход владельца, но может войти своим Яндекс ID (/login) — тогда всё своё.
+# Кто сейчас пишет — в потоке (_ctx): ставят on_message, on_callback, api_post, приложение и spawn.
+
+_ctx = threading.local()
+ACCOUNT = ("yandex_token", "jwt", "name", "places", "place_id", "building_id", "address", "taxi")
+
+
+def use(uid):
+    _ctx.uid = uid
+
+
+def cur():
+    return getattr(_ctx, "uid", None)
+
+
+def guest(uid=None):
+    uid = cur() if uid is None else uid
+    return bool(uid) and not is_owner(uid) and str(uid) in (st.get("guests") or {})
+
+
+def me():
+    """Личное текущего человека: у владельца — корень st (как раньше), у гостя — его запись в st["users"]."""
+    uid = cur()
+    return st.setdefault("users", {}).setdefault(str(uid), {}) if guest(uid) else st
+
+
+def acc():
+    """Вход в Домиленд, на который заказываем: свой у гостя, вошедшего своим Яндекс ID, иначе — владельца."""
+    u = me()
+    return u if u is st or u.get("yandex_token") else st
+
+
+def shared():
+    """Гость на входе владельца: адрес и автопропуск не его, история — только его пропуска."""
+    return acc() is not me()
+
 
 def client():
-    return dl.Client(st.get("yandex_token"), st.get("jwt"), st.get("place_id"), st.get("building_id"))
+    a = acc()
+    return dl.Client(a.get("yandex_token"), a.get("jwt"), a.get("place_id"), a.get("building_id"))
 
 
 def call(fn):
     """Вызов API с одной попыткой обновить JWT по сохранённому Яндекс-токену."""
+    a = acc()
     c = client()
     try:
         return fn(c)
     except dl.AuthError:
-        if not st.get("yandex_token"):
+        if not a.get("yandex_token"):
             raise
         c.jwt = None
         c.login()
-        st["jwt"] = c.jwt
+        a["jwt"] = c.jwt
         save(st)
         return fn(c)
 
@@ -168,9 +209,15 @@ def edit(chat, msg_id, text, buttons=None):
               link_preview_options={"is_disabled": True}, **extra)
 
 
+def clip(text, n=24):
+    """Текст кнопки до 24 символов — иначе Telegram режет его посередине (правило всех ботов)."""
+    text = str(text)
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
 def btn(text, data, style=None):
     """Inline-кнопка; style — "success" | "danger" | "primary" (цвет, скупо)."""
-    b = {"text": text, "callback_data": data}
+    b = {"text": clip(text), "callback_data": data}
     if style:
         b["style"] = style
     return b
@@ -241,7 +288,8 @@ def allowed(uid):
 
 # ---------- гости: «👥 Дать доступ» (/invite) — одноразовая ссылка на сутки ----------
 INVITE_TTL = 24 * 3600
-OWNER_ONLY = {"/login", "/logout", "/update", "/place", "/auto", "/invite", "/guests"}
+OWNER_ONLY = {"/update", "/invite", "/guests"}
+GUEST_OWN = {"/place", "/auto"}  # гостю — только со своим входом в Домиленд
 _me = {}
 
 
@@ -270,10 +318,11 @@ def accept_invite(uid, code, frm):
         return False
     name = " ".join(x for x in (frm.get("first_name"), frm.get("last_name")) if x) or (frm.get("username") or "гость")
     st.setdefault("guests", {})[str(uid)] = {"name": name[:60], "added": int(time.time())}
+    st.setdefault("users", {})[str(uid)] = {}  # своя история с чистого листа
     save(st)
     if owner_id():
         send(owner_id(), fmt("👥 Новый доступ", f"{esc(name)} теперь может заказывать пропуска.",
-                             "Убрать — /guests"))
+                             "История у каждого своя. Убрать — /guests"))
     return True
 
 
@@ -283,7 +332,7 @@ def guests_view():
         return fmt("👥 Доступ", "Пока только у тебя.", "Дать доступ — /invite"), []
     rows = [[btn(f"✕ {v.get('name', k)}"[:24], f"gdel|{k}")] for k, v in g.items()]
     return fmt("👥 Доступ", "\n".join(f"• {esc(v.get('name', k))}" for k, v in g.items()),
-               "Заказывают пропуска на твой вход. Нажми, чтобы убрать."), rows
+               "Заказывают на твой вход (или свой), история у каждого своя. Нажми, чтобы убрать."), rows
 
 
 def claim(uid):
@@ -313,8 +362,8 @@ NBSP = " "
 def pass_body(plate, ts=None):
     """Карточка пропуска: номер, адрес, срок — по строке, по одному эмодзи."""
     lines = [f"🚕 <b>{esc(dl.pretty(plate))}</b>"]
-    if st.get("address"):
-        lines.append(f"📍 {esc(st['address'])}")
+    if acc().get("address"):
+        lines.append(f"📍 {esc(acc()['address'])}")
     if ts:
         lines.append(f"🕑 Разовый · {when_text(ts)}")
     return "\n".join(lines)
@@ -352,14 +401,14 @@ MODES = {"chat": "💬 чат", "app": "📱 приложение"}
 
 
 def ui_mode():
-    m = st.get("mode")
+    m = me().get("mode")
     return m if m in MODES else ""
 
 
 def set_mode(m):
     if m not in MODES:
         raise ValueError("Режим — chat или app")
-    st["mode"] = m
+    me()["mode"] = m
     save(st)
 
 
@@ -400,16 +449,20 @@ def home_text(hi=""):
 def menu_buttons():
     """Главное меню. Чат: без web_app. Приложение: открыть приложение + 2–3 нужных действия."""
     rows = []
-    last = st.get("last")
+    last = me().get("last")
     if ui_mode() == "app":
         rows += app_buttons()
-        if last and st.get("jwt"):
+        if last and acc().get("jwt"):
             rows.append([btn(f"🔁 {dl.pretty(last)}", f"rp|{last}")])
         rows.append([btn("🗂 Пропуска", "m|passes"), btn("⚙️ Режим", "mode")])
         return rows
-    if last and st.get("jwt"):
+    if last and acc().get("jwt"):
         rows.append([btn(f"🔁 {dl.pretty(last)}", f"rp|{last}")])
-    rows.append([btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place"), support.Support.button()])
+    if shared():  # гость на входе владельца: адрес, автопропуск и /fix — у владельца
+        rows.append([btn("🗂 Пропуска", "m|passes"), btn("⚙️ Режим", "mode")])
+        return rows
+    rows.append([btn("🗂 Пропуска", "m|passes"), btn("📍 Адрес", "m|place")]
+                + ([support.Support.button()] if not guest() else []))
     rows.append([btn("🤖 Автопропуск", "m|auto"), btn("⚙️ Режим", "mode")])
     return rows
 
@@ -423,7 +476,7 @@ def app_buttons(always=False):
 
 def welcome(chat, name, mid=None):
     hi = f"Привет, {esc(name)}! " if name else ""
-    if st.get("jwt"):
+    if acc().get("jwt"):
         text, rows = home_text(hi), menu_buttons()
         edit(chat, mid, text, rows) if mid else send(chat, text, rows)
     else:
@@ -439,47 +492,77 @@ def need_login(chat, msg_id=None):
 # ---------- вход и адрес ----------
 
 def do_login(chat, token):
+    """Вход по Яндекс-токену. -> None, если вошли, иначе (код, текст ошибки) — для приложения."""
     msg = send(chat, "⏳ <b>Вхожу в Домиленд…</b>")["result"]["message_id"]
     c = dl.Client(token)
     try:
         c.login()
-        me = c.me()
+        me_ = c.me()
         places = c.places()
     except dl.AuthError:
-        edit(chat, msg, fail("Домиленд не принял вход — попробуй ещё раз."), login_buttons())
-        return
+        edit(chat, msg, fail("Домиленд не принял вход — войди в Яндекс ещё раз и пришли новый адрес."),
+             login_buttons())
+        return 401, "Домиленд не принял вход — войди в Яндекс ещё раз и вставь новый адрес"
     except dl.Error as e:
-        edit(chat, msg, fail(f"Домиленд не ответил: {esc(e)}"))
-        return
-    st.update(yandex_token=token, jwt=c.jwt, name=me.get("shortName") or me.get("fullName") or "")
-    st["places"] = [{"id": p.get("id"), "building": p.get("buildingId"),
+        edit(chat, msg, fail(f"Домиленд не ответил: {esc(str(e)[:200])}\nПришли тот же адрес ещё раз чуть позже."))
+        return 502, f"Домиленд не ответил: {str(e)[:200]} — попробуй ещё раз"
+    a = me()  # гость входит своим Яндекс ID — дальше всё на его вход
+    a.update(yandex_token=token, jwt=c.jwt, name=me_.get("shortName") or me_.get("fullName") or "")
+    a["places"] = [{"id": p.get("id"), "building": p.get("buildingId"),
                      "title": dl.no_flat(p.get("address") or p.get("title") or p.get("buildingTitle") or str(p.get("id"))),
                      "flat": p.get("placeTypeId") == 1} for p in places if p.get("id") is not None]
     save(st)
-    edit(chat, msg, fmt("✅ Вход выполнен", note=f"Аккаунт: {esc(st['name'])}" if st.get("name") else ""))
+    edit(chat, msg, fmt("✅ Вход выполнен", note=f"Аккаунт: {esc(a['name'])}" if a.get("name") else ""))
     choose_place(chat)
 
 
+def short_labels(titles, n=22):
+    """Подписи кнопок ≤ n символов: общее начало адресов («ЖК «Домиленд+», корпус») убираем — оно уходит
+    в подпись сообщения; длинное — без первых слов (важен конец: дом, корпус), в крайнем случае с «…».
+    Полные адреса — в тексте сообщения. -> (подписи, общее начало)."""
+    words = [str(t).split() for t in titles]
+    common = 0
+    if len(words) > 1:
+        while all(len(w) > common + 1 for w in words) and len({w[common] for w in words}) == 1:
+            common += 1
+        cut = [i + 1 for i in range(common) if words[0][i].endswith(",")]
+        common = cut[-1] if cut else common  # по запятой: «корпус 2» лучше, чем просто «2»
+    out = []
+    for w, t in zip(words, titles):
+        w = w[common:] or [str(t)]
+        while len(" ".join(w)) > n and len(w) > 1:  # отличается обычно конец адреса (дом, корпус) — режем начало
+            w = w[1:]
+        o = " ".join(w)
+        out.append(o if len(o) <= n else o[:n - 1].rstrip(" ,") + "…")
+    return (out,
+            " ".join(words[0][:common]).rstrip(",") if words else "")
+
+
 def choose_place(chat, msg_id=None):
-    places = st.get("places") or []
+    a = acc()
+    places = a.get("places") or []
     if not places:
         text = fail("В Домиленде нет ни одного адреса — тот ли это аккаунт? /login")
         return edit(chat, msg_id, text) if msg_id else send(chat, text)
     flats = [p for p in places if p["flat"]] or places
     if len(flats) == 1 and not msg_id:
         return set_place(chat, flats[0])
-    rows = [[btn(("✓ " if p["id"] == st.get("place_id") else "") + p["title"][:60], f"pl|{p['id']}",
-                 "primary" if p["id"] == st.get("place_id") else None)] for p in places]
-    if st.get("place_id"):
+    # адрес целиком — в тексте, на кнопке отличающаяся часть (до 24 символов): «✓ корпус 2, кв. 148»
+    labels, common = short_labels([p["title"] for p in places])
+    rows = [[btn(("✓ " if p["id"] == a.get("place_id") else "") + label, f"pl|{p['id']}",
+                 "primary" if p["id"] == a.get("place_id") else None)] for p, label in zip(places, labels)]
+    if a.get("place_id"):
         rows.append([btn("‹ Назад", "m|home")])
-    text = fmt("📍 Куда заказывать пропуск?")
+    text = fmt("📍 Куда заказывать пропуск?", "\n".join(f"• {esc(p['title'])}" for p in places),
+               f"Все адреса: {esc(common)}" if common else "")
     return edit(chat, msg_id, text, rows) if msg_id else send(chat, text, rows)
 
 
 def apply_place(p):
-    st.update(place_id=p["id"], building_id=p["building"], address=p["title"])
+    a = acc()
+    a.update(place_id=p["id"], building_id=p["building"], address=p["title"])
     try:
-        st["taxi"] = list(call(lambda c: c.calibrate()))
+        a["taxi"] = list(call(lambda c: c.calibrate()))
     except dl.Error as e:
         print("calibrate:", e)
     save(st)
@@ -494,10 +577,10 @@ def set_place(chat, p, msg_id=None):
 # ---------- пропуск ----------
 
 def order(chat, plate, force=False):
-    if not st.get("jwt"):
+    if not acc().get("jwt"):
         need_login(chat)
         return
-    if not st.get("place_id"):
+    if not acc().get("place_id"):
         choose_place(chat)
         return
     last = recent_pass(plate)
@@ -510,7 +593,7 @@ def order(chat, plate, force=False):
         pid, now = create_pass(plate)
     except dl.AuthError:
         edit(chat, msg, fail("Вход в Домиленд устарел — войди ещё раз, и я сразу закажу."), login_buttons())
-        st["pending"] = plate
+        me()["pending"] = plate
         save(st)
         return
     except dl.Error as e:
@@ -526,22 +609,46 @@ def cancel_buttons(pid):
 
 def recent_pass(plate):
     """Тот же номер недавно (REPEAT_WINDOW) — не дублируем: запись {ts, id} или None."""
-    last = (st.get("recent") or {}).get(plate)
+    last = (me().get("recent") or {}).get(plate)
     return last if last and time.time() - last["ts"] < REPEAT_WINDOW else None
 
 
 def create_pass(plate):
     """Заказать пропуск в Домиленде и запомнить его. -> (id, время). Ошибки — dl.AuthError / dl.Error."""
-    type_id, sub_id = st.get("taxi") or (dl.TAXI_TYPE, dl.TAXI_SUBTYPE)
+    type_id, sub_id = acc().get("taxi") or (dl.TAXI_TYPE, dl.TAXI_SUBTYPE)
     resp = call(lambda c: c.create_taxi_pass(plate, type_id, sub_id))
     now = time.time()
     pid = dl.created_id(resp)
-    recent = {k: v for k, v in (st.get("recent") or {}).items() if now - v["ts"] < 86400}
+    u = me()
+    recent = {k: v for k, v in (u.get("recent") or {}).items() if now - v["ts"] < 86400}
     recent[plate] = {"ts": now, "id": pid}
-    st["recent"] = recent
-    st["last"] = plate
+    u["recent"] = recent
+    u["last"] = plate
+    if guest():  # история гостя: его пропуска (на входе владельца их видит только он)
+        u["mine"] = (u.get("mine") or [])[-49:] + [{"id": pid, "plate": plate, "ts": int(now), "shared": shared()}]
     save(st)
     return pid, now
+
+
+def mine_ids(u, only_shared=False):
+    return {str(x["id"]) for x in u.get("mine") or []
+            if x.get("id") is not None and (x.get("shared") or not only_shared)}
+
+
+def my_passes(items):
+    """История у каждого своя: гость на входе владельца видит только свои пропуска, владелец — без пропусков гостей."""
+    if shared():
+        ids, keep = mine_ids(me()), True
+    elif acc() is st:
+        ids, keep = set().union(*(mine_ids(u, True) for u in (st.get("users") or {}).values())), False
+    else:
+        return items
+    return [it for it in items if (str(it.get("id")) in ids) == keep]
+
+
+def my_pass(pid):
+    """Гость на входе владельца отменяет только свои пропуска."""
+    return not shared() or str(pid) in mine_ids(me())
 
 
 def pass_line(it):
@@ -558,7 +665,7 @@ def can_cancel(it):
 
 
 def passes_view():
-    items = call(lambda c: c.passes())[:6]
+    items = my_passes(call(lambda c: c.passes()))[:6]
     back = [btn("‹ Назад", "m|home")]
     if not items:
         return fmt("🗂 Пропуска", note="Пока пусто — пришли номер такси."), [back]
@@ -580,8 +687,9 @@ def autopass_view():
             body.append(f"<b>{esc(p.get('title') or '')}</b>: {esc(p['description'])}")
     note = "" if places else "Для твоих адресов Домиленд эту настройку не показывает."
     text = fmt(f"🤖 {esc(data.get('screenTitle') or 'Автопропуск')}", "\n\n".join(body), note)
-    rows = [[btn(("🟢 " if p.get("isActive") else "⚪️ ") + str(p.get("title") or p.get("id"))[:50],
-                 f"ap|{p.get('id')}")] for p in places]
+    labels, _ = short_labels([str(p.get("title") or p.get("id")) for p in places], 20)
+    rows = [[btn(("🟢 " if p.get("isActive") else "⚪️ ") + label, f"ap|{p.get('id')}")]
+            for p, label in zip(places, labels)]
     return text, rows + [[btn("‹ Назад", "m|home")]]
 
 
@@ -631,14 +739,22 @@ def spoken_plate(text):
         return ask_claude(prompt, tmp)
 
 
-def spawn(fn, *args):
-    """Медленное (речь, картинки, видео) — в отдельном потоке, чтобы бот не замирал."""
+def spawn(fn, chat, *args):
+    """Медленное (речь, картинки, видео) — в отдельном потоке, чтобы бот не замирал.
+    Упало — человек узнаёт об этом, а не смотрит вечно на «⏳ Ищу номер…»."""
+    uid = cur()
+
     def run():
+        use(uid)
         try:
-            fn(*args)
+            fn(chat, *args)
         except Exception as e:
             print("media:", e)
             traceback.print_exc()
+            try:
+                send(chat, fail("Не получилось разобрать — пришли номер текстом: <code>А123ВС777</code>"))
+            except Exception:
+                pass
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -728,11 +844,13 @@ def on_message(msg):
     uid = frm.get("id")
     if msg["chat"].get("type") != "private":
         return
+    use(uid)
     text = (msg.get("text") or msg.get("caption") or "").strip()
     if text.startswith("/start inv_") and not allowed(uid):  # гость по ссылке-приглашению
         if accept_invite(uid, text.split("inv_", 1)[1].strip(), frm):
-            send(chat, home_text(f"Привет, {esc(frm.get('first_name') or '')}! ") if st.get("jwt") else
-                 fmt("👋 Доступ есть", "Вход в Домиленд пока не настроен — владелец скоро войдёт."), menu_buttons())
+            send(chat, home_text(f"Привет, {esc(frm.get('first_name') or '')}! ") if acc().get("jwt") else
+                 fmt("👋 Доступ есть", "Вход в Домиленд пока не настроен — владелец скоро войдёт.",
+                     "Или войди своим Яндекс ID: /login"), menu_buttons())
         else:
             send(chat, "🔒 Ссылка устарела или уже использована — попроси новую.")
         return
@@ -742,13 +860,17 @@ def on_message(msg):
         send(chat, "🔒 Это личный бот.")
         return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if (cmd in OWNER_ONLY or (not cmd and dl.extract_token(text))) and not is_owner(uid):
+    if cmd in OWNER_ONLY and not is_owner(uid):
         send(chat, fail("Это может только владелец бота. Пропуск — просто пришли номер машины."))
+        return
+    if cmd in GUEST_OWN and shared():
+        send(chat, fail("Адрес и автопропуск — на входе владельца. Свой вход в Домиленд — /login"))
         return
     if cmd == "/invite":
         link = make_invite()
         send(chat, fmt("👥 Дать доступ", f"Перешли эту ссылку — по ней можно один раз войти, она живёт сутки:\n{esc(link)}",
-                       "Гость заказывает пропуска на твой вход; вход, адрес и настройки меняешь только ты."))
+                       "Гость заказывает на твой вход, история и последний номер у него свои. "
+                       "Может войти и своим Яндекс ID (/login) — тогда и адрес свой."))
         return
     if cmd == "/guests":
         send(chat, *guests_view())
@@ -769,12 +891,15 @@ def on_message(msg):
             send(chat, fail(f"Приложение ещё настраивается: {esc(https_note)}"))
     elif cmd == "/login":
         send(chat, LOGIN_TEXT, login_buttons())
+    elif cmd == "/logout" and shared():
+        send(chat, fmt("👋 Своего входа нет", note="Пропуска идут на вход владельца. Войти своим Яндекс ID — /login"))
     elif cmd == "/logout":
-        for k in ("yandex_token", "jwt", "places", "place_id", "building_id", "address", "taxi"):
-            st.pop(k, None)
+        for k in ACCOUNT:
+            me().pop(k, None)
         save(st)
-        send(chat, fmt("👋 Вышел из Домиленда", note="Токены удалены. Войти снова — /login"))
-    elif cmd in ("/place", "/auto", "/passes") and not st.get("jwt"):
+        send(chat, fmt("👋 Вышел из Домиленда", note="Токены удалены. Войти снова — /login"
+                       + (" · Пока заказываю на вход владельца." if guest() and st.get("jwt") else "")))
+    elif cmd in ("/place", "/auto", "/passes") and not acc().get("jwt"):
         need_login(chat)
     elif cmd == "/place":
         choose_place(chat)
@@ -796,9 +921,8 @@ def on_message(msg):
             tg("deleteMessage", chat_id=chat, message_id=msg["message_id"])
         except Exception:
             pass
-        do_login(chat, dl.extract_token(text))
-        if st.get("pending") and st.get("place_id"):
-            order(chat, st.pop("pending"))
+        if not do_login(chat, dl.extract_token(text)) and me().get("pending") and acc().get("place_id"):
+            order(chat, me().pop("pending"))
     elif dl.plates(text):
         for plate in dl.plates(text)[:3]:
             order(chat, plate)
@@ -810,47 +934,77 @@ def on_message(msg):
         send(chat, fail("Не вижу номера — пришли так: <code>А123ВС777</code>, скриншотом или голосом"))
 
 
+def answer_cb(cq, text="", alert=False):
+    """Ответ на нажатие (убирает «часики» у кнопки); сбой Telegram здесь не должен ронять обработку."""
+    try:
+        tg("answerCallbackQuery", callback_query_id=cq["id"], text=text[:190], show_alert=alert)
+    except Exception as e:
+        print("answerCallbackQuery:", e)
+
+
+def drop_buttons(chat, mid):
+    """Убрать кнопки у сообщения — чтобы второе нажатие «Заказать ещё раз» не заказало второй пропуск."""
+    try:
+        tg("editMessageReplyMarkup", chat_id=chat, message_id=mid, reply_markup={"inline_keyboard": []})
+    except Exception as e:
+        print("drop buttons:", e)
+
+
+SLOW = {"again", "rp", "x", "ap"}  # ходят в Домиленд: отвечаем на нажатие сразу, результат — сообщением
+
+
 def on_callback(cq):
     uid = cq["from"]["id"]
     msg = cq.get("message") or {}
     chat, mid = msg.get("chat", {}).get("id"), msg.get("message_id")
     data = (cq.get("data") or "").split("|")
-    note = ""
+    note, alert, answered = "", False, False
+    use(uid)
     if not allowed(uid) or not chat:
-        tg("answerCallbackQuery", callback_query_id=cq["id"])
+        answer_cb(cq, "🔒 Это личный бот." if chat else "")
         return
-    if (data[0] in ("pl", "ap", "gdel") or data[:2] in (["m", "place"], ["m", "auto"])) and not is_owner(uid):
-        tg("answerCallbackQuery", callback_query_id=cq["id"], text="Это может только владелец бота", show_alert=True)
+    if (data[0] == "gdel" and not is_owner(uid)) or (
+            (data[0] in ("pl", "ap") or data[:2] in (["m", "place"], ["m", "auto"])) and shared()):
+        answer_cb(cq, "Это может только владелец бота", True)
         return
+    if data[0] == "x" and len(data) > 1 and not my_pass(data[1]):
+        answer_cb(cq, "Это не твой пропуск", True)
+        return
+    if data[0] in SLOW and len(data) > 1:
+        answer_cb(cq, {"again": "⏳ Заказываю…", "rp": "⏳ Заказываю…", "x": "⏳ Отменяю…"}.get(data[0], "⏳ Секунду…"))
+        answered = True
     try:
         if data[0] == "gdel":  # убрать гостя
             (st.get("guests") or {}).pop(data[1], None)
+            (st.get("users") or {}).pop(data[1], None)  # и его вход в Домиленд, если был
             save(st)
             edit(chat, mid, *guests_view())
             note = "Убрал"
         elif data[0] == "x":  # отменить пропуск
             call(lambda c: c.cancel(data[1]))
-            plate = next((k for k, v in (st.get("recent") or {}).items() if str(v.get("id")) == data[1]), "")
+            plate = next((k for k, v in (me().get("recent") or {}).items() if str(v.get("id")) == data[1]), "")
             if plate:
-                st["recent"].pop(plate, None)
+                me()["recent"].pop(plate, None)
                 save(st)
                 edit(chat, mid, fmt("↩️ Пропуск отменён", pass_body(plate)), [])
             else:
                 edit(chat, mid, *passes_view())
-            note = "Отменил"
-        elif data[0] == "again":
+        elif data[0] == "again":  # «Заказать ещё раз» / «Повторить» — кнопка одноразовая
+            drop_buttons(chat, mid)
             order(chat, data[1], force=True)
-        elif data[0] == "rp":  # повторить последний
+        elif data[0] == "rp":  # повторить последний (тот же номер недавно — «уже заказан», не дубль)
             order(chat, data[1])
         elif data[0] == "pl":
-            p = next((p for p in st.get("places") or [] if str(p["id"]) == data[1]), None)
+            p = next((p for p in acc().get("places") or [] if str(p["id"]) == data[1]), None)
             if p:
                 set_place(chat, p, mid)
                 note = "Адрес выбран"
+            else:  # кнопка из старого сообщения: после нового входа адресов могло стать других
+                choose_place(chat, mid)
+                note, alert = "Этого адреса уже нет — выбери из списка", True
         elif data[0] == "ap":
             toggle_autopass(data[1])
             edit(chat, mid, *autopass_view())
-            note = "Сохранил"
         elif data[0].startswith("mode"):  # «⚙️ Режим» → карточка на месте; mode:chat / mode:app — выбор
             key = data[0].partition(":")[2]
             if key in MODES:
@@ -859,7 +1013,7 @@ def on_callback(cq):
             else:
                 ask_mode(chat, mid)
         elif data[0] == "m":  # меню: правка сообщения на месте
-            if not st.get("jwt"):
+            if not acc().get("jwt"):
                 need_login(chat, mid)
             elif data[1] == "passes":
                 edit(chat, mid, *passes_view())
@@ -869,13 +1023,37 @@ def on_callback(cq):
                 edit(chat, mid, *autopass_view())
             else:
                 edit(chat, mid, home_text(), menu_buttons())
+        else:  # старая кнопка от прошлой версии бота
+            note = "Кнопка устарела — /start"
     except dl.AuthError:
         send(chat, fail("Вход в Домиленд устарел — войди ещё раз."), login_buttons())
+        note = "Нужно войти заново"
+    except dl.Error as e:  # Домиленд не ответил — без трассировки в логах
+        text = fail(f"Домиленд не ответил: {esc(str(e)[:200])}\nПопробуй ещё раз через минуту.")
+        if answered:
+            send(chat, text)
+        note, alert = "⚠️ Домиленд не ответил — попробуй ещё раз", True
+    except IndexError:  # обрезанные данные кнопки
+        note = "Кнопка устарела — /start"
     except Exception as e:
         print("callback:", e)
         traceback.print_exc()
-        note = "Не получилось"
-    tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
+        if answered:
+            send(chat, fail("Не получилось — попробуй ещё раз или /start"))
+        note, alert = "⚠️ Не получилось — попробуй ещё раз", True
+    if not answered:
+        answer_cb(cq, note, alert)
+
+
+def oops(u):
+    """Необработанная ошибка в обработчике: сказать человеку, а не молчать."""
+    try:
+        if u.get("callback_query"):
+            answer_cb(u["callback_query"], "⚠️ Не получилось — попробуй ещё раз", True)
+        elif (u.get("message") or {}).get("chat", {}).get("type") == "private":
+            send(u["message"]["chat"]["id"], fail("Что-то пошло не так — попробуй ещё раз или /start"))
+    except Exception as e:
+        print("oops:", e)
 
 
 def update(chat):
@@ -915,14 +1093,14 @@ def check_init_data(init_data, max_age=86400):
 
 
 def web_user(headers):
-    """Владелец, открывший приложение из Telegram, или None."""
+    """Владелец или гость, открывший приложение из Telegram, или None."""
     user = check_init_data(headers.get("X-Init-Data") or "")
     return user if isinstance(user, dict) and allowed(user.get("id")) else None
 
 
 def pass_items():
     out = []
-    for it in call(lambda c: c.passes())[:8]:
+    for it in my_passes(call(lambda c: c.passes()))[:8]:
         out.append({"id": it.get("id"), "title": it.get("title") or "Пропуск",
                     "status": (it.get("status") or {}).get("title") or "", "subtitle": it.get("subtitle") or "",
                     "fields": [{"title": f.get("title") or "", "value": f["value"]}
@@ -933,16 +1111,17 @@ def pass_items():
 
 def app_state():
     now = time.time()
-    recent = sorted(((k, v) for k, v in (st.get("recent") or {}).items() if now - v["ts"] < 86400),
+    u, a = me(), acc()
+    recent = sorted(((k, v) for k, v in (u.get("recent") or {}).items() if now - v["ts"] < 86400),
                     key=lambda kv: -kv[1]["ts"])
-    res = {"login": bool(st.get("jwt")), "name": st.get("name") or "", "address": st.get("address") or "",
-           "place_id": st.get("place_id"), "login_url": dl.LOGIN_URL, "mode": ui_mode(),
-           "places": [{"id": p["id"], "title": p["title"]} for p in st.get("places") or []],
+    res = {"login": bool(a.get("jwt")), "name": a.get("name") or "", "address": a.get("address") or "",
+           "place_id": a.get("place_id"), "login_url": dl.LOGIN_URL, "mode": ui_mode(), "shared": shared(),
+           "places": [] if shared() else [{"id": p["id"], "title": p["title"]} for p in a.get("places") or []],
            "recent": [{"plate": k, "pretty": dl.pretty(k), "when": when_text(v["ts"]), "id": v.get("id"),
                        "fresh": now - v["ts"] < REPEAT_WINDOW} for k, v in recent[:6]],
-           "last": {"plate": st["last"], "pretty": dl.pretty(st["last"])} if st.get("last") else None,
+           "last": {"plate": u["last"], "pretty": dl.pretty(u["last"])} if u.get("last") else None,
            "passes": [], "passes_error": ""}
-    if st.get("jwt"):
+    if a.get("jwt"):
         try:
             res["passes"] = pass_items()
         except dl.AuthError:
@@ -958,9 +1137,9 @@ def api_order(chat, body):
     if not found:
         return 400, {"error": "Не вижу номера — например, А123ВС777"}
     plate = found[0]
-    if not st.get("jwt"):
+    if not acc().get("jwt"):
         return 401, {"error": "Сначала войди через Яндекс", "login": True}
-    if not st.get("place_id"):
+    if not acc().get("place_id"):
         return 400, {"error": "Сначала выбери адрес"}
     last = recent_pass(plate)
     if last and not body.get("force"):
@@ -982,10 +1161,12 @@ def api_cancel(body):
     pid = str(body.get("id") or "")
     if not pid:
         return 400, {"error": "нет id"}
+    if not my_pass(pid):
+        return 403, {"error": "Это не твой пропуск"}
     call(lambda c: c.cancel(pid))
-    plate = next((k for k, v in (st.get("recent") or {}).items() if str(v.get("id")) == pid), "")
+    plate = next((k for k, v in (me().get("recent") or {}).items() if str(v.get("id")) == pid), "")
     if plate:
-        st["recent"].pop(plate, None)
+        me()["recent"].pop(plate, None)
         save(st)
     return 200, {"ok": True}
 
@@ -1014,7 +1195,8 @@ def api_photo(data, ctype=""):
 
 def api_post(chat, path, body):
     """POST /api/… от владельца или гостя (chat — его id). -> (код, ответ)."""
-    if path in ("/api/login", "/api/place", "/api/invite") and not is_owner(chat):
+    use(chat)
+    if (path == "/api/invite" and not is_owner(chat)) or (path == "/api/place" and shared()):
         return 403, {"error": "Это может только владелец бота"}
     if path == "/api/invite":  # ссылка-приглашение для гостя (как /invite в чате)
         return 200, {"link": make_invite()}
@@ -1026,12 +1208,12 @@ def api_post(chat, path, body):
         token = dl.extract_token(str(body.get("text") or ""))
         if not token:
             return 400, {"error": "В адресе нет токена — скопируй его целиком после входа"}
-        do_login(chat, token)
-        if st.get("yandex_token") != token:
-            return 401, {"error": "Домиленд не принял вход — попробуй ещё раз", "login": True}
+        bad = do_login(chat, token)
+        if bad:
+            return bad[0], {"error": bad[1], "login": True}
         return 200, app_state()
     if path == "/api/place":
-        p = next((p for p in st.get("places") or [] if str(p["id"]) == str(body.get("id"))), None)
+        p = next((p for p in acc().get("places") or [] if str(p["id"]) == str(body.get("id"))), None)
         if not p:
             return 404, {"error": "Нет такого адреса"}
         apply_place(p)
@@ -1086,8 +1268,10 @@ class Web(BaseHTTPRequestHandler):
         if path == "/health":
             return self.reply(200, "ok", "text/plain")
         if path.startswith("/api/"):
-            if not web_user(self.headers):
+            user = web_user(self.headers)
+            if not user:
                 return self.reply(401, {"error": "Открой приложение из Telegram"})
+            use(user["id"])
             if path == "/api/state":
                 with LOCK:
                     return self.reply(200, app_state())
@@ -1257,6 +1441,7 @@ def main():
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()
+                oops(u)
 
 
 if __name__ == "__main__":

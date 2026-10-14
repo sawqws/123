@@ -386,12 +386,15 @@ def ideas_card(theme, res):
     taken = [u for u, st in res if st == "taken"][:6]
     rows = kit.rows([kit.b(f"🎯 Занять @{u}", f"grab|{u}", "success") for u in free], 2)
     rows += kit.rows([kit.b(f"👀 Следить @{u}", f"watch|{u}") for u in taken], 2)
-    rows += [[kit.b("🔁 Ещё идеи", f"ideas|{theme[:40]}", "primary"), kit.b("‹ Главное", "home")]]
+    # тему не кладём в кнопку: по-русски 40 букв — 80 байт, а callback_data — до 64 байт (Telegram отверг бы
+    # всё сообщение). «*» — последняя тема (run_ideas её запоминает), пустая «любые» тоже.
+    rows += [[kit.b("🔁 Ещё идеи", "ideas|*", "primary"), kit.b("‹ Главное", "home")]]
     return kit.card(f"✨ <b>Идеи{(' · ' + kit.esc(theme)) if theme else ''}</b>", lines,
                     "<i>Свободные можно занять сразу, занятые — поставить на слежение.</i>"), rows
 
 
 def run_ideas(c, theme):
+    bot.db.set("ideas_theme", theme)
     mid = c.say(kit.card("✨ <b>Думаю…</b>", ["Придумываю имена и проверяю, что свободно."]))
     res = check_ideas(ideas(theme))
     text, rows = ideas_card(theme, res)
@@ -543,7 +546,8 @@ def home_text():
              f"⏱ Проверка раз в {s['interval']} с · куда: " + (kit.esc(s["target_title"]) if s["target"] else "новый канал")]
     if watcher.last:
         lines.append(f"<i>Последнее: {kit.esc(watcher.last)}</i>")
-    return kit.card("🎯 <b>Catcher</b>", lines, "<i>Пришли @имя (можно списком) — проверю и займу или буду следить.</i>")
+    return kit.card("🎯 <b>Catcher</b>", lines, "\n".join(
+        x for x in ("<i>Пришли @имя (можно списком) — проверю и займу или буду следить.</i>", bot.mode_line()) if x))
 
 
 def home_rows():
@@ -552,7 +556,7 @@ def home_rows():
             [kit.b("⏹ Стоп по пожеланиям" if h["on"] else "🎲 По пожеланиям", "hunt|off" if h["on"] else "wish",
                    "danger" if h["on"] else "primary"), kit.b("➕ Имя", "add")],
             [kit.b("✨ Идеи", "ideas|"), kit.b("📋 Список", "list"), kit.b("⚙️ Настройки", "settings")],
-            [kit.support_button()]]
+            [kit.support_button(), bot.mode_button()]]  # «⚙️ Режим» — как у всех ботов (нет приложения — нет кнопки)
 
 
 @bot.home
@@ -676,7 +680,9 @@ def ideas_cmd(c):
 @bot.button("ideas")
 def ideas_btn(c):
     theme = c.args[0] if c.args else ""
-    if theme:
+    if theme == "*":  # «🔁 Ещё идеи» — та же тема, что в прошлый раз
+        return bot.later(run_ideas, c, bot.db.get("ideas_theme") or "")
+    if theme:  # старые кнопки с темой внутри
         return bot.later(run_ideas, c, theme)
     c.ask("theme", "✨ На какую тему имена? Напиши тему («космос», «финансы», «мемы») или «любые».")
 
@@ -726,7 +732,7 @@ def wish_rows():
     rows += kit.rows([kit.b(mark(w["style"] == k, cap), f"ws|{k}") for k, cap in STYLES], 3)
     rows.append([kit.b(("🔤 Только буквы ✓" if w["letters"] else "🔤 Только буквы"), "wt"),
                  kit.b(f"✍️ Тема{': ' + w['theme'][:10] if w['theme'] else ''}", "wtheme")])
-    rows.append(kit.rows([kit.b(mark(w["count"] == n, f"поймать {n}"), f"wc|{n}") for n in COUNTS], 4)[0])
+    rows += kit.rows([kit.b(mark(w["count"] == n, f"поймать {n}"), f"wc|{n}") for n in COUNTS], 2)  # ≤ 3 в ряду
     rows.append([kit.b("⏹ Стоп", "hunt|off", "danger") if h["on"] else kit.b("🚀 Ловить", "hunt|on", "success"),
                  kit.b("‹ Главное", "home")])
     return rows
@@ -834,7 +840,7 @@ def interval(c):
 @bot.button("target")
 def target(c):
     cid = int(c.args[0] or 0)
-    title = c.args[1] if len(c.args) > 1 else ""
+    title = c.args[1] if len(c.args) > 1 else (bot.db.get("channel_titles") or {}).get(str(cid), "") if cid else ""
     set_setting("target", cid)
     set_setting("target_title", title)
     c.toast("Имя пойдёт на " + (f"«{title}»" if cid else "новый канал"))
@@ -859,12 +865,26 @@ def channels(c):
         return c.show(kit.card("📂 <b>Свои каналы</b>", ["У всех твоих каналов уже есть юзернейм — пойманное имя "
                                                        "заменило бы его. Оставлю «новый канал»."]),
                       [[kit.b("‹ Назад", "settings")]])
-    rows = kit.rows([kit.b(ch["title"], f"target|{ch['id']}|{ch['title'][:30]}") for ch in free[:12]], 2)
+    # название канала — не в кнопке (русские 30 букв + id > 64 байт callback_data), а в базе по id
+    bot.db.set("channel_titles", {str(ch["id"]): ch["title"] for ch in free[:12]})
+    rows = kit.rows([kit.b(ch["title"], f"target|{ch['id']}") for ch in free[:12]], 2)
     c.show(kit.card("📂 <b>На какой канал?</b>", ["Каналы без юзернейма, где ты создатель:"]),
            rows + [[kit.b("‹ Назад", "settings")]])
 
 
 # ---------- мини-приложение ----------
+
+_call_api = bot.call_api
+
+
+def call_api(name, user, body):
+    """Тело запроса не JSON-объект ([], "x", 5) — как пустое: иначе r.body.get(...) падает с 500.
+    (Корень — botkit.Request не проверяет тип тела; botkit общий со Студией, поэтому здесь.)"""
+    return _call_api(name, user, body if isinstance(body, dict) else {})
+
+
+bot.call_api = call_api
+
 
 @bot.api("state")
 def api_state(r):
@@ -911,12 +931,19 @@ def api_resume(r):
 @bot.api("settings")
 def api_settings(r):
     if "interval" in r.body:
-        v = int(r.body["interval"])
+        try:
+            v = int(r.body["interval"])
+        except (TypeError, ValueError):
+            v = None
         if v not in INTERVALS:
             raise kit.Fail("Такого интервала нет")
         set_setting("interval", v)
     if "target" in r.body:
-        set_setting("target", int(r.body["target"] or 0))
+        try:
+            cid = int(r.body["target"] or 0)
+        except (TypeError, ValueError):
+            raise kit.Fail("Нет такого канала")
+        set_setting("target", cid)
         set_setting("target_title", str(r.body.get("target_title") or "")[:60])
     return api_state(r)
 
@@ -924,9 +951,9 @@ def api_settings(r):
 @bot.api("wish")
 def api_wish(r):
     b = r.body
-    if b.get("len") in {k for k, _, _ in LENGTHS}:
+    if b.get("len") in [k for k, _, _ in LENGTHS]:  # список, не множество: {"len": []} — не TypeError
         set_wish("len", b["len"])
-    if b.get("style") in {k for k, _ in STYLES}:
+    if b.get("style") in [k for k, _ in STYLES]:
         set_wish("style", b["style"])
     if "theme" in b:
         set_wish("theme", str(b["theme"] or "").strip()[:60])

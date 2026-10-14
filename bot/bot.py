@@ -738,16 +738,23 @@ SOLVE_TOOLS = ["Bash(node horo/*)", "Bash(python3 horo/*)", "Bash(pdftoppm *)", 
 
 
 # Доработка: учитель вернул задание и написал, что доделать («Решить № 3-4»). Глеб хочет, чтобы бот сам понял,
-# что именно доделать, и сделал это его почерком прямо на скриншоте задания — как он сам пишет на iPad.
+# что именно доделать, и сделал это его почерком (вариант 3, выбрал 14.10: на скрине задания — только ответы,
+# всё решение — на тёмном листе в клетку, отдельными картинками).
+HANDWRITE = (
+    "Письменное решение (математика, физика, задачи) — его почерком через horo/sheet.py: "
+    "`node horo/shot.js {url} {d}/shot.png` (снимок только карточки с условием + shot.json с расположением номеров), "
+    "затем {d}/draw.py: `import sys; sys.path.insert(0, 'horo'); from sheet import Work; w = Work('{d}')`, "
+    "на каждый решённый номер `w.solve(номер, [строки решения])` (строка — элементы Hand.expr: текст и дроби "
+    "(числитель, знаменатель); переносы модуль делает сам), в конце `w.save()`. Получится {d}/draft_files/1_task.jpg "
+    "(скрин, справа от каждого примера только ответ) и 2_sheet.jpg… (всё решение на тёмном листе в клетку). Скрин сам "
+    "не рисуй, не обрезай и не расширяй. Посмотри картинки через Read: ответ не налез на пример, дроби читаются.\n"
+)
 REWORK = (
     "Если статус задания reworking или failed (на доработке / не зачтено) и учитель в «ОТВЕТЫ И КОММЕНТАРИИ УЧИТЕЛЯ» "
     "написал, что доделать (например «Решить № 3-4»), — это доработка. Посмотри через Read его прошлые файлы ответа "
     "(«файл ответа: …», prev*.jpg) и пометки учителя (mark*), пойми, что уже сделано, и сделай ТОЛЬКО то, что просит "
-    "учитель; сданное заново не решай. Письменное решение (математика, физика, задачи) рисуй его почерком прямо на "
-    "скриншоте задания: `node horo/shot.js {url} {d}/shot.png`, затем Hand поверх shot.png (блок «Попытка» с прошлым "
-    "ответом под условием отрежь) — в свободном месте под условием (не хватает места — расширь картинку вниз тем же фоном; строки — через 2 размера шрифта, длинную "
-    "строку переноси), номера, которые решаешь, обведи (∠ ⊥ ∥ ° Hand рисует). Готовую "
-    "картинку положи в {d}/draft_files/, а в {d}/draft.txt одной строкой — что доделал (например «Доделал № 3–4»).\n"
+    "учитель; сданное заново не решай (в Work.solve — только эти номера). "
+    "В {d}/draft.txt одной строкой — что доделал (например «Доделал № 3–4»).\n"
 )
 
 
@@ -766,11 +773,12 @@ def prompt_for(url, text, show):
         f"Если это detailedAnswer, на сайт НЕ отправляй. Сделай черновик: текст для учителя запиши в {d}/draft.txt "
         "(каждая строка — абзац, только то, что пойдёт учителю). Если нужны картинки (решение от руки на скриншоте, "
         f"заполненный лист), сделай их по CLAUDE.md и положи в {d}/draft_files/. Скрипт рисования клади в {d}/ и запускай "
-        f"`python3 {d}/draw.py` (в нём: import sys; sys.path.insert(0, 'horo'); from hand import Hand). "
+        f"`python3 {d}/draw.py`. "
         + ("" if os.path.exists(GLEB_EXTRA) else
            "Алфавит почерка Глеба ещё не заполнен: цифры, знаки и латиница — его настоящие, русские буквы — похожим "
            "шрифтом. Решение от руки всё равно рисуй, а в ответе последней строкой напомни: «русские буквы пока не "
            "мои — заполни алфавит (✍️ Почерк)».\n")
+        + HANDWRITE.format(url=url, d=d)
         + REWORK.format(url=url, d=d)
         + f"Сначала прочитай {os.path.relpath(drafts.STYLE, REPO)}, если он есть: это правила Глеба по его прошлым правкам, "
         "они важнее общих. Бот сам покажет черновик Глебу: в ответе текст черновика не повторяй, напиши 1–2 строки, что сделал.\n"
@@ -993,7 +1001,12 @@ def edit_draft(chat, text):
 
 def add_draft_photo(chat, msg):
     d = draft()
-    data, name = download(attachment(msg))
+    try:
+        data, name = download(attachment(msg))
+    except Exception as e:  # сеть моргнула или файл больше 20 МБ — сказать, а не молчать
+        print("draft photo:", e)
+        send(chat, err("Не получилось скачать фото, пришли ещё раз"), markup=DRAFT_KB, raw_html=True)
+        return
     drafts.add_file(d["task"], data, name, replace=not d["own_files"])  # первое своё фото заменяет мои картинки
     d["own_files"] = True
     set_draft(d)
@@ -1249,7 +1262,12 @@ def take_alphabet(chat, msg):
         send(chat, BUSY)
         return
     try:
-        data, name = download(attachment(msg))
+        try:
+            data, name = download(attachment(msg))
+        except Exception as e:
+            print("alphabet sheet:", e)
+            send(chat, err("Не получилось скачать лист, пришли ещё раз"), raw_html=True)
+            return
         path = os.path.join(ALPHA_DIR, f"in_{int(time.time() * 1000)}_{name}")
         with open(path, "wb") as f:
             f.write(data)
@@ -1839,6 +1857,9 @@ def handle(msg):
     if text.startswith("/update"):
         update(chat)
         return
+    if (mode.get(chat) or "").startswith("agent_") and (text in BUTTONS or text.startswith("/")) \
+            and text != "/cancel" and not text.startswith("/agent"):
+        agent.pop(chat, None); mode.pop(chat, None)  # кнопка или другая команда — шаг /agent закончен, выполняем её
     if text.startswith("/agent") or (mode.get(chat) or "").startswith("agent_"):
         threading.Thread(target=agent_step, args=(chat, text, msg.get("message_id")), daemon=True).start()
         return
@@ -1884,8 +1905,9 @@ def handle(msg):
         return
     if mode.get(chat) == "emoji":
         mode.pop(chat)
-        save_emoji(chat, msg)
-        return
+        if text not in BUTTONS and not text.startswith("/"):  # кнопка или команда вместо эмодзи — выполняем её
+            save_emoji(chat, msg)
+            return
     if text.startswith("/alphabet_reset"):
         ok, out = py("horo/alphabet.py", "reset")
         send(chat, out if ok else err(out), menu=True, raw_html=not ok)
@@ -1923,12 +1945,14 @@ def handle(msg):
         mode.pop(chat)
     if mode.get(chat) == "confirm_all":
         mode.pop(chat)
-        rows = pending.pop(chat, [])
         if text.lower() in ("да", "yes", "ок", "давай"):
-            threading.Thread(target=run_all, args=(chat, rows), daemon=True).start()
-        else:
+            threading.Thread(target=run_all, args=(chat, pending.pop(chat, [])), daemon=True).start()
+            return
+        if text and text not in BUTTONS and not text.startswith("/") and not LINK.search(text):
+            pending.pop(chat, None)
             send(chat, "👌 Отменил", menu=True)
-        return
+            return
+        # другая кнопка, команда, ссылка или фото — выполняем их; «Сдать все» под списком по-прежнему работает
     if draft() and attachment(msg):
         threading.Thread(target=add_draft_photo, args=(chat, msg), daemon=True).start()
         return
@@ -2379,9 +2403,15 @@ def app_prep_run(b):
     """Подготовить из приложения: предмет, темы (uuid), минуты, своё ТЗ. more — ещё вопросы к последней."""
     busy_check()
     chat = owner()
-    minutes = int(b.get("minutes") or 5)
+    try:
+        minutes = int(b.get("minutes") or 5)
+    except (TypeError, ValueError):
+        minutes = 0
     if minutes not in prep.MINUTES:
         raise ValueError("Время — 1, 5 или 10 минут")
+    uuids = b.get("topics") or []
+    if not isinstance(uuids, list):
+        raise ValueError("Темы — списком")
     if b.get("more"):
         if not PREP_CTX.get(chat):
             raise ValueError("Сначала подготовься — потом будут ещё вопросы")
@@ -2391,7 +2421,7 @@ def app_prep_run(b):
     if not (b.get("again") and PREP_CTX.get(chat)):  # again: «Подробнее (10 мин)» — те же темы и ТЗ
         if not subj and not tz:
             raise ValueError("Выбери предмет или напиши своё ТЗ")
-        prep_ctx(chat, subj, tz, uuids=[str(u) for u in b.get("topics") or []] or None)
+        prep_ctx(chat, subj, tz, uuids=[str(u) for u in uuids] or None)
     threading.Thread(target=prep_run, args=(chat, minutes), daemon=True).start()
     return {"ok": True}
 
@@ -2517,7 +2547,8 @@ def main():
             print("startup:", e)
     global SUP
     SUP = sup = support.Support(TOKEN, "HDP", folders=["bot", "horo"], pm2="horo-bot",
-                                allowed=lambda uid: uid == owner(), tests=["python3 bot/test_bot.py"])
+                                allowed=lambda uid: uid == owner(),
+                                tests=["python3 bot/test_bot.py", "python3 bot/test_buttons.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=60)
@@ -2527,29 +2558,34 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
-            if sup.intercept(u):  # 🛠 /fix и ответы поддержке
-                continue
-            cq = u.get("callback_query")
-            if cq:
-                if cq.get("from", {}).get("id") == owner() and cq.get("message"):
-                    try:
-                        on_callback(cq)
-                    except Exception as e:
-                        print("callback:", e)
-                continue
-            msg = u.get("message") or {}
-            uid = msg.get("from", {}).get("id")
-            if "chat" not in msg:
-                continue
-            if not owner() and (msg.get("text") or "").startswith("/start"):
-                s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
-                print("Владелец бота:", uid)
-            if uid != owner():
-                continue
+            on_update(u, sup)
+
+
+def on_update(u, sup=None):
+    """Одно обновление Telegram (из цикла main; тесты зовут его же): поддержка, кнопка или сообщение."""
+    if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
+        return
+    cq = u.get("callback_query")
+    if cq:
+        if cq.get("from", {}).get("id") == owner() and cq.get("message"):
             try:
-                handle(msg)
+                on_callback(cq)
             except Exception as e:
-                print("handle:", e)
+                print("callback:", e)
+        return
+    msg = u.get("message") or {}
+    uid = msg.get("from", {}).get("id")
+    if "chat" not in msg:
+        return
+    if not owner() and (msg.get("text") or "").startswith("/start"):
+        s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
+        print("Владелец бота:", uid)
+    if uid != owner():
+        return
+    try:
+        handle(msg)
+    except Exception as e:
+        print("handle:", e)
 
 
 if __name__ == "__main__":

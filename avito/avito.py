@@ -901,10 +901,10 @@ def copy_text(chat):
     lines = ["<b>📋 Для Авито</b>", f"Название: <code>{esc(d['title'])}</code>"]
     if d.get("price"):
         lines.append(f"Цена: <code>{d['price']}</code>")
-    lines.append("<i>Нажми на название или цену — скопируется. Описание — следующим сообщением.</i>")
+    lines.append("<i>Нажми на название или цену — скопируется."
+                 + (" Описание — следующим сообщением.</i>" if d.get("description") else "</i>"))
     send(chat, "\n".join(lines))
-    if d.get("description"):
-        tg("sendMessage", chat_id=chat, text=d["description"])
+    send_description(chat, d)
 
 
 # ---------- выложить, статусы, все объявления ----------
@@ -929,12 +929,18 @@ def publish(chat):
               f"4. Название: <code>{esc(d['title'])}</code>",
               (f"5. Цена: <code>{d['price']}</code>" if d.get("price")
                else "5. Цена: пришли сюда число, подскажу по рынку — «📊 Цена»."),
-              "6. Описание — следующим сообщением (долгий тап → Копировать)."]
+              ("6. Описание — следующим сообщением (долгий тап → Копировать)." if d.get("description")
+               else "6. Описания пока нет — напиши о вещи пару слов, и я его составлю.")]
     send(chat, fmt("📤 Выложить на Авито — 1 минута", "\n".join(steps),
                    "Нажми на название или цену — скопируется. Выложил — жми «✅ Выложил»."),
          [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]])
-    if d.get("description"):
-        tg("sendMessage", chat_id=chat, text=d["description"])
+    send_description(chat, d)
+
+
+def send_description(chat, d):
+    """Описание отдельным сообщением (без разметки — копируется как есть). Пустое Telegram не примет (400)."""
+    if (d.get("description") or "").strip():
+        tg("sendMessage", chat_id=chat, text=d["description"][:4096])
 
 
 def set_live(chat, url=None, mid=None):
