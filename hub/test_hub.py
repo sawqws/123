@@ -95,6 +95,54 @@ class HubTest(Base):
         hub.on_message(self.msg("привет", uid=99))
         self.assertIn("личный", self.last()[0])  # чужой текст Секретарю не уходит
 
+    def answers(self):
+        return [kw.get("text") for k, kw in self.sent if k == "answerCallbackQuery"]
+
+    def test_every_button_is_answered(self):
+        """Устаревшая кнопка, упавший экран, удалённое сообщение — ответ на нажатие есть всегда, ошибка — «⚠️ …» в чат."""
+        self.cq("старое|что-то")
+        self.assertIn("устарела", self.answers()[-1])
+        self.cq("rs")  # без бота — тоже устаревшая, а не тишина
+        self.assertIn("устарела", self.answers()[-1])
+        with mock.patch.object(hub, "server_card", side_effect=RuntimeError("диск не ответил")):
+            self.cq("srv")
+        self.assertIn("⚠️", self.answers()[-1])
+        text, btns = self.last()
+        self.assertIn("Не получилось", text)
+        self.assertIn("диск не ответил", text)
+        self.assertIn('"home"', btns)
+        hub.on_callback({"id": "1", "from": {"id": U}, "data": "home", "message": {}})  # сообщение недоступно
+        self.assertIn("устарела", self.answers()[-1])
+        self.cq("mkr|нет-такого")
+        self.assertIn("уже нет", self.answers()[-1])
+
+    def test_background_action_failure_is_reported(self):
+        """Долгое действие из чата упало в фоне — человек узнаёт об этом, а не ждёт вечно."""
+        with mock.patch.object(hub.threading, "Thread", lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args))), \
+                mock.patch.object(hub, "restart_app", side_effect=OSError("pm2 пропал")):
+            self.cq("rs|coach-bot")
+        self.assertEqual(self.answers()[-1], "Перезапускаю…")
+        self.assertIn("pm2 пропал", self.last()[0])
+
+    def test_update_not_twice(self):
+        hub.live.clear()
+        with mock.patch.object(hub, "bg") as bg:
+            self.cq("upd")
+            self.cq("upd")
+        self.assertEqual(bg.call_count, 1)
+        self.assertIn("Уже обновляю", self.answers()[-1])
+        hub.live.clear()
+
+    def test_logs_fit_in_message(self):
+        with mock.patch.object(hub, "log_text", return_value="<&>" * 3000):
+            hub.logs(U, "coach-bot")
+        self.assertLessEqual(len(self.last()[0]), 4096)
+        self.assertTrue(self.last()[0].endswith("</pre>"))
+
+    def test_mode_card_has_way_back(self):
+        hub.on_message(self.msg("/mode"))
+        self.assertIn('"home"', self.last()[1])
+
     def test_alerts(self):
         self.assertEqual(hub.watch_once(), [])
         self.pm2["coach-bot"] = ("errored", 0)

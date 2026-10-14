@@ -607,6 +607,11 @@
     const out = [top('Секретарь', 'Память')];
     out.push(h('div', { class: 'card note' }, h('span', { class: 'em', text: '📝' }),
       h('div', { class: 'grow', text: 'Учитываю это в каждом ответе. В чате можно просто сказать: «запомните, что…».' })));
+    if (S.memory == null && S.memErr) {  // не загрузилась — сказать и дать повторить, а не крутить скелетон вечно
+      out.push(h('div', { class: 'card empty' }, h('h3', { text: 'Память не открылась' }), h('p', { text: S.memErr }),
+        h('button', { class: 'btn primary', onclick: () => { S.memErr = ''; paint(); } }, 'Повторить')));
+      return out;
+    }
     if (S.memory == null) {
       out.push(h('div', { class: 'card' }, [90, 70, 80, 40].map((w) => h('div', { class: 'sk sk-line', style: `width:${w}%` }))));
       loadMemory();
@@ -642,7 +647,8 @@
   }
 
   async function loadMemory() {
-    try { const r = await api('/api/memory'); S.memory = r.text; if (S.tab === 'memory') paint(); } catch (e) { toast(e.message, true); }
+    try { const r = await api('/api/memory'); S.memory = r.text; S.memErr = ''; } catch (e) { S.memErr = e.message || 'Сервер не ответил'; toast(e.message, true); }
+    if (S.tab === 'memory') paint();
   }
 
   // ---------- вкладки и отрисовка ----------
