@@ -9,7 +9,7 @@
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
   tg.ready(); tg.expand();
-  try { tg.setHeaderColor('secondary_bg_color'); tg.setBackgroundColor('secondary_bg_color'); } catch (e) { /* старый Telegram */ }
+  try { const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#f6f3ee'; tg.setHeaderColor(bg); tg.setBackgroundColor(bg); } catch (e) { /* старый Telegram */ }
 }
 const $ = (sel) => (sel[0] === '#' || sel[0] === '.' || sel.includes(' ') ? document.querySelector(sel) : document.getElementById(sel));
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

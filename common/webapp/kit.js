@@ -6,11 +6,10 @@
   const root = document.documentElement;
 
   function scheme() {
-    const dark = tg && tg.colorScheme ? tg.colorScheme === 'dark'
-      : window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
-    root.dataset.scheme = dark ? 'dark' : 'light';
+    // вид «пастель» всегда светлый, тема Telegram на него не влияет
+    root.dataset.scheme = 'light';
     // шапка и фон Telegram — в цвет страницы, чтобы не было полосы сверху
-    const bg = getComputedStyle(root).getPropertyValue('--tg-theme-secondary-bg-color').trim();
+    const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
     if (tg && bg) {
       try { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); if (tg.setBottomBarColor) tg.setBottomBarColor(bg); } catch (e) { /* старый клиент */ }
     }
