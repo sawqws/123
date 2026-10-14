@@ -1366,16 +1366,26 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": str(e)})
 
+    def length(self):
+        """Content-Length; мусор или меньше нуля — ValueError (ответ 400): иначе read(-1) ждал бы конца соединения."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if n < 0:
+            raise ValueError("bad length")
+        return n
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         if path.startswith("/app/agent/"):
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = self.length()
+            except ValueError:
+                return self.reply(400, {"error": "bad length"})
             if n > 300_000:
                 return self.reply(413, {"error": "слишком большой запрос"})
             return self.proxy(path[len("/app/agent"):], self.rfile.read(n) if n else b"")
         if path == "/app/api/support":  # 🛠 из приложения, со скриншотом
             try:
-                n = int(self.headers.get("Content-Length") or 0)
+                n = self.length()
                 if n > 16_000_000:
                     return self.reply(413, {"error": "слишком большой скриншот"})
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
@@ -1384,7 +1394,7 @@ class Web(BaseHTTPRequestHandler):
             return self.app_api(app_support, body if isinstance(body, dict) else {})
         if path == "/app/api/mode":  # {mode: chat|app} — то же, что action=mode
             try:
-                n = int(self.headers.get("Content-Length") or 0)
+                n = self.length()
                 body = json.loads(self.rfile.read(min(n, 10_000)) or b"{}") if n else {}
             except ValueError:
                 return self.reply(400, {"error": "bad json"})
@@ -1392,7 +1402,7 @@ class Web(BaseHTTPRequestHandler):
             return self.app_api(app_mode, body)
         if path == "/app/api/action":  # мини-приложение: вход по подписи Telegram
             try:
-                n = int(self.headers.get("Content-Length") or 0)
+                n = self.length()
                 body = json.loads(self.rfile.read(min(n, 100_000)) or b"{}") if n else {}
             except ValueError:
                 return self.reply(400, {"error": "bad json"})
@@ -1411,7 +1421,7 @@ class Web(BaseHTTPRequestHandler):
                      "Если это не ты, нажми «♻️ Новый ключ» в /claude.")
             return self.reply(401, {"error": "неверный ключ"})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
+            n = self.length()
             body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
         except ValueError:
             return self.reply(400, {"error": "bad json"})

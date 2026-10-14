@@ -209,9 +209,15 @@ def edit(chat, msg_id, text, buttons=None):
               link_preview_options={"is_disabled": True}, **extra)
 
 
+def clip(text, n=24):
+    """Текст кнопки до 24 символов — иначе Telegram режет его посередине (правило всех ботов)."""
+    text = str(text)
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
 def btn(text, data, style=None):
     """Inline-кнопка; style — "success" | "danger" | "primary" (цвет, скупо)."""
-    b = {"text": text, "callback_data": data}
+    b = {"text": clip(text), "callback_data": data}
     if style:
         b["style"] = style
     return b
@@ -517,11 +523,12 @@ def choose_place(chat, msg_id=None):
     flats = [p for p in places if p["flat"]] or places
     if len(flats) == 1 and not msg_id:
         return set_place(chat, flats[0])
-    rows = [[btn(("✓ " if p["id"] == a.get("place_id") else "") + p["title"][:60], f"pl|{p['id']}",
-                 "primary" if p["id"] == a.get("place_id") else None)] for p in places]
+    # адрес целиком — в тексте под номером, на кнопке номер и начало (кнопка — до 24 символов)
+    rows = [[btn(("✓ " if p["id"] == a.get("place_id") else "") + f"{i}. {p['title']}", f"pl|{p['id']}",
+                 "primary" if p["id"] == a.get("place_id") else None)] for i, p in enumerate(places, 1)]
     if a.get("place_id"):
         rows.append([btn("‹ Назад", "m|home")])
-    text = fmt("📍 Куда заказывать пропуск?")
+    text = fmt("📍 Куда заказывать пропуск?", "\n".join(f"{i}. {esc(p['title'])}" for i, p in enumerate(places, 1)))
     return edit(chat, msg_id, text, rows) if msg_id else send(chat, text, rows)
 
 
@@ -939,6 +946,8 @@ def on_callback(cq):
             if p:
                 set_place(chat, p, mid)
                 note = "Адрес выбран"
+            else:  # кнопка из старого сообщения: после нового входа адресов могло стать других
+                note = "Этого адреса уже нет — /place"
         elif data[0] == "ap":
             toggle_autopass(data[1])
             edit(chat, mid, *autopass_view())
@@ -963,6 +972,9 @@ def on_callback(cq):
                 edit(chat, mid, home_text(), menu_buttons())
     except dl.AuthError:
         send(chat, fail("Вход в Домиленд устарел — войди ещё раз."), login_buttons())
+    except dl.Error as e:  # Домиленд не ответил — как у /passes и /auto, без трассировки в логах
+        send(chat, fail(f"Домиленд не ответил: {esc(str(e)[:200])}"))
+        note = "Не получилось"
     except Exception as e:
         print("callback:", e)
         traceback.print_exc()

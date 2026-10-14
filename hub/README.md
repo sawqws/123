@@ -73,3 +73,6 @@ curl -fsSL https://raw.githubusercontent.com/sawqws/123/main/hub/install.sh | HU
 Потом /start в боте — станешь владельцем. Логи: `pm2 logs hub-bot`.
 
 **Тесты**: `python3 hub/test_hub.py`, `python3 hub/test_maker.py`, `python3 hub/test_digest.py`.
+Обход всех кнопок и команд Главного и Секретаря (оба режима, с аккаунтом и без, Секретарь лежит; ошибки, ответ на
+каждое нажатие, ≤ 24 символов и ≤ 3 в ряд, действия с аккаунтом только после «Да», маршруты приложения с мусором):
+`tgbot/.venv/bin/python hub/test_buttons.py` (без telethon — `python3 hub/test_buttons.py`, Секретарь — имитация).
