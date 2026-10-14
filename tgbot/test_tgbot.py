@@ -261,6 +261,21 @@ class Actions(unittest.TestCase):
         for safe in ("🤖 Боты", "« Назад", "📊 Оценки", "⚙️ Ещё", "🛠 Поддержка", "Отмена", "📖 Подготовка", "Дальше"):
             self.assertFalse(actions.RISKY.search(safe), safe)
 
+    def test_bot_wait_sees_edit_made_before_click_returned(self):
+        """Бот правит меню раньше, чем вернётся ответ на нажатие: правка видна по виду «до нажатия»."""
+        class M:
+            def __init__(self, text, ed=None):
+                self.raw_text, self.edit_date, self.reply_markup, self.id, self.out = text, ed, None, 5, False
+
+        class C:
+            async def get_messages(self, peer, ids=None, limit=None, min_id=None):
+                return M("📅 Сегодня", ed=1) if ids else []
+
+        ctx = pytypes.SimpleNamespace(client=C())
+        new, edited = run(actions.bot_wait(ctx, "p", 5, 5, 3, quiet=0.5, before=("Меню", None, "None")))
+        self.assertEqual(new, [])
+        self.assertEqual(edited.raw_text, "📅 Сегодня")
+
     def test_dates(self):
         d = actions.date("2026-10-10 09:00")
         self.assertEqual(d.astimezone(UTC).hour, 6)
