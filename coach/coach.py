@@ -1601,7 +1601,7 @@ PAGE_DONE = """<!doctype html><meta charset="utf-8"><meta name="viewport" conten
 <meta name="color-scheme" content="dark"><meta name="theme-color" content="#070708"><title>Форма</title><style>
 html{{background:#070708}}
 body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;color:#f6f1e7;text-align:center;
-font:17px/1.45 ui-rounded,"SF Pro Rounded",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+font:17px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 background:radial-gradient(60% 32% at 95% 4%,rgba(224,180,100,.42),transparent 70%),
 radial-gradient(55% 30% at -8% 60%,rgba(150,100,45,.36),transparent 70%),#070708}}
 div{{max-width:340px;background:rgba(255,255,255,.055);border-radius:32px;padding:34px 26px;overflow-wrap:anywhere;
