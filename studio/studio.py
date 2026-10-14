@@ -40,17 +40,32 @@ TALK_MODEL = os.environ.get("STUDIO_TALK_MODEL", "sonnet")
 SITES = os.environ.get("STUDIO_SITES_DIR") or "/root/sites"
 SITES_REG = os.path.join(BOTS, "sites.json")  # сайты — отдельный файл: Главный читает registry.json только про ботов
 BUILD_TIMEOUT = 40 * 60
+# STUDIO_MODE=sites — «Студия сайтов» для другого человека (сестра Глеба): только статические сайты, без ботов,
+# без /fix; Claude работает лишь в своей папке (STUDIO_BOTS_DIR) — ключи ботов и сессию Telegram на сервере не видит.
+SITES_ONLY = os.environ.get("STUDIO_MODE") == "sites"
+DATA = os.environ.get("STUDIO_DATA") or os.path.join(HERE, "data")
+SAFE_DENY = [f"{tool}(//{d}/**)" for tool in ("Read", "Edit", "Write") for d in
+             ("root", "etc", "home", "proc", "sys", "var", "tmp", "opt", "usr", "boot", "dev", "run", "mnt", "media")]
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 
-bot = kit.Bot("Студия", emoji="🏗", app_text="Студия",
-              about="Делаю красивых и простых ботов по твоей идее: уточню, покажу план, напишу код, "
-                    "сделаю мини-приложение и запущу.",
-              short="Бот, который делает ботов",
-              commands=[("start", "Новый бот"), ("bots", "Мои боты"), ("cancel", "Отменить черновик")],
-              token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
-              data=os.path.join(HERE, "data"), webapp=os.path.join(HERE, "webapp"),
-              support={"name": "Студия", "folders": ["studio"], "pm2": "studio-bot", "cwd": REPO,
-                       "tests": ["python3 studio/test_studio.py"]})
+if SITES_ONLY:
+    bot = kit.Bot("Site Studio", emoji="🌐", app_text="Сайты", tg_name=os.environ.get("STUDIO_TG_NAME") or None,
+                  about="Делаю красивые сайты по твоему описанию: уточню, покажу план, соберу и выложу. "
+                        "Потом можно закрыть паролем или открыть для всех.",
+                  short="Делает сайты по описанию",
+                  commands=[("start", "Новый сайт"), ("sites", "Мои сайты"), ("cancel", "Отменить черновик")],
+                  token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
+                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=None)
+else:
+    bot = kit.Bot("Студия", emoji="🏗", app_text="Студия",
+                  about="Делаю красивых и простых ботов по твоей идее: уточню, покажу план, напишу код, "
+                        "сделаю мини-приложение и запущу.",
+                  short="Бот, который делает ботов",
+                  commands=[("start", "Новый бот"), ("bots", "Мои боты"), ("cancel", "Отменить черновик")],
+                  token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
+                  data=DATA, webapp=os.path.join(HERE, "webapp"),
+                  support={"name": "Студия", "folders": ["studio"], "pm2": "studio-bot", "cwd": REPO,
+                           "tests": ["python3 studio/test_studio.py"]})
 if os.environ.get("STUDIO_ALLOWED") and not bot.owner:
     bot.db.set("_owner", int(re.findall(r"\d+", os.environ["STUDIO_ALLOWED"])[0]))
 
@@ -115,7 +130,7 @@ def pm2_status():
     code, out = sh("pm2", "jlist", timeout=30)
     try:
         return {r.get("name"): (r.get("pm2_env") or {}).get("status") for r in json.loads(out[out.find("["):])}
-    except ValueError:
+    except (ValueError, TypeError, AttributeError):  # pm2 нет или ответил не списком
         return {}
 
 
@@ -192,10 +207,19 @@ TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash(python3:*)", "Bash(node:
 
 def claude(prompt, cwd, on_step=None, timeout=BUILD_TIMEOUT, tools=True, model=None):
     """(ok, итоговый текст). tools=False — только читать (картинки к идее). on_step(строка) — живой статус."""
+    if SITES_ONLY:  # Студия сайтов не для Глеба: в просьбах к Claude — «владелец», и только сайты
+        prompt = ("Это «Студия сайтов»: делаешь только статические сайты (kind всегда \"site\"), ботов не делаешь. "
+                  "Работай только в текущей папке, не читай ничего вне неё.\n\n"
+                  + prompt.replace("Глеба", "владельца").replace("Глебу", "владельцу").replace("Глеб", "владелец"))
     cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"]
     if model:
         cmd += ["--model", model]
-    if tools:
+    if SITES_ONLY:  # чужой человек: никаких команд, читать и писать — только в своей папке (cwd)
+        cmd += ["--permission-mode", "acceptEdits", "--allowedTools", "Read(./**)", "Glob", "Grep"] + \
+            (["Write(./**)", "Edit(./**)"] if tools else []) + \
+            ["--disallowedTools", "Bash", "WebFetch", "Task", "NotebookEdit", *SAFE_DENY] + \
+            ([] if tools else ["Write", "Edit"])
+    elif tools:
         cmd += ["--permission-mode", "acceptEdits", "--allowedTools", *TOOLS]
     else:
         cmd += ["--allowedTools", "Read", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task"]
@@ -412,6 +436,8 @@ FIX = """Ты дорабатываешь Telegram-бота «{name}» Глеба
 
 # ---------- экраны чата ----------
 
+SITE_EXAMPLES = ["сайт-визитка для фотографа", "лендинг для кофейни с меню и картой", "портфолио с работами",
+                 "приглашение на день рождения"]
 EXAMPLES = ["бот-напоминалка пить воду", "сайт-визитка репетитора", "трекер привычек с серией дней",
             "лендинг для кофейни с меню и картой", "список покупок на двоих", "портфолио фотографа"]
 
@@ -422,6 +448,13 @@ def home(c):
     if d.get("stage") and d["stage"] not in ("done",):
         return resume(c)
     n = len(registry())
+    if SITES_ONLY:
+        ns = len(sites())
+        mine = [[b(f"🌐 Мои сайты · {ns}", "sites")]] if ns else []
+        return bot.menu(c, "🌐 <b>Сайты</b>", ["Опиши, какой сайт нужен — текстом или голосом.",
+                                             "Уточню, покажу план и соберу. Потом закроешь паролем или откроешь всем."],
+                        buttons=mine, quick=mine,
+                        foot="<i>Например: «" + SITE_EXAMPLES[int(time.time()) % len(SITE_EXAMPLES)] + "»</i>")
     foot = "<i>Например: «" + EXAMPLES[int(time.time()) % len(EXAMPLES)] + "»</i>"
     if not n and not one_tap() and not secretary_ready():  # до первого бота: как он появится в Telegram
         foot += ("\n<i>Бота в Telegram создаю через @BotFather: в конце попрошу токен. Чтобы в один тап — включи мне "
@@ -588,7 +621,7 @@ def interview(chat):
           for q in (res.get("questions") or [])[:3] if isinstance(q, dict) and q.get("q")]
     d.update(qs=qs, qi=0, names=[str(n)[:40] for n in (res.get("names") or [])][:3],
              emoji=str(res.get("emoji") or "✨")[:4], stage="ask" if qs else "name",
-             kind="site" if res.get("kind") == "site" else "bot")
+             kind="site" if SITES_ONLY or res.get("kind") == "site" else "bot")
     put(d)
     lead = "👌 <b>Понял идею.</b> " + (f"{kit.plural(len(qs), 'вопрос', 'вопроса', 'вопросов')} — и начну."
                                        if qs else "Всё ясно — осталось имя.")
@@ -1661,8 +1694,9 @@ def api_state(r):
         pub["result"] = {"slug": info.get("slug"), "name": info.get("name"), "username": info.get("username"),
                          "about": info.get("about") or info.get("summary"), "kind": info.get("kind", "bot"),
                          "url": site_url(info) if info.get("kind") == "site" else None}
-    return {"draft": pub, "bots": bots_list(), "busy": bot.db.get("busy"), "examples": EXAMPLES,
-            "secretary": secretary_ready()}
+    return {"draft": pub, "bots": bots_list(), "busy": bot.db.get("busy"),
+            "examples": SITE_EXAMPLES if SITES_ONLY else EXAMPLES, "sites_only": SITES_ONLY,
+            "secretary": False if SITES_ONLY else secretary_ready()}
 
 
 def need(d, stage):

@@ -60,6 +60,7 @@ AVITO_PORT = 8793  # avito/avito.py
 AGENT_PORT = 8794  # tgbot/agent.py
 STUDIO_PORT = 8795  # studio/studio.py: приложение Студии и мини-приложения сделанных ею ботов
 CATCHER_PORT = 8796  # catcher/catcher.py: «Ловец» юзернеймов
+SITES_PORT = 8797  # studio/studio.py в режиме STUDIO_MODE=sites: «Студия сайтов» сестры (ecosystem.sites.config.js)
 HDP_PORT = 8788  # bot/web.py: сайт HDP в браузере (/site/) и мини-приложение HDP-бота
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
@@ -1421,6 +1422,10 @@ def caddyfile(ip):
         # «Студия» (studio/): её приложение и мини-приложения ботов, которых она сделала (/b/<slug>/)
         f"https://apps.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{STUDIO_PORT}\n"
+        "}\n"
+        # «Студия сайтов» (studio/, STUDIO_MODE=sites): приложение и сайты сестры Глеба (/s/<slug>/)
+        f"https://web.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{SITES_PORT}\n"
         "}\n"
         # «Ловец» (catcher/): юзернеймы на каналы
         f"https://catcher.{host} {{\n"

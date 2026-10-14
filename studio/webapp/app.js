@@ -21,7 +21,15 @@ async function act(name, body, okText) {
 
 function render(s) {
   S = s;
-  $('count').textContent = s.bots.length ? s.bots.length + ' ' + (s.bots.length === 1 ? 'бот' : s.bots.length < 5 ? 'бота' : 'ботов') : '';
+  if (s.sites_only) {  // «Студия сайтов»: шапка и вкладка — про сайты
+    document.title = 'Сайты';
+    document.querySelector('.top .title').textContent = '🌐 Сайты';
+    document.querySelector('.subtitle').textContent = 'Опиши сайт — уточню, покажу план и соберу сам.';
+    const t = document.querySelector('[data-tab="bots"]');
+    if (t) t.textContent = 'Мои сайты';
+  }
+  const n = s.bots.length, word = s.sites_only ? ['сайт', 'сайта', 'сайтов'] : ['бот', 'бота', 'ботов'];
+  $('count').textContent = n ? n + ' ' + (n === 1 ? word[0] : n < 5 ? word[1] : word[2]) : '';
   renderNew(s);
   renderBots(s);
 }
@@ -47,11 +55,12 @@ function renderNew(s) {
           `<p class="muted" style="font-size:14px">Сайт пока закрыт. Защитить паролем или выпустить для всех — во вкладке «Мои».</p>` : '') +
         (r.username ? `<button class="btn primary" style="margin-top:16px" data-open="${esc(r.username)}">Открыть @${esc(r.username)}</button>` : '') + '</div>';
     }
-    h += `<div class="card fade"><h2>Какой бот или сайт нужен?</h2>` +
-      `<textarea id="idea" rows="4" placeholder="Например: напоминает пить воду и считает стаканы за день"></textarea>` +
+    const so = !!s.sites_only;  // «Студия сайтов» (STUDIO_MODE=sites): только сайты
+    h += `<div class="card fade"><h2>${so ? 'Какой сайт нужен?' : 'Какой бот или сайт нужен?'}</h2>` +
+      `<textarea id="idea" rows="4" placeholder="${so ? 'Например: сайт-визитка для фотографа с работами и контактами' : 'Например: напоминает пить воду и считает стаканы за день'}"></textarea>` +
       `<div class="chips" style="margin:12px 0 0">${s.examples.map((x) => `<button class="chip" data-example="${esc(x)}">${esc(x)}</button>`).join('')}</div>` +
       `<button class="btn primary" id="start" style="margin-top:12px">Дальше →</button></div>` +
-      `<p class="muted" style="font-size:14px;margin:0 4px">Я задам пару вопросов, ты дашь имя и подтвердишь план. Дальше всё сам: код, мини-приложение, аватар и запуск.</p>`;
+      `<p class="muted" style="font-size:14px;margin:0 4px">${so ? 'Я задам пару вопросов, ты дашь имя и подтвердишь план. Дальше соберу сайт сам, а потом закроешь его паролем или откроешь для всех.' : 'Я задам пару вопросов, ты дашь имя и подтвердишь план. Дальше всё сам: код, мини-приложение, аватар и запуск.'}</p>`;
   } else if (st === 'think') {
     h += idea(d) + `<div class="card fade"><div class="thinking">Думаю, что уточнить…</div></div>`;
   } else if (st === 'ask') {

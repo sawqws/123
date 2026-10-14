@@ -77,6 +77,7 @@ APPS = {  # имя в pm2 -> подпись
     SECRETARY: "🤖 Секретарь",
     "eye-bot": "👁 Глаз",
     "studio-bot": "🏗 Студия",
+    "studio-sites": "🌐 Сайты (сестра)",
     "catcher-bot": "🎯 Catcher",
     SELF: "👑 Главный",
 }

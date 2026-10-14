@@ -620,6 +620,57 @@ def free_port():
     return p
 
 
+class SitesOnlyMode(unittest.TestCase):
+    """STUDIO_MODE=sites — «Студия сайтов» для другого человека: только сайты, без /fix, Claude только в своей папке."""
+
+    def test_sites_mode_is_locked_down(self):
+        import subprocess
+        tmp = tempfile.mkdtemp(prefix="studio-sites-")
+        code = r"""
+import json, os, subprocess, sys
+sys.path.insert(0, os.environ["HERE"])
+import studio
+seen = []
+class P:
+    def __init__(self, cmd, **kw):
+        seen.append(cmd); self.stdout = iter([json.dumps({"type": "result", "result": "{}"}) + "\n"]); self.returncode = 0
+    def wait(self): return 0
+    def kill(self): pass
+orig, studio.subprocess.Popen = studio.subprocess.Popen, P
+studio.claude("сделай сайт для Глеба", os.environ["STUDIO_BOTS_DIR"])
+studio.claude("вопросы", os.environ["STUDIO_BOTS_DIR"], tools=False)
+studio.subprocess.Popen = orig
+st = studio.api_state(None)
+print(json.dumps({"support": studio.bot.support is None, "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
+                  "sites_only": st["sites_only"], "examples": st["examples"], "secretary": st["secretary"]}))
+"""
+        env = {**os.environ, "HERE": HERE, "STUDIO_MODE": "sites", "STUDIO_TG_NAME": "Site Studio",
+               "STUDIO_BOTS_DIR": os.path.join(tmp, "work"), "STUDIO_SITES_DIR": os.path.join(tmp, "work", "sites"),
+               "STUDIO_DATA": os.path.join(tmp, "data"), "STUDIO_PORT": "0"}
+        os.makedirs(env["STUDIO_BOTS_DIR"], exist_ok=True)
+        out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        r = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertTrue(r["support"])  # /fix выключен: правка кода сервера недоступна
+        self.assertTrue(r["sites_only"])
+        self.assertFalse(r["secretary"])
+        self.assertEqual(r["tg_name"], "Site Studio")
+        self.assertFalse([x for x in r["examples"] if any(w.startswith("бот") for w in x.split())])
+        build, talk = r["build"], r["talk"]
+        for cmd in (build, talk):
+            allowed = cmd[cmd.index("--allowedTools") + 1:cmd.index("--disallowedTools")]
+            denied = cmd[cmd.index("--disallowedTools") + 1:]
+            self.assertNotIn("Read", allowed)  # голый Read читал бы что угодно
+            self.assertFalse([t for t in allowed if t.startswith("Bash")])
+            for must in ("Bash", "WebFetch", "Read(//root/**)", "Read(//etc/**)", "Edit(//root/**)"):
+                self.assertIn(must, denied)
+            self.assertNotIn("Глеб", cmd[2])  # чужой человек: не «Глеб»
+            self.assertIn("Студия сайтов", cmd[2])
+        self.assertIn("Write(./**)", build)
+        self.assertNotIn("Write(./**)", talk)
+        self.assertIn("Write", talk[talk.index("--disallowedTools") + 1:])
+
+
 def wait_up(base):
     for _ in range(50):
         try:
