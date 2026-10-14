@@ -2,8 +2,10 @@
 import base64
 import json
 import os
+import re
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -422,6 +424,49 @@ def init_data(token, uid=1, age=0, **extra):
     check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
     pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return urllib.parse.urlencode(pairs)
+
+
+
+class Guests(BotBase):
+    """Гость по приглашению (/invite): заказывает пропуска, но не трогает вход, адрес, настройки и /fix."""
+
+    def start(self, text, uid):
+        kpp.on_message({"chat": {"id": uid, "type": "private"}, "from": {"id": uid, "first_name": "Аня"}, "text": text})
+
+    def test_invite_once_and_guest_limits(self):
+        with mock.patch.object(kpp, "bot_username", return_value="Taxii111bot"):
+            self.msg("/invite")
+        link = re.search(r"https://t\.me/Taxii111bot\?start=inv_([A-Za-z0-9]+)", self.texts()[-1])
+        self.assertTrue(link)
+        code = link.group(1)
+        self.start("/start", 42)
+        self.assertIn("личный бот", self.texts()[-1])  # без ссылки — нельзя
+        self.start(f"/start inv_{code}", 42)
+        self.assertTrue(kpp.allowed(42))
+        self.assertFalse(kpp.is_owner(42))
+        self.assertTrue(any("Аня теперь может" in t for t in self.texts()))  # владельцу сообщили
+        self.start(f"/start inv_{code}", 43)  # ссылка одноразовая
+        self.assertFalse(kpp.allowed(43))
+        for cmd in ("/login", "/logout", "/place", "/invite", "/update"):
+            self.start(cmd, 42)
+            self.assertIn("только владелец", self.texts()[-1])
+        self.assertEqual(kpp.st["jwt"], "j")  # /logout гостя ничего не стёр
+        with mock.patch.object(dl.Client, "create_taxi_pass", return_value={"items": [{"id": 9}]}):
+            self.start("А123ВС777", 42)
+        self.assertIn("Пропуск заказан", self.texts()[-1])
+        self.assertEqual(kpp.api_post(42, "/api/login", {"text": "x"})[0], 403)
+        kpp.on_callback({"id": "q", "from": {"id": 42}, "data": "m|auto", "message": {"chat": {"id": 42}, "message_id": 1}})
+        self.assertIn("только владелец", self.sent[-1][1].get("text", ""))
+
+    def test_expired_invite_and_remove_guest(self):
+        kpp.st["invites"] = {"old": time.time() - kpp.INVITE_TTL - 5}
+        self.start("/start inv_old", 50)
+        self.assertFalse(kpp.allowed(50))
+        kpp.st["guests"] = {"51": {"name": "Аня"}}
+        self.msg("/guests")
+        self.assertIn("Аня", self.texts()[-1])
+        kpp.on_callback({"id": "q", "from": {"id": 1}, "data": "gdel|51", "message": {"chat": {"id": 1}, "message_id": 1}})
+        self.assertFalse(kpp.allowed(51))
 
 
 class InitData(unittest.TestCase):
