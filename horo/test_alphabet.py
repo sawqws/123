@@ -184,9 +184,9 @@ class OldSheetTest(unittest.TestCase):
             self.assertAlmostEqual(np.ptp(z[f'{ord(ch)}_0'][:, 1]), A.SHORT_H, delta=0.15, msg=ch)
         self.assertAlmostEqual(np.ptp(z[f'{ord("В")}_0'][:, 1]), A.DIGIT_H, delta=0.15)
 
-    def test_old_latin_sheet_skips_letters_like_russian(self):
+    def test_old_latin_sheet_full(self):
         added, _ = A.ingest([self.sharp(old_sheet(3, 'abcdefg'))])
-        self.assertEqual(sorted(added), sorted('BbDdFfGg'))  # a c e — как русские, их не берём
+        self.assertEqual(sorted(added), sorted('AaBbCcDdEeFfGg'))  # английский — полный (Глеб, 14.10)
 
     def test_compressed_old_sheet_is_not_taken(self):
         # сжатый Telegram старый лист (889 px) даёт кривые буквы — не берём, просим новые листы файлами
@@ -203,6 +203,70 @@ class OldSheetTest(unittest.TestCase):
         added, errors = A.retry(folder)
         self.assertEqual(sorted(added), sorted('АаБб'))
         self.assertEqual(A.retry(folder), ([], []))  # второй раз ничего
+
+
+def fill3(page, skip=''):
+    """Лист v3, заполненный «синим»: большая на верхней строке клетки, маленькая на нижней."""
+    with tempfile.TemporaryDirectory() as d:
+        A.template3(page, os.path.join(d, 't.png'))
+        im = Image.open(os.path.join(d, 't.png')).convert('RGB')
+    dr = ImageDraw.Draw(im)
+    head, chars, paired = A.PAGES3[page]
+    cell_h = (A.H - A.TOP - A.BOTTOM) / 6
+    f = ImageFont.truetype(A.FONT, 110)
+    for i, ch in enumerate(chars):
+        if ch in skip:
+            continue
+        x0, x1, y0, _ = A.cell(i, 6, 6)
+        if paired:
+            dr.text((x0 + 40, y0 + cell_h * A.UP), ch.upper(), font=f, fill=(90, 160, 240), anchor='ls')
+            dr.text((x0 + 60, y0 + cell_h * A.LOW), ch, font=f, fill=(90, 160, 240), anchor='ls')
+        elif ch != '√':
+            dr.text((x0 + 50, y0 + cell_h * A.UP), ch, font=f, fill=(90, 160, 240), anchor='ls')
+    return im
+
+
+class SheetV3Test(unittest.TestCase):
+    """Листы v3 (с 14.10): 3 листа, оформлены одинаково, английский — все 26 букв."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        A.EXTRA = os.path.join(self.tmp.name, 'extra.npz')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def sharp(self, im):
+        path = os.path.join(self.tmp.name, f'in_{id(im)}.png')
+        im.save(path)
+        return path
+
+    def test_english_full_and_russian(self):
+        added, errors = A.ingest([self.sharp(fill3(1)), self.sharp(fill3(0, skip='ж'))])
+        self.assertEqual(errors, [])
+        eng = [c for c in added if c.lower() in 'abcdefghijklmnopqrstuvwxyz']
+        self.assertEqual(sorted(eng), sorted('abcdefghijklmnopqrstuvwxyz' + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))
+        ru = ''.join(c for c in added if c not in eng)
+        self.assertEqual(sorted(ru), sorted(A.PAGES3[0][1].replace('ж', '') + A.PAGES3[0][1].replace('ж', '').upper()))
+        z = np.load(A.EXTRA)
+        for ch in 'aenoаеио':
+            self.assertAlmostEqual(np.ptp(z[f'{ord(ch)}_0'][:, 1]), A.SHORT_H, delta=0.15, msg=ch)
+
+    def test_signs_and_compressed_sheet(self):
+        added, errors = A.ingest([as_telegram(fill3(2))])  # пришёл сжатым фото — берём и советуем файл
+        self.assertEqual(errors, [])
+        self.assertIn('0', added)
+        self.assertIn('9', added)
+        self.assertIn('файлом', A.ingest.tips[0])
+
+    def test_all_sheets_look_the_same(self):
+        # один размер, одна сетка 6×6 и подписи — на каждом листе
+        for page in range(len(A.PAGES3)):
+            path = os.path.join(self.tmp.name, f't{page}.png')
+            A.template3(page, path)
+            self.assertEqual(Image.open(path).size, (A.W, A.H))
+            self.assertLessEqual(len(A.PAGES3[page][1]), 36)
+        self.assertEqual(len(A.PAGES3[1][1]), 26)
 
 
 class StyleTest(unittest.TestCase):
