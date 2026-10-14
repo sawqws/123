@@ -76,8 +76,8 @@ const I = {
   x: '<svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>',
   flag: '<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
 };
-// пастельная палитра целей: насыщенно — только кольца, точки и полоски, текст темнее (в app.css)
-const COLORS = { violet: '#9a88d8', blue: '#6d9fd6', teal: '#5fb3a6', green: '#7cb38a', amber: '#dcae5a', orange: '#e3906b', rose: '#de8a93', pink: '#cf8fb8' };
+// палитра целей под тёмное стекло: светлые насыщенные тона (кольца, точки, полоски, подписи)
+const COLORS = { violet: '#b4a5f5', blue: '#8dbcf2', teal: '#7dd6c6', green: '#9bd696', amber: '#ecc677', orange: '#f0a47c', rose: '#f39aa3', pink: '#e8a3d2' };
 const EMOJI = ['🎯', '🏆', '🥊', '💪', '🏃', '📚', '🧠', '💡', '💻', '🚀', '🎨', '🎵', '🎮', '📈', '💰', '🏠', '✈️', '🌱', '🧘', '❤️', '😴', '🍎', '💧', '📝', '🎓', '🗣️', '🤝', '🎉', '⭐', '🔥', '⚡', '🌍'];
 const HZ = { week: 'Неделя', month: 'Месяц', year: 'Год', none: 'Без срока' };
 const gc = g => COLORS[g && g.color] || COLORS.violet;
@@ -493,7 +493,7 @@ function toast(text, action, fn) {
 function confetti() {
   const c = $('#confetti'), x = c.getContext('2d'), dpr = devicePixelRatio || 1;
   c.width = innerWidth * dpr; c.height = innerHeight * dpr; x.scale(dpr, dpr);
-  const cols = ['#e3906b', '#f2c1a6', '#dcae5a', '#7cb38a', '#6d9fd6', '#cf8fb8'];
+  const cols = ['#f0a47c', '#d6b26e', '#f0d7a4', '#9bd696', '#8dbcf2', '#e8a3d2'];
   const ps = Array.from({ length: 140 }, () => ({
     x: innerWidth / 2 + (Math.random() - .5) * 80, y: innerHeight * .45, vx: (Math.random() - .5) * 13, vy: -Math.random() * 15 - 5,
     r: Math.random() * 6 + 4, c: cols[Math.random() * cols.length | 0], a: Math.random() * 6, va: (Math.random() - .5) * .4,
