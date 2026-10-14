@@ -1530,13 +1530,13 @@ def asset_version():
 
 
 PAGE_DONE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark"><title>Форма</title><style>
-body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:#f2f2f7;color:#000;
+<meta name="color-scheme" content="light"><title>Форма</title><style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:#f6f3ee;color:#1f1b17;
 font:17px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;text-align:center}}
-div{{max-width:340px;background:#fff;border-radius:16px;padding:32px 24px;overflow-wrap:anywhere}}
-b{{font-size:44px;display:block;margin-bottom:16px}}a{{display:block;margin-top:24px;padding:14px;border-radius:12px;
-background:#007aff;color:#fff;text-decoration:none;font-weight:600}}
-@media (prefers-color-scheme:dark){{body{{background:#000;color:#fff}}div{{background:#1c1c1e}}a{{background:#0a84ff}}}}
+div{{max-width:340px;background:#fff;border:1px solid rgba(70,50,30,.065);border-radius:26px;padding:34px 26px;overflow-wrap:anywhere;
+box-shadow:0 1px 1px rgba(70,45,20,.03),0 12px 32px -16px rgba(70,45,20,.16)}}
+b{{font-size:44px;display:block;margin-bottom:16px}}a{{display:block;margin-top:24px;padding:14px;border-radius:999px;
+background:#c5e9dc;color:#1f1b17;text-decoration:none;font-weight:600}}
 </style><div><b>{icon}</b>{text}<a href="{link}">Вернуться в Telegram</a></div>"""
 
 
