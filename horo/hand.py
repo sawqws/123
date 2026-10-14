@@ -91,13 +91,59 @@ GLYPHS = {  # символ: (список штрихов, ширина)
 # ---------- настоящие буквы Глеба (вырезаны с его скриншотов, см. horo/fonts/gleb.npz) ----------
 BANK = {}
 _here = os.path.dirname(os.path.abspath(__file__))
+def _step(pts):
+    """Шаг сетки, на которой снят скелет буквы (1/80 у старого банка, 1/320 — у снятого с увеличением)."""
+    d = np.abs(np.diff(np.sort(pts[:, 0])))
+    d = d[d > 1e-6]
+    return float(d.min()) if len(d) else 1 / 80
+
+
+def _strokes(pts, step):
+    """Точки скелета (пиксели вперемешку) -> штрихи по порядку: от концов линии по соседним пикселям."""
+    q = {tuple(p) for p in np.round(pts / step).astype(int)}
+    nb = lambda p: [(p[0] + dx, p[1] + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                    if (dx or dy) and (p[0] + dx, p[1] + dy) in q]
+    seen, out = set(), []
+    for s in sorted(q, key=lambda p: (len(nb(p)) != 1, p)):  # сначала концы штрихов
+        if s in seen:
+            continue
+        path, cur = [s], s
+        seen.add(s)
+        while True:
+            nxt = sorted((n for n in nb(cur) if n not in seen), key=lambda n: abs(n[0] - cur[0]) + abs(n[1] - cur[1]))
+            if not nxt:
+                break
+            cur = nxt[0]
+            seen.add(cur)
+            path.append(cur)
+        out.append(np.array(path, float) * step)
+    return out
+
+
+def smooth(pts, win=7):
+    """Буква из алфавита: скелет мелкой буквы с листа зубчатый — сглаживаем каждый штрих, как ровный росчерк пера."""
+    out, step = [], _step(pts)
+    win = max(3, int(win * (1 / 80) / step) // 2 * 2 + 1)  # окно сглаживания — одной длины на любой сетке
+    for p in _strokes(pts, step):
+        k = min(win, (len(p) - 1) // 2 * 2 + 1)
+        if k >= 3:
+            pad = np.concatenate([np.repeat(p[:1], k // 2, 0), p, np.repeat(p[-1:], k // 2, 0)])
+            sm = np.stack([np.convolve(pad[:, i], np.ones(k) / k, 'valid') for i in (0, 1)], 1)
+            sm[0], sm[-1] = p[0], p[-1]
+            n = np.maximum(1, (np.hypot(*np.diff(sm, axis=0).T) / (step / 2)).astype(int))  # плотно: перо без дыр
+            p = np.vstack([sm[:1]] + [sm[i] + (sm[i + 1] - sm[i]) * np.linspace(0, 1, n[i] + 1)[1:, None]
+                                      for i in range(len(sm) - 1)])
+        out.append(p)
+    return np.concatenate(out).astype(np.float32)
+
 # gleb_extra.npz — буквы из его алфавита (horo/alphabet.py), лежат вне репозитория
 for _bp in (os.path.join(_here, 'fonts', 'gleb.npz'), os.path.join(_here, 'tmp', 'fonts', 'gleb_extra.npz')):
     if os.path.exists(_bp):
         _z = np.load(_bp)
         for _k in _z.files:
             if not _k.endswith('w'):
-                BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_z[_k], float(_z[_k + 'w'])))
+                _p = _z[_k] if _bp.endswith('gleb.npz') else smooth(_z[_k])
+                BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_p, float(_z[_k + 'w'])))
 
 # латинские буквы, которые пишутся как русские (их нет в алфавите отдельно), и наоборот
 ALIAS = dict(zip('aceopxyACEHKMOPTXB', 'асеорхуАСЕНКМОРТХВ'))
@@ -209,14 +255,15 @@ class Hand:
                 if ch in BANK and sup: sup = False       # у надстрочных своя высота в банке
             else:
                 pts, w = glyph(c)
-            k = xh * random.uniform(1 - 0.1 * m, 1 + 0.12 * m) * (0.68 if sup else 1)
+            k = xh * (random.uniform(1 - 0.04 * m, 1 + 0.05 * m) if real else random.uniform(1 - 0.1 * m, 1 + 0.12 * m)) \
+                * (0.68 if sup else 1)  # его буквы одного размера: прыгающий размер и делал почерк корявым
             up = xh * random.uniform(0.75, 0.9) if sup else xh * 0.4 if dot else 0
             if sup: x -= xh * 0.08
             if real:
-                prm = dict(real=pts, sx=random.uniform(0.94, 1.06), sy=random.uniform(0.94, 1.06), slant=0,
-                           rot=random.uniform(-0.03, 0.03) * m, amp=0)
+                prm = dict(real=pts, sx=random.uniform(0.97, 1.03), sy=random.uniform(0.97, 1.03), slant=0,
+                           rot=random.uniform(-0.02, 0.02) * m, amp=0)
                 out.append((c, x, up, k, prm))
-                x += w * k * prm['sx'] + xh * random.uniform(0.32 - 0.1 * m, 0.32 + 0.14 * m) * (0.5 if sup else 1)
+                x += w * k * prm['sx'] + xh * random.uniform(0.26, 0.26 + 0.08 * m) * (0.5 if sup else 1)
                 continue
             prm = dict(sx=random.uniform(1 - 0.12 * m, 1 + 0.15 * m), sy=random.uniform(1 - 0.12 * m, 1 + 0.1 * m),
                        slant=self.sl + random.uniform(-0.06, 0.08) * m, rot=random.uniform(-0.07, 0.07) * m,
@@ -233,10 +280,10 @@ class Hand:
         if lay:  # длинная строка (числитель дроби) не должна уехать за свою высоту: иначе черта дроби режет буквы
             span = max(lay[-1][1], xh)
             tilt = max(-0.3 * xh / span, min(0.3 * xh / span, tilt))
-        amp = xh * random.uniform(0.06, 0.14) * m
+        amp = xh * random.uniform(0.04, 0.09) * m
         for c, x, up, k, p in lay:
             gx = x0 + x
-            gy = base - up + amp * line(gx) + (gx - x0) * tilt + random.uniform(-0.08, 0.08) * m * xh
+            gy = base - up + amp * line(gx) + (gx - x0) * tilt + random.uniform(-0.035, 0.035) * m * xh
             for st in ([p['real']] if 'real' in p else glyph(c)[0]):
                 n = len(st)
                 if c in GLYPHS and 'real' not in p and n > 40:               # штрих то не дотянут, то короче: кружки не всегда замкнуты
