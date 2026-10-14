@@ -339,170 +339,153 @@ body.has-tabbar .sup-fab { bottom: calc(82px + var(--bottom)); }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 
-/* ========== Оникс-стекло (Глеб, 14.10: вариант 6+7 «А»): чёрный, золото, шрифт iPhone SF Pro, крупные скругления, стекло как в iOS 26 ==========
-   Всегда тёмная тема (kit.js ставит data-scheme="dark" и красит шапку Telegram в --bg). За стеклом — золотые
-   «пятна» (body::before, z-index −1), поэтому фон держит html, а body прозрачный. У бота свой только --accent:
-   --accent-soft (стеклянный фон), --accent-pastel (заливка на стекле), --accent-line, --accent-deep (светлый тон — текст/иконки).
-   Главная кнопка у всех — золотое стекло (--gold). */
+/* ========== Пастель (как iPhone): светлый тёплый фон, белые карточки, мягкие тени, пастельный акцент ==========
+   Всегда светлая тема (kit.js ставит data-scheme="light" и красит шапку Telegram в --bg).
+   У бота свой только --accent; из него: --accent-soft (фон), --accent-pastel (заливка кнопки), --accent-deep (текст). */
 :root, html[data-scheme] {
-  color-scheme: dark;
-  --bg: #070708;
-  --card: rgba(255, 255, 255, .055);
-  --card-2: rgba(255, 255, 255, .085);
-  --text: #f6f1e7;
-  --ink: #f6f1e7;
-  --hint: rgba(240, 232, 215, .52);
-  --link: var(--gold-ink);
-  --sep: rgba(255, 255, 255, .07);
-  --line: rgba(255, 255, 255, .08);
-  --field: rgba(255, 255, 255, .07);
-  --ok: #92d48c;
-  --warn: #e9c06c;
-  --err: #f28c7f;
-  --gold: #d6b26e;
-  --gold-ink: #f0d7a4;
-  --accent-soft: color-mix(in srgb, var(--accent) 17%, transparent);
-  --accent-pastel: color-mix(in srgb, var(--accent) 34%, transparent);
-  --accent-line: color-mix(in srgb, var(--accent) 42%, transparent);
-  --accent-deep: color-mix(in srgb, var(--accent) 58%, #ffffff);
+  color-scheme: light;
+  --bg: #f6f3ee;
+  --card: #ffffff;
+  --card-2: #faf8f4;
+  --text: #1f1b17;
+  --ink: #1f1b17;
+  --hint: #8f877e;
+  --link: var(--accent-deep);
+  --sep: rgba(70, 50, 30, .08);
+  --line: rgba(70, 50, 30, .065);
+  --field: #f2eee8;
+  --ok: #3f9d6b;
+  --warn: #c98327;
+  --err: #d0584c;
+  --accent-soft: color-mix(in srgb, var(--accent) 13%, #ffffff);
+  --accent-pastel: color-mix(in srgb, var(--accent) 30%, #ffffff);
+  --accent-line: color-mix(in srgb, var(--accent) 26%, #ffffff);
+  --accent-deep: color-mix(in srgb, var(--accent) 62%, #1f1b17);
   --accent-2: color-mix(in srgb, var(--accent) 70%, #ffffff);
-  --accent-ink: #f6f1e7;
-  --r-xl: 32px; --r-lg: 26px; --r-md: 20px; --r-sm: 14px;
-  --blur: blur(24px) saturate(1.7);
-  --hl: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 0 0 1px rgba(255, 255, 255, .07);
-  --shadow: var(--hl), 0 22px 44px -26px rgba(0, 0, 0, .9);
-  --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 50px -18px rgba(0, 0, 0, .95);
-  --glass: rgba(28, 27, 31, .62);
-  --round: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;  /* шрифт iPhone — SF Pro (вариант «А») */
-  --font: var(--round); --font-d: var(--round);
-  --serif: var(--round);  /* прежнее имя: заголовки и цифры — тоже SF Pro */
+  --r-xl: 26px; --r-lg: 22px; --r-md: 16px; --r-sm: 12px;
+  --shadow: 0 1px 1px rgba(70, 45, 20, .03), 0 12px 32px -16px rgba(70, 45, 20, .16);
+  --shadow-lg: 0 2px 4px rgba(70, 45, 20, .04), 0 24px 48px -20px rgba(70, 45, 20, .22);
+  --glass: #ffffff;
+  --serif: ui-serif, "New York", "Iowan Old Style", "Times New Roman", Georgia, serif;
 }
 
-html { background: var(--bg); }
-body { background: transparent; color: var(--text); padding-bottom: calc(84px + var(--bottom)); font-family: var(--round); }
-button, input, textarea, select { font-family: var(--round); }
-/* золотые пятна за стеклом — без них размывать нечего; лёгкий оттенок акцента бота */
+html, body { background: var(--bg); color: var(--text); }
+/* место под плавающей «Поддержкой», чтобы она не закрывала последнюю строку */
+body { padding-bottom: calc(84px + var(--bottom)); }
+/* едва заметная пастельная дымка акцента сверху — «лицо» бота */
 body::before {
-  content: ""; position: fixed; inset: 0; height: auto; z-index: -1; pointer-events: none;
-  background:
-    radial-gradient(60% 32% at 95% 4%, rgba(224, 180, 100, .42), transparent 70%),
-    radial-gradient(55% 30% at -8% 48%, rgba(150, 100, 45, .36), transparent 70%),
-    radial-gradient(60% 30% at 40% 104%, color-mix(in srgb, var(--accent) 30%, rgba(214, 178, 110, .3)), transparent 70%);
+  content: ""; position: fixed; inset: 0 0 auto; height: 46vh; z-index: -1; pointer-events: none;
+  background: radial-gradient(90% 70% at 50% -10%, var(--accent-soft), transparent 72%);
 }
 body::after { content: none; }
 
-/* шапка: засечки, логотип — золотое стекло */
+/* шапка: заголовок с засечками (New York на iPhone), логотип — пастельная плитка */
 .hero { padding: 14px 2px 22px; }
 .hero .logo {
-  width: 54px; height: 54px; border-radius: 18px; font-size: 26px;
-  background: linear-gradient(160deg, rgba(255, 240, 210, .3), rgba(214, 178, 110, .1));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 0 0 1px rgba(214, 178, 110, .45), 0 12px 28px -14px rgba(214, 178, 110, .6);
-  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  width: 54px; height: 54px; border-radius: 17px; font-size: 27px;
+  background: linear-gradient(160deg, #ffffff, var(--accent-pastel));
+  box-shadow: 0 10px 24px -14px var(--accent-deep), inset 0 0 0 1px rgba(255, 255, 255, .7);
 }
-.hero h1, .title-xl { font-family: var(--round); font-weight: 700; letter-spacing: -.6px; }
-.hero h1 { font-size: 30px; }
-.hero .sub, .hint, .muted { color: var(--hint); }
-.title-lg { font-family: var(--round); font-weight: 750; letter-spacing: -.3px; }
-.label { color: var(--hint); font-size: 13px; font-weight: 650; letter-spacing: 0; text-transform: none; margin: 26px 10px 10px; }
-.label .more { color: var(--gold-ink); letter-spacing: 0; }
+.hero h1, .title-xl { font-family: var(--serif); font-weight: 600; letter-spacing: -.3px; }
+.hero h1 { font-size: 28px; }
+.hero .sub { color: var(--hint); }
+.title-lg { font-weight: 650; letter-spacing: -.3px; }
+.label { color: var(--hint); font-size: 12px; font-weight: 600; letter-spacing: .9px; margin: 26px 8px 10px; }
+.label .more { color: var(--accent-deep); }
 
-/* стекло: карточки, списки, цифры */
-.card, .list, .stat, .chip, .seg, .tabbar, .toast, .sup-fab, .sheet, .btn, input, textarea, select {
-  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-}
-.card, .list, .stat { background: var(--card); border: 0; box-shadow: var(--shadow); }
+/* карточки и списки — белые, тонкая линия, мягкая тень */
+.card, .list, .stat { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .card { border-radius: var(--r-xl); padding: 20px; }
-.card > h2, .card > .card-title { font-family: var(--round); font-weight: 750; letter-spacing: -.2px; }
-/* вложенное стекло не размываем второй раз */
-.card .stat, .card .list { -webkit-backdrop-filter: none; backdrop-filter: none; }
-.card .stat { background: rgba(255, 255, 255, .05); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.card > h2, .card > .card-title { font-weight: 650; letter-spacing: -.2px; }
+.card .stat { background: var(--card-2); border: 1px solid var(--line); box-shadow: none; }
 .card .list { background: transparent; border: 0; box-shadow: none; margin: 0 -20px -20px; }
-.card.flat { box-shadow: var(--hl); }
-.card.feature { border: 0; background: linear-gradient(160deg, rgba(214, 178, 110, .2), rgba(255, 255, 255, .045) 62%); }
-.card.accent { background: linear-gradient(160deg, var(--accent-pastel), rgba(255, 255, 255, .05)); color: var(--ink); }
-.card.accent .hint, .card.accent .muted { color: var(--hint); }
-.stat { border-radius: var(--r-lg); }
-.stat .v, .big-num { color: var(--ink); font-family: var(--round); font-weight: 700; letter-spacing: -.6px; }
-
-/* кнопки: прозрачные капсулы с бликом; главная — золотое стекло */
-.btn { border-radius: 999px; background: rgba(255, 255, 255, .08); color: var(--ink); border: 0; font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 0 0 1px rgba(255, 255, 255, .08); }
-.btn.primary {
-  background: linear-gradient(180deg, rgba(246, 222, 170, .62), rgba(196, 152, 78, .42)); color: #fff7e6; border: 0;
-  text-shadow: 0 1px 1px rgba(80, 55, 15, .35);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 1px rgba(240, 210, 150, .45), 0 12px 28px -12px rgba(214, 178, 110, .75);
+.card.flat { box-shadow: none; }
+.card.feature {
+  border-color: var(--accent-line);
+  background: linear-gradient(165deg, var(--accent-soft), #ffffff 70%);
 }
-.btn.tonal { background: var(--accent-soft); color: var(--accent-deep); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 0 0 1px var(--accent-line); }
-.btn.ghost { background: transparent; color: var(--gold-ink); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
-.btn.danger { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px color-mix(in srgb, var(--err) 30%, transparent); }
+.card.accent { background: linear-gradient(160deg, var(--accent-pastel), var(--accent-soft)); color: var(--ink); border-color: var(--accent-line); }
+.card.accent .hint, .card.accent .muted { color: color-mix(in srgb, var(--ink) 60%, transparent); }
+.stat { border-radius: var(--r-lg); }
+.stat .v, .big-num { color: var(--ink); }
+
+/* кнопки — капсулы; главная — пастельная заливка акцента с тёмным текстом */
+.btn { border-radius: 999px; background: var(--field); color: var(--ink); border: 0; box-shadow: none; font-weight: 600; }
+.btn.primary {
+  background: var(--accent-pastel); color: var(--ink); border: 0;
+  box-shadow: 0 10px 22px -14px var(--accent-deep), inset 0 0 0 1px rgba(255, 255, 255, .5);
+}
+.btn.tonal { background: var(--accent-soft); color: var(--accent-deep); border: 0; }
+.btn.ghost { background: transparent; color: var(--accent-deep); box-shadow: none; }
+.btn.danger { background: color-mix(in srgb, var(--err) 10%, #ffffff); color: var(--err); border: 0; }
 .btn.sm { border-radius: 999px; }
 
-/* поля — тёмное стекло, фокус — золотое кольцо */
-input, textarea, select { background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .08); color: var(--ink); border-radius: var(--r-md);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .3); }
-input::placeholder, textarea::placeholder { color: var(--hint); opacity: .8; }
-input:focus, textarea:focus, select:focus { background: rgba(255, 255, 255, .09); border-color: rgba(214, 178, 110, .55);
-  box-shadow: 0 0 0 4px rgba(214, 178, 110, .16); }
-select option { background: #1a191c; color: var(--ink); }
-/* поле внутри стеклянной карточки не размываем второй раз — иначе тёмный прямоугольник */
-.card input, .card textarea, .card select, .list input, .list textarea, .sheet input, .sheet textarea { -webkit-backdrop-filter: none; backdrop-filter: none; }
+/* поля — тёплый «туман», без рамки; фокус — пастельное кольцо */
+input, textarea, select {
+  background: var(--field); border: 1px solid transparent; box-shadow: none; color: var(--ink);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+input:focus, textarea:focus, select:focus { background: #ffffff; border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-soft); }
 
 /* строки «как в Настройках» */
 .row + .row::before { background: var(--sep); }
-button.row:active, a.row:active, .row.tap:active { background: rgba(255, 255, 255, .06); }
-.row .ic { background: var(--accent-soft); color: var(--accent-deep); border-radius: 50%; box-shadow: inset 0 0 0 1px var(--accent-line); }
-.row .ic.solid { background: linear-gradient(160deg, rgba(246, 222, 170, .5), rgba(196, 152, 78, .3)); color: #fff7e6; }
-.row .chev::after { color: rgba(240, 232, 215, .35); opacity: 1; }
+button.row:active, a.row:active, .row.tap:active { background: var(--card-2); }
+.row .ic { background: var(--accent-soft); color: var(--accent-deep); border-radius: 10px; box-shadow: none; }
+.row .ic.solid { background: var(--accent-pastel); color: var(--ink); }
+.row .title { font-weight: 560; }
+.row .chev::after { color: #c5beb5; opacity: 1; }
 
 /* метки, чипы, переключатели */
-.pill { background: rgba(255, 255, 255, .08); color: var(--hint); }
-.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
-.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
-.pill.err { color: var(--err); background: color-mix(in srgb, var(--err) 15%, transparent); }
+.pill { background: var(--field); color: var(--hint); }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, #ffffff); }
+.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, #ffffff); }
+.pill.err { color: var(--err); background: color-mix(in srgb, var(--err) 11%, #ffffff); }
 .pill.accent { color: var(--accent-deep); background: var(--accent-soft); }
-.chip { background: rgba(255, 255, 255, .07); border: 0; color: var(--ink); box-shadow: var(--hl); }
-.chip.on { background: rgba(214, 178, 110, .24); color: var(--gold-ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), inset 0 0 0 1px rgba(214, 178, 110, .5); }
-.seg { background: rgba(255, 255, 255, .06); border: 0; box-shadow: var(--hl); border-radius: 999px; }
-.seg button { color: var(--hint); border-radius: 999px; }
-.seg button.on { background: rgba(255, 255, 255, .14); color: var(--ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 3px 10px -4px rgba(0, 0, 0, .6); }
-.switch { background: rgba(255, 255, 255, .14); }
-.switch.on { background: var(--gold); }
+.chip { background: var(--card); border: 1px solid var(--line); color: var(--ink); box-shadow: 0 1px 2px rgba(70, 45, 20, .04); }
+.chip.on { background: var(--accent-pastel); color: var(--ink); border-color: transparent; }
+.seg { background: var(--field); border: 0; box-shadow: none; border-radius: 13px; }
+.seg button { color: var(--hint); }
+.seg button.on { background: #ffffff; color: var(--ink); box-shadow: 0 1px 2px rgba(70, 45, 20, .06), 0 4px 12px -6px rgba(70, 45, 20, .2); }
+.switch { background: #e6e0d8; }
+.switch.on { background: color-mix(in srgb, var(--ok) 70%, #ffffff); }
 
 /* прогресс */
-.bar { background: rgba(255, 255, 255, .08); }
+.bar { background: var(--field); }
 .bar > i { background: linear-gradient(90deg, var(--accent-pastel), var(--accent)); }
-.ring { background: conic-gradient(var(--accent) calc(var(--p) * 1%), rgba(255, 255, 255, .08) 0); }
+.ring { background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--field) 0); }
 
-/* нижние вкладки — стеклянная капсула */
-.tabbar { background: rgba(255, 255, 255, .08); border: 0; border-radius: 999px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px rgba(255, 255, 255, .08), 0 16px 34px -14px rgba(0, 0, 0, .9); }
-.tabbar button { border-radius: 999px; color: var(--hint); }
-.tabbar button .i { filter: grayscale(1) opacity(.6) brightness(1.6); }
-.tabbar button.on { color: var(--gold-ink); background: rgba(214, 178, 110, .2); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14); }
+/* нижние вкладки — белая капсула, как док iPhone */
+.tabbar {
+  background: rgba(255, 255, 255, .94); border: 1px solid var(--line); border-radius: 28px;
+  -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: 0 18px 40px -20px rgba(70, 45, 20, .3), 0 1px 2px rgba(70, 45, 20, .05);
+}
+.tabbar button { border-radius: 22px; color: var(--hint); }
+.tabbar button .i { filter: grayscale(1) opacity(.6); }
+.tabbar button.on { color: var(--accent-deep); background: var(--accent-soft); box-shadow: none; }
 .tabbar button.on .i { filter: none; }
 
-/* лист снизу — тёмное стекло */
-.sheet-backdrop { background: rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
-.sheet { background: rgba(22, 21, 24, .78); border: 0; border-radius: 36px 36px 0 0;
-  -webkit-backdrop-filter: blur(36px) saturate(1.7); backdrop-filter: blur(36px) saturate(1.7);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 -16px 50px rgba(0, 0, 0, .6); }
-.sheet::before { background: rgba(255, 255, 255, .3); opacity: 1; }
-.sheet h2 { font-family: var(--round); font-weight: 700; letter-spacing: -.4px; }
-.sheet-x { background: rgba(255, 255, 255, .1); color: var(--ink); }
+/* лист снизу */
+.sheet-backdrop { background: rgba(40, 30, 20, .22); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+.sheet {
+  background: var(--bg); border: 0; border-radius: 30px 30px 0 0;
+  -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 -12px 40px rgba(70, 45, 20, .16);
+}
+.sheet::before { background: #cfc7bd; opacity: 1; }
+.sheet h2 { font-family: var(--serif); font-weight: 600; letter-spacing: -.2px; }
+.sheet-x { background: var(--field); color: var(--hint); -webkit-backdrop-filter: none; backdrop-filter: none; }
 
 /* уведомление и кнопка поддержки */
-.toast { background: rgba(28, 27, 31, .7); color: var(--ink); border: 0; border-radius: 999px; box-shadow: var(--shadow-lg); }
+.toast { background: #ffffff; color: var(--ink); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-lg);
+  -webkit-backdrop-filter: none; backdrop-filter: none; }
 .toast.err { color: var(--err); } .toast.ok { color: var(--ok); }
-.sup-fab { background: rgba(255, 255, 255, .09); color: var(--ink); border: 0; box-shadow: var(--shadow-lg); }
-.sup-x { background: rgba(255, 255, 255, .14); }
+.sup-fab { background: #ffffff; color: var(--ink); border: 1px solid var(--line); box-shadow: var(--shadow-lg);
+  -webkit-backdrop-filter: none; backdrop-filter: none; }
+.sup-x { background: var(--field); }
 
 /* пусто, загрузка, заметки */
 .empty b { color: var(--ink); }
-.sk { background: rgba(255, 255, 255, .07); }
-.note { background: var(--accent-soft); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent-line); }
-.note.err { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err); box-shadow: none; }
-.note.ok { background: color-mix(in srgb, var(--ok) 13%, transparent); box-shadow: none; }
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root, html[data-scheme] { --card: #151417; --glass: #151417; }
-}
+.sk { background: var(--field); }
+.note { background: var(--accent-soft); color: var(--ink); }
+.note.err { background: color-mix(in srgb, var(--err) 10%, #ffffff); color: var(--err); }
+.note.ok { background: color-mix(in srgb, var(--ok) 10%, #ffffff); }

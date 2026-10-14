@@ -1,5 +1,5 @@
-/* КПП: жёлтый «такси» в мелочах. Общий вид — kit.css (оникс-стекло), здесь только акцент и своё:
-   госномер (белый, как настоящий — единственное светлое на экране), стеклянные плитки, результат, вход, пропуска. */
+/* КПП: тёплый пастельный жёлтый «такси». Общий вид — kit.css (пастель), здесь только акцент и своё:
+   госномер, плитки быстрых действий, результат, вход, последние пропуска. */
 :root { --accent: #f0b43c; --accent-ink: var(--ink); }
 
 /* шапка: адрес — кнопка смены корпуса */
@@ -17,18 +17,21 @@
 .hint.lead { margin: 6px 0 20px; font-size: 15px; line-height: 1.4; }
 .clip2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
-/* главная карточка — тёмное стекло с тёплым золотым верхом (фон — из общего .card.feature) */
-.card.feature { padding: 22px 20px 20px; }
+/* главная карточка — белая, с едва тёплым верхом: табличка сама по себе главный акцент */
+.card.feature {
+  padding: 22px 20px 20px; border-color: var(--line);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, #ffffff), #ffffff 58%);
+}
 
-/* заголовки карточек (вход, адрес, результат) — SF Rounded жирный */
-.card > h2.title-lg { font-family: var(--round); font-weight: 800; font-size: 25px; letter-spacing: -.4px; }
+/* заголовки карточек (вход, адрес, результат) — засечки, как у шапки */
+.card > h2.title-lg { font-family: var(--serif); font-weight: 600; font-size: 25px; letter-spacing: -.3px; }
 
 /* ---------- госномер ---------- */
 .rp {
   --plate-ink: #1d1c1f;
   display: inline-flex; align-items: stretch; flex: none; height: 1.42em; padding: .04em;
   border-radius: .15em; background: #fff; color: var(--plate-ink);
-  box-shadow: 0 0 0 .02em rgba(0, 0, 0, .5), 0 .12em .4em -.06em rgba(0, 0, 0, .7);
+  box-shadow: 0 0 0 .02em rgba(40, 30, 20, .28), 0 .06em .22em -.04em rgba(70, 45, 20, .22);
   font-family: "DIN Alternate", "Roboto Mono", ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700;
   line-height: 1; white-space: nowrap; user-select: none;
 }
@@ -42,7 +45,7 @@
 .rp .gap { display: inline-block; width: .16em; }
 .rp-num { display: flex; align-items: center; height: .74em; }
 .rp-num span.d { width: .5em; font-size: .72em; }
-.rp-rus { display: flex; align-items: center; gap: .08em; margin-top: .06em; font: 700 .24em/1 -apple-system, system-ui, sans-serif; letter-spacing: .06em; }
+.rp-rus { display: flex; align-items: center; gap: .08em; margin-top: .06em; font: 700 .24em/1 var(--font); letter-spacing: .06em; }
 .rp .flag { display: inline-block; width: 1.4em; height: .9em; border: .5px solid rgba(0, 0, 0, .25);
   background: linear-gradient(#fff 33.3%, #2f62c8 0 66.6%, #d23a2c 0); }
 .rp .ghost { color: rgba(29, 28, 31, .14); }
@@ -51,7 +54,7 @@
 .rp .cur { position: relative; }
 .rp .cur::after { content: ""; position: absolute; left: 12%; right: 12%; bottom: -.04em; height: .07em; border-radius: 1px;
   background: var(--accent); animation: kpp-blink 1s steps(2) infinite; }
-.rp.mini { font-size: 15px; box-shadow: 0 2px 8px -3px rgba(0, 0, 0, .7); }
+.rp.mini { font-size: 15px; box-shadow: 0 0 0 .03em rgba(40, 30, 20, .22); }
 @keyframes kpp-blink { 50% { opacity: 0; } }
 
 /* большое поле номера: табличка во всю ширину, настоящее поле ввода прозрачное поверх */
@@ -60,7 +63,7 @@
 .plate-box { display: flex; justify-content: center; }
 .plate-box .rp.big { font-size: min(14.6cqw, 62px); width: 100%; }
 .plate-field:not(.focus) .rp .cur::after { display: none; }
-.plate-field.focus .rp { box-shadow: 0 0 0 .02em rgba(0, 0, 0, .5), 0 0 0 6px rgba(214, 178, 110, .3), 0 .12em .4em -.06em rgba(0, 0, 0, .7); }
+.plate-field.focus .rp { box-shadow: 0 0 0 .02em rgba(40, 30, 20, .28), 0 0 0 6px var(--accent-soft), 0 .06em .22em -.04em rgba(70, 45, 20, .22); }
 .plate-field input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; padding: 0;
   border: 0; background: none; color: transparent; caret-color: transparent; box-shadow: none; }
 .plate-field.shake { animation: kpp-shake .4s; }
@@ -70,21 +73,21 @@
 .plate-field.ok + .plate-hint { color: var(--ink); font-weight: 600; letter-spacing: .6px; }
 .btn.go { min-height: 56px; font-size: 17px; }
 
-/* быстрые действия — три стеклянные плитки с тонкими значками (вложены в карточку — без второго размытия) */
+/* быстрые действия — три белые плитки с тонкими значками */
 .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 0;
-  min-height: 86px; padding: 12px 4px 10px; border: 0; border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, .06); color: var(--ink); box-shadow: var(--hl);
-  font: 650 14px/1.15 var(--round); cursor: pointer; transition: transform .16s var(--ease), opacity .2s, background .2s; }
-.tile .i { display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 3px; border-radius: 50%;
-  background: var(--accent-soft); color: var(--accent-deep); box-shadow: inset 0 0 0 1px var(--accent-line); }
+  min-height: 86px; padding: 12px 4px 10px; border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(70, 45, 20, .04), 0 8px 18px -14px rgba(70, 45, 20, .22);
+  font: 600 14px/1.15 var(--font); cursor: pointer; transition: transform .16s var(--ease), opacity .2s, background .2s; }
+.tile .i { display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 3px; border-radius: 11px;
+  background: var(--accent-soft); color: var(--accent-deep); }
 .tile .i svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round;
   stroke-linejoin: round; }
 .tile small { max-width: 100%; color: var(--hint); font-size: 11.5px; font-weight: 500; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.tile:active { transform: scale(.96); background: rgba(255, 255, 255, .1); }
+.tile:active { transform: scale(.96); background: var(--card-2); }
 .tile[disabled] { opacity: .45; pointer-events: none; box-shadow: none; }
-.tile[disabled] .i { background: var(--field); color: var(--hint); box-shadow: none; }
+.tile[disabled] .i { background: var(--field); color: var(--hint); }
 .tile.busy { opacity: .6; pointer-events: none; }
 .tile.busy .i { animation: kit-pulse 1s ease-in-out infinite; }
 
@@ -100,11 +103,11 @@
 .result .note { margin-top: 16px; text-align: left; line-height: 1.4; }
 .tick { width: 64px; height: 64px; margin: 0 auto; display: grid; place-items: center; }
 .tick svg { width: 64px; height: 64px; fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-.tick circle { stroke: color-mix(in srgb, var(--ok) 70%, transparent); fill: color-mix(in srgb, var(--ok) 14%, transparent); }
+.tick circle { stroke: color-mix(in srgb, var(--ok) 55%, #ffffff); fill: color-mix(in srgb, var(--ok) 11%, #ffffff); }
 .tick path { stroke: var(--ok); stroke-dasharray: 40; stroke-dashoffset: 40; animation: kpp-draw .5s .15s var(--ease) forwards; }
-.tick.warn circle { stroke: color-mix(in srgb, var(--warn) 70%, transparent); fill: color-mix(in srgb, var(--warn) 14%, transparent); }
+.tick.warn circle { stroke: color-mix(in srgb, var(--warn) 50%, #ffffff); fill: color-mix(in srgb, var(--warn) 11%, #ffffff); }
 .tick.warn path { stroke: var(--warn); stroke-dasharray: none; stroke-dashoffset: 0; animation: none; }
-.tick.err circle { stroke: color-mix(in srgb, var(--err) 70%, transparent); fill: color-mix(in srgb, var(--err) 14%, transparent); }
+.tick.err circle { stroke: color-mix(in srgb, var(--err) 50%, #ffffff); fill: color-mix(in srgb, var(--err) 10%, #ffffff); }
 .tick.err path { stroke: var(--err); stroke-dasharray: none; stroke-dashoffset: 0; animation: none; }
 @keyframes kpp-draw { to { stroke-dashoffset: 0; } }
 @media (prefers-reduced-motion: reduce) { .tick path { animation: none; stroke-dashoffset: 0; } }
@@ -116,11 +119,10 @@
 .steps li > div { flex: 1; min-width: 0; }
 .steps li b { display: block; margin: 4px 0 10px; font-weight: 600; line-height: 1.3; }
 .steps .n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
-  background: linear-gradient(180deg, rgba(246, 222, 170, .5), rgba(196, 152, 78, .32)); color: #fff7e6;
-  font: 750 14px/1 var(--round); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 0 0 1px rgba(240, 210, 150, .4); }
+  background: var(--accent-pastel); color: var(--ink); font: 650 14px/1 var(--font);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .6); }
 .steps .hint { margin-top: -6px; }
 .steps textarea { font: 13.5px/1.35 var(--mono); border-radius: var(--r-md); }
-.steps textarea::placeholder { font-family: var(--mono); }
 .steps .btns { margin-top: 10px; }
 .login .btn + .btn { margin-top: 0; }
 

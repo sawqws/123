@@ -208,9 +208,10 @@
       <div class="stat"><div class="v">${st.jobs.length}</div><div class="k">${plural(st.jobs.length, 'расписание', 'расписания', 'расписаний')}</div></div></div>`;
   }
 
-  // аватарки — тёмное стекло с оттенком и светлыми буквами (как у Секретаря, tgbot/webapp/app.js)
-  const AVAS = ['#e9c27a', '#b9a8f2', '#f2a3b3', '#8fd8b9', '#9ec3f2', '#f2b48c', '#c6d98f'];
-  const grad = (id) => { const c = AVAS[Math.abs(Number(id) || 0) % AVAS.length]; return `background:color-mix(in srgb,${c} 22%,transparent);color:${c}`; };
+  // пастельные аватарки: [фон, буквы] — как у Секретаря (tgbot/webapp/app.js)
+  const AVAS = [['#f6e3c4', '#8a6324'], ['#e4ddf3', '#5f4f97'], ['#f4dbe0', '#97475a'], ['#d8ebe3', '#3f7a64'],
+    ['#dbe5f2', '#3f6491'], ['#f5dfcf', '#985b36'], ['#e3e9d3', '#5d6f35']];
+  const grad = (id) => { const g = AVAS[Math.abs(Number(id) || 0) % AVAS.length]; return `background:linear-gradient(160deg,#fff -40%,${g[0]});color:${g[1]}`; };
 
   function chatsBlock() {
     const st = S.sec;

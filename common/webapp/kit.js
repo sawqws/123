@@ -6,8 +6,8 @@
   const root = document.documentElement;
 
   function scheme() {
-    // вид «Оникс-стекло» всегда тёмный, тема Telegram на него не влияет
-    root.dataset.scheme = 'dark';
+    // вид «пастель» всегда светлый, тема Telegram на него не влияет
+    root.dataset.scheme = 'light';
     // шапка и фон Telegram — в цвет страницы, чтобы не было полосы сверху
     const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
     if (tg && bg) {

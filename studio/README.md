@@ -19,7 +19,7 @@
 
 - `studio.py` — сам бот (на том же `botkit`), Claude: `claude -p` (вопросы и план — `STUDIO_TALK_MODEL`, по умолчанию sonnet; код — модель по умолчанию).
 - `kit/botkit.py` — библиотека для ботов: Telegram, единый стиль (`card`, `b`, `rows`, цвет кнопок с откатом), `@bot.home/command/button/text/reply/photo/api`, `bot.menu` и режим чат/приложение (`bot.ui_mode()`, `set_mode`, `/mode`, `/app`, api `mode`), `bot.db`, `bot.daily/every`, голосовые и фото (`common/media.py`; фото без обработчика — подпись как текст), `kit.claude()`, сервер мини-приложения с проверкой initData, `bot.testing()` (`t.keyboard` — кнопки целиком). Копируется в папку каждого бота.
-- `kit/template/` — заготовка (рабочий пример) + `webapp/kit.css`, `kit.js` — общий дизайн мини-приложений: «Оникс-стекло» — чёрный, золото, тёмное стекло, SF Rounded, всегда тёмная тема (`kit/onyx.css` дописан в конец `kit.css`; у бота свой только `--accent` в `app.css`). Студия при старте сама обновляет `kit.css`/`kit.js` у уже сделанных ботов (`sync_kits`), остальные файлы бота не трогает.
+- `kit/template/` — заготовка (рабочий пример) + `webapp/kit.css`, `kit.js` — общий дизайн мини-приложений: пастель как iPhone, всегда светлая тема (`kit/pastel.css` дописан в конец `kit.css`; у бота свой только `--accent` в `app.css`). Студия при старте сама обновляет `kit.css`/`kit.js` у уже сделанных ботов (`sync_kits`), остальные файлы бота не трогает.
 - Боты: `/root/bots/<slug>/` (свой git, `.env` 600, `data/`), список — `/root/bots/registry.json` (Главный тоже его видит: «Все боты», «Доработать», «Удалить»).
 - https: Caddy планера `apps.<ip>.sslip.io` → 127.0.0.1:8795 (Студия) → `/b/<slug>/` → порт бота (8800+).
 
