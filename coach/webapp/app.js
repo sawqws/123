@@ -27,7 +27,7 @@
   const plural = (n, a, b, c) => n % 10 === 1 && n % 100 !== 11 ? a : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? b : c;
   const fail = e => { haptic('error'); toast(e.message || String(e), 'err'); };
   const clock = iso => new Date(iso).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
-  // линейные иконки (SVG, 24x24, штрих 1.8) — как в приложении WHOOP, без эмодзи
+  // линейные иконки (SVG, 24x24, штрих 1.8), без эмодзи
   const svgi = (d, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
   const I = {
     today: svgi('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.2"/>'),
@@ -164,7 +164,7 @@
       s += `<line class="norm" x1="0" x2="${W}" y1="${yb.toFixed(1)}" y2="${yb.toFixed(1)}"/><text class="norm-t" x="${W}" y="${(yb > 18 ? yb - 6 : yb + 14).toFixed(1)}" text-anchor="end">норма ${num(base)}</text>`;
     }
     s += `<path d="${d} L${P[P.length - 1][0].toFixed(1)},${CH} L${P[0][0].toFixed(1)},${CH} Z" fill="url(#${id})"/>`;
-    s += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`;
+    s += `<path d="${d}" fill="none" stroke="color-mix(in srgb, ${color} 82%, #1f1b17)" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`;
     const last = P[P.length - 1];
     s += `<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${color}" stroke="var(--card)" stroke-width="2"/>`;
     return svg(W, s, rows);
@@ -225,7 +225,7 @@
   function waterCard(w, full) {
     if (!w) return '';
     const q = full ? [[250, 'стакан'], [500, 'бутылка'], [1000, 'литр']] : [[250, 'стакан'], [500, 'бутылка']];
-    return `<section class="card rise">${head(`<span class="hico">${I.drop}</span>Вода`, `<span class="num"><b>${liters(w.drank)}</b> / ${liters(w.target)}</span>`)}
+    return `<section class="card rise">${head(`<span class="hico" style="--hc:var(--water)">${I.drop}</span>Вода`, `<span class="num"><b>${liters(w.drank)}</b> / ${liters(w.target)}</span>`)}
       ${bar(pct(w.drank, w.target), 'var(--water)')}
       ${w.note ? `<p class="small muted">${esc(w.note)}</p>` : ''}
       <div class="btns">${q.map(([ml, k]) => `<button class="btn tonal water-b" data-a="water" data-v="${ml}"><b class="num">+${ml}</b><span>${k}</span></button>`).join('')}</div>
@@ -236,7 +236,7 @@
   function foodMini(t) {
     const n = t.nutrition, e = t.eaten;
     const right = n ? `<span class="num"><b>${big(e.kcal)}</b> / ${big(n.kcal)} ккал</span>` : `<span class="num"><b>${big(e.kcal)}</b> ккал</span>`;
-    return `<section class="card rise tap" data-a="tab" data-v="food" role="button">${head(`<span class="hico">${I.food}</span>Питание`, right + '<span class="chev"></span>')}
+    return `<section class="card rise tap" data-a="tab" data-v="food" role="button">${head(`<span class="hico" style="--hc:var(--food)">${I.food}</span>Питание`, right + '<span class="chev"></span>')}
       ${n ? bar(pct(e.kcal, n.kcal), 'var(--food)') : ''}
       <div class="macros num">${n ? `<span>Б <b>${e.protein}</b>/${n.protein}</span><span>Ж <b>${e.fat}</b>/${n.fat}</span><span>У <b>${e.carbs}</b>/${n.carbs} г</span>`
         : `<span>${e.count ? `${e.count} ${plural(e.count, 'приём', 'приёма', 'приёмов')}` : 'Пока ничего — пришли фото еды'}</span>`}</div></section>`;
@@ -459,7 +459,7 @@
     render(false); window.scrollTo(0, S.scrollY || 0);
   }
   const dHead = (title, sub, color) => `<header class="dhead"><button class="avatar ghost" data-a="back" aria-label="Назад">${I.back}</button>
-    <div class="titles"><h1 style="color:${color}">${title}</h1><div class="sub">${sub}</div></div></header>`;
+    <div class="titles"><h1 style="--c:${color}">${title}</h1><div class="sub">${sub}</div></div></header>`;
   const lastRows = n => (S.data.series || []).slice(-n);
   const dAbout = kind => ABOUT[kind] ? `<details class="about"><summary>${ABOUT[kind].t}</summary>${ABOUT[kind].p.map(x => `<p>${esc(x)}</p>`).join('')}</details>` : '';
   const dNoData = (title, text) => `<div class="empty"><span class="e">${I.moon}</span><b>${title}</b>${text}</div>`;
@@ -480,14 +480,14 @@
     if (!s) return h + dNoData('Сон ещё не посчитан', 'WHOOP присылает его после пробуждения.');
     const perf = s.performance != null ? s.performance : s.need ? Math.round(s.hours / s.need * 100) : null;
     const inBed = (s.hours + s.awake) || 1;
-    h += `<section class="hero-ring rise">${ring((perf || 0) / 100, 'var(--sleep)', `<b class="num">${cnt(perf)}<small>%</small></b><span>ВЫПОЛНЕНИЕ СНА</span>`, 210)}
+    h += `<section class="hero-ring rise">${ring((perf || 0) / 100, 'var(--sleep)', `<b class="num">${cnt(perf)}<small>%</small></b><span>выполнение сна</span>`, 210)}
       <div class="hr-sub num">${esc(s.start)} → ${esc(s.end)}</div></section>`;
     h += dAbout('sleep');
     const mx = Math.max(s.hours, s.need, 1);
     h += `<section class="card rise">${head('Часы и норма', `<span class="num">${s.debt ? 'недосып ' + hm(s.debt) : 'недосыпа нет'}</span>`)}
       <div class="hv"><div class="hv-r"><span>Спал</span><b class="num">${hHuman(s.hours)}</b></div>${bar(pct(s.hours, mx), 'var(--sleep)')}
-        <div class="hv-r"><span>Нужно</span><b class="num">${hHuman(s.need)}</b></div>${bar(pct(s.need, mx), 'var(--hint)')}
-        ${b.sleep != null ? `<div class="hv-r"><span>Обычно</span><b class="num">${hHuman(b.sleep)}</b></div>${bar(pct(b.sleep, mx), 'color-mix(in srgb, var(--sleep) 45%, #000)')}` : ''}</div></section>`;
+        <div class="hv-r"><span>Нужно</span><b class="num">${hHuman(s.need)}</b></div>${bar(pct(s.need, mx), 'var(--st-awake)')}
+        ${b.sleep != null ? `<div class="hv-r"><span>Обычно</span><b class="num">${hHuman(b.sleep)}</b></div>${bar(pct(b.sleep, mx), 'color-mix(in srgb, var(--sleep) 40%, #fff)')}` : ''}</div></section>`;
     // ступени: строки идут сверху вниз от бодрствования к глубокому сну, длина = доля ночи
     h += `<section class="card rise">${head('Фазы сна', `<span class="num">в постели ${hm(inBed)}</span>`)}
       <div class="stagebar">${STAGES.map(([k, , col]) => s[k] ? `<span style="flex:${s[k]};background:${col}"></span>` : '').join('')}</div>
@@ -510,7 +510,7 @@
     const r = t.recovery, b = t.base || {}, d = S.data;
     let h = dHead('Восстановление', sub0(t), r ? C[r.zone] : 'var(--text)');
     if (!r) return h + dNoData('Ещё не посчитано', 'WHOOP считает восстановление ночью, по готовности сна.');
-    h += `<section class="hero-ring rise">${ring(r.score / 100, C[r.zone], `<b class="num" style="color:${C[r.zone]}">${cnt(r.score)}<small>%</small></b><span>${ZONE[r.zone].toUpperCase()}</span>`, 210)}
+    h += `<section class="hero-ring rise">${ring(r.score / 100, C[r.zone], `<b class="num" style="color:${C[r.zone]}">${cnt(r.score)}<small>%</small></b><span>${ZONE[r.zone].toLowerCase()}</span>`, 210)}
       <div class="hr-sub num">ВСР ${r.hrv != null ? Math.round(r.hrv) : '—'} мс · пульс покоя ${r.rhr != null ? r.rhr : '—'}</div></section>`;
     h += dAbout('rec');
     if (r.calibrating) h += '<div class="note rise"><span>⏳</span><span>WHOOP ещё калибруется — первые недели цифры неточные.</span></div>';
@@ -526,13 +526,13 @@
   }
 
   // зоны пульса: 1 — разминка … 5 — максимум
-  const ZCOL = ['#7ba1bb', '#0093e7', '#16ec06', '#ffde00', '#ff0026'];
+  const ZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)'];
   function strainScreen(t) {
     const c = t.cycle, b = t.base || {}, ws = t.workouts || [];
     let h = dHead('Нагрузка', sub0(t), 'var(--strain)');
     const sv = c && c.strain != null ? c.strain : null;
     const band = t.band ? [t.band[0] / 21, t.band[1] / 21] : null;
-    h += `<section class="hero-ring rise">${ring((sv || 0) / 21, 'var(--strain)', `<b class="num">${cnt(sv, 1)}</b><span>ИЗ 21</span>`, 210, band)}
+    h += `<section class="hero-ring rise">${ring((sv || 0) / 21, 'var(--strain)', `<b class="num">${cnt(sv, 1)}</b><span>из 21</span>`, 210, band)}
       <div class="hr-sub num">${t.band ? `Цель на сегодня ${t.band[0]}–${t.band[1]}` : 'Шкала 0–21'}${b.strain != null ? ` · обычно ${num(b.strain, 1)}` : ''}</div></section>`;
     h += dAbout('strain');
     h += `<div class="grid2 metrics rise">${metric('Траты', c ? big(c.kcal) + '<small> ккал</small>' : '—', b.kcal != null ? `обычно ${big(b.kcal)}` : '')}
