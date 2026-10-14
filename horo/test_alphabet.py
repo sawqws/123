@@ -114,7 +114,7 @@ class AlphabetTest(unittest.TestCase):
         rnd = np.random.default_rng(1)
         sizes = {ch: int(150 * rnd.uniform(0.65, 1.5)) for ch in A.PAGES[0][1]}
         normalize = A.normalize
-        A.normalize = lambda g: [(c, p * 0.8 + [0, 0.1], w * 0.8) for c, p, w in g]  # как старый: один масштаб
+        A.normalize = lambda g: [(c, p * 0.8 + [0, 0.1], w * 0.8, None) for c, p, w, *_ in g]  # как старый: один масштаб
         try:
             A.ingest([as_telegram(fill(0, sizes=sizes))])
         finally:

@@ -90,6 +90,8 @@ GLYPHS = {  # символ: (список штрихов, ширина)
 
 # ---------- настоящие буквы Глеба (вырезаны с его скриншотов, см. horo/fonts/gleb.npz) ----------
 BANK = {}
+STAMPS = {}  # буква: [(альфа 0..1, левый край, верх, размер пикселя)] — его буквы с листа без перерисовки
+GAP = 0.22   # промежуток между его буквами, в высотах строчной — всегда одинаковый (Глеб: «± одинаковое расстояние»)
 _here = os.path.dirname(os.path.abspath(__file__))
 def _step(pts):
     """Шаг сетки, на которой снят скелет буквы (1/80 у старого банка, 1/320 — у снятого с увеличением)."""
@@ -141,9 +143,19 @@ for _bp in (os.path.join(_here, 'fonts', 'gleb.npz'), os.path.join(_here, 'tmp',
     if os.path.exists(_bp):
         _z = np.load(_bp)
         for _k in _z.files:
-            if not _k.endswith('w'):
+            if _k.split('_')[1].isdigit():
                 _p = _z[_k] if _bp.endswith('gleb.npz') else smooth(_z[_k])
                 BANK.setdefault(chr(int(_k.split('_')[0])), []).append((_p, float(_z[_k + 'w'])))
+                if _k + 's' in _z.files:  # его буква картинкой (алфавит с 14.10): ставится как есть
+                    _a = _z[_k + 's'].astype(np.float32) / 255
+                    _l, _t, _px = map(float, _z[_k + 'm'])
+                    # ширина для промежутка — по основной части буквы (от строки до высоты строчной):
+                    # хвостик «б» сверху или петля «у» снизу заходят на соседнюю букву, как у него
+                    _rows = (_t - np.arange(_a.shape[0]) * _px)
+                    _body = _a[(_rows > 0.05) & (_rows < 1.0)]
+                    _cols = np.nonzero((_body if len(_body) else _a).max(0) > 0.3)[0]
+                    _bw = (_cols.max() + 1) * _px if len(_cols) else _a.shape[1] * _px
+                    STAMPS.setdefault(chr(int(_k.split('_')[0])), []).append((_a, _l, _t, _px, _bw))
 
 # латинские буквы, которые пишутся как русские (их нет в алфавите отдельно), и наоборот
 ALIAS = dict(zip('aceopxyACEHKMOPTXB', 'асеорхуАСЕНКМОРТХВ'))
@@ -206,7 +218,7 @@ class Noise:
 
 
 class Hand:
-    def __init__(self, img, ink=INK, seed=1, width=2.8, mess=1.0, slant=0.02):
+    def __init__(self, img, ink=INK, seed=1, width=2.8, mess=1.0, slant=0.02, exact=True):
         """mess: насколько небрежно (0.5 аккуратно, 1 как он, 1.5 на скорость); slant: наклон вправо (у него почти 0).
         Настройки из бота (hand_style.json) умножают mess, width и размер букв."""
         random.seed(seed); np.random.seed(seed)
@@ -221,6 +233,8 @@ class Hand:
         self.mask = np.zeros((H * SS, W * SS), bool)
         self.ink = ink
         self.r = width * SS / 2
+        self.exact = exact   # его буквы из алфавита — как на листе, без случайного размера и промежутков
+        self.stamps = None
         self.last = {}
 
     # ---------- перо ----------
@@ -240,12 +254,18 @@ class Hand:
         out, x = [], 0.0
         for ch in s:
             if ch == ' ':
-                x += xh * random.uniform(0.55, 0.85); continue
+                x += xh * (0.7 if self.exact else random.uniform(0.55, 0.85)); continue
             sup = ch in '²³⁴⁵'
             dot = ch == '·' and '·' not in BANK and '.' in BANK  # точка умножения — его точка, поднятая к середине
             c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '·': '.' if dot else '·'}.get(ch, ch)
             if c not in BANK and ch not in BANK and ALIAS.get(c) in BANK:
                 c = ALIAS[c]
+            st = (STAMPS.get(ch) or STAMPS.get(c)) if self.exact and not sup else None
+            if st:  # его буква как на листе: тот же размер, ровно на строке, одинаковый промежуток
+                a, left, top, px, bw = st[0]
+                out.append((c, x, 0.0, xh, dict(stamp=(a, left, top, px))))
+                x += (left + bw) * xh + xh * GAP
+                continue
             real = ch in BANK or c in BANK
             if real:                                     # его настоящая буква: случайный из вариантов, не тот же подряд
                 vs = BANK[ch] if ch in BANK else BANK[c]
@@ -281,8 +301,13 @@ class Hand:
             span = max(lay[-1][1], xh)
             tilt = max(-0.3 * xh / span, min(0.3 * xh / span, tilt))
         amp = xh * random.uniform(0.04, 0.09) * m
+        if any('stamp' in p for *_, p in lay):  # строка его буквами — ровная, без волны и наклона
+            amp, tilt = 0.0, 0.0
         for c, x, up, k, p in lay:
             gx = x0 + x
+            if 'stamp' in p:
+                self._stamp(p['stamp'], gx, base, k)
+                continue
             gy = base - up + amp * line(gx) + (gx - x0) * tilt + random.uniform(-0.035, 0.035) * m * xh
             for st in ([p['real']] if 'real' in p else glyph(c)[0]):
                 n = len(st)
@@ -297,6 +322,21 @@ class Hand:
                 cr, sr = math.cos(p['rot']), math.sin(p['rot'])
                 u, v = u * cr - v * sr, u * sr + v * cr
                 self._dots(np.stack([gx + u * k, gy - v * k], 1))
+
+    def _stamp(self, st, x, base, xh):
+        """Поставить его букву картинкой: левый верх — (x + left·xh, base − top·xh), пиксель альфы — px·xh."""
+        a, left, top, px = st
+        k = px * xh * SS
+        w, h = max(1, round(a.shape[1] * k)), max(1, round(a.shape[0] * k))
+        im = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS), np.float32) / 255
+        X, Y = round((x + left * xh) * SS), round((base - top * xh) * SS)
+        if self.stamps is None:
+            self.stamps = np.zeros(self.mask.shape, np.float32)
+        H, W = self.stamps.shape
+        y0, x0, y1, x1 = max(0, Y), max(0, X), min(H, Y + h), min(W, X + w)
+        if y1 > y0 and x1 > x0:
+            sub = self.stamps[y0:y1, x0:x1]
+            np.maximum(sub, im[y0 - Y:y1 - Y, x0 - X:x1 - X], out=sub)
 
     def text(self, s, x, base, size=44):
         size *= self.k
@@ -349,6 +389,9 @@ class Hand:
         m = ndimage.binary_dilation(self.mask, structure=(xx ** 2 + yy ** 2) <= r * r)
         a = Image.fromarray((m * 255).astype(np.uint8)).resize(self.img.size, Image.BOX)
         a = np.asarray(a, dtype=np.float32)[..., None] / 255 * 0.97
+        if self.stamps is not None:  # его буквы-картинки поверх линий пера
+            st = Image.fromarray((self.stamps * 255).astype(np.uint8)).resize(self.img.size, Image.BOX)
+            a = np.maximum(a, np.asarray(st, np.float32)[..., None] / 255 * 0.97)
         base = np.asarray(self.img, dtype=np.float32)
         out = base * (1 - a) + np.array(self.ink, np.float32) * a
         Image.fromarray(out.astype(np.uint8)).save(path, quality=92)

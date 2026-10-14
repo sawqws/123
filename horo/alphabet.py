@@ -63,6 +63,7 @@ CELL_W = (W - 2 * SIDE) / COLS
 CELL_H = (H - TOP - BOTTOM) / ROWS
 XH = 80                    # высота строчной буквы в шаблоне, px
 ZOOM = 4                   # буквы со листа увеличиваем перед скелетом: линия плавная, а не лесенкой
+THIN = 0.55                # порог картинки буквы: при нём толщина линии как на его листе
 MARK = 60                  # размер угловой метки
 BIT = 34                   # размер метки номера страницы
 BG, LINE, HINT, MAGENTA = (30, 30, 32), (78, 78, 82), (120, 120, 126), (230, 0, 200)
@@ -247,7 +248,19 @@ def glyph_from(mask, base, tiny=False):
     ys, xs = np.nonzero(prune(sk, 0.9 * width))
     x0 = xs.min()
     pts = np.stack([(xs - x0) / (XH * ZOOM), (base * ZOOM - ys) / (XH * ZOOM)], 1).astype(np.float32)
-    return pts, float((xs.max() - x0) / (XH * ZOOM))
+    return pts, float((xs.max() - x0) / (XH * ZOOM)), stamp_from(keep, base, x0)
+
+
+def stamp_from(keep, base, x0):
+    """Буква как есть — картинкой (Глеб, 14.10: «бери буквы из моего алфавита без изменений»): мягкая маска
+    чернил в ZOOM раз крупнее, края сглажены. -> (альфа uint8, левый край, верх) в единицах XH от x0 и строки."""
+    soft = ndimage.gaussian_filter(ndimage.zoom(keep.astype(np.float32), ZOOM, order=1), ZOOM * 0.45)
+    a = np.clip((soft - THIN) / 0.25, 0, 1)  # маска чернил с ореолом сжатия толще его линии — берём середину
+    ys, xs = np.nonzero(a > 0.02)
+    if not len(ys):
+        return None
+    a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return ((a * 255).astype(np.uint8), float((xs.min() - x0) / (XH * ZOOM)), float((base * ZOOM - ys.min()) / (XH * ZOOM)))
 
 
 # Пишут кто крупнее, кто мельче линеек, и одну букву больше, другую меньше. Поэтому каждая буква
@@ -273,8 +286,10 @@ def extent(ch):
 
 
 def normalize(glyphs):
-    """[(знак, точки, ширина)] одного листа -> те же знаки в масштабе банка букв, каждый подогнан отдельно."""
-    flat = [float(p[:, 1].min()) for c, p, _ in glyphs if c.isalnum() and extent(c) == (0.0, 1.0)]
+    """[(знак, точки, ширина[, штамп])] одного листа -> те же знаки в масштабе банка букв, каждый подогнан отдельно.
+    Штамп (картинка буквы) подгоняется тем же масштабом: (альфа, левый край, верх, размер пикселя альфы)."""
+    glyphs = [g if len(g) == 4 else (*g, None) for g in glyphs]
+    flat = [float(p[:, 1].min()) for c, p, _, _ in glyphs if c.isalnum() and extent(c) == (0.0, 1.0)]
     line = float(np.median(flat)) if flat else None  # где он пишет строку относительно линейки
 
     def body(c, p):
@@ -289,18 +304,24 @@ def normalize(glyphs):
         return h, lo - bot * h
 
     out, ks = [None] * len(glyphs), []
-    for i, (c, p, w) in enumerate(glyphs):
+    for i, (c, p, w, _) in enumerate(glyphs):
         if c.isalnum():
             h, base = body(c, p)
             k = (SHORT_H if c.islower() else DIGIT_H) / h
             out[i] = (k, base)
             ks.append(k)
     kmed = float(np.median(ks)) if ks else 1.0
+    # картинки букв — одним масштабом на весь лист и на одной его строке: как он их написал, без подгонки
+    # каждой отдельно (иначе одна буква толще и крупнее другой — Глеб: «бери из алфавита без изменений»)
+    low = [k for (c, *_), kb in zip(glyphs, out) if kb and c.islower() for k in kb[:1]]
+    ks_sheet = float(np.median(low)) if low else kmed
+    line0 = line if line is not None else 0.0
     res = []
-    for (c, p, w), kb in zip(glyphs, out):
+    for (c, p, w, st), kb in zip(glyphs, out):
         k, base = kb or (kmed, line if line is not None else 0.0)
         k = min(max(k, kmed / 2.5), kmed * 2.5)  # клякса или обрывок буквы не раздувается в гиганта
-        res.append((c, ((p - [0, base]) * k + [0, BOTTOM_Y]).astype(np.float32), w * k))
+        st = st and (st[0], st[1] * ks_sheet, (st[2] - line0) * ks_sheet + BOTTOM_Y, ks_sheet / (XH * ZOOM))
+        res.append((c, ((p - [0, base]) * k + [0, BOTTOM_Y]).astype(np.float32), w * k, st))
     return res
 
 
@@ -339,12 +360,14 @@ def ingest(paths):
             glyphs = old_letters(m, page) if page in OLD_LETTERS else cells(m, page)
         else:
             glyphs = cells(m, page)
-        for ch, pts, w in normalize(glyphs):
+        for ch, pts, w, st in normalize(glyphs):
             if ch in ',.':  # его запятая и точка со листа выходят как «>» и клякса — их рисует hand.GLYPHS
                 continue
             k = ord(ch)
-            n = sum(1 for key in bank if key.split('_')[0] == str(k) and not key.endswith('w'))
+            n = sum(1 for key in bank if key.split('_')[0] == str(k) and key.split('_')[1].isdigit())
             bank[f'{k}_{n}'], bank[f'{k}_{n}w'] = pts, np.float32(w)
+            if st:  # картинка буквы: альфа и [левый край, верх, размер пикселя] в единицах высоты строчной
+                bank[f'{k}_{n}s'], bank[f'{k}_{n}m'] = st[0], np.array(st[1:], np.float32)
             added.append(ch)
     if added:
         os.makedirs(os.path.dirname(EXTRA), exist_ok=True)
@@ -366,7 +389,7 @@ def cells(m, page):
         sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
         g = glyph_from(sub, base - y_top, tiny=ch in '.,:;')
         if g is not None:
-            out.append((ch, g[0], g[1]))
+            out.append((ch, *g))
     return out
 
 
@@ -404,7 +427,7 @@ def two_lines(m, seq, up, low, top, bottom, small=True):
         for mask, c, b in ((upper, ch.upper(), base - y_top), (down, ch, y0 + cell_h * low - y_top)):
             g = glyph_from(mask, b)
             if g is not None:
-                out.append((c, g[0], g[1]))
+                out.append((c, *g))
     return out
 
 
@@ -418,7 +441,7 @@ def signs3(m, chars):
         y_top, y_bot = int(y0 + 14), int(y0 + cell_h - 2)
         g = glyph_from(m[y_top:y_bot, int(x0 + 14):int(x1 - 14)], base - y_top, tiny=ch in '.,:;')
         if g is not None:
-            out.append((ch, g[0], g[1]))
+            out.append((ch, *g))
     return out
 
 
@@ -488,9 +511,9 @@ def renorm():
     if not os.path.exists(EXTRA) or os.path.exists(EXTRA + '.v2'):
         return 0
     bank = dict(np.load(EXTRA))
-    keys = [k for k in bank if not k.endswith('w')]
+    keys = [k for k in bank if k.split('_')[1].isdigit()]
     glyphs = normalize([(chr(int(k.split('_')[0])), bank[k], float(bank[k + 'w'])) for k in keys])
-    for k, (_, pts, w) in zip(keys, glyphs):
+    for k, (_, pts, w, _) in zip(keys, glyphs):
         bank[k], bank[k + 'w'] = pts, np.float32(w)
     np.savez_compressed(EXTRA, **bank)
     open(EXTRA + '.v2', 'w').close()
