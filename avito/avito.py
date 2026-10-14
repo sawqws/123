@@ -882,6 +882,8 @@ def archive():
     """Убрать текущее объявление в прошлые (они остаются в приложении)."""
     with lock:
         old = st.pop("draft", None)
+        if (st.get("wait") or {}).get("kind") in ("buyer", "floor"):  # ждали по старому объявлению
+            st.pop("wait", None)
         if old and (old.get("title") or old.get("photos")):
             st["ads"] = ([old] + [a for a in st.get("ads") or [] if a.get("id") != old.get("id")])[:KEEP_ADS - 1]
         save()
@@ -899,9 +901,10 @@ def copy_text(chat):
     lines = ["<b>📋 Для Авито</b>", f"Название: <code>{esc(d['title'])}</code>"]
     if d.get("price"):
         lines.append(f"Цена: <code>{d['price']}</code>")
-    lines.append("<i>Нажми на название или цену — скопируется. Описание — следующим сообщением.</i>")
+    lines.append("<i>Нажми на название или цену — скопируется."
+                 + (" Описание — следующим сообщением.</i>" if d.get("description") else "</i>"))
     send(chat, "\n".join(lines))
-    tg("sendMessage", chat_id=chat, text=d.get("description") or "")
+    send_description(chat, d)
 
 
 # ---------- выложить, статусы, все объявления ----------
@@ -926,11 +929,18 @@ def publish(chat):
               f"4. Название: <code>{esc(d['title'])}</code>",
               (f"5. Цена: <code>{d['price']}</code>" if d.get("price")
                else "5. Цена: пришли сюда число, подскажу по рынку — «📊 Цена»."),
-              "6. Описание — следующим сообщением (долгий тап → Копировать)."]
+              ("6. Описание — следующим сообщением (долгий тап → Копировать)." if d.get("description")
+               else "6. Описания пока нет — напиши о вещи пару слов, и я его составлю.")]
     send(chat, fmt("📤 Выложить на Авито — 1 минута", "\n".join(steps),
                    "Нажми на название или цену — скопируется. Выложил — жми «✅ Выложил»."),
          [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]])
-    tg("sendMessage", chat_id=chat, text=d.get("description") or "")
+    send_description(chat, d)
+
+
+def send_description(chat, d):
+    """Описание отдельным сообщением (без разметки — копируется как есть). Пустое Telegram не примет (400)."""
+    if (d.get("description") or "").strip():
+        tg("sendMessage", chat_id=chat, text=d["description"][:4096])
 
 
 def set_live(chat, url=None, mid=None):
@@ -1093,6 +1103,9 @@ def on_wait(chat, msg, text):
     with lock:
         st.pop("wait", None)
         save()
+    if not draft():
+        send(chat, fail("Объявления уже нет — отвечу, когда сделаешь новое."))
+        return True
     kind = media.kind(msg)
     if kind == "voice":
         run(chat, hear_buyer, chat, msg)
@@ -1129,6 +1142,10 @@ def on_message(msg):
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
         return
+    if text.startswith("/") and (st.get("wait") or {}).get("kind") in ("buyer", "floor", "avreply"):
+        with lock:  # команда — значит, ждать ответа покупателю / цену уже не нужно (как в @BotFather)
+            st.pop("wait", None)
+            save()
     if not text.startswith("/") and on_wait(chat, msg, text or (msg.get("caption") or "").strip()):
         return
     if media.kind(msg) == "photo":
@@ -1236,24 +1253,47 @@ def on_text(chat, text, now=False):
         later(write, chat)
 
 
+STALE = "Кнопка устарела — /start"
+NO_AD = "Объявления уже нет — пришли фото или /ads"
+
+
 def on_callback(cq):
+    """Нажатие кнопки. Ответ (answerCallbackQuery) — всегда, даже если кнопка старая или что-то упало:
+    иначе у Глеба крутится часик на кнопке."""
     uid = cq["from"]["id"]
     msg = cq.get("message") or {}
     chat, mid = msg.get("chat", {}).get("id"), msg.get("message_id")
     data = (cq.get("data") or "").split("|")
     note = ""
-    if not allowed(uid) or not chat:
-        tg("answerCallbackQuery", callback_query_id=cq["id"])
-        return
+    if allowed(uid) and chat:
+        try:
+            note = callback(chat, mid, data)
+        except (IndexError, ValueError) as e:  # старая или кривая кнопка («pr|», «open» без id)
+            print("callback", data, e)
+            note = STALE
+        except Exception as e:
+            print("callback", data, e)
+            traceback.print_exc()
+            note = "⚠️ Не получилось — попробуй ещё раз"
+            try:
+                send(chat, fail(f"Кнопка не сработала: {esc(e)}"[:300]))
+            except Exception:
+                pass
+    try:
+        tg("answerCallbackQuery", callback_query_id=cq["id"], text=note or "")
+    except Exception:
+        pass
+
+
+def callback(chat, mid, data):
+    """Кнопки бота -> текст всплывашки ("" — без неё)."""
+    note = ""
     d = draft()
     if data[0].startswith("av"):
         note = chats.on_callback(chat, mid, data)
         if note is not None:
-            try:
-                tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
-            except Exception:
-                pass
-            return
+            return note
+        return STALE
     if data[0].startswith("mode"):  # «⚙️ Режим» → карточка на месте; mode:chat / mode:app — выбор
         key = data[0].partition(":")[2]
         if key in MODES:
@@ -1267,9 +1307,12 @@ def on_callback(cq):
         run(chat, write, chat, "Напиши другой вариант: живее и убедительнее, факты те же.", mid)
     elif data[0] == "mk":
         run(chat, check_market, chat, len(data) > 1, mid)
-    elif data[0] == "pr" and d:
-        d["price"] = int(data[1])
-        save()
+    elif data[0] == "pr":
+        if not d:
+            return NO_AD
+        with lock:
+            d["price"] = int(data[1])
+            save()
         note = f"Цена {market.fmt_rub(d['price'])}"
         show_card(chat, mid)
     elif data[0] == "card":
@@ -1287,9 +1330,13 @@ def on_callback(cq):
     elif data[0] == "pub":
         run(chat, publish, chat)
     elif data[0] == "live":
+        if not d:
+            return NO_AD
         set_live(chat, mid=mid)
         note = "Отметил: на Авито"
     elif data[0] == "sold":
+        if not d:
+            return NO_AD
         set_sold(chat)
         note = "🎉 Продано!"
     elif data[0] == "ads":
@@ -1314,10 +1361,9 @@ def on_callback(cq):
             tg("deleteMessage", chat_id=chat, message_id=mid)
         except Exception:
             pass
-    try:
-        tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
-    except Exception:
-        pass
+    else:
+        note = STALE
+    return note
 
 
 def update(chat):
@@ -1411,6 +1457,8 @@ def ad_view(d):
         "photos": [{"url": f"/api/photo/{d['id']}/{n}" + ("?c" if p.get("clean") else ""),
                     "state": photo_state(p)} for n, p in enumerate(photos)],
         "pending": len(todo_photos(d)), "info": bool(d.get("info")), "questions": d.get("questions") or [],
+        # ждут фона, но их никто не обрабатывает (загрузка оборвалась) — приложение само попросит /api/process
+        "stuck": sum(1 for p in todo_photos(d) if not p.get("work")),
         "date": f"{date.group(2)}.{date.group(1)}" if date else "",
         "job": d.get("job") or "", "error": d.get("error") or ""})
     return out
@@ -1770,6 +1818,12 @@ def main():
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()
+                chat = ((u.get("message") or {}).get("chat") or {}).get("id")
+                if chat and allowed(((u.get("message") or {}).get("from") or {}).get("id")):
+                    try:
+                        send(chat, fail(f"Что-то сломалось: {esc(e)}"[:300] + " — попробуй ещё раз."))
+                    except Exception:
+                        pass
 
 
 if __name__ == "__main__":

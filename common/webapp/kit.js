@@ -42,7 +42,14 @@
     if (body instanceof FormData) init.body = body;
     else if (body) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     Object.assign(init, opts || {});
-    const r = await fetch(path, init);
+    let r;
+    try {
+      r = await fetch(path, init);
+    } catch (e) {  // обрыв сети: вместо «Failed to fetch» — по-русски
+      const err = new Error('Нет связи с сервером — проверь интернет и попробуй ещё раз');
+      err.status = 0;
+      throw err;
+    }
     let data = {};
     try { data = await r.json(); } catch (e) { /* пустой ответ */ }
     if (!r.ok) {

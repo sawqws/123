@@ -145,14 +145,14 @@ function renderStatus() {
   if (!box) return;
   const st = S.state || {};
   const l = st.last;
-  const key = JSON.stringify([!st.busy && l && l.at > S.seen ? l.at : 0, st.draft && [st.draft.title, st.draft.files]]);
+  const ds = st.drafts || (st.draft ? [st.draft] : []);
+  const key = JSON.stringify([!st.busy && l && l.at > S.seen ? l.at : 0, ds.map(d => [d.task, d.title, d.files])]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   let out = '';
   if (!st.busy && l && l.at > S.seen) out += resultCard(l);
-  if (st.draft) {
-    const d = st.draft;
-    out += `<button class="card banner rise" data-a="draft"><span class="ic">📄</span>
+  for (const d of ds) {  // черновиков может быть несколько — у каждого своя карточка
+    out += `<button class="card banner rise" data-a="draft" data-task="${esc(d.task || '')}"><span class="ic">📄</span>
       <span class="main"><div class="title">Черновик для учителя</div><div class="hint">${esc(d.title)}</div></span><span class="chev"></span></button>`;
   }
   box.innerHTML = out;
@@ -301,9 +301,11 @@ function taskSheet(url) {
     <div class="hint c">${busy ? 'Сейчас занят другим заданием' : t.auto ? 'Результат покажу здесь и пришлю в чат' : 'Сначала покажу черновик — отправишь сам'}</div>`, 'task');
 }
 
-function draftSheet() {
-  const d = S.state && S.state.draft;
+function draftSheet(task) {
+  const st = S.state || {};
+  const d = (st.drafts || []).find(x => x.task === task) || st.draft;
   if (!d) return;
+  S.draftTask = d.task;
   openSheet(`<div class="s-sub">📄 Черновик для учителя</div><h2>${esc(d.title)}</h2>
     <textarea id="draft-text" rows="8">${esc(d.text)}</textarea>
     ${d.files ? `<div class="note" style="margin-bottom:12px">🖼 ${d.files} ${plural(d.files, 'картинка', 'картинки', 'картинок')} — в чате, уйдут вместе с текстом</div>` : ''}
@@ -391,16 +393,16 @@ const ACT = {
   },
   seen: () => { S.seen = (S.state && S.state.last && S.state.last.at) || Date.now() / 1000; store('hdp.seen', S.seen); renderStatus(); },
   more: el => { const t = el.previousElementSibling; t.classList.add('open'); el.remove(); },
-  draft: () => draftSheet(),
+  draft: el => draftSheet(el.dataset.task),
   'draft-send': el => Kit.busy(el, async () => {
     try {
-      await api('/api/draft/save', { text: q('#draft-text').value });
-      await api('/api/draft/send', {});
+      await api('/api/draft/save', { task: S.draftTask, text: q('#draft-text').value });
+      await api('/api/draft/send', { task: S.draftTask });
       closeSheet(); toast('Отправляю учителю', 'ok'); haptic('success'); setTimeout(poll, 400);
     } catch (e) { toast(e.message, 'err'); haptic('error'); }
   }),
   'draft-drop': () => confirmDo('Не отправлять этот черновик?', async () => {
-    try { S.state = await api('/api/draft/drop', {}); closeSheet(); renderStatus(); toast('Не отправляю'); } catch (e) { toast(e.message, 'err'); }
+    try { S.state = await api('/api/draft/drop', { task: S.draftTask }); closeSheet(); renderStatus(); toast('Не отправляю'); } catch (e) { toast(e.message, 'err'); }
   }),
   check: async () => { try { await api('/api/check', {}); closeSheet(); toast('Проверяю — ответ придёт в чат', 'ok'); } catch (e) { toast(e.message, 'err'); } },
   alphabet: async () => { try { await api('/api/alphabet', {}); closeSheet(); toast('Листы алфавита — в чате', 'ok'); } catch (e) { toast(e.message, 'err'); } },

@@ -11,6 +11,8 @@ let tab = 'ad';
 let pollTimer = null;
 let marketBusy = '';      // id объявления, для которого сейчас ищем цену
 let uploading = null;     // {done, total} — пока грузим фото
+let loaded = false;       // состояние уже приходило: сбой связи при опросе не стирает экран
+let kicked = {};          // id → {since, at}: «застрявшие» фото без фона — с какого времени и когда просили сервер
 const searchResult = { m: null, url: '' };
 
 const current = () => state.ads.find((a) => a.current) || null;
@@ -336,6 +338,15 @@ function render() {
   if (tab === 'price') renderPrice();
   const a = current();
   clearTimeout(pollTimer);
+  // фото загружены, но фон никто не убирает (загрузка оборвалась, приложение закрыли) — попросить сервер ещё раз
+  // (ждём 10 с: фото из чата бот берёт в работу сам, чуть позже)
+  if (a && a.stuck && !a.job && !uploading) {
+    const k = kicked[a.id] || (kicked[a.id] = { since: Date.now(), at: 0 });
+    if (Date.now() - k.since > 10000 && Date.now() - k.at > 20000) {
+      k.at = Date.now();
+      api('/api/process', { id: a.id }).then((res) => { if (res.ad) { replaceAd(res.ad); render(); } }).catch(() => {});
+    }
+  } else if (a) delete kicked[a.id];
   if (a && (a.job || (a.pending && !uploading))) pollTimer = setTimeout(load, 1600);
 }
 
@@ -347,8 +358,15 @@ function replaceAd(ad) {
 async function load() {
   try {
     state = await api('/api/state');
+    loaded = true;
     render();
   } catch (e) {
+    if (loaded && e.status !== 401) {  // сбой связи посреди опроса: экран оставить, попробовать снова
+      toast('Нет связи с ботом — пробую ещё раз', true);
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(load, 5000);
+      return;
+    }
     $('tab-ad').innerHTML = `<div class="card empty"><span class="e">🔒</span><b>Не открылось</b>${esc(e.message)}</div>` +
       '<button class="btn tonal" data-act="reload">Попробовать ещё раз</button>';
     clearTimeout(pollTimer);
@@ -385,21 +403,29 @@ async function upload(files) {
       const r = await fetch('/api/upload', { method: 'POST', body: blob,
         headers: Object.assign(auth(), { 'Content-Type': blob.type || 'image/jpeg' }) });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error || 'Ошибка ' + r.status);
+      if (!r.ok) throw new Error(data.error || (r.status === 413 ? 'Фото слишком большое' : 'Ошибка ' + r.status));
+      if (!data.ad) throw new Error('Бот не ответил — попробуй ещё раз');
       replaceAd(data.ad);
       uploading.done += 1;
       render();
     }
-    const res = await api('/api/process', { id: current() && current().id });
-    replaceAd(res.ad);
-    haptic('success');
   } catch (e) {
     haptic('error');
-    toast(e.message, true);
-  } finally {
-    uploading = null;
-    render();
+    toast((uploading.done ? `Загрузил ${uploading.done} из ${uploading.total}. ` : '') + e.message, true);
   }
+  // фон и описание — для всего, что успело загрузиться (даже если следующее фото не прошло)
+  if (uploading.done) {
+    try {
+      const res = await api('/api/process', { id: current() && current().id });
+      if (res.ad) replaceAd(res.ad);
+      haptic('success');
+    } catch (e) {
+      haptic('error');
+      toast(e.message, true);
+    }
+  }
+  uploading = null;
+  render();
 }
 
 // ---------- листы ----------

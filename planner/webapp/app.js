@@ -8,7 +8,18 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const pad = n => String(n).padStart(2, '0');
 const plural = (n, a, b, c) => { n = Math.abs(n); const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
 const haptic = k => Kit.haptic(k === 'light' || k === 'medium' ? 'tap' : k);
-const api = (path, body) => Kit.api('api/' + path, body);
+// ошибки — всегда понятным «⚠️ …»: нет связи, сервер упал, причина от сервера
+async function api(path, body) {
+  try {
+    return await Kit.api('api/' + path, body);
+  } catch (e) {
+    const msg = e instanceof TypeError || !e.message ? 'Нет связи с сервером — проверь интернет и попробуй ещё раз'
+      : e.message.replace(/^⚠️\s*/, '');
+    const err = new Error('⚠️ ' + msg[0].toUpperCase() + msg.slice(1));
+    err.status = e.status;
+    throw err;
+  }
+}
 
 /* ---------- даты (строки YYYY-MM-DD, считаем в UTC, чтобы не мешали часовые пояса) ---------- */
 const D = {
@@ -827,7 +838,9 @@ function noteSheet(n) {
       if (!await confirmPopup('Удалить заметку?', [{ id: 'y', type: 'destructive', text: 'Удалить' }, { type: 'cancel' }])) return;
       try {
         await api('note/delete', { id: n.id }); S.notes.delete(n.id); closeSheet(); render();
-        toast('Заметка удалена', 'Вернуть', async () => { const r = await api('note', { goal: n.goal, text: n.text }); S.notes.set(r.note.id, r.note); render(); });
+        toast('Заметка удалена', 'Вернуть', async () => {
+          try { const r = await api('note', { goal: n.goal, text: n.text }); S.notes.set(r.note.id, r.note); render(); } catch (err) { toast(err.message); }
+        });
       } catch (e) { toast(e.message); }
     });
   });
@@ -1020,7 +1033,7 @@ async function boot() {
   } catch (e) {
     $('#tabs').hidden = true;
     document.body.classList.remove('has-tabbar');
-    v.innerHTML = hero('Ритм', 'Не загрузилось') + `<div class="card"><div class="empty"><span class="e">😕</span><b>Не загрузилось</b>${esc(e.message)}</div>
+    v.innerHTML = hero('Ритм', 'Не загрузилось') + `<div class="card"><div class="empty"><span class="e">😕</span><b>Не загрузилось</b>${esc(e.message.replace(/^⚠️\s*/, ''))}</div>
       <button class="btn primary" onclick="location.reload()">Обновить</button></div>`;
     return;
   }

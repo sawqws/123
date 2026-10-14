@@ -4,6 +4,7 @@ usage: python3 planner/test_planner.py
 import datetime
 import hashlib
 import hmac
+import io
 import json
 import os
 import sys
@@ -173,6 +174,24 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.db.task(U, t["id"])["done"], 1)
         self.assertIn("Всё сделано", self.texts()[-1])
 
+    def test_stale_buttons(self):
+        """Кнопки старого сообщения, а задачу/цель уже удалили: понятный ответ и свежий экран, без ошибки в логе."""
+        today = planner.today_of(U).isoformat()
+        t = self.db.save_task(U, {"title": "Бокс", "date": today})
+        g = self.db.save_goal(U, {"title": "Спарринг", "horizon": "week"})
+        self.db.delete_task(U, t["id"])
+        self.db.delete_goal(U, g["id"])
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", out):
+            for data in (f"t|{t['id']}|{today}", f"gs|{t['id']}|{g['id']}", f"r|{t['id']}|{today}", f"gd|{g['id']}"):
+                self.cb(data)
+        self.assertEqual(out.getvalue(), "")
+        notes = [p.get("text") for m, p in self.sent if m == "answerCallbackQuery"]
+        self.assertEqual(notes, ["⚠️ Этой задачи уже нет", "⚠️ Этого шага уже нет", "⚠️ Этой задачи уже нет", "⚠️ Цели больше нет"])
+        self.assertIn("Пусто", self.texts()[0])
+        self.assertIn("Этой задачи уже нет", self.texts()[2])
+        self.assertIn("Цели больше нет", self.texts()[3])
+
     def test_week_goals_help(self):
         self.db.save_goal(U, {"title": "Спарринг", "emoji": "🥊", "horizon": "week"})
         for c in ("/week", "/goals", "/help", "/tomorrow"):
@@ -208,6 +227,111 @@ class BotTest(unittest.TestCase):
 
     def cb(self, data):
         planner.on_callback({"id": "1", "from": {"id": U}, "message": {"chat": {"id": U}, "message_id": 3}, "data": data})
+
+    def answers(self):
+        return [p.get("text", "") for m, p in self.sent if m == "answerCallbackQuery"]
+
+    def buttons(self, p):
+        return [b for row in p.get("reply_markup", {}).get("inline_keyboard", []) for b in row]
+
+    def test_every_button_answers(self):
+        """Каждая кнопка каждого экрана (оба режима): обработчик есть, нажатие отвечено, без «устарела»/ошибки."""
+        today = planner.today_of(U)
+        self.db.save_task(U, {"title": "Бокс", "date": today.isoformat(), "time": "18:00"})
+        g = self.db.save_goal(U, {"title": "Спарринг", "emoji": "🥊", "horizon": "week",
+                                  "start": store.period_start("week", today).isoformat()})
+        self.db.save_task(U, {"title": "Шаг", "goal": g["id"]})
+        self.db.save_note(U, {"text": "мысль"})
+        with mock.patch.object(planner, "owner", lambda: U):
+            for mode in ("chat", "app"):
+                self.db.meta("mode", mode)
+                self.sent.clear()
+                for c in ("/start", "/today", "/week", "/month", "/goals", "/notes", "/settings", "/help", "/mode",
+                          "завтра кино", "заметка: идея", "цель на неделю: бег"):
+                    self.msg(c)
+                screens = [p for m, p in self.sent if m in ("sendMessage", "editMessageText")]
+                seen, queue = set(), [b["callback_data"] for p in screens for b in self.buttons(p) if "callback_data" in b]
+                while queue:
+                    data = queue.pop(0)
+                    if data in seen or data.startswith(("sup|", "u|", "un|", "ug|", "c|")):
+                        continue  # поддержка — common/support.py; отмены удаляют — их проверяют отдельные тесты
+                    if data.startswith("d|") and abs((datetime.date.fromisoformat(data[2:]) - today).days) > 2:
+                        continue  # листание дней бесконечно — хватит соседних
+                    seen.add(data)
+                    n = len(self.sent)
+                    self.cb(data)
+                    new = self.sent[n:]
+                    ans = [p for m, p in new if m == "answerCallbackQuery"]
+                    self.assertEqual(len(ans), 1, data)
+                    self.assertNotIn("⚠️", ans[0].get("text", ""), data)
+                    for m, p in new:
+                        queue += [b["callback_data"] for b in self.buttons(p) if "callback_data" in b]
+                self.assertIn("home", seen)
+                self.assertTrue(any(d.startswith("v|") for d in seen) or mode == "app")
+
+    def test_menu_edits_in_place_with_back(self):
+        """Меню чата не плодит сообщения: экран встаёт на место меню, «‹ Меню» возвращает его."""
+        self.db.meta("mode", "chat")
+        for d in ("v|week", "v|month", "v|goals", "v|notes", "v|settings", f"d|{planner.today_of(U).isoformat()}"):
+            self.sent.clear()
+            self.cb(d)
+            m, p = self.sent[0]
+            self.assertEqual(m, "editMessageText", d)
+            self.assertIn("home", [b.get("callback_data") for b in self.buttons(p)], d)
+        self.sent.clear()
+        self.cb("home")
+        self.assertEqual(self.sent[0][0], "editMessageText")
+        self.assertIn("v|week", json.dumps(self.sent[0][1]))
+
+    def test_stale_and_broken_buttons(self):
+        """Кнопки старых сообщений: удалённая задача/цель, мусор в данных, неизвестная кнопка — ответ «⚠️», бот живой."""
+        today = planner.today_of(U).isoformat()
+        for data in (f"t|999|{today}", "gs|999|1", "gd|999", "m|999|-", "r|999|" + today, "zzz",
+                     "t|abc|x", "d|not-a-date", "v|nope", "mode", "s"):
+            self.sent.clear()
+            self.cb(data)
+            ans = self.answers()
+            self.assertEqual(len(ans), 1, data)
+            self.assertIn("⚠️", ans[0], data)
+        self.sent.clear()
+        self.cb(f"t|999|{today}")  # экран дня перерисован без пропавшей задачи
+        self.assertTrue(any(m == "editMessageText" and "Пусто" in p["text"] for m, p in self.sent))
+        self.cb("g|999")  # открыть удалённую цель — спокойный экран с выходом, не ошибка
+        self.assertIn("Цели больше нет", self.texts()[-1])
+
+    def test_old_query_and_uneditable_message(self):
+        """Telegram не принял ответ на старое нажатие или правку старого сообщения — не падаем, шлём новым."""
+        def fake(m, **p):
+            self.sent.append((m, p))
+            if m == "answerCallbackQuery":
+                raise planner.TgError(m, 400, "query is too old and response timeout expired")
+            if m == "editMessageText":
+                raise planner.TgError(m, 400, "message can't be edited")
+            return {"ok": True, "result": {"message_id": 5}}
+        with mock.patch.object(planner, "tg", side_effect=fake):
+            self.cb("v|week")
+        self.assertEqual([m for m, p in self.sent], ["editMessageText", "sendMessage", "answerCallbackQuery"])
+        self.assertIn("Неделя", self.sent[1][1]["text"])
+
+    def test_errors_reach_user(self):
+        """Неожиданная ошибка в сообщении, фото или выгрузке — понятное «⚠️», а не тишина."""
+        with mock.patch.object(planner, "handle_text", side_effect=RuntimeError("db locked")):
+            planner.handle_update({"message": {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "кино"}})
+        self.assertIn("⚠️", self.texts()[-1])
+        with mock.patch.object(planner, "on_callback", side_effect=RuntimeError("boom")):
+            planner.handle_update({"callback_query": {"id": "9", "from": {"id": U}, "data": "x"}})
+        self.assertIn("⚠️", self.answers()[-1])
+        with mock.patch.object(planner, "spawn", lambda fn, *a: fn(*a)), \
+                mock.patch.object(planner.media, "photo_path", side_effect=RuntimeError("disk full")):
+            planner.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "photo": [{"file_id": "f"}]})
+        self.assertIn("⚠️ Не получилось разобрать", self.texts()[-1])
+        with mock.patch.object(planner, "_export", side_effect=OSError("network")):
+            self.msg("/export")
+        self.assertIn("⚠️", self.texts()[-1])
+        self.msg("/nope")
+        self.assertIn("⚠️", self.texts()[-1])
+        planner.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U}, "sticker": {"file_id": "a"}})
+        self.assertIn("не разберу", self.texts()[-1])
 
     def test_note_and_goal_by_text(self):
         self.msg("Заметка: купить подарок маме")
@@ -610,6 +734,8 @@ class WebTest(unittest.TestCase):
             code, body = self.get("/api/task", {"X-Init-Data": signed({"id": 42}), "Content-Type": "application/json"},
                                   json.dumps({"title": ""}).encode())
             self.assertEqual(code, 400)
+            for raw in (b"[1]", b"null", b'{"id": null}', b'{"title": "x", "date": 5}'):  # не объект, не тот тип — 400
+                self.assertEqual(self.get("/api/task", {"X-Init-Data": signed({"id": 42})}, raw)[0], 400, raw)
         with mock.patch.object(planner, "PUBLIC", False), mock.patch.object(planner, "ALLOWED", {1}):
             self.assertEqual(self.get("/api/all", {"X-Init-Data": signed({"id": 42})})[0], 403)
 

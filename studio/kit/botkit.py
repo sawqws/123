@@ -622,6 +622,11 @@ class Bot:
             return self.send(chat, "📷 Картинки я не разбираю — напиши словами, что на ней.")
         if text:
             return self._route_text(Ctx(self, chat, user, text=text, msg=msg))
+        if kind == "video":  # видео без подписи — слушаем речь, как голосовое
+            return self.later(self._voice, chat, user, msg)
+        if any(msg.get(k) for k in ("sticker", "document", "animation", "location", "contact", "venue", "poll",
+                                    "dice")):  # не молчим (служебные сообщения Telegram — пропускаем)
+            self.send(chat, "🤷 Такое я не разберу — напиши текстом или пришли голосовое.")
 
     def _route_text(self, c):
         wait = self.waits.pop(c.chat, None)
@@ -720,6 +725,9 @@ class Bot:
                 self.db.set("_owner", user["id"])
             else:
                 return 403, {"error": "Это личный бот"}
+        body = {} if body is None else body
+        if not isinstance(body, dict):  # список, число, строка вместо объекта — не 500, а понятный отказ
+            return 400, {"error": "ждём JSON-объект"}
         try:
             res = fn(Request(user, body))
             return 200, res if isinstance(res, dict) else {"ok": True, "result": res}
@@ -1033,6 +1041,8 @@ def media_kind(msg):
     doc = msg.get("document") or {}
     if msg.get("photo") or (doc.get("mime_type") or "").startswith("image/"):
         return "photo"
+    if msg.get("video") or (doc.get("mime_type") or "").startswith("video/"):
+        return "video"
     return None
 
 

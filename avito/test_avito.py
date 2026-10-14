@@ -724,6 +724,118 @@ class Chats(Flow):
         self.assertNotIn("av_keys", avito.st)
 
 
+class Buttons(Chats):
+    """Каждая кнопка отвечает (часик не висит), старые и кривые кнопки не роняют бота, тупиков нет."""
+
+    def answers(self):
+        return [p for m, p in self.sent if m == "answerCallbackQuery"]
+
+    def press(self, data):
+        n = len(self.answers())
+        self.cb(data)
+        self.assertEqual(len(self.answers()), n + 1, f"нет ответа на кнопку {data}")
+        return self.answers()[-1].get("text", "")
+
+    def test_stale_and_broken_buttons_answered(self):
+        for data in ("pr|100", "live", "sold"):  # объявления ещё нет
+            self.assertIn("Объявления уже нет", self.press(data))
+        self.make_ad()
+        for data in ("pr|", "pr|abc", "open", "floor|x", "avo", "avs", "avmode", "avmode|zzz", "zzz", "avzz", ""):
+            self.assertTrue(self.press(data), data)
+        self.assertIn("устарела", self.press("zzz"))
+        self.assertIn("Черновика уже нет", self.press("avs|nokey"))
+        self.press("open|нет-такого")
+        self.assertIn("Этого объявления уже нет", self.texts()[-1])
+        self.press("avo|nokey")
+        self.assertIn("Чат устарел", self.texts()[-1])
+
+    def test_crash_in_handler_still_answered(self):
+        self.make_ad()
+        with mock.patch.object(avito, "show_card", side_effect=RuntimeError("сеть упала")):
+            note = self.press("card")
+        self.assertIn("⚠️", note)
+        self.assertIn("Кнопка не сработала: сеть упала", self.texts()[-1])
+
+    def test_new_cancels_buyer_wait(self):
+        self.make_ad()
+        self.cb("buy")
+        self.assertEqual(avito.waiting()["kind"], "buyer")
+        avito.on_message(self.msg(text="/new"))
+        self.assertIsNone(avito.waiting())
+        with mock.patch.object(ai, "reply_buyer", side_effect=AssertionError("не покупатель")):
+            avito.on_message(self.msg(text="велосипед stels"))
+        self.assertIn("велосипед", avito.draft()["info"])  # рассказ о новой вещи не пропал
+
+    def test_command_cancels_floor_wait(self):
+        self.make_ad()
+        self.cb("floor")
+        avito.on_message(self.msg(text="/ad"))
+        self.assertIsNone(avito.waiting())
+        avito.on_message(self.msg(text="40000"))
+        self.assertEqual(avito.draft()["price"], 40000)  # число — снова цена, а не минимум
+
+    def test_buyer_screenshot_without_ad(self):
+        avito.st["wait"] = {"kind": "buyer", "ts": __import__("time").time()}
+        with mock.patch.object(avito.media, "photo_path", side_effect=AssertionError("без объявления не качаем")):
+            avito.on_message(self.msg(photo=[{"file_id": "s"}]))
+        self.assertIn("Объявления уже нет", self.texts()[-1])
+
+    def test_copy_and_publish_without_description(self):
+        avito.draft(create=True).update(title="Велосипед", description="")
+        self.cb("cp")
+        self.cb("pub")
+        empty = [p for m, p in self.sent if m == "sendMessage" and not p.get("text")]
+        self.assertEqual(empty, [])  # пустое сообщение Telegram не принимает (400)
+
+    def test_message_crash_reported(self):
+        update = {"update_id": 1, "message": self.msg(text="/ad")}
+        with mock.patch.object(avito, "on_message", side_effect=RuntimeError("диск")), \
+                mock.patch.object(avito, "tg", side_effect=[{"result": [update]}, KeyboardInterrupt()]), \
+                mock.patch.object(avito, "send") as send, mock.patch.object(avito, "setup_bot"), \
+                mock.patch.object(avito.chats, "start"), mock.patch.object(avito, "serve"), \
+                mock.patch.object(avito, "load", return_value={"owner": 7}), \
+                mock.patch.object(avito.support, "Support") as sup, mock.patch.object(avito, "public_url", "x"), \
+                mock.patch.object(avito, "set_menu"), mock.patch.object(avito.threading, "Thread"), \
+                mock.patch.object(avito, "st", avito.st), mock.patch.object(avito, "SUP", None):  # main() их меняет
+            sup.return_value.intercept.return_value = False
+            with self.assertRaises(KeyboardInterrupt):
+                avito.main()
+        self.assertIn("Что-то сломалось: диск", send.call_args[0][1])
+
+    def test_app_stuck_photos(self):
+        """Фото загружено, но фон никто не убирает (загрузка оборвалась) — приложение видит stuck и само зовёт process."""
+        d = avito.draft(create=True)
+        d["photos"] = [{"orig": "/x/orig_01.jpg", "clean": None}, {"orig": "/x/orig_02.jpg", "clean": None, "work": True}]
+        v = avito.ad_view(d)
+        self.assertEqual((v["pending"], v["stuck"]), (2, 1))  # второе уже в работе (из чата)
+
+    def test_all_keyboards_fit(self):
+        """Кнопки ≤ 24 символов и ≤ 3 в ряд на всех экранах."""
+        d = self.make_ad()
+        boards = [avito.card_buttons(dict(d, **kw)) for kw in ({}, {"title": ""}, {"status": "live"},
+                                                               {"status": "sold"}, {"price": None})]
+        boards += [avito.mode_kb(), avito.help_buttons()]
+        avito.st["mode"] = "app"
+        boards.append(avito.help_buttons())
+        self.cb("mk")
+        boards.append(avito.market_buttons(d["market"]))
+        self.connect()
+        k = self.chats.key("u2i-abc")
+        boards += [self.chats.draft_buttons(k), self.chats.open_buttons(k)]
+        n = len(self.sent)
+        for fn in (lambda: self.chats.show_chats(7), lambda: self.chats.show_modes(7), lambda: self.chats.ask_keys(7),
+                   lambda: self.chats.open_chat(7, k), lambda: self.cb("pub"), lambda: self.cb("buy"),
+                   lambda: self.cb("floor"), lambda: avito.on_message(self.msg(text="/ads"))):
+            fn()
+        boards += [p["reply_markup"]["inline_keyboard"] for m, p in self.sent[n:]
+                   if (p.get("reply_markup") or {}).get("inline_keyboard")]
+        for rows in boards:
+            for row in rows:
+                self.assertLessEqual(len(row), 3, row)
+                for x in row:
+                    self.assertLessEqual(len(x["text"]), 24, x["text"])
+
+
 class InitData(unittest.TestCase):
     def setUp(self):
         avito.st.clear()

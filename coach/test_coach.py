@@ -111,8 +111,11 @@ def seeded(path=None, days=40):
     db.user(U, "Глеб")
     db.save_token(U, "acc", "ref", time.time() + 3600)
     fw = FakeWhoop(fake_whoop(days))
+    # sync берёт окно от настоящего «сейчас», а данные — до TODAY: окно растягиваем на прошедшие с TODAY дни,
+    # иначе с каждым днём после TODAY первые дни выпадают (test_progress ждал 40 дней, получал 39)
+    behind = max(0, (datetime.date.today() - TODAY).days)
     with mock.patch.object(whoop.Client, "get", fw.get):
-        whoop.sync(db, U, "cid", "sec", days=days + 2)
+        whoop.sync(db, U, "cid", "sec", days=days + 2 + behind)
     return db, fw
 
 
@@ -1089,6 +1092,8 @@ class BotTest(unittest.TestCase):
         p = self.db.user(U)["profile"]
         self.assertEqual((p["weight"], p["height"], p["sport"], p["goal"], p["sex"], p["age"]), (61.5, 172, "бокс", "mass", "m", 14))
         self.assertIn("Профиль обновлён", self.texts()[-1])
+        self.assertIn("Рост, см — 172\n", self.texts()[-1])  # число без «.0»
+        self.assertIn("Вес, кг — 61,5", self.texts()[-1])
         self.assertIsNone(coach.awaiting(U))
         coach.on_message(self.msg("/profile утро выкл"))
         self.assertEqual(self.db.user(U)["profile"]["morning"], "off")
@@ -1121,6 +1126,118 @@ class BotTest(unittest.TestCase):
         self.assertEqual(r.code, 200)
         self.assertIn(b"app.js?v=", r.body)
         self.assertEqual(call("/health", method="GET", init="").body, b"ok")
+
+
+class ErrCheckTest(unittest.TestCase):
+    """Проверка «до конца»: каждая кнопка отвечена, ошибки — понятным «⚠️ …», нет тупиков и вечных «Обновляю…»."""
+    setUp, tearDown, fake_tg, texts = BotTest.setUp, BotTest.tearDown, BotTest.fake_tg, BotTest.texts
+
+    def cb(self, data, mid=3):
+        coach.on_callback({"id": "cb", "from": {"id": U, "first_name": "Глеб"}, "data": data,
+                           "message": {"chat": {"id": U}, "message_id": mid}})
+        answers = [kw for m, kw in self.sent if m == "answerCallbackQuery"]
+        self.assertTrue(answers, f"{data}: callback не отвечен")
+        return answers[-1].get("text", "")
+
+    def inline(self):
+        return mock.patch.object(coach.threading, "Thread",
+                                 lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args)))
+
+    def test_stale_and_broken_buttons_answered(self):
+        self.assertIn("устарела", self.cb("old|thing"))
+        self.assertIn("устарела", self.cb(""))
+        with self.inline():
+            for d in ("mode", "full", "g|del|", "g|del|abc", "wa|del|x", "m|del|", "mt|", "sum|", "pf"):
+                self.assertNotIn("Не вышло", self.cb(d))  # не падает и всегда отвечает
+        self.assertEqual(self.cb("wa|del|999999"), "Уже отменено")
+        self.assertEqual(self.cb("m|del|999999"), "Уже удалено")
+
+    def test_crash_in_button_still_answers(self):
+        with mock.patch.object(coach, "food_text", side_effect=RuntimeError("boom")):
+            note = self.cb("food|")
+        self.assertIn("Не вышло", note)
+        self.assertTrue(self.texts()[-1].startswith("⚠️"))
+        self.assertNotIn("boom", self.texts()[-1])  # без трассировки и внутренностей
+
+    def test_crash_in_background_tells_user(self):
+        with self.inline(), mock.patch.object(coach, "morning_brief", side_effect=RuntimeError("boom")):
+            self.cb("b|now")
+        self.assertTrue(self.texts()[-1].startswith("⚠️"))
+
+    def test_busy_brief_says_so(self):
+        coach.busy.add(U)
+        try:
+            with self.inline():
+                self.cb("b|now")
+            self.assertEqual(self.texts()[-1], coach.BUSY)
+        finally:
+            coach.busy.discard(U)
+
+    def test_waiting_input_can_be_cancelled(self):
+        for start in ("g|add", "pf|edit"):
+            self.cb(start)
+            self.assertIn("w|cancel", json.dumps([kw.get("reply_markup") for m, kw in self.sent if m == "sendMessage"][-1]))
+            self.assertEqual(self.cb("w|cancel", mid=7), "Отменил")
+            self.assertIsNone(coach.awaiting(U))  # ожидание снято
+            self.assertEqual([kw for m, kw in self.sent if m == "editMessageText"][-1]["message_id"], 7)
+
+    def test_sync_error_replaces_status(self):
+        with self.inline(), mock.patch.object(whoop, "sync", side_effect=RuntimeError("whoop 502")):
+            self.assertEqual(self.cb("s|"), "Обновляю WHOOP…")
+        last = [kw.get("text", "") for m, kw in self.sent if m in ("sendMessage", "editMessageText")][-1]
+        self.assertIn("WHOOP сейчас не отвечает", last)
+        self.assertNotIn("502", last)
+
+    def test_sync_expired_login(self):
+        with self.inline(), mock.patch.object(whoop, "sync", side_effect=whoop.NotConnected("x")):
+            self.cb("s|")
+        last = [(kw.get("text", ""), kw.get("reply_markup")) for m, kw in self.sent if m in ("sendMessage", "editMessageText")][-1]
+        self.assertIn("истёк", last[0])
+        self.assertIn("c|", json.dumps(last[1]))
+        with mock.patch.object(whoop, "sync", side_effect=RuntimeError("whoop 502")):
+            self.assertEqual(call("/api/sync", {}).code, 400)  # не подключён — понятная ошибка
+
+    def test_message_crash_tells_user(self):
+        """Сообщение уронило обработчик — главный цикл пишет «⚠️ …», а не молчит."""
+        upd ={"update_id": 1, "message": {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "/help"}}
+        calls = iter([{"result": [upd]}])
+
+        def fake(method, **kw):
+            if method == "getUpdates":
+                try:
+                    return next(calls)
+                except StopIteration:
+                    raise SystemExit
+            return self.fake_tg(method, **kw)
+        sup = mock.Mock(intercept=lambda u: False)
+        with mock.patch.object(coach, "tg", side_effect=fake), mock.patch.object(coach, "TOKEN", "1:x"), \
+                mock.patch.object(coach, "serve"), mock.patch.object(coach, "setup_bot"), mock.patch.object(coach, "https"), \
+                mock.patch.object(coach, "scheduler"), mock.patch.object(coach.support, "Support", return_value=sup), \
+                mock.patch.object(coach, "help_text", side_effect=RuntimeError("boom")), self.assertRaises(SystemExit):
+            coach.main()
+        self.assertTrue(self.texts()[-1].startswith("⚠️"))
+
+    def test_api_errors_are_human(self):
+        with mock.patch.object(coach, "day_payload", side_effect=RuntimeError("sqlite: database is locked")):
+            r = call("/api/all")
+        self.assertEqual(r.code, 500)
+        self.assertNotIn("sqlite", r.json["error"])
+        self.assertIn("попробуй", r.json["error"])
+        self.assertIn("не хватает поля", call("/api/goal/delete", {}).json["error"])
+        self.assertEqual(call("/api/nope", {}).code, 404)
+
+    def test_buttons_short_and_three_per_row(self):
+        self.db.meta(f"mode:{U}", "chat")
+        u = self.db.user(U)
+        boards = [coach.main_menu(U), coach.morning_buttons(u), coach.goals_view(U)[1], coach.profile_view(U)[1],
+                  coach.water_buttons(U, 1), coach.CANCEL]
+        self.db.meta(f"mode:{U}", "app")
+        boards.append(coach.main_menu(U))
+        for b in boards:
+            for row in b:
+                self.assertLessEqual(len(row), 3, row)
+                for x in row:
+                    self.assertLessEqual(len(x["text"]), 24, x["text"])
 
 
 if __name__ == "__main__":

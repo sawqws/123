@@ -215,6 +215,18 @@ class StudioFlow(unittest.TestCase):
         self.assertFalse(os.path.exists(path))
         self.assertEqual(studio.draft(), {})
 
+    def test_cancel_from_app_drops_unfinished_bot(self):
+        """Та же отмена из мини-приложения (api cancel) — тоже убирает недоделанного бота."""
+        with mock.patch.object(studio, "botfather", lambda n, w: (None, "нет")):
+            self.t.api("idea", {"text": "дневник"})
+            self.t.api("enough")
+            self.t.api("name", {"text": "Дневник"})
+            self.t.api("confirm")
+        path = studio.registry()["voda"]["dir"]
+        self.assertEqual(self.t.api("cancel")[0], 200)
+        self.assertEqual(studio.registry(), {})
+        self.assertFalse(os.path.exists(path))
+
     def test_voice_and_photo_start_idea(self):
         """Голосовое → текст идеи; фото с подписью → картинка к идее и сама идея."""
         class Media:
@@ -653,7 +665,7 @@ class Kit(unittest.TestCase):
             raise RuntimeError("сеть")
         b._safe(slow, 5)  # фон (bot.later вне тестов): ошибка — в чат владельца, а не тишина
         self.assertIn("Что-то пошло не так", t.last)
-        self.assertEqual(b.call_api("mode", {"id": 5}, ["не", "dict"])[0], 200)  # тело не объект — не 500
+        self.assertEqual(b.call_api("mode", {"id": 5}, ["не", "dict"])[0], 400)  # тело не объект — понятный отказ, не 500
 
     def test_style_fallback(self):
         b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp())
@@ -781,7 +793,8 @@ studio.claude("сделай сайт для Глеба", os.environ["STUDIO_BOTS
 studio.claude("вопросы", os.environ["STUDIO_BOTS_DIR"], tools=False)
 studio.subprocess.Popen = orig
 st = studio.api_state(None)
-print(json.dumps({"support": studio.bot.support is None and studio.bot.support_cfg is False, "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
+print(json.dumps({"support": studio.bot.support is None and studio.bot.support_cfg is False,
+                  "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
                   "sites_only": st["sites_only"], "examples": st["examples"], "secretary": st["secretary"]}))
 """
         env = {**os.environ, "HERE": HERE, "STUDIO_MODE": "sites", "STUDIO_TG_NAME": "Site Studio",
