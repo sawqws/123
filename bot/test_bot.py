@@ -314,15 +314,18 @@ class BotTest(unittest.TestCase):
             self.say(bot.BTN_LATE)
         self.assertEqual(self.last()[0], '❗ <b>Просрочено: 1</b>\n🔁 <a href="u">Тест &amp; Ко</a>')  # разметка не экранирована
 
-    def test_handwriting_needs_alphabet(self):
+    def test_handwriting_without_alphabet(self):
+        # без алфавита рисует всё равно (цифры и латиница — его настоящие), только напоминает про алфавит
         with mock.patch.object(bot, "GLEB_EXTRA", "/nonexistent"):
-            self.assertIn("НУЖЕН_АЛФАВИТ", bot.prompt_for(URL, "", False))
+            p = bot.prompt_for(URL, "", False)
+            self.assertNotIn("НУЖЕН_АЛФАВИТ", p)
+            self.assertIn("всё равно рисуй", p)
+            # старый ответ Claude «НУЖЕН_АЛФАВИТ» по-прежнему понимается
             with mock.patch.object(bot, "claude", lambda p, t, timeout=0, on_tool=None: (True, "НУЖЕН_АЛФАВИТ")):
                 self.say(URL)
         self.assertIn("алфавита у меня ещё нет", self.last()[0])
-        self.assertIsNone(bot.draft())
         with mock.patch.object(bot, "GLEB_EXTRA", __file__):
-            self.assertNotIn("НУЖЕН_АЛФАВИТ", bot.prompt_for(URL, "", False))
+            self.assertNotIn("заполни алфавит", bot.prompt_for(URL, "", False))
 
     def test_rework_prompt(self):
         # доработка: прошлые файлы ответа, только то, что просит учитель, почерком прямо на скриншоте задания
