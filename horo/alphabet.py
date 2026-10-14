@@ -193,6 +193,39 @@ def ink(a):
     return ((chroma > 22) & ~_magenta(a)) | (a.mean(-1) > 185)  # 22: тонкие линии после сжатия Telegram бледнеют
 
 
+def prune(sk, length):
+    """Убрать «усики» скелета: на стыке толстых линий скелет даёт короткие отростки — у «р» вырастала
+    перекладина, и она читалась как «Н». Отросток — путь от конца до развилки короче length px.
+    Отдельные короткие штрихи (точки ё, дужка й) не трогаем: у них нет развилки."""
+    sk = sk.copy()
+    H, W = sk.shape
+    steps = [(dy, dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+
+    def nbs(y, x):
+        return [(y + dy, x + dx) for dy, dx in steps if 0 <= y + dy < H and 0 <= x + dx < W and sk[y + dy, x + dx]]
+    for _ in range(3):
+        changed = False
+        for y, x in zip(*np.nonzero(sk)):
+            if not sk[y, x] or len(nbs(y, x)) != 1:
+                continue
+            path, prev, cur = [(y, x)], None, (y, x)
+            while len(path) <= length:
+                nxt = [p for p in nbs(*cur) if p != prev and p not in path]
+                if len(nxt) != 1 or len(nbs(*nxt[0])) >= 3:   # дошли до развилки (или конца) — дальше не идём
+                    break
+                prev, cur = cur, nxt[0]
+                path.append(cur)
+            nxt = [p for p in nbs(*cur) if p != prev and p not in path]
+            at_fork = bool(nxt) and (len(nxt) > 1 or len(nbs(*nxt[0])) >= 3)
+            if at_fork and len(path) <= length:
+                for p in path:
+                    sk[p] = False
+                changed = True
+        if not changed:
+            break
+    return sk
+
+
 def glyph_from(mask, base, tiny=False):
     """Маска клетки -> (точки скелета в единицах XH, ширина) или None, если пусто.
     tiny: знак из точек (. , : ;) — мелкие пятна не выбрасываем."""
@@ -209,7 +242,9 @@ def glyph_from(mask, base, tiny=False):
     big = ndimage.gaussian_filter(ndimage.zoom(keep.astype(np.float32), ZOOM, order=1), ZOOM * 0.6) > 0.45
     if not big.any():
         return None
-    ys, xs = np.nonzero(skeletonize(big))
+    sk = skeletonize(big)
+    width = 2 * float(ndimage.distance_transform_edt(big)[sk].mean())  # толщина его штриха (в увеличенных px)
+    ys, xs = np.nonzero(prune(sk, 0.9 * width))
     x0 = xs.min()
     pts = np.stack([(xs - x0) / (XH * ZOOM), (base * ZOOM - ys) / (XH * ZOOM)], 1).astype(np.float32)
     return pts, float((xs.max() - x0) / (XH * ZOOM))
