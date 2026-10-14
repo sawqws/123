@@ -170,6 +170,7 @@ COMMANDS = [  # меню команд у поля ввода
     ("mode", "Чат или приложение"),
     ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
+    ("delay", "Сдача как человек: вкл/выкл"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
 ]
 ABOUT = ("Помощник по HDP. Решаю и сдаю задания по ссылке, пишу ответы учителю твоим почерком, "
@@ -647,7 +648,8 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
         + (["--allowedTools", *tools] if tools else [])
     try:
         proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                env={**os.environ, "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "900000"})
+                                env={**os.environ, "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "900000",
+                                     **({} if human_on() else {"HORO_FAST": "1"})})
         # submit.js сдаёт тест «как человек» (паузы до 6 мин) — обычные 2 мин на команду его бы оборвали
     except FileNotFoundError:
         return False, "⚠️ Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
@@ -759,6 +761,12 @@ HANDWRITE = (
     "не рисуй, не обрезай и не расширяй. Посмотри картинки через Read: ответ не налез на пример, дроби читаются.\n"
     + "{grade}"
 )
+PRIVATE = (  # Глеб, 14.10: в заданиях — ни слова личного о нём
+    "Не пиши в ответах ничего личного о Глебе: ни фамилии, ни адреса, телефона, почты, школы и класса, имён и "
+    "подробностей о родных и друзьях, здоровья, денег, его ботов, проектов и аккаунтов, переписки. Если задание "
+    "просит рассказать о себе или своей семье — пиши обобщённо и нейтрально, без настоящих деталей. Не упоминай, что "
+    "помогал ИИ или бот.\n"
+)
 GRADE8 = (  # Глеб в 8 классе: решение должно быть таким, какое он сам мог написать (и какое ждёт учитель)
     "Решай только тем, что проходят до конца 8 класса (школа РФ): алгебра — дроби и действия с ними, степени, формулы "
     "сокращённого умножения, разложение на множители, квадратные корни, квадратные уравнения (дискриминант, теорема "
@@ -811,6 +819,7 @@ def prompt_for(url, text, show):
            "мои — заполни алфавит (✍️ Почерк)».\n")
         + HANDWRITE.format(url=url, d=d, grade=GRADE8)
         + REWORK.format(url=url, d=d)
+        + PRIVATE
         + f"Сначала прочитай {os.path.relpath(drafts.STYLE, REPO)}, если он есть: это правила Глеба по его прошлым правкам, "
         "они важнее общих. Бот сам покажет черновик Глебу: в ответе текст черновика не повторяй, напиши 1–2 строки, что сделал.\n"
         "Ответ пиши для Telegram, коротко, без markdown-таблиц: что написал по каждому вопросу. Если работа сдана и сайт "
@@ -1112,7 +1121,7 @@ def edit_draft(chat, text, task=None):
                        f"просьба про решение или ответы на картинках, поправь {rel} и запусти `python3 {rel}` — картинки "
                        "перерисуются; посмотри их через Read. Если просьба только про текст — картинки не трогай.\n"
                        if hand else "")
-                    + "В ответе одна строка: что сделал.",
+                    + PRIVATE + "В ответе одна строка: что сделал.",
                     ["Read", "Write", "Edit"] + ([f"Bash(python3 {rel})"] if hand else []), timeout=600)
             finally:
                 live.done()
@@ -1157,7 +1166,28 @@ def add_draft_photo(chat, msg, task=None):
 SEND_DELAY = os.environ.get("HDP_SEND_DELAY") or "4-12"
 
 
+def human_on():
+    """Сдавать «как человек» (паузы в тестах, отправка учителю через несколько минут)? Включено, пока не выключат."""
+    return load_settings().get("human", True)
+
+
+def set_human(on):
+    with settings_lock:
+        s = load_settings()
+        s["human"] = bool(on)
+        save_settings(s)
+
+
+def human_card():
+    on = human_on()
+    return card("Сдача как человек: " + ("вкл" if on else "выкл"),
+                "Тесты: пауза 20–45 с на вопрос, ответы учителю уходят через 4–12 мин после «Отправить»." if on else
+                "Тесты сдаю сразу, ответы учителю — сразу после «Отправить».", "Переключить — /delay или «⚙️ Ещё»", "⏳")
+
+
 def send_delay():
+    if not human_on():
+        return 0
     try:
         lo, _, hi = SEND_DELAY.partition("-")
         lo = float(lo)
@@ -1388,6 +1418,7 @@ def more_kb():
         [("❗ Просрочки", "m:late"), ("🛠 Поддержка", "sup|ask")],  # sup|… ловит support.Support
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
         [("❓ Помощь", "m:help"), ("⚙️ Режим", "m:mode")] + app,
+        [("⏳ Как человек: " + ("вкл" if human_on() else "выкл"), "m:human")],
     ]
     return kb(*rows)
 
@@ -1406,6 +1437,9 @@ def on_more(chat, mid, cq_id, key):
         threading.Thread(target=send_alphabet, args=(chat,), daemon=True).start()
     elif key == "check":
         threading.Thread(target=check, args=(chat,), daemon=True).start()
+    elif key == "human":  # ⏳ задержка при сдаче: вкл/выкл, меню правится на месте
+        set_human(not human_on())
+        edit(chat, mid, human_card(), more_kb())
 
 
 # ---------- Почерк ----------
@@ -2199,6 +2233,11 @@ def handle(msg):
                  markup=cancel_kb(), raw_html=True)
             return
         mode.pop(chat)
+    if text.startswith("/delay"):  # /delay, /delay on, /delay off
+        arg = text[6:].strip().lower()
+        set_human(arg in ("on", "вкл", "1") if arg else not human_on())
+        send(chat, human_card(), markup=kb([("⏳ Переключить", "m:human")]), raw_html=True)
+        return
     if text.startswith("/style"):
         threading.Thread(target=send_sample, args=(chat,), daemon=True).start()
         return
@@ -2362,7 +2401,7 @@ def app_overview(b):
 
 def app_me(_):
     git = lambda *a: subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True).stdout.strip()
-    return {"alphabet": os.path.exists(GLEB_EXTRA), "mode": ui_mode(),
+    return {"alphabet": os.path.exists(GLEB_EXTRA), "mode": ui_mode(), "human": human_on(),
             "version": git("rev-parse", "--short", "HEAD")}
 
 
@@ -2441,6 +2480,7 @@ ROUTES = {
     "/api/support": app_support, "/api/mode": app_mode,
     "/api/state": app_state, "/api/overview": app_overview, "/api/me": app_me,
     "/api/solve": app_solve, "/api/auto": app_auto,
+    "/api/human": lambda b: (set_human(bool(b.get("on"))), {"human": human_on()})[1],
     "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),
     "/api/check": app_chat(check), "/api/alphabet": app_chat(send_alphabet),
 }
