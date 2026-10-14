@@ -1014,8 +1014,10 @@ def api_photo(data, ctype=""):
 
 def api_post(chat, path, body):
     """POST /api/… от владельца или гостя (chat — его id). -> (код, ответ)."""
-    if path in ("/api/login", "/api/place") and not is_owner(chat):
-        return 403, {"error": "Вход и адрес меняет только владелец бота"}
+    if path in ("/api/login", "/api/place", "/api/invite") and not is_owner(chat):
+        return 403, {"error": "Это может только владелец бота"}
+    if path == "/api/invite":  # ссылка-приглашение для гостя (как /invite в чате)
+        return 200, {"link": make_invite()}
     if path == "/api/order":
         return api_order(chat, body)
     if path == "/api/cancel":

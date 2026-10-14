@@ -455,6 +455,11 @@ class Guests(BotBase):
             self.start("А123ВС777", 42)
         self.assertIn("Пропуск заказан", self.texts()[-1])
         self.assertEqual(kpp.api_post(42, "/api/login", {"text": "x"})[0], 403)
+        self.assertEqual(kpp.api_post(42, "/api/invite", {})[0], 403)
+        with mock.patch.object(kpp, "bot_username", return_value="Taxii111bot"):
+            code, r = kpp.api_post(1, "/api/invite", {})
+        self.assertEqual(code, 200)
+        self.assertIn("start=inv_", r["link"])
         kpp.on_callback({"id": "q", "from": {"id": 42}, "data": "m|auto", "message": {"chat": {"id": 42}, "message_id": 1}})
         self.assertIn("только владелец", self.sent[-1][1].get("text", ""))
 
