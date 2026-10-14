@@ -1,5 +1,5 @@
 
-/* ========== Оникс-стекло (Глеб, 14.10: вариант 6+7 «Б»): чёрный, золото, шрифт iPhone SF Rounded, крупные скругления, стекло как в iOS 26 ==========
+/* ========== Оникс-стекло (Глеб, 14.10: вариант 6+7 «А»): чёрный, золото, шрифт iPhone SF Pro, крупные скругления, стекло как в iOS 26 ==========
    Всегда тёмная тема (kit.js красит шапку Telegram в --bg). У бота свой только --accent (в app.css).
    Главная кнопка у всех — золотое стекло. Фон держит html, body прозрачный — иначе пятна за стеклом прячутся. */
 :root {
@@ -30,9 +30,9 @@
   --hl: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 0 0 1px rgba(255, 255, 255, .07);
   --shadow: var(--hl), 0 22px 44px -26px rgba(0, 0, 0, .9);
   --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 50px -18px rgba(0, 0, 0, .95);
-  --round: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --round: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;  /* шрифт iPhone — SF Pro (вариант «А») */
   --font: var(--round); --font-d: var(--round);
-  --serif: var(--round);  /* прежнее имя: заголовки и цифры — тоже SF Rounded */
+  --serif: var(--round);  /* прежнее имя: заголовки и цифры — тоже SF Pro */
 }
 html { background: var(--bg); }
 body { background: transparent; color: var(--text); padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); font-family: var(--round); }
@@ -44,7 +44,7 @@ body::before {
     radial-gradient(55% 30% at -8% 48%, rgba(150, 100, 45, .36), transparent 70%),
     radial-gradient(60% 30% at 40% 104%, color-mix(in srgb, var(--accent) 30%, rgba(214, 178, 110, .3)), transparent 70%);
 }
-.title { font-family: var(--round); font-weight: 800; letter-spacing: -.4px; }
+.title { font-family: var(--round); font-weight: 700; letter-spacing: -.6px; }
 .subtitle, .muted { color: var(--hint); }
 .section { color: var(--hint); font-size: 13px; font-weight: 650; letter-spacing: 0; text-transform: none; margin: 26px 10px 10px; }
 
@@ -58,7 +58,7 @@ body::before {
 .row + .row { border-top-color: var(--sep); }
 button.row:active { background: rgba(255, 255, 255, .06); }
 .row .icon { background: var(--accent-soft); color: var(--accent-deep); border-radius: 50%; box-shadow: inset 0 0 0 1px var(--accent-line); }
-.stat .value { color: var(--ink); font-family: var(--round); font-weight: 800; }
+.stat .value { color: var(--ink); font-family: var(--round); font-weight: 700; letter-spacing: -.6px; }
 
 .tabs { background: rgba(255, 255, 255, .06); border: 0; border-radius: 999px; padding: 3px; box-shadow: var(--hl); }
 .tabs button { border-radius: 999px; color: var(--hint); }
