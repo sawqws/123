@@ -45,6 +45,7 @@ class BotTest(unittest.TestCase):
             mock.patch.object(bot, "tg", self.fake_tg),
             mock.patch.object(bot, "send_file", lambda chat, path, caption="", **kw: self.files.append(path)),
             mock.patch.object(bot, "claude", self.fake_claude),
+            mock.patch.object(bot, "SEND_DELAY", "0"),  # отправка «как человек» с задержкой — в своём тесте
             mock.patch.object(bot, "node", self.fake_node),
             mock.patch.object(bot, "INBOX", os.path.join(t, "inbox")),
             mock.patch.object(bot.media, "photo_path", self.fake_photo),  # без сети: фото и видео из Telegram
@@ -153,6 +154,32 @@ class BotTest(unittest.TestCase):
             self.say(photo=[{"file_id": "c"}])
         names = [os.path.basename(f) for f in drafts.files(TASK)]
         self.assertEqual(names, ["01_photo.jpg", "02_photo.jpg"])
+
+    def test_send_waits_like_a_human(self):
+        self.say(URL)
+        with mock.patch.object(bot, "SEND_DELAY", "5-5"):
+            bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual(self.nodes, [])  # сразу не отправил
+        self.assertIn("Отправлю в", self.last()[0])
+        self.assertIn(f"now:{TASK}", self.last()[1])
+        at = bot.draft(TASK)["send_at"]
+        self.assertAlmostEqual(at - __import__("time").time(), 300, delta=5)
+        bot.due_sends(at - 1)  # ещё рано
+        self.assertEqual(self.nodes, [])
+        bot.due_sends(at + 1)  # время пришло — отправил сам
+        self.assertEqual(self.nodes[-1][0], "horo/answer.js")
+        self.assertIsNone(bot.draft())
+
+    def test_send_now_and_hold(self):
+        self.say(URL)
+        with mock.patch.object(bot, "SEND_DELAY", "4-12"):
+            bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        bot.on_callback({"id": "1", "data": f"hold:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 6}})
+        self.assertNotIn("send_at", bot.draft(TASK))
+        bot.due_sends(__import__("time").time() + 3600)  # отменён — не уйдёт и через час
+        self.assertEqual(self.nodes, [])
+        bot.on_callback({"id": "1", "data": f"now:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 7}})
+        self.assertEqual(self.nodes[-1][0], "horo/answer.js")
 
     def test_drop_and_ok_word(self):
         self.say(URL)

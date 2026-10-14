@@ -23,6 +23,7 @@ import html
 import io
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -53,7 +54,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS = os.path.join(REPO, "horo", "tmp", "bot_settings.json")
 API = f"https://api.telegram.org/bot{TOKEN}/"
 LINK = re.compile(r"https://horodigital\.ru/student/topic/[0-9a-f-]{36}/task/[0-9a-f-]{36}\S*")
-TIMEOUT = 15 * 60  # секунд на одно задание
+TIMEOUT = 20 * 60  # секунд на одно задание (тест сдаётся «как человек» — паузы до 6 мин)
 MSK = ZoneInfo("Europe/Moscow")
 
 MAX_PARALLEL = int(os.environ.get("HDP_PARALLEL") or 3)  # сколько заданий решать одновременно (память сервера 2 ГБ)
@@ -645,7 +646,9 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
     cmd = ["claude", "-p", prompt, "--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose"] \
         + (["--allowedTools", *tools] if tools else [])
     try:
-        proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                env={**os.environ, "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "900000"})
+        # submit.js сдаёт тест «как человек» (паузы до 6 мин) — обычные 2 мин на команду его бы оборвали
     except FileNotFoundError:
         return False, "⚠️ Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
     late, finished = threading.Event(), threading.Event()
@@ -1149,6 +1152,56 @@ def add_draft_photo(chat, msg, task=None):
         markup=draft_kb(d["task"]), raw_html=True))
 
 
+# «Как человек»: после «Отправить» ответ уходит не сразу, а через несколько минут — будто Глеб сделал задание,
+# отошёл и потом сам отправил. HDP_SEND_DELAY — минуты «от-до» (по умолчанию 4-12), «0» — сразу.
+SEND_DELAY = os.environ.get("HDP_SEND_DELAY") or "4-12"
+
+
+def send_delay():
+    try:
+        lo, _, hi = SEND_DELAY.partition("-")
+        lo = float(lo)
+        return random.uniform(lo, float(hi or lo)) * 60
+    except ValueError:
+        return 0
+
+
+def schedule_send(chat, task=None):
+    """«✅ Отправить учителю»: назначает отправку через пару минут (или сразу, если задержка 0)."""
+    d = draft(task)
+    if not d:
+        send(chat, "⚠️ Черновика уже нет", menu=True)
+        return
+    secs = send_delay()
+    if secs <= 0:
+        submit_draft(chat, d["task"])
+        return
+    d["send_at"] = time.time() + secs
+    set_draft(d)
+    at = datetime.datetime.fromtimestamp(d["send_at"], MSK).strftime("%H:%M")
+    send(chat, card(f"Отправлю в {at}", note=f"{esc(d['title'])} · как будто ты сам отправил чуть позже", icon="⏳"),
+         markup=kb([("⚡ Сейчас", f"now:{d['task']}"), ("✖ Отменить", f"hold:{d['task']}")]), raw_html=True)
+
+
+def due_sends(now=None):
+    """Черновики, у которых подошло время отправки, — отправить (зовётся раз в 20 с)."""
+    now = now or time.time()
+    for d in all_drafts():
+        if d.get("send_at") and d["send_at"] <= now:
+            d.pop("send_at")
+            set_draft(d)
+            submit_draft(owner(), d["task"])
+
+
+def sender_loop():
+    while True:
+        try:
+            due_sends()
+        except Exception as e:
+            print("sender:", e)
+        threading.Event().wait(20)
+
+
 SENDING = set()  # черновики, которые сейчас отправляются учителю
 sending_lock = threading.Lock()
 
@@ -1296,13 +1349,27 @@ def on_callback(cq):
         on_photo_button(chat, data[3:])
         return
     act, _, task = data.partition(":")
+    if act in ("now", "hold"):  # отправка по таймеру: «⚡ Сейчас» / «✖ Отменить»
+        d = draft(task or None)
+        if not d:
+            send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
+            return
+        d.pop("send_at", None)
+        set_draft(d)
+        if act == "now":
+            threading.Thread(target=submit_draft, args=(chat, d["task"]), daemon=True).start()
+        else:
+            remember_mids(d["task"], send(chat, card("Не отправляю", note=f"{esc(d['title'])} · черновик остался — "
+                                                     "можно поправить или отправить", icon="👌"),
+                                          markup=draft_kb(d["task"]), raw_html=True))
+        return
     d = draft(task or None)
     if act not in ("send", "drop"):
         send(chat, card("Кнопка устарела", note="Пришли ссылку на задание ещё раз", icon="🤔"), menu=True, raw_html=True)
     elif not d:
         send(chat, "⚠️ Этот черновик уже неактуален", menu=True)
     elif act == "send":
-        threading.Thread(target=submit_draft, args=(chat, d["task"]), daemon=True).start()
+        threading.Thread(target=schedule_send, args=(chat, d["task"]), daemon=True).start()
     else:
         send(chat, card("Не отправляю", note=f"{esc(d['title'])} · передумаешь — пришли ссылку ещё раз", icon="👌"),
              menu=True, raw_html=True)
@@ -2156,7 +2223,7 @@ def handle(msg):
         return
     if target and text and not text.startswith("/") and text not in BUTTONS and not LINK.search(text):
         if text.lower().strip(".! ") in ("ок", "ok", "да", "отправляй", "отправь"):
-            threading.Thread(target=submit_draft, args=(chat, target["task"]), daemon=True).start()
+            threading.Thread(target=schedule_send, args=(chat, target["task"]), daemon=True).start()
         else:
             threading.Thread(target=edit_draft, args=(chat, text, target["task"]), daemon=True).start()
         return
@@ -2327,7 +2394,7 @@ def app_draft(action):
         if not d:
             raise ValueError("Черновика уже нет")
         if action == "send":
-            threading.Thread(target=submit_draft, args=(owner(), d["task"]), daemon=True).start()
+            threading.Thread(target=schedule_send, args=(owner(), d["task"]), daemon=True).start()
         elif action == "drop":
             send(owner(), card("Не отправляю", note=f"{esc(d['title'])} — отменён в приложении", icon="👌"), menu=True,
                  raw_html=True)
@@ -2748,6 +2815,7 @@ def main():
     print("Бот запущен")
     print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
     threading.Thread(target=retry_alphabet, daemon=True).start()
+    threading.Thread(target=sender_loop, daemon=True).start()  # отложенные «как человек» отправки учителю
     s = load_settings()
     if s.pop("updated", None):  # поднялись после /update
         save_settings(s)
