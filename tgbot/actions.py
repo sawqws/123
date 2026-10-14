@@ -916,14 +916,17 @@ def msg_view(m):
             "buttons": rows, "edited": bool(m.edit_date)}
 
 
-async def bot_wait(ctx, peer, last, watch, wait, quiet=2.5):
-    """Ждать ответа бота: новые сообщения после last и правки сообщения watch. Останавливается, когда после ответа
+def snap(m):
+    return (m.raw_text, m.edit_date, str(m.reply_markup)) if m else None
+
+
+async def bot_wait(ctx, peer, last, watch, wait, quiet=2.5, before=None):
+    """Ждать ответа бота: новые сообщения после last и правки сообщения watch (before — его вид ДО нажатия:
+    бот часто правит меню раньше, чем Telegram вернёт ответ на нажатие). Останавливается, когда после ответа
     quiet секунд тихо, или через wait секунд. → (новые сообщения, изменённое сообщение или None)."""
     import asyncio
-    before = None
-    if watch:
-        w = await ctx.client.get_messages(peer, ids=watch)
-        before = (w.raw_text, w.edit_date, str(w.reply_markup)) if w else None
+    if watch and before is None:
+        before = snap(await ctx.client.get_messages(peer, ids=watch))
     deadline, got_at, new, edited = time.monotonic() + wait, None, {}, None
     while time.monotonic() < deadline:
         await asyncio.sleep(1)
@@ -934,7 +937,7 @@ async def bot_wait(ctx, peer, last, watch, wait, quiet=2.5):
                 new[m.id] = m
         if watch:
             w = await ctx.client.get_messages(peer, ids=watch)
-            if w and before and (w.raw_text, w.edit_date, str(w.reply_markup)) != before:
+            if w and before and snap(w) != before:
                 if edited is None or (w.raw_text, w.edit_date) != (edited.raw_text, edited.edit_date):
                     got_at = time.monotonic()
                 edited = w
@@ -984,6 +987,7 @@ async def botpress(ctx, a):
             return {**out, "pressed": btn.text, "kind": kind, "url": getattr(btn, "url", None),
                     "note": "такие кнопки не жму: открывают ссылку/приложение"}
         t0 = time.monotonic()
+        before = snap(target)
         try:
             ans = await btn.click()
         except errors.BotResponseTimeoutError:
@@ -995,7 +999,7 @@ async def botpress(ctx, a):
         if kind == "cb":
             out["answer"] = ("⚠️ бот не ответил на нажатие (крутилка у кнопки)" if ans == "TIMEOUT" else ans) \
                 if isinstance(ans, str) else ({"text": ans.message, "alert": ans.alert} if ans and ans.message else None)
-        new, edited = await bot_wait(ctx, peer, last_id, target.id, wait)
+        new, edited = await bot_wait(ctx, peer, last_id, target.id, wait, before=before)
         out["secs"] = round(time.monotonic() - t0, 1)
     else:
         text = a.get("text") or "/start"
