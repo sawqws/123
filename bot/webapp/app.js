@@ -315,8 +315,20 @@ function draftSheet(task) {
 }
 
 function settingsSheet() {
+  // данные /api/me приходят, когда лист уже открыт: обновляем его на месте, а не открываем заново —
+  // иначе лист мигает, а тап по «Поддержке» сразу после этого Kit принимает за «призрачный» и глотает
+  if (S.sheet === 'settings' && S.sheetEl && S.sheetEl.isConnected) {
+    const x = S.sheetEl.querySelector('.sheet-x');
+    S.sheetEl.innerHTML = settingsHtml();
+    if (x) S.sheetEl.prepend(x);
+    return;
+  }
+  openSheet(settingsHtml(), 'settings');
+}
+
+function settingsHtml() {
   const me = S.me || {};
-  openSheet(`<h2>Настройки</h2>
+  return `<h2>Настройки</h2>
     <div class="list">
       <button class="row" data-a="check"><span class="ic">🩺</span><span class="main"><div class="title">Проверка</div>
         <div class="meta">сайт, Claude, почерк — ответ в чат</div></span><span class="chev"></span></button>
@@ -327,7 +339,7 @@ function settingsSheet() {
       <button class="row" data-a="chat"><span class="ic">💬</span><span class="main"><div class="title">Перейти в чат</div>
         <div class="meta">${me.mode === 'chat' ? 'режим чата уже включён' : 'бот перейдёт в режим чата: всё кнопками там'}</div></span><span class="chev"></span></button>
     </div>
-    <div class="hint c">HDP · версия ${esc(me.version || '—')} · режим: ${me.mode === 'chat' ? '💬 чат' : me.mode === 'app' ? '📱 приложение' : '—'}</div>`, 'settings');
+    <div class="hint c">HDP · версия ${esc(me.version || '—')} · режим: ${me.mode === 'chat' ? '💬 чат' : me.mode === 'app' ? '📱 приложение' : '—'}</div>`;
 }
 
 /* ---------- действия ---------- */
@@ -386,7 +398,7 @@ const ACT = {
     toast('В буфере нет ссылки — вставь её в поле');
   },
   auto: el => {
-    const n = ((S.data && S.data.tasks) || []).filter(t => t.auto && t.rawStatus === 'appointed').length;
+    const n = ((S.data && S.data.tasks) || []).filter(t => t.auto && (t.rawStatus === 'appointed' || t.rawStatus === 'reworking')).length;  // как на карточке и в боте (AUTO_STATUSES)
     confirmDo(`Сдать ${n} ${plural(n, 'автотест', 'автотеста', 'автотестов')} по очереди? Это ${n * 2}–${n * 3} мин.`, () => Kit.busy(el, async () => {
       try { await api('/api/auto', {}); toast('Сдаю — прогресс сверху', 'ok'); haptic('success'); setTimeout(poll, 400); } catch (e) { toast(e.message, 'err'); haptic('error'); }
     }));

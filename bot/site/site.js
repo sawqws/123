@@ -85,6 +85,8 @@
   };
   const icon = name => (topics().find(t => t.subj === name) || (ov().tasks || []).find(t => t.subj === name) || {}).icon || '📘';
   const debts = () => ov().tasks || [];
+  // что бот сдаст по «Сдать все автотесты»: как AUTO_STATUSES в bot.py (не зачтено с исчерпанными попытками — нет)
+  const autoNow = t => t.auto && ['appointed', 'reworking'].includes(t.rawStatus);
   // «На проверке» в списке долгов нет — берём из тем (обязательные, уровни 1–3, как на главной платформы)
   const reviewing = () => topics().flatMap(tp => tp.tasks
     .filter(t => t.status === 'reviewing' && t.req !== false && (t.lvl == null || t.lvl <= 3))
@@ -99,7 +101,8 @@
       if (S.ovError && !r.loading) toast(S.ovError, 'err');
       render();
       if (r.loading) setTimeout(() => loadOv(false), 4000);
-    } catch (e) { if (S.authed !== false) toast(e.message, 'err'); }
+      return true;
+    } catch (e) { if (S.authed !== false) toast(e.message, 'err'); return false; }
   }
 
   async function tick() {
@@ -226,7 +229,7 @@
     const apt = d.filter(t => t.rawStatus === 'appointed').length;
     const rev = reviewing().length;
     const late = d.filter(t => t.late).length;
-    const autos = d.filter(t => t.auto).length;
+    const autos = d.filter(autoNow).length;
     const comments = (ov().comments || []).length;
     return hero({ title: 'Мой профиль' }) + `<main class="page"><div class="wrap">
       <section class="card status-card">
@@ -393,9 +396,13 @@
     } catch (e) { toast(e.message, 'err'); }
   }
 
+  // что видно на странице подготовки: без изменений не перерисовываем (не сбить ввод ТЗ и нажатие кнопки)
+  const prepKey = p => JSON.stringify(p ? [p.running, p.title, p.sub, p.error, p.running && p.secs, p.result && p.result.at] : null);
+
   async function pollPrep() {
     clearTimeout(S.prepTimer);
     S.prepTimer = 0;
+    S.prepPolling = true;  // пока ждём ответ, prepPage() не заводит второй опрос (раньше выходил бесконечный цикл запросов)
     try {
       const was = S.prep;
       S.prep = await api('/api/prep/state');
@@ -403,14 +410,16 @@
         if (S.prep.error) toast(S.prep.error, 'err');
         else { S.prepView = 'result'; S.prepOpen.clear(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
       }
-      if (route()[0] === 'prep') render();
+      if (route()[0] === 'prep' && prepKey(was) !== prepKey(S.prep)) render();
     } catch (e) { /* следующий опрос */ }
+    S.prepPolling = false;
+    clearTimeout(S.prepTimer);
     if (route()[0] === 'prep' || (S.prep && S.prep.running)) S.prepTimer = setTimeout(pollPrep, S.prep && S.prep.running ? 2000 : 8000);
   }
 
   function prepPage() {
     if (!S.prepSubjects) loadPrep();
-    if (!S.prepTimer) S.prepTimer = setTimeout(pollPrep, 0);  // опрос хода подготовки, пока страница открыта
+    if (!S.prepTimer && !S.prepPolling) S.prepTimer = setTimeout(pollPrep, 0);  // опрос хода подготовки, пока страница открыта
     const p = S.prep || {};
     let body;
     if (p.running) {
@@ -490,10 +499,11 @@
     } else if (S.running.size) {
       parts.push(`<div class="dock"><div class="hd"><span class="spin" style="width:18px;height:18px;border-width:2px"></span><b>В работе: ${tasksWord(S.running.size)}</b></div></div>`);
     }
-    if (s.draft) {
+    // черновиков может быть несколько (бот решает задания параллельно) — у каждого своя карточка
+    for (const dr of s.drafts || (s.draft ? [s.draft] : [])) {
       parts.push(`<div class="dock draft"><div class="hd"><span>✍️</span><b>Черновик учителю готов</b></div>
-        <div class="sub">${esc(s.draft.title)}${s.draft.files ? ` · картинок: ${s.draft.files}` : ''}</div>
-        <div class="acts"><button class="btn small primary" data-a="draft-open">Посмотреть и отправить</button></div></div>`);
+        <div class="sub">${esc(dr.title)}${dr.files ? ` · картинок: ${dr.files}` : ''}</div>
+        <div class="acts"><button class="btn small primary" data-a="draft-open" data-task="${esc(dr.task || '')}">Посмотреть и отправить</button></div></div>`);
     }
     const l = s.last;
     if (l && l.at > S.seenLast && l.at > Date.now() / 1000 - 3600 && !(s.live && s.busy)) {
@@ -506,9 +516,11 @@
     el.innerHTML = parts.join('');
   }
 
-  function draftModal() {
-    const d = S.st && S.st.draft;
+  function draftModal(task) {
+    const st = S.st || {};
+    const d = (st.drafts || []).find(x => x.task === task) || st.draft;
     if (!d) return;
+    S.draftTask = d.task || '';  // действия — именно с этим черновиком, даже если тем временем пришёл другой
     $('#modal').innerHTML = `<div class="overlay" data-a="modal-x"><div class="sheet" role="dialog" aria-modal="true">
       <div class="hd"><h2>✍️ ${esc(d.title)}</h2><button class="btn small ghost" data-a="modal-x">✕</button></div>
       <div class="muted" style="margin-bottom:10px">Черновик ответа учителю. Поправь текст — бот запомнит правки${d.files ? ` · картинок: ${d.files} (видны в чате)` : ''}</div>
@@ -558,15 +570,19 @@
 
   async function autoTopic(btn, uuid) {
     const tp = topic(uuid);
+    if (!tp) { toast('Темы уже нет в данных — нажми ↻', 'err'); return; }
     const autos = tp.tasks.filter(t => t.type === 'test' && !['approved', 'reviewing'].includes(t.status) && t.req !== false);
     if (!autos.length || !confirm(`Сдать ${tasksWord(autos.length)} с автопроверкой в теме «${tp.title}»?\nБот решает до 3 сразу, остальные — в очереди.`)) return;
-    await busy(btn, async () => {
+    let started = 0;
+    await busy(btn, async () => {  // ошибка на одном тесте — busy покажет её; запущенные до неё уже идут
       for (const t of autos) {
         await api('/api/solve', { url: taskUrl(uuid, t.uuid) });
         S.running.add(t.uuid);
+        started++;
       }
     });
-    toast('Запустил — по каждому тесту результат придёт сюда и в чат');
+    if (started) toast(started === autos.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат'
+      : `Запустил ${started} из ${autos.length} — результат придёт сюда и в чат`);
     render();
     tick();
   }
@@ -608,11 +624,10 @@
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       store.set('theme', dark ? 'dark' : 'light');
     } else if (a === 'refresh') {
-      await busy(el, () => loadOv(true));
-      toast('Обновляю с HDP — около минуты');
+      if (await busy(el, () => loadOv(true))) toast('Обновляю с HDP — около минуты');
     } else if (a === 'solve') solve(el);
     else if (a === 'auto') {
-      const n = debts().filter(t => t.auto).length;
+      const n = debts().filter(autoNow).length;
       if (!confirm(`Сдать все тесты с автопроверкой (${n})?\nБот решит и отправит их на HDP.`)) return;
       const r = await busy(el, () => api('/api/auto', {}));
       if (r) { toast(`Запустил: ${tasksWord(r.n)} — результат придёт сюда и в чат`); tick(); }
@@ -627,11 +642,12 @@
     else if (a === 'theory') { delete S.theoryErr[d.id]; render(); }
     else if (a === 'mat') matModal(d.id, Number(d.i));
     else if (a === 'last-x') { S.seenLast = S.st.last.at; store.set('seenLast', S.seenLast); dock(); }
-    else if (a === 'draft-open') draftModal();
+    else if (a === 'draft-open') draftModal(d.task);
     else if (a === 'draft') {
-      const body = { text: ($('#dtext') || {}).value || '' };
+      const body = { task: S.draftTask, text: ($('#dtext') || {}).value || '' };
       if (d.v === 'send' && !confirm('Отправить ответ учителю на HDP?')) return;
-      if (d.v !== 'drop') await api('/api/draft/save', body).catch(x => toast(x.message, 'err'));
+      // правка не сохранилась — не отправляем старый текст (и не показываем вторую ошибку следом)
+      if (d.v !== 'drop' && !(await busy(el, () => api('/api/draft/save', body)))) return;
       const r = d.v === 'save' ? true : await busy(el, () => api('/api/draft/' + d.v, body));
       if (r) { toast(d.v === 'send' ? 'Отправляю учителю…' : d.v === 'drop' ? 'Не отправляю' : 'Сохранил'); if (d.v !== 'save') $('#modal').innerHTML = ''; tick(); }
     } else if (a === 'psubj') { S.prepSubj = d.v; S.prepSel = null; S.prepTz = ($('#ptz') || {}).value || S.prepTz; render(); }

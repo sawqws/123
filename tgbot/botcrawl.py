@@ -15,9 +15,17 @@ SKIP_KINDS = {"url", "app", "inline", "phone", "geo", "copy"}
 
 
 def press(bot, wait, **kw):
+    """Одно действие через Секретаря. Секретарь перезапускается («Обновить всех») — ждём до 4 мин и повторяем."""
     args = {"bot": bot, "wait": wait, "text": None, "click": None, "msg": None, "force": False}
     args.update(kw)
-    ok, out = tg.call("botpress", args, timeout=wait * 6 + 60)
+    for _ in range(16):
+        try:
+            ok, out = tg.call("botpress", args, timeout=wait * 6 + 60)
+        except OSError as e:
+            ok, out = False, f"агент оборвал ответ ({e})"
+        if ok or not re.search(r"агент не запущен|агент оборвал", str(out)):
+            break
+        time.sleep(15)
     if not ok:
         return {"fail": out}
     return out if isinstance(out, dict) else {"fail": str(out)[:300]}

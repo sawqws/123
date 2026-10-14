@@ -29,6 +29,7 @@ function render(s) {
     if (t) t.textContent = 'Мои сайты';
     const nt = document.querySelector('[data-tab="new"]');
     if (nt) nt.textContent = 'Новый сайт';
+    document.querySelectorAll('.sup-list, .sup-fab').forEach((x) => x.remove());  // здесь нет «Поддержки» (/fix)
   }
   const n = s.bots.length, word = s.sites_only ? ['сайт', 'сайта', 'сайтов'] : ['бот', 'бота', 'ботов'];
   $('count').textContent = n ? n + ' ' + (n === 1 ? word[0] : n < 5 ? word[1] : word[2]) : '';
@@ -250,7 +251,14 @@ document.addEventListener('click', (ev) => {
   if (t.dataset.name !== undefined) return sendName(t.dataset.name);
   if (t.dataset.bot) return openBot(t.dataset.bot);
   if (t.dataset.open) { if (tg) tg.openTelegramLink('https://t.me/' + t.dataset.open); return; }
-  if (t.dataset.link) { if (tg && tg.openTelegramLink) tg.openTelegramLink(t.dataset.link); else window.open(t.dataset.link); return; }
+  if (t.dataset.link !== undefined) {  // t.me — внутри Telegram; сайт — в браузере (openTelegramLink чужие адреса не открывает)
+    const link = t.dataset.link;
+    if (!link) { toast('Адреса пока нет — https ещё настраивается', true); return; }
+    if (tg && /^https:\/\/t\.me\//.test(link)) tg.openTelegramLink(link);
+    else if (tg && tg.openLink) tg.openLink(link);
+    else window.open(link);
+    return;
+  }
   if (t.dataset.tg) { if (tg) tg.openTelegramLink('https://t.me/' + t.dataset.tg); return; }
   switch (t.id) {
     case 'start': return startIdea();

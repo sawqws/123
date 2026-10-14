@@ -113,7 +113,7 @@ document.addEventListener('click', async (ev) => {
   const resume = ev.target.closest('[data-resume]');
   try {
     if (rm) render(await api('remove', { name: rm.dataset.rm }));
-    else if (resume) render(await api('resume'));
+    else if (resume) render(await api('resume', {}));
     else if (grab) {
       grab.disabled = true;
       const r = await api('grab', { name: grab.dataset.grab });

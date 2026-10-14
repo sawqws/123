@@ -491,11 +491,12 @@ def cancel_cmd(c):
 def cancel(c):
     d = draft()
     if d.get("stage") == "build":
-        return c.show(card("⏳ <b>Уже собираю</b>", ["Сборку не остановить — дождись, потом можно удалить."]))
+        return c.show(card("⏳ <b>Уже собираю</b>", ["Сборку не остановить — дождись, потом можно удалить."]),
+                      [[b("‹ Главное", "home")]])
     drop_unfinished(d)
     put({})
     c.toast("Черновик удалён")
-    c.show(card("🗑 <b>Черновик удалён</b>", ["Напиши новую идею, когда захочешь."]))
+    c.show(card("🗑 <b>Черновик удалён</b>", ["Напиши новую идею, когда захочешь."]), [[b("‹ Главное", "home")]])
 
 
 def drop_unfinished(d):
@@ -827,6 +828,8 @@ def on_go(c):
     d = draft()
     if d.get("stage") not in ("plan", "failed"):
         return c.toast("Уже собираю" if d.get("stage") == "build" else "Черновика нет")
+    if job.locked():  # Claude дорабатывает другого бота — иначе «Создаю» без сборки
+        return c.toast("⏳ Claude сейчас дорабатывает другого бота — нажми «Создать» через пару минут", alert=True)
     if c.mid and d.get("stage") == "plan":
         bot.edit(c.chat, c.mid, plan_card(d).rsplit("\n", 1)[0] + "\n✅ <b>Создаю</b>")
     confirm(c.chat)
@@ -1333,6 +1336,7 @@ def on_undo(c):
     info = registry().get(slug) or sites().get(slug)
     if not info or len(c.args) < 2 or not re.fullmatch(r"[0-9a-f]{6,40}", c.args[1]):
         return c.toast("Кнопка устарела" if info else "Бота уже нет")
+    c.ack("Откатываю…")
     code, out = git(info["dir"], "-c", "user.name=Студия", "-c", "user.email=studio@localhost", "revert", "--no-edit",
                     c.args[1])
     if code != 0:
@@ -1373,7 +1377,8 @@ def mark(status):
 def show_bots(c):
     rows = bots_list()
     if not rows:
-        return c.show(card("🧩 <b>Мои боты</b>", ["Пока ни одного — напиши идею, сделаю первого."]))
+        return c.show(card("🧩 <b>Мои боты</b>", ["Пока ни одного — напиши идею, сделаю первого."]),
+                      [[b("‹ Главное", "home")]])
     lines = []
     for r in rows:
         lines.append(f"{mark(r['status'])} {r['emoji']} <b>{esc(r['name'])}</b>"
@@ -1381,7 +1386,8 @@ def show_bots(c):
         if r["summary"]:
             lines.append(f"<i>{esc(r['summary'])}</i>")
     c.show(card(f"🧩 <b>Мои боты</b> · {len(rows)}", lines),
-           kit.rows([b(f"{r['emoji']} {r['name']}", f"bot|{r['slug']}") for r in rows]) + [[b("‹ Главное", "home")]])
+           kit.rows([b(f"{r['emoji']} {r['name']}", f"{'site' if r.get('kind') == 'site' else 'bot'}|{r['slug']}")
+                     for r in rows]) + [[b("‹ Главное", "home")]])
 
 
 @bot.button("bot")
@@ -1406,8 +1412,9 @@ def on_logs(c):
     info = registry().get(c.args[0] if c.args else "")
     if not info:
         return c.toast("Бота уже нет")
+    c.ack()
     c.say(f"📜 <b>{esc(info['name'])}</b>\n<pre>{esc(logs(info['pm2']))}</pre>",
-          [[b("✏️ Починить", f"fix|{info['slug']}", "primary")]])
+          [[b("✏️ Починить", f"fix|{info['slug']}", "primary"), b("‹ Назад", f"bot|{info['slug']}")]])
 
 
 @bot.button("restart")
@@ -1415,8 +1422,10 @@ def on_restart(c):
     info = registry().get(c.args[0] if c.args else "")
     if not info:
         return c.toast("Бота уже нет")
-    sh("pm2", "restart", info["pm2"], timeout=60)
-    c.toast("Перезапустил")
+    c.ack("Перезапускаю…")
+    code, out = sh("pm2", "restart", info["pm2"], timeout=60)
+    if code != 0:
+        c.say(kit.error(f"Не перезапустился: <code>{esc(out[-300:])}</code>"), [[b("📜 Логи", f"logs|{info['slug']}")]])
     show_bot(c)
 
 
@@ -1688,8 +1697,8 @@ def set_access(slug, mode):
 
 @bot.button("smode")
 def on_smode(c):
-    if len(c.args) < 2:
-        return c.toast("Кнопка устарела")
+    if len(c.args) < 2 or c.args[1] not in ACCESS_NAMES:
+        return c.toast("Эта кнопка устарела")
     info = set_access(c.args[0], c.args[1])
     if not info:
         return c.toast("Сайта уже нет")
@@ -1827,9 +1836,10 @@ def api_confirm(r):
 
 @bot.api("cancel")
 def api_cancel(r):
-    if draft().get("stage") == "build":
+    d = draft()
+    if d.get("stage") == "build":
         raise kit.Fail("Сборку не остановить")
-    drop_unfinished(draft())  # как кнопка «Отмена»: недоделанный бот не остаётся в «Моих ботах» и на диске
+    drop_unfinished(d)  # как в чате: недособранный бот не остаётся в «Моих ботах»
     put({})
     return api_state(r)
 

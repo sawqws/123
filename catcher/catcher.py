@@ -396,8 +396,13 @@ def ideas_card(theme, res):
 def run_ideas(c, theme):
     bot.db.set("ideas_theme", theme)
     mid = c.say(kit.card("✨ <b>Думаю…</b>", ["Придумываю имена и проверяю, что свободно."]))
-    res = check_ideas(ideas(theme))
-    text, rows = ideas_card(theme, res)
+    try:
+        res = check_ideas(ideas(theme))
+        text, rows = ideas_card(theme, res)
+    except Exception as e:  # «Думаю…» не должно висеть вечно
+        print("ideas:", e, flush=True)
+        text = kit.error("Не получилось придумать — попробуй ещё раз.")
+        rows = [[kit.b("🔁 Ещё раз", f"ideas|{theme[:40]}", "primary"), kit.b("‹ Главное", "home")]]
     bot.edit(c.chat, mid, text, rows)
 
 
@@ -631,8 +636,10 @@ def add_btn(c):
 
 @bot.button("grab")
 def grab_btn(c):
-    u = c.args[0]
-    c.toast(f"Занимаю @{u}…")
+    u = c.args[0] if c.args else ""
+    if not parse_names(u):
+        return c.toast("Эта кнопка устарела")
+    c.ack(f"Занимаю @{u}…")  # захват идёт до полуторы минут — крутилку гасим сразу
     r = grab(u, say=False)
     if r == "ok":
         n = find(u)
@@ -645,9 +652,12 @@ def grab_btn(c):
 
 @bot.button("watch")
 def watch_btn(c):
-    st, line = add(c.args[0])
-    c.toast(line[:190])
-    c.say(kit.esc(line))
+    u = c.args[0] if c.args else ""
+    if not parse_names(u):
+        return c.toast("Эта кнопка устарела")
+    c.ack("Проверяю…")
+    st, line = add(u)
+    c.say(kit.esc(line), [[kit.b("📋 Список", "list"), kit.b("‹ Главное", "home")]])
 
 
 def add_many(c, text):

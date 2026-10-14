@@ -254,6 +254,28 @@ def pairs(btns, n=2):
     return [btns[i:i + n] for i in range(0, len(btns), n)]
 
 
+def oops(chat, e):
+    """Ошибка действия — понятным сообщением в чат, а не тишиной (подробности — в лог pm2)."""
+    why = str(getattr(e, "detail", "") or e).strip()[:300] or type(e).__name__
+    try:
+        send(chat, card("⚠️ <b>Не получилось</b>", [esc(why)], "<i>Попробуй ещё раз или открой /start</i>"),
+             [[b("‹ Главная", "home")]])
+    except Exception as e2:
+        print("oops:", e2)
+
+
+def bg(chat, fn, *args):
+    """Долгое действие из чата — в фоне; упало — сказать в чат (иначе статус висит, а человек ждёт)."""
+    def run():
+        try:
+            fn(chat, *args)
+        except Exception as e:
+            traceback.print_exc()
+            if chat:
+                oops(chat, e)
+    threading.Thread(target=run, args=(), daemon=True).start()
+
+
 # ---------- pm2 и сервер ----------
 
 def sh(*cmd, timeout=60, env=None):
@@ -453,11 +475,13 @@ def mode_note():
 
 
 def mode_card(chat, mid=None):
+    btns = [[b("💬 В чате", "mode|chat", "primary"), b("📱 Приложение", "mode|app", "primary")]]
+    if ui_mode():  # режим уже выбран (зашли из /mode или «⚙️ Режим») — можно вернуться, ничего не меняя
+        btns.append([b("‹ Главная", "home")])
     return show(chat, mid, card("🧭 <b>Как удобнее?</b>",
                                 ["💬 <b>В чате</b> — всё кнопками и командами здесь",
                                  "📱 <b>Приложение</b> — Секретарь, боты и дела в одном окне"],
-                                "<i>Поменять можно в любой момент: /mode</i>"),
-                [[b("💬 В чате", "mode|chat", "primary"), b("📱 Приложение", "mode|app", "primary")]])
+                                "<i>Поменять можно в любой момент: /mode</i>"), btns)
 
 
 TASK_BTN = "✨ Поручить Секретарю"
@@ -653,8 +677,15 @@ def log_text(name, lines=30, limit=3500):
     return "\n".join(line for line in out.splitlines() if line.strip())[-limit:] or "пусто"
 
 
+def fit_pre(text, limit=3800):
+    """Текст для <pre>: после экранирования (& < > растут в 4–5 раз) влезает в сообщение Telegram (4096)."""
+    while len(esc(text)) > limit:
+        text = text[len(text) // 5 + 1:]
+    return esc(text)
+
+
 def logs(chat, name):
-    send(chat, f"📜 <b>Логи · {esc(short(label(name)))}</b>\n<pre>{esc(log_text(name))}</pre>",
+    send(chat, f"📜 <b>Логи · {esc(short(label(name)))}</b>\n<pre>{fit_pre(log_text(name))}</pre>",
          [[b("🔄 Перезапустить", f"rs|{name}"), b("‹ К ботам", "bots")]])
 
 
@@ -669,7 +700,12 @@ def restart_app(name, wait=4):
 
 
 def restart(chat, name):
-    if name == SELF:
+    if name == SELF:  # после перезапуска Главный сам напишет «Снова на связи» в этот чат
+        setting("updated_chat", chat)
+        try:  # подтвердить нажатие у Telegram, иначе после перезапуска оно придёт снова — и так по кругу
+            tg("getUpdates", offset=offset, timeout=0)
+        except Exception:
+            pass
         sh("pm2", "restart", name, timeout=60)
         return
     ok, text = restart_app(name)
@@ -737,6 +773,15 @@ def fmt_date(iso):
 # ---------- обновление и установка ----------
 
 def update_all(chat, reset=False):
+    """Обновить всех из main. Упало посередине — живой статус закрываем, иначе «Обновляю…» висит полчаса."""
+    try:
+        _update_all(chat, reset)
+    except Exception:
+        progress("Обновление упало — подробности в чате", done=True, ok=False)
+        raise
+
+
+def _update_all(chat, reset=False):
     def git(*a):
         return sh("git", "-C", REPO, *a, timeout=120)
     progress("Скачиваю свежий код из main…", kind="update")
@@ -801,7 +846,20 @@ def ask_token(chat, mid, kind):
     show(chat, mid, card(f"➕ <b>{esc(short(INSTALL[kind][1]))}</b>", lines), rows + [[b("Отмена", "home")]])
 
 
+installing = set()  # что сейчас ставится: второе нажатие «Создать бота сам» не плодит второго бота
+
+
 def botfather_install(chat, kind):
+    if kind in installing:
+        return send(chat, "⏳ Уже создаю этого бота — итог придёт сюда.")
+    installing.add(kind)
+    try:
+        _botfather_install(chat, kind)
+    finally:
+        installing.discard(kind)
+
+
+def _botfather_install(chat, kind):
     name, want = BOTFATHER.get(kind, (INSTALL[kind][1], kind))
     send(chat, card(f"🤖 <b>Создаю бота «{esc(name)}»</b>", ["В @BotFather через Секретаря…"]))
     token, why = maker.botfather(name, want)
@@ -900,7 +958,8 @@ def install(chat, kind, token, msg_id=None):
            "LANG": "C.UTF-8", "DEBIAN_FRONTEND": "noninteractive", var: token}
     code, out = sh("bash", os.path.join(REPO, kind, "install.sh"), timeout=1200, env=env)
     if code != 0:
-        return send(chat, f"❌ <b>Не получилось</b>\n<pre>{esc(out.strip()[-1200:])}</pre>")
+        return send(chat, f"❌ <b>Не получилось</b>\n<pre>{esc(out.strip()[-1200:])}</pre>",
+                    [[b("🔁 Ещё раз", f"add|{kind}"), b("‹ К ботам", "bots")]])
     if kind == "studio":
         setting("studio_user", name)  # кнопка «🏗 Студия» на главном экране
     maker.to_folder(name)  # сразу в папку «Bot» (если Секретарь вошёл в аккаунт)
@@ -1122,6 +1181,11 @@ def app_state():
             "live": dict(live), "boot": BOOT, "now": time.time()}
 
 
+def updating():
+    """Обновление всех уже идёт (из чата или приложения) — второе не запускаем."""
+    return live.get("kind") == "update" and not live.get("done") and time.time() - live.get("at", 0) < 1800
+
+
 def app_action(action, arg):
     """Действия из приложения — те же функции, что у кнопок чата."""
     action, arg = str(action or ""), str(arg or "").strip()
@@ -1137,7 +1201,7 @@ def app_action(action, arg):
         ok, text = restart_app(arg)
         return {"ok": ok, "text": text}
     if action == "update":
-        if live.get("kind") == "update" and not live.get("done") and time.time() - live.get("at", 0) < 1800:
+        if updating():
             raise ValueError("уже обновляю")
         progress("Скачиваю свежий код из main…", kind="update")
         threading.Thread(target=update_all, args=(owner(),), daemon=True).start()
@@ -1564,7 +1628,7 @@ def on_message(msg):
         psy_card(chat)
     elif not cmd and wait == "psy" and text:  # имя чата или человека для «Один чат»
         setting("wait", None)
-        threading.Thread(target=psy_run, args=(chat, "chat", text), daemon=True).start()
+        bg(chat, psy_run, "chat", text)
     elif not cmd and wait == "task" and text:  # поручение Секретарю: следующее сообщение — задача
         setting("wait", None)
         to_secretary({"message": msg}, chat)
@@ -1584,9 +1648,13 @@ def on_message(msg):
     elif cmd == "/claude":
         claude_card(chat, None)
     elif cmd == "/update":
-        threading.Thread(target=update_all, args=(chat,), daemon=True).start()
+        if updating():
+            send(chat, "⏳ Уже обновляю — итог придёт сюда.")
+        else:
+            progress("Скачиваю свежий код из main…", kind="update")
+            bg(chat, update_all)
     elif cmd == "/all":
-        threading.Thread(target=maker.show_all, args=(chat,), daemon=True).start()
+        bg(chat, maker.show_all)
     elif cmd == "/make":
         maker.ask_make(chat)
     elif cmd == "/fix":
@@ -1694,14 +1762,43 @@ def on_callback(cq):
     msg = cq.get("message") or {}
     chat, mid = msg.get("chat", {}).get("id"), msg.get("message_id")
     if (cq.get("data") or "").startswith(SEC_PREFIX) and allowed(uid):  # кнопка Секретаря — ему, он и ответит
-        if to_secretary({"callback_query": cq}, chat):
-            return
-        return tg("answerCallbackQuery", callback_query_id=cq["id"], text="Секретарь не отвечает")
+        try:
+            if to_secretary({"callback_query": cq}, chat):
+                return
+        except Exception as e:  # чат недоступен и т. п. — всё равно снять крутилку
+            print("secretary callback:", e)
+        try:
+            tg("answerCallbackQuery", callback_query_id=cq["id"], text="Секретарь не отвечает")
+        except Exception:
+            pass
+        return
     data = (cq.get("data") or "").split("|")
+    note = ""
+    try:  # что бы ни случилось, крутилка на кнопке не должна висеть: ответ — в finally
+        note = callback(chat, mid, uid, data)
+    except Exception as e:
+        traceback.print_exc()
+        note = "⚠️ Не получилось: " + str(getattr(e, "detail", "") or e)[:150]
+        if chat:
+            oops(chat, e)
+    finally:
+        try:
+            tg("answerCallbackQuery", callback_query_id=cq["id"], text=note or "")
+        except Exception:
+            pass
+
+
+STALE = "Кнопка устарела — открой /start"
+
+
+def callback(chat, mid, uid, data):
+    """Кнопки Главного -> текст всплывашки ('' — без неё). Незнакомая/устаревшая кнопка — подсказка, а не тишина."""
     arg = data[1] if len(data) > 1 else ""
     note = ""
     if not allowed(uid):
         note = "Нет доступа"
+    elif not chat:  # сообщение слишком старое или удалено — Telegram не дал чат
+        note = STALE
     elif data[0] == "home":
         setting("wait", None)
         home(chat, mid)
@@ -1717,24 +1814,24 @@ def on_callback(cq):
         setting("wait", None)
         psy_card(chat, mid)
     elif data[0] == "psy" and arg == "one":
-        threading.Thread(target=psy_one, args=(chat, mid), daemon=True).start()
+        bg(chat, psy_one, mid)
     elif data[0] == "psy" and arg in PSY_SCOPES:
         note = "Запускаю разбор…"
-        threading.Thread(target=psy_run, args=(chat, arg, None, mid), daemon=True).start()
+        bg(chat, psy_run, arg, None, mid)
     elif data[0] == "psy" and arg == "c" and len(data) > 2:
         setting("wait", None)
         note = "Запускаю разбор…"
-        threading.Thread(target=psy_run, args=(chat, "chat", data[2], mid), daemon=True).start()
+        bg(chat, psy_run, "chat", data[2], mid)
     elif data[0] == "srst":
         note = "Поднимаю Секретаря…"
-        threading.Thread(target=revive, args=(chat, True), daemon=True).start()
+        bg(chat, revive, True)
     elif data[0] == "app":
         app_card(chat, mid, arg)
     elif data[0] == "rs" and arg:
         note = "Перезапускаю…"
-        threading.Thread(target=restart, args=(chat, arg), daemon=True).start()
+        bg(chat, restart, arg)
     elif data[0] == "lg" and arg:
-        threading.Thread(target=logs, args=(chat, arg), daemon=True).start()
+        bg(chat, logs, arg)
     elif data[0] == "srv":
         server_card(chat, mid)
     elif data[0] == "more":
@@ -1742,8 +1839,12 @@ def on_callback(cq):
     elif data[0] == "cl":
         on_claude(chat, mid, arg)
     elif data[0] == "upd":
-        note = "Обновляю…"
-        threading.Thread(target=update_all, args=(chat, len(data) > 1), daemon=True).start()
+        if updating():
+            note = "Уже обновляю — дождись итога"
+        else:
+            note = "Обновляю…"
+            progress("Скачиваю свежий код из main…", kind="update")
+            bg(chat, update_all, len(data) > 1)
     elif data[0] == "rmd":
         with lock:
             st = load()
@@ -1752,8 +1853,11 @@ def on_callback(cq):
         if res:
             note = res[0]
             show(chat, mid, res[1], (res[2] or []) + [[b("‹ Назад", "more")]])
+        else:
+            note = STALE
     elif data[0] in ("all", "mk", "mkr", "fix", "rb", "del?", "del", "mkh", "fixh"):
-        note = maker.on_callback(chat, mid, data) or ""
+        note = maker.on_callback(chat, mid, data)
+        note = STALE if note is None else note
     elif data[0] == "add" and len(data) == 1:
         show(chat, mid, card("➕ <b>Какого бота поставить?</b>", ["Выбери — дальше пришлёшь токен от @BotFather "
                                                                  "или я создам бота сам через Секретаря."]),
@@ -1766,24 +1870,25 @@ def on_callback(cq):
         elif maker.secretary_ready():
             setting("wait", None)
             note = "Ставлю…"
-            threading.Thread(target=botfather_install, args=(chat, "studio"), daemon=True).start()
+            bg(chat, botfather_install, "studio")
         else:
             ask_token(chat, mid, "studio")
+    elif data[0] == "bf" and arg in INSTALL and arg in installing:
+        note = "Уже создаю — подожди"
     elif data[0] == "bf" and arg in INSTALL:
         setting("wait", None)
         note = "Создаю…"
-        threading.Thread(target=botfather_install, args=(chat, arg), daemon=True).start()
+        bg(chat, botfather_install, arg)
     elif data[0] == "addt":
         token = setting("token_hint")
         setting("token_hint", None)
         if token and arg in INSTALL:
-            threading.Thread(target=install, args=(chat, arg, token), daemon=True).start()
+            bg(chat, install, arg, token)
         else:
             note = "Пришли токен ещё раз"
-    try:
-        tg("answerCallbackQuery", callback_query_id=cq["id"], text=note)
-    except Exception:
-        pass
+    else:
+        note = STALE
+    return note
 
 
 COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
@@ -1839,6 +1944,9 @@ def main():
             except Exception as e:
                 print("update:", e)
                 traceback.print_exc()
+                chat = ((u.get("message") or {}).get("chat") or {}).get("id")
+                if chat and allowed((u["message"].get("from") or {}).get("id")):
+                    oops(chat, e)
 
 
 if __name__ == "__main__":
