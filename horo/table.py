@@ -23,7 +23,7 @@ from PIL import Image
 from hand import Hand
 
 INK = (25, 125, 240)   # его синее перо на белом (как на скриншотах HDP)
-PEN = 3.4
+PEN = 2.4   # как у него на листе алфавита: штрих ~1/9 высоты буквы (3.4 выходило жирно)
 
 
 def _runs(mask, min_gap=4):
