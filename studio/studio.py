@@ -46,6 +46,10 @@ SITES_ONLY = os.environ.get("STUDIO_MODE") == "sites"
 DATA = os.environ.get("STUDIO_DATA") or os.path.join(HERE, "data")
 SAFE_DENY = [f"{tool}(//{d}/**)" for tool in ("Read", "Edit", "Write") for d in
              ("root", "etc", "home", "proc", "sys", "var", "tmp", "opt", "usr", "boot", "dev", "run", "mnt", "media")]
+# и своя служебная папка Студии сайтов: реестр сайтов (пароли и ключи всех сайтов) и база бота — только самой Студии
+SAFE_DENY += [f"{tool}(//{d})" for tool in ("Read", "Edit", "Write") for d in
+              ("srv/studio-sites/sites.json", "srv/studio-sites/registry.json", "srv/studio-sites/data/**")]
+SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|KEY|HUB_|HORO_|API_", re.I)
 BOT_TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
 
 if SITES_ONLY:
@@ -176,8 +180,16 @@ def proxy(h, method):
         h.end_headers()
         return True
     rest = h.path[len(f"/b/{m.group(1)}"):]
-    body = h.rfile.read(int(h.headers.get("Content-Length") or 0)) if method == "POST" else None
+    try:
+        n = int(h.headers.get("Content-Length") or 0)
+    except ValueError:
+        n = -1
+    if not 0 <= n <= 6_000_000:  # как в botkit: не читаем бесконечность в память
+        h.reply(413, {"error": "слишком большой запрос"})
+        return True
+    body = h.rfile.read(n) if method == "POST" else None
     headers = {k: h.headers[k] for k in ("Content-Type", "X-Init-Data") if h.headers.get(k)}
+    c = None
     try:
         c = http.client.HTTPConnection("127.0.0.1", info["port"], timeout=120)
         c.request(method, rest, body=body, headers=headers)
@@ -190,8 +202,11 @@ def proxy(h, method):
         h.send_header("Content-Length", str(len(data)))
         h.end_headers()
         h.wfile.write(data)
-    except OSError:
+    except (OSError, http.client.HTTPException):
         h.reply(502, {"error": f"«{info.get('name')}» сейчас не отвечает — он перезапускается?"})
+    finally:
+        if c:
+            c.close()
     return True
 
 
@@ -203,6 +218,12 @@ bot.http_hook = proxy
 TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash(python3:*)", "Bash(node:*)", "Bash(ls:*)", "Bash(cat:*)",
          "Bash(sed -n:*)", "Bash(grep:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(find:*)",
          "Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(mkdir:*)", "Bash(cp:*)"]
+
+
+def claude_env():
+    """Окружение для Claude Code: без токенов и ключей (STUDIO_TOKEN и др. из /etc/*.env, переменные Главного) —
+    они ему не нужны, а команда или ошибка могли бы вывести их в чат. Вход в аккаунт Claude (HOME) остаётся."""
+    return {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k) or k.startswith(("CLAUDE", "ANTHROPIC_"))}
 
 
 def claude(prompt, cwd, on_step=None, timeout=BUILD_TIMEOUT, tools=True, model=None):
@@ -224,7 +245,8 @@ def claude(prompt, cwd, on_step=None, timeout=BUILD_TIMEOUT, tools=True, model=N
     else:
         cmd += ["--allowedTools", "Read", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch", "Task"]
     try:
-        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             env=claude_env())
     except FileNotFoundError:
         return False, "Claude Code не установлен на сервере"
     timer = threading.Timer(timeout, p.kill)
@@ -274,6 +296,9 @@ def step_text(name, inp):
 def talk(prompt):
     """Быстрый вопрос Claude без правки файлов → dict из JSON или None."""
     cwd = BOTS if os.path.isdir(BOTS) else "/tmp"
+    if SITES_ONLY:  # чужой человек: рабочая папка пустая, а не та, где лежат реестр сайтов с паролями и база бота
+        cwd = os.path.join(BOTS, "talk")
+        os.makedirs(cwd, exist_ok=True)
     ok, out = claude(prompt, cwd, tools=False, timeout=240, model=TALK_MODEL or None)
     if not ok and TALK_MODEL:
         ok, out = claude(prompt, cwd, tools=False, timeout=240)
@@ -295,6 +320,11 @@ def draft():
 def put(d):
     bot.db.set("draft", d)
     return d
+
+
+def patch(**kw):
+    """Атомарно дописать поля черновика (сборка пишет шаги в фоне — целиком put() затёр бы токен или правку)."""
+    return bot.db.update("draft", lambda d: {**(d or {}), **kw}, {})
 
 
 def owner_chat():
@@ -537,6 +567,11 @@ def stage_text(d):
 def on_text(c):
     d = draft()
     st = d.get("stage")
+    if BOT_TOKEN.search(c.text) and st not in ("build", "token"):
+        # токен в чате, когда он не нужен: не превращать его в «идею» (уйдёт в Claude, в базу и в приложение) — удалить
+        bot.delete(c.chat, c.msg.get("message_id"))
+        return c.say("🔑 Токен сейчас не нужен — удалил сообщение. Если он был настоящий, пересоздай его в @BotFather "
+                     "(/revoke): токен, присланный в чат, уже мог где-то остаться.")
     if st == "ask":
         return answer(c.chat, c.text)
     if st == "name":
@@ -552,11 +587,9 @@ def on_text(c):
         m = BOT_TOKEN.search(c.text)
         if m:
             bot.delete(c.chat, c.msg.get("message_id"))  # токен не должен висеть в чате
-            d["token"] = m.group(0)
-            put(d)
+            patch(token=m.group(0))
             return c.say("🔑 Токен принял — запущу бота, как только допишу код.")
-        d.setdefault("queued", []).append(c.text)
-        put(d)
+        bot.db.update("draft", lambda x: {**x, "queued": (x.get("queued") or []) + [c.text]}, {})
         return c.say(card("📌 <b>Запомнил</b>", [esc(c.text[:300])], "<i>Доделаю сборку и сразу внесу эту правку.</i>"))
     if registry():
         bot.db.set("heard", c.text)
@@ -861,9 +894,7 @@ class Status:
     def step(self, text, force=False):
         self.steps = steps = self.steps + [text]
         if self.track:  # сборка: шаги видны и в приложении
-            d = draft()
-            d["steps"] = steps[-30:]
-            put(d)
+            patch(steps=steps[-30:])
         if force or time.time() - self.last > 8:
             self.last = time.time()
             mins = int(time.time() - self.start) // 60
@@ -1008,7 +1039,7 @@ def _build(chat):
             "plan": d.get("plan"), "username": None, "created": time.time(), "by": "studio"}
     reg_set(slug, info)
     d.update(slug=slug)
-    put(d)
+    patch(slug=slug)
 
     # параллельно, пока Claude пишет код: бот в Telegram и аватар.
     # Лучший путь — Managed Bots: Глеб жмёт кнопку, подтверждает окно Telegram, токен приходит сам (@bot.managed).
@@ -1016,7 +1047,7 @@ def _build(chat):
     t = None
     if bot.can_manage():
         d["newbot"] = bot.newbot_link(want_username(d), d["name"])
-        put(d)
+        patch(newbot=d["newbot"])
         bot.send(chat, card("⚡ <b>Нажми — и бот появится в Telegram</b>",
                             [f"Откроется окно с именем «{esc(d['name'])}» и адресом @{esc(want_username(d))} — "
                              "просто подтверди. Можно поменять адрес, если занят."],
@@ -1139,8 +1170,7 @@ def on_managed(upd):
         print("access:", e, flush=True)
     d = draft()
     if d.get("stage") == "build":
-        d["token"] = token
-        put(d)
+        patch(token=token)
         bot.notify(f"🤖 @{esc(new.get('username'))} создан — запущу, как только допишу код.")
     elif d.get("stage") == "token":
         d.update(stage="build", token=token)
@@ -1509,19 +1539,49 @@ def _eq(a, b):
     return hmac.compare_digest(str(a).encode(), str(b).encode())
 
 
+def _hv(v):
+    """Значение заголовка HTTP — только latin-1 (http.server иначе падает UnicodeEncodeError и ответа нет — был 502 на
+    сайтах с русскими именами): что не лезет — переводим в %XX (как в Location/filename*), без переводов строк."""
+    v = re.sub(r"[\r\n]+", " ", str(v))
+    try:
+        v.encode("latin-1")
+        return v
+    except UnicodeEncodeError:
+        return "".join(ch if ord(ch) < 256 else urllib.parse.quote(ch) for ch in v)
+
+
+def _send_headers(h, headers):
+    for k, v in headers.items():
+        h.send_header(k, _hv(v))
+
+
 def _site_page(h, code, title, text, headers=None):
     body = (f'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{esc(title)}</title><body style="font:18px system-ui;display:grid;place-items:center;min-height:90vh;'
             f'text-align:center;color:#444;background:#fafafa"><div><div style="font-size:48px">🔒</div>'
             f'<h1 style="font-size:22px">{esc(title)}</h1><p>{esc(text)}</p></div>').encode()
     h.send_response(code)
-    for k, v in (headers or {}).items():
-        h.send_header(k, v)
-    h.send_header("Content-Type", "text/html; charset=utf-8")
-    h.send_header("Content-Length", str(len(body)))
-    h.send_header("Cache-Control", "no-store")
+    _send_headers(h, {**(headers or {}), "Content-Type": "text/html; charset=utf-8",
+                      "Content-Length": str(len(body)), "Cache-Control": "no-store"})
     h.end_headers()
     h.wfile.write(body)
+
+
+_pw_fails = {}  # slug -> время неудачных вводов пароля (перебор 8 знаков — медленный, но не бесконечный)
+_pw_lock = threading.Lock()
+PW_TRIES = 10  # неверных паролей в минуту на сайт, дальше — 429
+
+
+def _pw_failed(slug):
+    with _pw_lock:
+        _pw_fails.setdefault(slug, []).append(time.time())
+
+
+def _pw_blocked(slug):
+    with _pw_lock:
+        recent = [t for t in _pw_fails.get(slug, []) if time.time() - t < 60]
+        _pw_fails[slug] = recent
+        return len(recent) >= PW_TRIES
 
 
 def serve_site(h, method):
@@ -1537,7 +1597,7 @@ def serve_site(h, method):
         return True
     if not m.group(2):
         h.send_response(301)
-        h.send_header("Location", f"/s/{slug}/" + (f"?{u.query}" if u.query else ""))
+        h.send_header("Location", _hv(f"/s/{slug}/" + (f"?{u.query}" if u.query else "")))
         h.end_headers()
         return True
     access = info.get("access", "private")
@@ -1552,7 +1612,7 @@ def serve_site(h, method):
             h.send_response(302)
             h.send_header("Set-Cookie", f"sk_{slug}={info['key']}; Path=/s/{slug}/; Max-Age=31536000; "
                                         "HttpOnly; Secure; SameSite=Lax")
-            h.send_header("Location", u.path)
+            h.send_header("Location", _hv(u.path))
             h.send_header("Cache-Control", "no-store")
             h.end_headers()
             return True
@@ -1568,7 +1628,12 @@ def serve_site(h, method):
                 pw = base64.b64decode(auth[6:]).decode("utf-8", "replace").partition(":")[2]
             except ValueError:
                 pass
+        if _pw_blocked(slug):
+            _site_page(h, 429, "Слишком много попыток", "Подожди минуту и попробуй ещё раз.", {"Retry-After": "60"})
+            return True
         if not pw or not _eq(pw, info.get("password", "")):
+            if pw:
+                _pw_failed(slug)
             _site_page(h, 401, "Нужен пароль", "Введи пароль, который тебе дал владелец сайта.",
                        {"WWW-Authenticate": 'Basic realm="Site", charset="UTF-8"'})  # заголовки — только latin-1, иначе 502
             return True
@@ -1576,9 +1641,13 @@ def serve_site(h, method):
     if rel.endswith("/"):
         rel += "index.html"
     root = os.path.realpath(os.path.join(SITES, slug))
-    full = os.path.realpath(os.path.join(root, rel.lstrip("/")))
+    try:
+        full = os.path.realpath(os.path.join(root, rel.lstrip("/")))
+        isfile = full.startswith(root + os.sep) and os.path.isfile(full)
+    except (ValueError, OSError):  # %00 и подобное — не файл, а не падение обработчика
+        full, isfile = "", False
     parts = [x for x in rel.split("/") if x]
-    if not (full.startswith(root + os.sep) and os.path.isfile(full)) or any(x.startswith(".") for x in parts):
+    if not isfile or any(x.startswith(".") for x in parts):
         _site_page(h, 404, "Страницы нет", "Такой страницы на сайте нет.")
         return True
     with open(full, "rb") as f:
@@ -1590,6 +1659,8 @@ def serve_site(h, method):
     h.send_header("Content-Type", ctype)
     h.send_header("Content-Length", str(len(data)))
     h.send_header("Cache-Control", "public, max-age=300" if access == "public" else "no-store")
+    h.send_header("X-Content-Type-Options", "nosniff")
+    h.send_header("Referrer-Policy", "no-referrer")
     if access != "public":
         h.send_header("X-Robots-Tag", "noindex, nofollow")
     h.end_headers()
