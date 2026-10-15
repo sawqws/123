@@ -139,6 +139,34 @@ class HubTest(Base):
         self.assertLessEqual(len(self.last()[0]), 4096)
         self.assertTrue(self.last()[0].endswith("</pre>"))
 
+    def test_send_falls_back_to_plain_text(self):
+        """Telegram не принял разметку (400) — то же сообщение уходит простым текстом, а не пропадает."""
+        calls = []
+
+        def fake(method, **kw):
+            calls.append((method, kw))
+            if kw.get("parse_mode") == "HTML":
+                e = urllib.error.HTTPError("u", 400, "Bad Request", {}, None)
+                e.detail = '{"description":"Bad Request: can\'t parse entities: Unsupported start tag"}'
+                raise e
+            return {"ok": True}
+        with mock.patch.object(hub, "tg", side_effect=fake):
+            hub.send(U, "🤖 <b>Claude:</b> &lt;script&gt; " + "я" * 5000, [[hub.b("OK", "home")]])
+        self.assertEqual(len(calls), 2)
+        text = calls[1][1]["text"]
+        self.assertNotIn("<b>", text)
+        self.assertIn("<script>", text)
+        self.assertLessEqual(len(text), 4096)
+        self.assertIn("reply_markup", calls[1][1])  # кнопки на месте
+        self.assertNotIn("parse_mode", calls[1][1])
+
+    def test_send_other_errors_are_raised(self):
+        e = urllib.error.HTTPError("u", 403, "Forbidden", {}, None)
+        e.detail = "bot was blocked by the user"
+        with mock.patch.object(hub, "tg", side_effect=e):
+            with self.assertRaises(urllib.error.HTTPError):
+                hub.send(U, "x")
+
     def test_mode_card_has_way_back(self):
         hub.on_message(self.msg("/mode"))
         self.assertIn('"home"', self.last()[1])
@@ -340,8 +368,15 @@ class RemoteTest(Base):
         hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})
         for _ in range(20):
             self.post("status", key="bad")
-        self.assertEqual(self.post("status", key=hub.setting("key"))[0], 429)
-        self.assertTrue(any("закрыт на час" in kw.get("text", "") for _, kw in self.sent))
+        self.assertEqual(self.post("status", key="bad")[0], 429)  # неверные ключи отклоняются на час
+        self.assertEqual(self.post("status", key=hub.setting("key"))[0], 200)  # а верный ключ владельца не запирается
+        self.assertTrue(any("ещё час" in kw.get("text", "") for _, kw in self.sent))
+
+    def test_remote_validation(self):
+        hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})
+        k = hub.setting("key")
+        self.assertEqual(self.post("restart", {"name": "--update-env"}, key=k)[0], 400)  # имя бота — не флаг pm2
+        self.assertEqual(self.post("logs", {"name": ""}, key=k)[0], 400)
 
     def test_remote_cli(self):
         hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})

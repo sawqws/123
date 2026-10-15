@@ -180,5 +180,32 @@ class StudioBots(Base):
             self.assertEqual(json.load(f), {})
 
 
+class CommitScope(unittest.TestCase):
+    """«Доработать» коммитит только код бота: данные и чужие папки в коммит не попадают."""
+
+    def test_only_bot_folder_without_data(self):
+        def real(*cmd, timeout=60, env=None):
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            return p.returncode, p.stdout + p.stderr
+        d = tempfile.mkdtemp()
+        for rel, text in (("coach/bot.py", "v1"), ("kpp/bot.py", "v1")):
+            os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
+            with open(os.path.join(d, rel), "w") as f:
+                f.write(text)
+        real("git", "-C", d, "init", "-q")
+        real("git", "-C", d, "add", "-A")
+        real("git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+        os.makedirs(os.path.join(d, "coach", "data"))
+        for rel, text in (("coach/bot.py", "v2"), ("coach/data/coach.db", "секрет"), ("kpp/bot.py", "чужая правка"),
+                          ("coach/new.py", "новый файл")):
+            with open(os.path.join(d, rel), "w") as f:
+                f.write(text)
+        with mock.patch.object(hub, "sh", side_effect=real):
+            sha = maker.commit(d, "тест", ["coach"])
+        self.assertTrue(sha)
+        _, files = real("git", "-C", d, "show", "--name-only", "--pretty=", "HEAD")
+        self.assertEqual(sorted(files.split()), ["coach/bot.py", "coach/new.py"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
