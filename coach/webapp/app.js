@@ -341,7 +341,7 @@
     if (s) rows.push(`<button class="act" data-a="detail" data-v="sleep"><span class="act-ic" style="--c:var(--sleep)">${I.moon}</span>
       <span class="act-m"><b>Сон</b><span class="num">${esc(s.start)} – ${esc(s.end)}</span></span>
       <span class="act-v num" style="--c:var(--sleep)">${hm(s.hours)}</span></button>`);
-    (t.workouts || []).forEach(w => rows.push(`<button class="act" data-a="detail" data-v="strain"><span class="act-ic" style="--c:var(--strain)">${sportIcon(w.sport)}</span>
+    (t.workouts || []).forEach(w => rows.push(`<button class="act" data-a="workout" data-v="${esc(w.id)}"><span class="act-ic" style="--c:var(--strain)">${sportIcon(w.sport)}</span>
       <span class="act-m"><b>${esc(w.sport)}</b><span class="num">${esc(w.start)} · ${w.minutes || '—'} мин${w.kcal ? ` · ${big(w.kcal)} ккал` : ''}</span></span>
       <span class="act-v num" style="--c:var(--strain)">${w.strain != null ? num(w.strain, 1) : '—'}</span></button>`));
     return `<div class="sec rise">${cap('Мой день', rows.length ? `${rows.length} ${plural(rows.length, 'запись', 'записи', 'записей')}` : '')}
@@ -592,7 +592,7 @@
       h += '<div class="label rise">Тренировки</div>';
       h += ws.map(w => {
         const tot = (w.zones || []).slice(1).reduce((a, x) => a + x, 0);
-        return `<section class="card wk rise"><div class="wk-h"><div><div class="wk-n">${esc(w.sport)}</div><div class="meta num">${esc(w.start)} · ${w.minutes || '—'} мин · пульс ${w.avg_hr || '—'}/${w.max_hr || '—'}${w.kcal ? ` · ${big(w.kcal)} ккал` : ''}</div></div>
+        return `<section class="card wk rise tap" data-a="workout" data-v="${esc(w.id)}" role="button"><div class="wk-h"><div><div class="wk-n">${esc(w.sport)}</div><div class="meta num">${esc(w.start)} · ${w.minutes || '—'} мин · пульс ${w.avg_hr || '—'}/${w.max_hr || '—'}${w.kcal ? ` · ${big(w.kcal)} ккал` : ''}</div></div>
           <div class="wk-s num">${w.strain != null ? num(w.strain, 1) : '—'}</div></div>
           ${tot ? `<div class="zbar">${w.zones.slice(1).map((m, i) => m ? `<span style="flex:${m};background:${ZCOL[i]}"></span>` : '').join('')}</div>
           <div class="zleg num">${w.zones.slice(1).map((m, i) => `<span><i style="background:${ZCOL[i]}"></i>Z${i + 1}<b>${m}</b></span>`).join('')}</div>` : ''}</section>`;
@@ -969,7 +969,9 @@
     const el = ev.target.closest('[data-a]');
     if (!el || el.disabled) return;
     const a = el.dataset.a, v = el.dataset.v;
+    if (F.actions[a]) return F.actions[a](el, v, ev);  // модуль может заменить и встроенное действие
     if (a === 'profile') profileSheet();
+    else if (a === 'workout') openScreen('strain');  // без модуля activity.js — общий экран нагрузки
     else if (a === 'tab') { const t = TABS.find(x => x.id === v); if (t) { haptic('select'); go(v); } }
     else if (a === 'connect') connect();
     else if (a === 'brief') brief();
@@ -1006,7 +1008,6 @@
     } else if (a === 'copy') {
       try { await navigator.clipboard.writeText(v); haptic('success'); toast('Скопировано', 'ok'); } catch (e) { toast('Выдели и скопируй адрес'); }
     } else if (a === 'open') { if (tg) tg.openLink(v); else window.open(v, '_blank'); }
-    else if (F.actions[a]) F.actions[a](el, v, ev);
     else if (a === 'tochat') {  // режим «💬 чат»: бот запомнит и пришлёт главное меню в чат, приложение закрывается
       try { await busy(el, () => api('/api/mode', { mode: 'chat' })); } catch (e) { fail(e); return; }
       S.data.mode = 'chat';
