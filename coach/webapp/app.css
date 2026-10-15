@@ -41,7 +41,7 @@
   --accent-soft: rgba(0, 241, 159, .12); --accent-line: rgba(0, 241, 159, .35); --accent-deep: #00f19f; --accent-pastel: rgba(0, 241, 159, .3);
 }
 /* фон — фирменный градиент WHOOP; никакого стекла и золотых пятен */
-html { background: var(--bg-2) linear-gradient(180deg, #283339 0, #161d21 420px, #101518 900px) no-repeat; background-attachment: fixed; }
+html { background: var(--bg-2) linear-gradient(180deg, #283339 0, #161d21 420px, #101518 900px) no-repeat; }
 body::before, body::after { content: none !important; }
 body { font-family: var(--head); color: var(--ink); -webkit-font-smoothing: antialiased; }
 .card, .list, .stat, .chip, .seg, .tabbar, .toast, .sup-fab, .sheet, .btn, input, textarea, select, details.about, .msg.them, .avatar {
