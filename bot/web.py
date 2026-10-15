@@ -7,6 +7,8 @@
 Сайт в браузере (/site/, bot/site/): то же API, вход без Telegram — одноразовой ссылкой из бота (/site):
 ссылка живёт 15 минут и срабатывает один раз, дальше браузер помнит вход 30 дней (cookie hdp_site).
 Постоянный адрес — https://hdp.<ip-через-дефисы>.sslip.io (его держит Caddy планера), иначе адрес туннеля.
+На постоянном адресе сайт — зеркало настоящего horodigital.ru с кнопками бота (bot/mirror.py): всё, что не API бота,
+не /site/ и не /_hdp/, после входа уходит на платформу. Прежний сайт (bot/site/) остаётся по адресу /site/.
 
 Переменные окружения:
   HORO_WEB_PORT  порт на 127.0.0.1 (по умолчанию 8788; у планера 8787)
@@ -31,6 +33,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+import mirror  # noqa: E402  (рядом, в bot/)
 WEB = os.path.join(HERE, "webapp")
 SITE = os.path.join(HERE, "site")
 SESSIONS = os.path.join(os.path.dirname(HERE), "horo", "tmp", "site_sessions.json")
@@ -77,6 +80,8 @@ def version(folder=WEB):
     """Метка файлов приложения: меняется при обновлении, чтобы Telegram не показывал старые из кэша."""
     h = hashlib.sha1()
     for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not os.path.isfile(os.path.join(folder, name)):
+            continue  # подпапки (bot/site/mirror) — у них своя метка
         with open(os.path.join(folder, name), "rb") as f:
             h.update(f.read())
     return h.hexdigest()[:10]
@@ -219,12 +224,40 @@ class Web(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def mirror_host(self):
+        """Постоянный адрес сайта (hdp.… или HORO_SITE_URL) — там зеркало платформы; на адресе туннеля — приложение."""
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        own = urllib.parse.urlparse(os.environ.get("HORO_SITE_URL", "")).hostname or ""
+        return host.startswith("hdp.") or (own and host == own.lower())
+
+    def mirror(self, path):
+        """Зеркало платформы: свои файлы /_hdp/, остальное — на horodigital.ru (только после входа)."""
+        if path.startswith("/_hdp/"):
+            got = mirror.file(path[len("/_hdp/"):])
+            if not got:
+                return self.reply(404, {"error": "not found"})
+            return self.reply(200, got[0], got[1], "public, max-age=31536000, immutable")
+        if not site_check(self.cookie()):
+            if self.command == "GET" and "text/html" in (self.headers.get("Accept") or ""):
+                return self.redirect("/site/")  # там карточка «напиши боту /site»
+            return self.reply(401, {"error": "Нужен вход: напиши боту /site — пришлю ссылку"})
+        origin = self.headers.get("Origin")
+        if self.command not in ("GET", "HEAD", "OPTIONS") and origin and \
+                urllib.parse.urlparse(origin).hostname != (self.headers.get("Host") or "").split(":")[0]:
+            return self.reply(403, {"error": "Чужой сайт"})  # запросы с других страниц не пускаем
+        try:
+            mirror.proxy(self, _cfg.get("mirror_version", "0"))
+        except Exception as e:
+            traceback.print_exc()
+            self.reply(502, {"error": f"Зеркало: {e}"})
+
     def site(self, path):
         """Сайт в браузере: /site/ и его файлы, вход по одноразовой ссылке, выход."""
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         if path == "/site/login":
             token = site_login((q.get("c") or [""])[0])
-            return self.redirect("/site/" if token else "/site/#login-expired", token or None)
+            home = "/student" if self.mirror_host() else "/site/"
+            return self.redirect(home if token else "/site/#login-expired", token or None)
         if path == "/site/logout":
             site_logout(self.cookie())
             return self.redirect("/site/", "")
@@ -249,6 +282,8 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             return self.reply(200, "ok", "text/plain")
+        if self.mirror_host() and path not in _cfg["routes"] and not (path == "/site" or path.startswith("/site/")):
+            return self.redirect("/student") if path == "/" else self.mirror(path)
         if path.startswith("/api/"):
             if path in WRITE:  # действия — только POST (GET могут повторить предпросмотр ссылок, расширения и т. п.)
                 return self.reply(405, {"error": "Это действие — только POST"})
@@ -265,6 +300,8 @@ class Web(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if self.mirror_host() and path not in _cfg["routes"]:
+            return self.mirror(path)
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # -1 — не ждать тело до закрытия связи
             limit = 16_000_000 if path == "/api/support" else 1_000_000  # в поддержке — скриншот
@@ -272,6 +309,15 @@ class Web(BaseHTTPRequestHandler):
         except ValueError:
             return self.reply(400, {"error": "bad json"})
         self.api(path, body if isinstance(body, dict) else {})
+
+    def other(self):
+        """PUT/PATCH/DELETE/HEAD/OPTIONS — только зеркалу (у API бота их нет)."""
+        path = urllib.parse.urlparse(self.path).path
+        if self.mirror_host() and path not in _cfg["routes"]:
+            return self.mirror(path)
+        self.reply(405, {"error": "method not allowed"})
+
+    do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = other
 
     def api(self, path, body):
         user = check_init_data(self.headers.get("X-Init-Data") or "", _cfg["token"])
@@ -380,7 +426,7 @@ def tunnel():
 def start(token, owner, routes, on_url):
     """Запускает сервер и (если нет HORO_WEB_URL) туннель. on_url(адрес) зовётся, когда адрес готов или сменился."""
     _cfg.update(token=token, owner=owner, routes=routes, on_url=on_url, version=version(),
-                site_version=version(SITE))
+                site_version=version(SITE), mirror_version=version(mirror.FILES))
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=watch_site, daemon=True).start()
     if url:
