@@ -67,6 +67,7 @@ ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("COACH_ALLOWED", ""
 PORT = int(os.environ.get("COACH_PORT") or 8789)
 DATA = os.path.join(HERE, "data")
 WEB = os.path.join(HERE, "webapp")
+mimetypes.add_type("font/woff2", ".woff2")  # шрифты приложения (fonts.css)
 REPO = os.path.dirname(HERE)
 NAME = "Форма"
 SYNC_EVERY = 15 * 60
