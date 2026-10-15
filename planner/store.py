@@ -50,7 +50,10 @@ def now_iso():
 
 
 def parse_date(s):
-    return datetime.date.fromisoformat(s) if s else None
+    try:
+        return datetime.date.fromisoformat(s) if s else None
+    except (ValueError, TypeError):
+        raise ValueError("Неверная дата") from None
 
 
 def period_start(horizon, day):
@@ -77,10 +80,13 @@ def occurs(task, day):
 def _clean_time(t):
     if not t:
         return None
-    h, m = str(t).split(":")[:2]
-    h, m = int(h), int(m)
+    try:
+        h, m = str(t).split(":")[:2]
+        h, m = int(h), int(m)
+    except ValueError:
+        raise ValueError("Неверное время — нужно ЧЧ:ММ") from None
     if not (0 <= h < 24 and 0 <= m < 60):
-        raise ValueError("время")
+        raise ValueError("Неверное время — нужно ЧЧ:ММ")
     return f"{h:02d}:{m:02d}"
 
 
@@ -177,6 +183,15 @@ class Store:
             self.db.commit()
             return cur.rowcount == 1
 
+    def unmark_sent(self, key):
+        """Снять отметку (отправка не удалась — пусть следующий проход попробует снова)."""
+        self.x("DELETE FROM sent WHERE key=?", key)
+
+    def prune_sent(self, days=60):
+        """Забыть отметки старше days дней — таблица не растёт бесконечно."""
+        cut = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat(timespec="seconds")
+        return self.x("DELETE FROM sent WHERE at < ?", cut).rowcount
+
     def backup(self, folder, keep=14):
         os.makedirs(folder, exist_ok=True)
         dst = os.path.join(folder, f"planner-{datetime.date.today().isoformat()}.db")
@@ -214,7 +229,10 @@ class Store:
             sets["remind"] = max(-1, min(int(d["remind"]), 24 * 60))
         if "tz" in d and d["tz"]:
             from zoneinfo import ZoneInfo
-            ZoneInfo(str(d["tz"]))  # проверка: такой пояс существует
+            try:
+                ZoneInfo(str(d["tz"]))  # проверка: такой пояс существует
+            except Exception:
+                raise ValueError("Такого часового пояса нет") from None
             sets["tz"] = str(d["tz"])
         for k, v in sets.items():
             self.x(f"UPDATE users SET {k}=? WHERE id=?", v, uid)
@@ -227,12 +245,13 @@ class Store:
         r = self.q("SELECT * FROM tasks WHERE id=? AND user=?", tid, uid)
         return r[0] if r else None
 
-    def save_task(self, uid, d):
+    def save_task(self, uid, d, today=None):
+        """today — «сегодня» у пользователя (его часовой пояс); без него — дата сервера."""
         clean = _clean_task(d)
         if clean.get("goal") and not self.goal(uid, clean["goal"]):
             clean["goal"] = None
         if clean.get("repeat") and not (clean.get("date") or (d.get("id") and (self.task(uid, int(d["id"])) or {}).get("date"))):
-            clean["date"] = datetime.date.today().isoformat()  # повтор начинается сегодня, если дата не задана
+            clean["date"] = (today or datetime.date.today()).isoformat()  # повтор начинается сегодня, если дата не задана
         if d.get("id"):
             tid = int(d["id"])
             if not self.task(uid, tid):
@@ -324,7 +343,7 @@ class Store:
         r = self.q("SELECT * FROM goals WHERE id=? AND user=?", gid, uid)
         return r[0] if r else None
 
-    def save_goal(self, uid, d):
+    def save_goal(self, uid, d, today=None):
         clean = _clean_goal(d)
         if "status" in d and d["status"] in ("active", "done", "archived"):
             clean["status"] = d["status"]
@@ -341,7 +360,7 @@ class Store:
                 raise ValueError("пустое название")
             hz = clean.setdefault("horizon", "month")
             if not clean.get("start") and hz != "none":
-                clean["start"] = period_start(hz, datetime.date.today()).isoformat()
+                clean["start"] = period_start(hz, today or datetime.date.today()).isoformat()
             cols = ", ".join(clean)
             marks = ", ".join("?" for _ in clean)
             pos = (self.q("SELECT MAX(pos) AS p FROM goals WHERE user=?", uid)[0]["p"] or 0) + 1

@@ -225,6 +225,16 @@ class BotTest(unittest.TestCase):
                     self.assertLessEqual(len(b["text"]), 24, b["text"])
         self.assertIn("<blockquote", self.texts()[0])
 
+    def test_note_date_in_user_timezone(self):
+        n = self.db.save_note(U, {"text": "поздно"})
+        self.db.x("UPDATE notes SET created='2026-10-09T22:30:00+00:00' WHERE id=?", n["id"])
+        self.db.update_settings(U, {"tz": "Asia/Tokyo"})
+        self.assertEqual(planner.note_when(U, "2026-10-09T22:30:00+00:00"), "10 окт")  # в Токио уже 10-е
+        self.db.update_settings(U, {"tz": "Europe/Moscow"})
+        self.assertEqual(planner.note_when(U, "2026-10-09T22:30:00+00:00"), "10 окт")  # в Москве 01:30
+        self.db.update_settings(U, {"tz": "America/New_York"})
+        self.assertEqual(planner.note_when(U, "2026-10-09T22:30:00+00:00"), "9 окт")
+
     def cb(self, data):
         planner.on_callback({"id": "1", "from": {"id": U}, "message": {"chat": {"id": U}, "message_id": 3}, "data": data})
 
@@ -574,6 +584,7 @@ class BotTest(unittest.TestCase):
         conf, cands = planner.caddyfile("2.27.206.165")
         self.assertEqual(cands, ["https://2-27-206-165.sslip.io", "https://2.27.206.165"])
         self.assertIn("profile shortlived", conf)
+        self.assertEqual(conf.count("encode zstd gzip"), 2)  # сжатие — для приложения на имени и на IP
         self.assertIn(f"reverse_proxy 127.0.0.1:{planner.PORT}", conf)
         for name, port in (("coach", 8789), ("hub", 8790), ("eye", 8791), ("kpp", 8792), ("avito", 8793), ("agent", 8794),
                            ("apps", 8795)):
@@ -649,6 +660,13 @@ class BotTest(unittest.TestCase):
 
     def test_mode_from_app(self):
         """«💬 Перейти в чат» в приложении: POST /api/mode -> режим «чат», в чат приходит главное меню."""
+        self.db.meta("owner", 999)
+        with self.assertRaises(PermissionError):  # PUBLIC: режим общий на весь бот — чужой его не меняет
+            planner.route(U, "/api/mode", {"mode": "chat"})
+        self.cb("mode|chat")
+        self.assertIn("владелец", self.answers()[-1])
+        self.assertEqual(planner.ui_mode(), "app")
+        self.db.meta("owner", U)
         r = planner.route(U, "/api/mode", {"mode": "chat"})
         self.assertEqual((r, planner.ui_mode()), ({"mode": "chat"}, "chat"))
         m, p = self.sent[-1]
@@ -756,6 +774,141 @@ class WebTest(unittest.TestCase):
                 self.assertEqual(post(43, {"text": "чужой"})[0], 403)  # в PUBLIC — не владелец
                 self.assertEqual(post(42, {"text": " "})[0], 400)
         self.assertEqual(len(calls), 1)
+
+    def test_audit_http_limits_and_errors(self):
+        """Аудит: GET меняет ничего, большое тело — 413 (кроме скриншота поддержки), ошибки — человеческим языком,
+        траверсал в статике не работает, подпись без id — 401."""
+        hdr = {"X-Init-Data": signed({"id": 42, "first_name": "A"}), "Content-Type": "application/json"}
+        with mock.patch.object(planner, "PUBLIC", True), mock.patch.object(planner, "owner", lambda: 42):
+            self.assertEqual(self.get("/api/task", hdr)[0], 405)  # GET только для /api/all
+            self.assertEqual(self.get("/api/all", hdr)[0], 200)
+            big = json.dumps({"title": "x" * 1_100_000}).encode()
+            self.assertEqual(self.get("/api/task", hdr, big)[0], 413)
+            # скриншот в «Поддержке» — до 16 МБ (в планер он доезжает; здесь поддержка не запущена -> 400, не 413)
+            code, body = self.get("/api/support", hdr, json.dumps({"text": "x", "photo": "A" * 2_000_000}).encode())
+            self.assertEqual(code, 400)
+            self.assertEqual(self.get("/api/task", hdr, b"[1, 2]")[0], 400)  # не словарь
+            code, body = self.get("/api/task/toggle", hdr, b"{}")
+            self.assertEqual(code, 400)
+            self.assertNotIn("'id'", body)
+            self.assertIn("Неверные данные", json.loads(body)["error"])
+            code, body = self.get("/api/task", hdr, json.dumps({"title": "Ок", "date": "вчера"}).encode())
+            self.assertEqual((code, json.loads(body)["error"]), (400, "Неверная дата"))
+            code, body = self.get("/api/task", hdr, json.dumps({"title": "Ок", "time": "25:99"}).encode())
+            self.assertIn("Неверное время", json.loads(body)["error"])
+            code, body = self.get("/api/settings", hdr, json.dumps({"tz": "Nowhere/Nope"}).encode())
+            self.assertEqual((code, json.loads(body)["error"]), (400, "Такого часового пояса нет"))
+        self.assertEqual(self.get("/../planner.py")[0], 404)
+        self.assertEqual(self.get("/%2e%2e/planner.py")[0], 404)
+        self.assertEqual(self.get("/api/all", {"X-Init-Data": signed({"first_name": "A"})})[0], 401)  # подпись верна, id нет
+
+    def test_asset_version_skips_dirs(self):
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "sub"))
+        with open(os.path.join(d, "a.js"), "w") as f:
+            f.write("1")
+        with mock.patch.object(planner, "WEB", d):
+            self.assertEqual(len(planner.asset_version()), 10)
+
+
+class SchedulerAuditTest(unittest.TestCase):
+    """Напоминания: сбой одного не рушит остальных, временная ошибка не теряет напоминание, постоянная не зацикливает."""
+    def setUp(self):
+        self.db = store.Store(os.path.join(tempfile.mkdtemp(), "t.db"))
+        self.addCleanup(self.db.close)
+        self.sent = []
+        self.fail = None
+        self.now = datetime.datetime(2026, 10, 9, 17, 50, tzinfo=datetime.timezone.utc)
+
+        def send(chat, text, buttons=None, **kw):
+            if self.fail:
+                raise self.fail
+            self.sent.append((chat, text))
+        self.patches = [mock.patch.object(planner, "db", self.db), mock.patch.object(planner, "PUBLIC", True),
+                        mock.patch.object(planner, "send", side_effect=send),
+                        mock.patch.object(planner, "user_now", side_effect=lambda u: self.now.astimezone(datetime.timezone.utc))]
+        for p in self.patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in self.patches])
+        self.db.update_settings(U, {"tz": "UTC", "morning": "", "evening": ""})
+        self.db.save_task(U, {"title": "Бокс", "date": "2026-10-09", "time": "18:00", "remind": 15})
+
+    def test_transient_failure_is_retried(self):
+        self.fail = OSError("сеть")
+        planner.tick()
+        self.assertEqual(self.sent, [])
+        self.fail = None
+        planner.tick()  # следующий проход — напоминание уходит
+        self.assertEqual(len(self.sent), 1)
+        planner.tick()
+        self.assertEqual(len(self.sent), 1)  # и только раз
+
+    def test_permanent_failure_not_retried_and_other_users_ok(self):
+        self.db.user(8)
+        self.db.update_settings(8, {"tz": "UTC", "morning": "", "evening": ""})
+        self.db.save_task(8, {"title": "Йога", "date": "2026-10-09", "time": "18:00", "remind": 15})
+        calls = []
+
+        def send(chat, text, buttons=None, **kw):
+            calls.append(chat)
+            if chat == U:
+                raise planner.TgError("sendMessage", 403, "bot was blocked by the user")
+        with mock.patch.object(planner, "send", side_effect=send):
+            planner.tick()
+            planner.tick()
+        self.assertEqual(calls.count(U), 1)  # заблокировал бота — не долбим каждые 20 с
+        self.assertEqual(calls.count(8), 1)  # а второй пользователь своё получил
+
+    def test_setup_caddy_writes_config_atomically(self):
+        d = tempfile.mkdtemp()
+        proc = mock.Mock()
+        with mock.patch.object(planner, "CADDY_DIR", d), mock.patch.object(planner, "server_ip", return_value="1.2.3.4"), \
+                mock.patch.object(planner, "caddy_bin", return_value="/bin/caddy"), \
+                mock.patch.object(planner, "start_caddy", return_value=proc) as sc:
+            got = planner.setup_caddy()
+        self.assertEqual(got, (proc, ["https://1-2-3-4.sslip.io", "https://1.2.3.4"], "/bin/caddy", os.path.join(d, "Caddyfile")))
+        self.assertTrue(os.path.exists(os.path.join(d, "Caddyfile")))
+        self.assertFalse(os.path.exists(os.path.join(d, "Caddyfile.new")))
+        with mock.patch.object(planner, "server_ip", return_value=None):
+            with self.assertRaises(RuntimeError):
+                planner.setup_caddy()  # IP не узнали — https() повторит через минуту, а не сдастся навсегда
+
+    def test_prune_sent_and_unmark(self):
+        self.assertTrue(self.db.mark_sent("a"))
+        self.assertFalse(self.db.mark_sent("a"))
+        self.db.unmark_sent("a")
+        self.assertTrue(self.db.mark_sent("a"))
+        self.db.x("UPDATE sent SET at='2020-01-01T00:00:00+00:00' WHERE key='a'")
+        self.db.mark_sent("b")
+        self.assertEqual(self.db.prune_sent(60), 1)
+        self.assertTrue(self.db.mark_sent("a"))
+        self.assertFalse(self.db.mark_sent("b"))
+
+    def test_repeat_without_date_uses_user_today(self):
+        t = self.db.save_task(U, {"title": "Зарядка", "repeat": "1234567"}, datetime.date(2026, 10, 10))
+        self.assertEqual(t["date"], "2026-10-10")
+        g = self.db.save_goal(U, {"title": "Цель", "horizon": "month"}, datetime.date(2026, 10, 31))
+        self.assertEqual(g["start"], "2026-10-01")
+
+    def test_claude_env_has_no_secrets(self):
+        env = {"PLANNER_TOKEN": "x", "HUB_KEY": "k", "TG_AGENT_TOKEN": "t", "ANTHROPIC_API_KEY": "a", "CLAUDE_CODE_OAUTH_TOKEN": "c",
+               "PATH": "/bin", "HOME": "/root"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            got = planner.clean_env()
+        self.assertEqual(sorted(got), ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "HOME", "PATH"])
+
+    def test_leap_day_parse_and_long_cards(self):
+        r = parse.parse("29.02 день", datetime.date(2027, 3, 20))  # 29 февраля 2027 нет — не падаем
+        self.assertEqual(r["title"], "29.02 день")
+        r = parse.parse("29.02.2028 день", datetime.date(2027, 3, 20))
+        self.assertEqual(r["date"], datetime.date(2028, 2, 29))
+        today = datetime.date(2026, 10, 9)
+        tasks = [self.db.save_task(U, {"title": "Очень длинное название задачи " * 8, "date": "2026-10-09"}) for _ in range(20)]
+        sent = []
+        with mock.patch.object(planner, "replace", side_effect=lambda chat, mid, text, buttons=None: sent.append(text)):
+            planner.report_tasks(U, None, "📷", tasks, today)
+        self.assertLess(len(sent[0]), 4096)
+        self.assertIn("и ещё 5", sent[0])
 
 
 if __name__ == "__main__":
