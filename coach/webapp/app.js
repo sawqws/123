@@ -328,12 +328,15 @@
   }
   // «Tonight's Sleep»: сколько нужно и во сколько лечь
   function sleepPlanner(t) {
-    const b = t.bedtime;
-    if (!b) return '';
-    return `<section class="card rise tap" data-a="detail" data-v="sleep" role="button">${cap('Сон сегодня', '<span class="chev"></span>')}
-      <div class="tonight"><div><span class="tk">Нужно сна</span><b class="num" style="color:var(--teal)">${hm(b.need)}</b></div>
-        <div><span class="tk">Лечь до</span><b class="num">${esc(b.bed)}</b></div>
-        <div><span class="tk">Подъём${b.weekend ? ' · вых.' : ''}</span><b class="num">${esc(b.wake)}</b></div></div></section>`;
+    // планер сна из «Моего плана» (режим Пик/Норма/Минимум) главнее простого расчёта insights.bedtime
+    const pl = (S.data.ext && S.data.ext.plan && S.data.ext.plan.planner) || null, b = t.bedtime;
+    if (!pl && !b) return '';
+    const need = pl ? pl.need : b.need, bed = pl ? pl.bed : b.bed, wake = pl ? pl.wake : b.wake;
+    const mode = pl ? ((pl.options || []).find(o => o.mode === pl.mode) || {}).name : '';
+    return `<section class="card rise tap" data-a="${F.screens.plan ? 'plan-open' : 'detail'}" data-v="sleep" role="button">${cap('Сон сегодня', `${mode ? esc(mode) : ''}<span class="chev"></span>`)}
+      <div class="tonight"><div><span class="tk">Нужно сна</span><b class="num" style="color:var(--teal)">${hm(need)}</b></div>
+        <div><span class="tk">Лечь в</span><b class="num">${esc(bed)}</b></div>
+        <div><span class="tk">Подъём${!pl && b.weekend ? ' · вых.' : ''}</span><b class="num">${esc(wake)}</b></div></div></section>`;
   }
   // «My Day»: сон и тренировки за день по порядку
   function myDay(t) {
@@ -969,7 +972,8 @@
     const a = el.dataset.a, v = el.dataset.v;
     if (F.actions[a]) return F.actions[a](el, v, ev);  // модуль может заменить и встроенное действие
     if (a === 'profile') profileSheet();
-    else if (a === 'workout') openScreen('strain');  // без модуля activity.js — общий экран нагрузки
+    else if (a === 'workout') openScreen('strain');
+    else if (a === 'plan-open') openScreen('plan');  // без модуля activity.js — общий экран нагрузки
     else if (a === 'tab') { const t = TABS.find(x => x.id === v); if (t) { haptic('select'); go(v); } }
     else if (a === 'connect') connect();
     else if (a === 'brief') brief();
