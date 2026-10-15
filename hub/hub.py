@@ -82,6 +82,7 @@ APPS = {  # имя в pm2 -> подпись
     "studio-bot": "🏗 Студия",
     "studio-sites": "🌐 Сайты (сестра)",
     "catcher-bot": "🎯 Catcher",
+    "pulse-bot": "📡 Пульс",
     SELF: "👑 Главный",
 }
 INSTALL = {  # что умеем ставить по одному токену: папка, переменная с токеном, подпись, что дальше
@@ -93,6 +94,8 @@ INSTALL = {  # что умеем ставить по одному токену: 
             "там «🎙 Говорить» и «📷 Фото»."),
     "catcher": ("CATCHER_TOKEN", "🎯 Catcher юзернеймов", "Открой @{name}, нажми /start — пришли @имя или выбери «🎲 По пожеланиям». "
                 "Ловит через Секретаря, он должен быть в аккаунте (/login)."),
+    "pulse": ("PULSE_TOKEN", "📡 Пульс", "Открой @{name} и нажми /start — там все чаты Claude Code: контекст, "
+              "задачи, что делают."),
     "studio": ("STUDIO_TOKEN", "🏗 Студия", "Открой @{name}, нажми /start и напиши, какой бот нужен — "
                                          "Студия уточнит детали, покажет план и сделает бота сама."),
 }
@@ -104,6 +107,7 @@ BOTFATHER = {  # имя и желаемый username, если бота созд
     "eye": ("Глаз", "glaz_eye"),
     "studio": ("Студия ботов", "bot_studio"),
     "catcher": ("Catcher", "username_catcher"),
+    "pulse": ("Пульс Claude", "claude_pulse"),
 }
 TZ = datetime.timezone(datetime.timedelta(hours=3))  # Москва
 
@@ -1500,6 +1504,24 @@ def run_job(cmd, timeout, why=""):
     return job
 
 
+PULSE_INGEST = int(os.environ.get("PULSE_INGEST_PORT") or 8799)
+
+
+def pulse_forward(body):
+    """Сводку от репортёра — боту «Пульс» (127.0.0.1, порт наружу не открыт). Нет бота — тихо ок."""
+    req = urllib.request.Request(f"http://127.0.0.1:{PULSE_INGEST}/", method="POST",
+                                 data=json.dumps(body, ensure_ascii=False).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        return {"ok": True}
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"Пульс: {e.code}")
+    except OSError:
+        return {"ok": False, "note": "Пульс не запущен"}
+
+
 def remote_api(action, body):
     if action == "status":
         return {"apps": apps(), "server": server(), "paid": setting("paid")}
@@ -1527,6 +1549,8 @@ def remote_api(action, body):
             raise KeyError("нет такой задачи (Главный перезапускался?)")
         start = max(0, int(body.get("from") or 0))
         return {"done": job["done"], "code": job["code"], "out": job["out"][start:], "len": len(job["out"])}
+    if action == "pulse":  # сводка чата Claude Code (pulse/reporter.py) → бот «Пульс»; в журнал не пишем
+        return pulse_forward(body)
     if action == "say":
         text = str(body.get("text") or "").strip()[:3500]
         if not text:

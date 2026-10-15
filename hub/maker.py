@@ -43,6 +43,8 @@ CATALOG = {
                    "делает новых ботов по идее: вопросы, план, код, мини-приложение"),
     "catcher-bot": ("🎯 Catcher", ["catcher"], "/etc/catcher-bot.env", "CATCHER_TOKEN", "catcher",
                     "ловит крутые юзернеймы на каналы: имена и пожелания"),
+    "pulse-bot": ("📡 Пульс", ["pulse"], "/etc/pulse-bot.env", "PULSE_TOKEN", "pulse",
+                  "все чаты Claude Code: контекст, задачи, что делают"),
     "hub-bot": ("👑 Главный", ["hub"], "/etc/hub-bot.env", "HUB_TOKEN", None, "следит за ботами, делает новых"),
 }
 

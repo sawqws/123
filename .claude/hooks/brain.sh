@@ -14,4 +14,6 @@ if [ -f "$B/NOW.md" ]; then
 else
   echo "Brain не подключён: вызови add_repo sawqws/Brain (клон в $B), прочитай NOW.md и wiki/INDEX.md."
 fi
+# «Пульс»: сводка этого чата (контекст, задачи, статус) → бот «Пульс» через Главного
+python3 "$(dirname "$0")/../../pulse/reporter.py" start >/dev/null 2>&1 || true
 exit 0

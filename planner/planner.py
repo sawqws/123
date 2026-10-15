@@ -56,6 +56,7 @@ COACH_PORT = 8789  # coach/coach.py
 HUB_PORT = 8790  # hub/hub.py
 EYE_PORT = 8791  # eye/eye.py
 KPP_PORT = 8792  # kpp/kpp.py
+PULSE_PORT = 8798  # pulse/pulse.py
 AVITO_PORT = 8793  # avito/avito.py
 AGENT_PORT = 8794  # tgbot/agent.py
 STUDIO_PORT = 8795  # studio/studio.py: приложение Студии и мини-приложения сделанных ею ботов
@@ -1646,6 +1647,10 @@ def caddyfile(ip):
         # «Ловец» (catcher/): юзернеймы на каналы
         f"https://catcher.{host} {{\n"
         f"\treverse_proxy 127.0.0.1:{CATCHER_PORT}\n"
+        "}\n"
+        # «Пульс» (pulse/): все чаты Claude Code
+        f"https://pulse.{host} {{\n"
+        f"\treverse_proxy 127.0.0.1:{PULSE_PORT}\n"
         "}\n"
         # HDP-бот (bot/): сайт в браузере — «как платформа» с кнопками «Сделать» и «Подготовь меня»
         f"https://hdp.{host} {{\n"
