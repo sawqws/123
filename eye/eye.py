@@ -17,6 +17,7 @@
   EYE_PORT        порт веб-сервера на 127.0.0.1 (по умолчанию 8791)
   EYE_MODEL, EYE_TALK_MODEL, EYE_VOICE — см. ai.py и speech.py
 """
+import datetime
 import hashlib
 import hmac
 import html
@@ -39,6 +40,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -58,6 +60,10 @@ PICS = os.path.join(DATA, "photos")
 STATE = os.path.join(DATA, "state.json")
 WEB = os.path.join(HERE, "webapp")
 NAME = "Глаз"
+try:  # время в чате («Что видел») — по часам Глеба, а не сервера (там обычно UTC)
+    TZ = ZoneInfo(os.environ.get("EYE_TZ") or "Europe/Moscow")
+except Exception:
+    TZ = datetime.timezone(datetime.timedelta(hours=3))
 FRESH_PLACE = 20 * 60  # сколько минут верим последней геопозиции
 NEW_TALK = 2 * 3600  # после такой паузы разговор начинается заново
 KEEP_PHOTOS = 200
@@ -103,11 +109,24 @@ def err(text):
 # ---------- состояние ----------
 
 def load():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    """Состояние с диска. Файл испорчен — прошлая копия (.bak), испорченный откладываем в .corrupt:
+    пустое состояние означало бы «владельца нет» — первый, кто нажмёт /start, стал бы им."""
+    for path in (STATE, STATE + ".bak"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as e:
+            print(f"состояние {os.path.basename(path)} не читается: {e}")
+            if path == STATE:
+                try:
+                    os.replace(STATE, STATE + ".corrupt")
+                except OSError:
+                    pass
+    return {}
 
 
 def save(st):
@@ -115,6 +134,13 @@ def save(st):
     tmp = STATE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    try:  # прошлая целая копия
+        if os.path.exists(STATE):
+            shutil.copy2(STATE, STATE + ".bak")
+    except OSError as e:
+        print("копия состояния:", e)
     os.replace(tmp, STATE)
 
 
@@ -292,7 +318,8 @@ def seen_text(n=8):
         return card("👁", "Что видел", note="Пока ничего — пришли фото или видео с очков.")
     lines = []
     for p in items:
-        when = time.strftime("%d.%m %H:%M", time.localtime(p["t"])) if isinstance(p["t"], (int, float)) else ""
+        when = datetime.datetime.fromtimestamp(p["t"], TZ).strftime("%d.%m %H:%M") \
+            if isinstance(p["t"], (int, float)) else ""
         what = p["title"] or p["say"][:60] or ("видео" if p["video"] else "фото")
         lines.append(f"• {esc(when)} — {'🎬 ' if p['video'] else ''}{esc(what)}" + (f" · {esc(p['place'])}" if p["place"] else ""))
     return card("👁", "Что видел", "\n".join(lines), "Спроси про любое — помню последние три часа.")
@@ -809,7 +836,7 @@ def check_init_data(init_data, max_age=7 * 86400):
         check = "\n".join(f"{k}={v}" for k, v in sorted(d.items()))
         return hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     variants = [pairs] + ([{k: v for k, v in pairs.items() if k != "signature"}] if "signature" in pairs else [])
-    if not got or not any(hmac.compare_digest(sign(d), got) for d in variants):
+    if not got or not any(hmac.compare_digest(sign(d).encode(), got.encode()) for d in variants):
         return None
     try:
         if time.time() - int(pairs.get("auth_date", 0)) > max_age:
@@ -821,7 +848,7 @@ def check_init_data(init_data, max_age=7 * 86400):
 
 def authorized(headers):
     key = headers.get("X-Key") or ""
-    if key and TOKEN and hmac.compare_digest(key, web_key()):
+    if key and TOKEN and hmac.compare_digest(key.encode(), web_key().encode()):
         return True
     user = check_init_data(headers.get("X-Init-Data") or "")
     return bool(user) and allowed(user.get("id"))
@@ -857,8 +884,17 @@ VERSION = asset_version() if os.path.isdir(WEB) else "0"
 MAX_UPLOAD = 25 * 1024 * 1024
 
 
+def content_length(headers):
+    """Content-Length как число (мусор и минус — 0), чтобы кривой запрос не ронял обработчик."""
+    try:
+        return max(0, int(headers.get("Content-Length") or 0))
+    except ValueError:
+        return 0
+
+
 class Web(BaseHTTPRequestHandler):
     server_version = "Eye/1"
+    timeout = 120  # медленный клиент не держит поток вечно (видео до 25 МБ по мобильной сети)
 
     def log_message(self, fmt, *args):
         pass
@@ -937,7 +973,7 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if not authorized(self.headers):
             return self.reply(401, {"error": "Открой «Глаз» из Telegram или по ссылке /link"})
-        n = int(self.headers.get("Content-Length") or 0)
+        n = content_length(self.headers)
         if n > MAX_UPLOAD:
             return self.reply(413, {"error": "файл больше 25 МБ"})
         raw = self.rfile.read(n) if n else b""

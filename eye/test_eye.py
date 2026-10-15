@@ -406,6 +406,50 @@ class ChatTest(Base):
         self.assertIn("Что-то пошло не так", self.texts()[-1])
 
 
+class AuditTest(Base):
+    """Проверка «от А до Я»: порча состояния, кривые заголовки, сбои распознавания речи."""
+
+    def test_state_recovers_from_backup(self):
+        eye.setting("owner", 7)
+        eye.setting("mode", "chat")  # второй save: в .bak — состояние с владельцем
+        with open(eye.STATE, "w") as f:
+            f.write("{обрыв")
+        with mock.patch("builtins.print"):
+            self.assertEqual(eye.owner(), 7)  # владелец не потерян — /start чужого его не перехватит
+        self.assertTrue(os.path.exists(eye.STATE + ".corrupt"))
+
+    def test_non_ascii_key_and_hash_do_not_crash(self):
+        self.assertFalse(eye.authorized({"X-Key": "ключ"}))
+        self.assertFalse(eye.authorized({"X-Init-Data": "auth_date=1&hash=%D0%B6"}))
+
+    def test_seen_times_use_gleb_clock_not_server(self):
+        eye.setting("photos", [{"id": "p", "path": "/x.jpg", "t": 1760430000, "title": "Дворец", "say": "", "text": "",
+                                "place": "", "video": False}])
+        self.assertIn("14.10 11:20", eye.seen_text())  # 1760430000 = 08:20 UTC = 11:20 по Москве
+
+    def test_content_length_garbage(self):
+        self.assertEqual(eye.content_length({"Content-Length": "x"}), 0)
+        self.assertEqual(eye.content_length({"Content-Length": "-1"}), 0)
+
+    def test_whisper_dead_process_is_a_clear_error(self):
+        w = eye.speech.Whisper.__new__(eye.speech.Whisper)
+        w.lock, w.used = eye.speech.threading.Lock(), 0.0
+        w.proc = mock.Mock()
+        w.proc.poll.return_value = None
+        w.proc.stdin.write.side_effect = BrokenPipeError()
+        with self.assertRaises(eye.speech.SpeechError):
+            w.text("/tmp/x.wav")
+        self.assertIsNone(w.proc)  # мёртвый процесс сброшен — в следующий раз запустится заново
+
+    def test_whisper_garbage_line_is_a_clear_error(self):
+        w = eye.speech.Whisper.__new__(eye.speech.Whisper)
+        w.lock, w.used = eye.speech.threading.Lock(), 0.0
+        w.proc = mock.Mock()
+        w.proc.stdout.readline.return_value = "warning: something\n"
+        with self.assertRaises(eye.speech.SpeechError):
+            w._read(5)
+
+
 class WebTest(Base):
     def setUp(self):
         super().setUp()

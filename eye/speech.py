@@ -52,7 +52,11 @@ class Whisper:
         if t.is_alive() or not box.get("line"):
             self.stop()
             raise SpeechError("распознавание речи зависло — скажи ещё раз")
-        return json.loads(box["line"])
+        try:
+            return json.loads(box["line"])
+        except ValueError:  # в stdout попал посторонний вывод
+            self.stop()
+            raise SpeechError("распознавание речи ответило невпопад — скажи ещё раз") from None
 
     def warm(self):
         """Загрузить модель заранее (страница открылась — скоро заговорят)."""
@@ -79,8 +83,12 @@ class Whisper:
             if not self.proc or self.proc.poll() is not None:
                 self._start()
             self.used = time.time()
-            self.proc.stdin.write(json.dumps({"path": path}) + "\n")
-            self.proc.stdin.flush()
+            try:
+                self.proc.stdin.write(json.dumps({"path": path}) + "\n")
+                self.proc.stdin.flush()
+            except OSError:  # процесс умер между проверкой и записью
+                self.stop()
+                raise SpeechError("распознавание речи перезапустилось — скажи ещё раз") from None
             res = self._read(timeout)
             self.used = time.time()
         if res.get("error"):
