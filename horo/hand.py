@@ -174,6 +174,25 @@ if os.path.exists(_lp):
         _bw = (_cols.max() + 1) * _px if len(_cols) else _a.shape[1] * _px
         LIVE.setdefault(chr(int(_k.split('_')[0])), []).append((_a, _l, _t, _px, _bw))
 
+# gleb_norm.npz — одна ровная азбука для текста (horo/live/norm.py): его буквы (из записей и с листа) приведены
+# к одной высоте по классу буквы, стоят ровно на строке и обведены одним пером одной толщины
+# (Глеб 15.10: «буквы разного размера и как будто криво вырезаны»).
+NORM = {}
+NORM_GAP = 0.2     # промежуток между буквами, в высотах строчной
+NORM_SPACE = 0.75  # пробел
+NORM_PEN = 0.17    # толщина пера, в высотах строчной (как в его записях)
+_np_ = os.path.join(_here, 'fonts', 'gleb_norm.npz')
+if os.path.exists(_np_):
+    _z = np.load(_np_)
+    for _k in _z.files:
+        if _k.endswith('w'):
+            continue
+        _flat = _z[_k]
+        _cut = np.nonzero(np.isnan(_flat[:, 0]))[0]
+        _parts = [p for p in np.split(_flat, _cut) if len(p)]
+        _parts = [p[~np.isnan(p[:, 0])] for p in _parts]
+        NORM[chr(int(_k))] = ([p for p in _parts if len(p)], float(_z[_k + 'w']))
+
 BOLD = 0.2   # толщина его пера в записях — в высотах строчной (на листе алфавита он писал тоньше, ~0.11)
 _bolded = {}
 
@@ -287,6 +306,7 @@ class Hand:
         self.r = width * SS / 2
         self.exact = exact   # его буквы из алфавита — как на листе, без случайного размера и промежутков
         self.stamps = None
+        self.layer = None
         self.last = {}
         self.turn = {}
 
@@ -305,17 +325,21 @@ class Hand:
         """Раскладка строки: (символ, x, подъём, масштаб, искажение) и ширина в px."""
         xh, m = size * XH, self.m
         out, x = [], 0.0
-        live = self.exact and any(ch in LIVE or ALIAS.get(ch) in LIVE for ch in s)
+        live = False
+        norm = self.exact and bool(NORM)
         for ch in s:
             if ch == ' ':
-                x += xh * ((LIVE_SPACE if live else 0.7) if self.exact else random.uniform(0.55, 0.85)); continue
-            lv = (LIVE.get(ch) or (LIVE.get(ALIAS.get(ch)) if ch in 'аеосу' else None)) if self.exact else None
-            if lv:  # его буква из настоящей записи: варианты по очереди — одинаковые буквы разные, как у него
-                i = self.turn.get(ch, 0) % len(lv)
-                self.turn[ch] = self.turn.get(ch, 0) + 1
-                a, left, top, px, bw = lv[i]
-                out.append((ch, x, 0.0, xh, dict(stamp=(a, left, top, px))))
-                x += (left + bw) * xh + xh * LIVE_GAP
+                x += xh * ((NORM_SPACE if norm else 0.7) if self.exact else random.uniform(0.55, 0.85)); continue
+            sup0 = ch in '²³⁴⁵'
+            nc = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '—': '-', 'ё': 'е', '«': '', '»': ''}.get(ch, ch)
+            if norm and nc == '':
+                continue
+            if norm and nc in NORM:   # его буква из ровной азбуки: один размер, ровно на строке, одно перо
+                st, w = NORM[nc]
+                kk = xh * (0.68 if sup0 else 1.0)
+                up = xh * 0.8 if sup0 else 0.0
+                out.append((nc, x, up, kk, dict(norm=st)))
+                x += w * kk + xh * NORM_GAP * (0.5 if sup0 else 1.0)
                 continue
             sup = ch in '²³⁴⁵'
             dot = ch == '·' and '·' not in BANK and '.' in BANK  # точка умножения — его точка, поднятая к середине
@@ -367,12 +391,15 @@ class Hand:
             span = max(lay[-1][1], xh)
             tilt = max(-0.3 * xh / span, min(0.3 * xh / span, tilt))
         amp = xh * random.uniform(0.04, 0.09) * m
-        if any('stamp' in p for *_, p in lay):  # строка его буквами — ровная, без волны и наклона
+        if any('stamp' in p or 'norm' in p for *_, p in lay):  # строка его буквами — ровная, без волны и наклона
             amp, tilt = 0.0, 0.0
         for c, x, up, k, p in lay:
             gx = x0 + x
             if 'stamp' in p:
                 self._stamp(p['stamp'], gx, base - up, k)
+                continue
+            if 'norm' in p:
+                self._norm(p['norm'], gx, base - up, k)
                 continue
             gy = base - up + amp * line(gx) + (gx - x0) * tilt + random.uniform(-0.035, 0.035) * m * xh
             for st in ([p['real']] if 'real' in p else glyph(c)[0]):
@@ -388,6 +415,21 @@ class Hand:
                 cr, sr = math.cos(p['rot']), math.sin(p['rot'])
                 u, v = u * cr - v * sr, u * sr + v * cr
                 self._dots(np.stack([gx + u * k, gy - v * k], 1))
+
+    def _norm(self, st, x, base, xh):
+        """Буква ровной азбуки: штрихи одним пером толщиной NORM_PEN·xh."""
+        if self.layer is None:
+            H, W = self.mask.shape
+            self.layer = Image.new('L', (W, H), 0)
+        d = ImageDraw.Draw(self.layer)
+        w = max(1, int(round(NORM_PEN * xh * SS)))
+        r = w / 2
+        for p in st:
+            pts = [((x + u * xh) * SS, (base - v * xh) * SS) for u, v in p]
+            if len(pts) > 1:
+                d.line(pts, fill=255, width=w, joint='curve')
+            for q in (pts[0], pts[-1]):
+                d.ellipse([q[0] - r, q[1] - r, q[0] + r, q[1] + r], fill=255)
 
     def _stamp(self, st, x, base, xh):
         """Поставить его букву картинкой: левый верх — (x + left·xh, base − top·xh), пиксель альфы — px·xh."""
@@ -418,6 +460,10 @@ class Hand:
                 a, left, t, px = p['stamp']
                 top = max(top, up + t * k)
                 bot = min(bot, up + (t - a.shape[0] * px) * k)
+            elif 'norm' in p:
+                v = np.concatenate([q[:, 1] for q in p['norm']])
+                top = max(top, up + (v.max() + NORM_PEN / 2) * k)
+                bot = min(bot, up + (v.min() - NORM_PEN / 2) * k)
             else:
                 top = max(top, up + 1.3 * xh)
                 bot = min(bot, up - 0.25 * xh)
@@ -486,6 +532,9 @@ class Hand:
         if self.stamps is not None:  # его буквы-картинки поверх линий пера
             st = Image.fromarray((self.stamps * 255).astype(np.uint8)).resize(self.img.size, Image.BOX)
             a = np.maximum(a, np.asarray(st, np.float32)[..., None] / 255 * 0.97)
+        if self.layer is not None:  # буквы ровной азбуки
+            ly = self.layer.resize(self.img.size, Image.BOX)
+            a = np.maximum(a, np.asarray(ly, np.float32)[..., None] / 255 * 0.97)
         base = np.asarray(self.img, dtype=np.float32)
         out = base * (1 - a) + np.array(self.ink, np.float32) * a
         Image.fromarray(out.astype(np.uint8)).save(path, quality=92)
