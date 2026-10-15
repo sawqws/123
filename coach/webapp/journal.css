@@ -1,1 +1,48 @@
-/* journal */
+/* journal — «Дневник» как WHOOP Journal */
+.jr-home .bar { margin-top: 12px; }
+.jr-home-b { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.jr-home-b .small { margin: 0; min-width: 0; }
+.jr-home-b .btn { flex: none; }
+
+.jr-pager { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 6px 0 4px; }
+.jr-lead { margin: 4px 4px 0; text-align: center; }
+
+/* вопрос: текст слева, «Нет / Да» справа */
+.card.jr-qs { padding: 4px 16px; }
+.jr-q { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 0; min-width: 0; }
+.jr-q + .jr-q { border-top: 1px solid var(--sep); }
+.jr-qt { min-width: 0; font-size: 15px; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
+.jr-qt small { display: block; margin-top: 3px; font-size: 12.5px; color: var(--rec-blue); }
+.jr-yn { flex: none; display: flex; gap: 6px; }
+.jr-yn button { min-width: 58px; height: 36px; padding: 0 12px; border: 0; border-radius: 999px; cursor: pointer;
+  background: var(--card-2); color: var(--hint); font: 800 12px var(--head); text-transform: uppercase; letter-spacing: .1em;
+  transition: background .15s, color .15s, transform .12s; }
+.jr-yn button:active { transform: scale(.94); }
+.jr-yn button.on.yes { background: var(--teal); color: #06140f; }
+.jr-yn button.on.no { background: #fff; color: #101518; }
+
+.jr-setup-b { width: 100%; margin: 4px 0 6px; }
+
+/* влияние: полоска от центра */
+.jr-how { margin: 0 0 6px !important; }
+.jr-imp { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; padding: 12px 0; }
+.jr-imp + .jr-imp { border-top: 1px solid var(--sep); }
+.jr-imp-t { min-width: 0; }
+.jr-imp-t b { display: block; font-size: 14.5px; font-weight: 600; color: var(--ink); }
+.jr-imp-t small { display: block; margin-top: 2px; font-size: 12px; color: var(--hint); }
+.jr-imp-v { font-size: 20px; font-weight: 700; white-space: nowrap; }
+.jr-imp.off .jr-imp-v { font: 800 11px var(--head); text-transform: uppercase; letter-spacing: .1em; color: var(--hint); }
+.jr-div { grid-column: 1 / -1; position: relative; height: 8px; border-radius: 999px; background: var(--trk); overflow: hidden; }
+.jr-div .jr-mid { position: absolute; left: calc(50% - 1px); top: 0; bottom: 0; width: 2px; background: rgba(255, 255, 255, .35); }
+.jr-div .jr-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; }
+.jr-health .jr-imp:first-of-type { padding-top: 2px; }
+
+/* лист настройки */
+.jr-sg { margin: 14px 0 6px; }
+.jr-sg-t { margin: 0 2px 6px; font: 800 12px var(--head); text-transform: uppercase; letter-spacing: .1em; color: var(--hint); }
+.jr-pick { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 46px; padding: 8px 12px; margin: 0 0 6px;
+  border: 0; border-radius: var(--r-md); background: var(--card-2); color: var(--ink); font: 500 15px/1.3 var(--head); text-align: left; cursor: pointer; }
+.jr-box { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; border: 2px solid rgba(255, 255, 255, .25); color: transparent; }
+.jr-box .ico { width: 16px; height: 16px; stroke-width: 2.6; }
+.jr-pick.on .jr-box { background: var(--teal); border-color: var(--teal); color: #06140f; }
+.sheet .jr-sg + .btn { margin-top: 14px; }
