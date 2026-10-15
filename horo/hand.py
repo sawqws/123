@@ -207,6 +207,21 @@ def glyph(ch):
     return _cache[ch]
 
 
+def _even(ch, a, top, px):
+    """Латиница Apple Pencil-режима: у него на листе буквы то выше, то ниже — выравниваем (Глеб, 15.10: «разные буквы»):
+    строчные «тела» (a c e m n o r s u v w x z) до одной высоты, с выносными (b d f h k l t) до одной, заглавные до одной."""
+    if not ('a' <= ch <= 'z' or 'A' <= ch <= 'Z'):
+        return 1.0
+    ys = np.flatnonzero(a.max(1) > 0.3)
+    t = top - ys[0] * px
+    if ch in 'gjpqy':   # с хвостом — как у него (хвост тянет размер)
+        return 1.0
+    tgt = {'t': 1.4, 'i': 1.6}.get(ch)
+    if tgt is None:
+        tgt = 2.0 if ch.isupper() else 1.6 if ch in 'bdfhkl' else 1.1
+    return min(1.15, max(0.75, tgt / t))   # не раздуваем сильно — штрих толстеет
+
+
 class Noise:
     """Плавный шум без периода: сумма синусов со случайными несоизмеримыми частотами."""
     def __init__(self, n=3, f=(0.5, 2.5)):
@@ -265,7 +280,7 @@ class Hand:
             st = (STAMPS.get(ch) or STAMPS.get(c)) if self.exact else None
             if st:  # его буква как на листе: тот же размер, ровно на строке, одинаковый промежуток
                 a, left, top, px, bw = st[0]
-                kk = xh * (0.68 if sup else 1.0)   # ² ³ — та же его цифра, поменьше и выше строки
+                kk = xh * (0.68 if sup else 1.0) * _even(c, a, top, px)   # ² ³ — та же его цифра, поменьше и выше строки
                 up = xh * 0.8 if sup else 0.0
                 if sup:
                     x -= xh * 0.06
@@ -401,6 +416,11 @@ class Hand:
     # ---------- обводка ----------
     def circle(self, cx, cy, rx, ry):
         """Небрежный овал одним движением, конец заходит за начало."""
+        if self.exact:   # Apple Pencil: ровный овал, начало сверху слева, конец чуть заходит за начало
+            pts = [(cx + rx * math.cos(a), cy + ry * math.sin(a))
+                   for a in (math.radians(-120) - t * 1.07 * 2 * math.pi for t in np.linspace(0, 1, 160))]
+            self.stroke(pts)
+            return
         st = random.uniform(0, 2 * math.pi); turn = random.uniform(1.08, 1.25)
         wob = Noise(2, (1.5, 3.5)); rot = random.uniform(-0.3, 0.3)
         pts = []
