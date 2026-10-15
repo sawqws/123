@@ -11,6 +11,7 @@ usage:
   python3 pulse/reporter.py stop     остановить
 Адрес и ключ — HUB_URL и HUB_KEY (или HUB_TOKEN), как у hub/remote.py. Ключ не печатается.
 """
+import calendar
 import glob
 import hashlib
 import hmac
@@ -37,7 +38,7 @@ def clip(s, n=TEXT):
 def ts(iso):
     """2026-10-15T13:33:07.523Z → epoch."""
     try:
-        return time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+        return float(calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")))
     except (TypeError, ValueError):
         return None
 
