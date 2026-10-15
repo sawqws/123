@@ -1,11 +1,11 @@
 'use strict';
 /* HDP-бот поверх настоящего horodigital.ru (зеркало на сервере бота: bot/web.py вставляет этот файл в каждую страницу).
-   Сайт остаётся 1:1 — родные элементы не меняем и не прячем, только добавляем свои (классы hdpx-, атрибут data-hdpx):
-   · страница задания — блок бота под шапкой: «⚡ Решить и сдать» / «👁 Только ответы» (тест) или «✍️ Написать ответ»
-     (проверка учителем), ход решения, готовый черновик, последний результат;
-   · страница темы — «📖 Подготовь меня» (1/5/10 мин) и «⚡ Автотесты темы», маленькие кнопки на карточках заданий;
-   · вкладка справа (как родная вкладка-календарь) — панель «HDP-бот»: Сейчас (ход работы, черновики учителю, автотесты),
-     Ожидание, Подтверждения 2.0/3.0, Подготовка, Настройки.
+   Сайт — точь-в-точь платформа (Глеб, 15.10: «прям точь-в-точь»): в страницу НИЧЕГО не вставляем и родные элементы
+   не двигаем. Всё бота — в панели «HDP-бот», которая открывается кнопкой-вкладкой справа (её можно спрятать в
+   настройках; спрятана — панель открывает тройной тап по странице или Alt+B):
+   · «Эта страница» — на задании: «⚡ Решить и сдать» / «👁 Ответы» (тест) или «✍️ Написать ответ», ход решения,
+     черновик; на теме: «📖 Подготовь меня» (1/5/10 мин), «⚡ Автотесты темы» и кнопки у каждого задания темы;
+   · Сейчас (ход работы, черновики учителю, автотесты), Ожидание, Подтверждения 2.0/3.0, Подготовка, Настройки.
    Данные и действия — API бота (bot/bot.py → ROUTES), те же функции, что кнопки в чате. Вход — cookie по ссылке из бота (/site).
    Тип и статус заданий — из API самой платформы (тот же запрос, что делает её страница темы), иначе из данных бота. */
 (() => {
@@ -32,7 +32,7 @@
 settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edits: {},
     prepSubjects: null, prep: null, prepSubj: '', prepSel: null, prepMin: store.get('prepMin', 5), prepTz: '',
     prepView: 'form', prepOpen: new Set(), prepTimer: 0, topics: {}, seen: store.get('seen', 0),
-    chooser: false, lastDraftKeys: '',
+    chooser: false, lastDraftKeys: '', hideTab: store.get('hideTab', false), ctxKey: '',
   };
 
   /* ---------- мелочи ---------- */
@@ -149,12 +149,31 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   /* ---------- всплывашки и подтверждение ---------- */
   function toast(text, kind) {
     let box = $('.hdpx-toasts');
-    if (!box) { box = el('div', 'hdpx-toasts'); document.body.append(box); }
+    if (!box) { box = el('div', 'hdpx-toasts'); layer().append(box); }
     const t = el('div', 'hdpx-toast' + (kind ? ' hdpx-toast-' + kind : ''));
     t.textContent = text;
     box.append(t);
     setTimeout(() => t.remove(), kind === 'err' ? 6500 : 4000);
   }
+
+  // Слой ровно по видимой части экрана. Платформа на телефоне шире экрана (у темы — 674 px при экране 390), и position:
+  // fixed считается от этой ширины: вкладка и панель уезжали за правый край. Слой двигаем за visualViewport.
+  function layer() {
+    let L = document.querySelector('body > .hdpx-vv');
+    if (!L) { L = el('div', 'hdpx-vv'); document.body.append(L); fitLayer(); }
+    return L;
+  }
+  function fitLayer() {
+    const L = document.querySelector('body > .hdpx-vv');
+    if (!L) return;
+    const v = window.visualViewport;
+    const box = v ? { l: v.offsetLeft, t: v.offsetTop, w: v.width, h: v.height } : { l: 0, t: 0, w: document.documentElement.clientWidth, h: window.innerHeight };
+    L.style.cssText = `left:${box.l}px;top:${box.t}px;width:${box.w}px;height:${box.h}px`;
+    L.classList.toggle('hdpx-narrow', box.w <= 640);
+  }
+  const narrow = () => (window.visualViewport ? visualViewport.width : document.documentElement.clientWidth) <= 640;
+  if (window.visualViewport) { visualViewport.addEventListener('resize', fitLayer); visualViewport.addEventListener('scroll', fitLayer); }
+  window.addEventListener('resize', fitLayer);
 
   function el(tag, cls, html) {
     const e = document.createElement(tag);
@@ -178,7 +197,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         else if (e.target === m) finish(false);
       });
       document.addEventListener('keydown', key, true);
-      document.body.append(m);
+      layer().append(m);
       $('[data-v="1"]', m).focus();
     });
   }
@@ -186,7 +205,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   function lightbox(src, name) {
     const m = el('div', 'hdpx-modal hdpx-lightbox', `<img src="${esc(src)}" alt="${esc(name)}"><button class="hdpx-iconbtn hdpx-lb-x" aria-label="Закрыть">${I.x}</button>`);
     m.addEventListener('click', () => m.remove());
-    document.body.append(m);
+    layer().append(m);
   }
 
   // заменить содержимое своего блока, если оно поменялось; раскрытые <details data-k> остаются раскрытыми
@@ -258,18 +277,21 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   /* ---------- вкладка справа и панель ---------- */
   function ensureTab() {
     let tab = $('.hdpx-tab');
+    if (S.hideTab && !S.open) { if (tab) tab.remove(); return; }
     if (!tab) {
       tab = el('button', 'hdpx-tab', I.bot + '<span class="hdpx-badge" hidden></span>');
       tab.type = 'button';
       tab.title = 'HDP-бот';
       tab.setAttribute('aria-label', 'HDP-бот');
       tab.addEventListener('click', () => (S.open ? closePanel() : openPanel()));
-      document.body.append(tab);
-    } else if (tab.parentElement !== document.body) document.body.append(tab);
+      layer().append(tab);
+    } else if (tab.parentElement !== layer()) layer().append(tab);
     // над родной вкладкой-календарём (если она есть на странице), с тем же шагом
     const own = $('[data-testid="aiAssistantButton"]');
     const r = own && own.getBoundingClientRect();
-    const bottom = r && r.height && r.right >= window.innerWidth - 2 ? Math.round(window.innerHeight - r.top + 12) : 190;
+    const vv = window.visualViewport;
+    const vw = vv ? vv.offsetLeft + vv.width : window.innerWidth, vh = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const bottom = r && r.height && r.right >= vw - 2 ? Math.round(vh - r.top + 12) : 190;
     if (tab.style.bottom !== bottom + 'px') tab.style.bottom = bottom + 'px';
     const n = (S.st && (S.st.drafts || []).length) || 0;
     const badge = $('.hdpx-badge', tab);
@@ -281,7 +303,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   }
 
   function openPanel(tab, opts = {}) {
-    if (tab) { S.tab = tab; store.set('tab', tab); }
+    if (tab) { S.tab = tab; store.set('tab', tab); } else if (where().kind !== 'other') S.tab = 'now';  // задание/тема — их кнопки сверху
     if (opts.draft) setTimeout(() => focusDraft(opts.draft), 320);
     let d = $('.hdpx-drawer');
     if (!d) {
@@ -291,7 +313,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       d.setAttribute('role', 'dialog');
       d.setAttribute('aria-label', 'HDP-бот');
       d.addEventListener('focusout', () => setTimeout(() => { if (S.pending && !typing()) renderPanel(); }, 0));
-      document.body.append(d);
+      layer().append(d);
     }
     S.open = true;
     requestAnimationFrame(() => d.classList.add('hdpx-dr-open'));
@@ -422,7 +444,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   function nowTab() {
     const st = S.st;
     if (!st) return `<div class="hdpx-card hdpx-center">${spin}<p class="hdpx-p hdpx-muted">Связываюсь с ботом…</p></div>`;
-    const parts = [liveCard(), lastCard()];
+    const parts = [hereCard(), liveCard(), lastCard()];
     const drafts = st.drafts || [];
     if (drafts.length) parts.push(`<p class="hdpx-h3 hdpx-sec">Черновики учителю <span class="hdpx-count">${drafts.length}</span></p>` + drafts.map(draftCard).join(''));
     const autos = S.ov ? (S.ov.tasks || []).filter(t => t.auto && ['appointed', 'reworking'].includes(t.rawStatus)).length : null;
@@ -430,7 +452,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       <p class="hdpx-small hdpx-muted">${autos ? `Новых тестов с автопроверкой: ${autos}. Бот решит и сдаст их — до 3 сразу, остальные в очереди.` : autos === 0 ? 'Новых тестов с автопроверкой нет' : 'Считаю тесты…'}</p>
       ${autos ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="auto" data-n="${autos}">⚡ Сдать все автотесты (${autos})</button></div>` : ''}</div>`);
     if (!st.live && !S.running.size && !drafts.length) {
-      parts.push('<p class="hdpx-small hdpx-muted hdpx-tc">Открой задание — под его заголовком появятся кнопки бота</p>');
+      if (where().kind === 'other') parts.push('<p class="hdpx-small hdpx-muted hdpx-tc">Открой задание или тему — здесь появятся их кнопки</p>');
     }
     return parts.join('');
   }
@@ -600,19 +622,15 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Тесты «как человек»</b>
         <span class="hdpx-small hdpx-muted">${s.human ? 'Пауза 20–45 с над каждым вопросом' : 'Сдаю сразу, без пауз'}</span></span>
         <button class="hdpx-switch${s.human ? ' hdpx-switch-on' : ''}" role="switch" aria-checked="${s.human}" data-a="human"><i></i></button></label></div>
+      <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Кнопка бота на странице</b>
+        <span class="hdpx-small hdpx-muted">${S.hideTab ? 'Спрятана — сайт ровно как платформа. Панель открывает тройной тап по странице или Alt+B' : 'Вкладка 🤖 справа. Спрячешь — открывать тройным тапом по странице или Alt+B'}</span></span>
+        <button class="hdpx-switch${S.hideTab ? '' : ' hdpx-switch-on'}" role="switch" aria-checked="${!S.hideTab}" data-a="tabvis"><i></i></button></label></div>
       <div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">Данные бота</b><button class="hdpx-btn hdpx-s hdpx-outline" data-a="ovfresh">↻ Обновить с HDP</button></div>
         <p class="hdpx-small hdpx-muted">Задания, оценки и подтверждения бот берёт с этого сайта — обновляются сами раз в пару минут</p></div>
       <p class="hdpx-small hdpx-muted hdpx-tc">Действия идут через @${BOT} — результат приходит и сюда, и в чат · <a class="hdpx-link" href="/site/logout">выйти</a></p>`;
   }
 
   /* ---------- страница задания ---------- */
-  function taskAnchor() {
-    const info = $('[data-testid="goToChatInfoPanel"]');
-    if (info && info.parentElement) return { parent: info.parentElement, after: info };
-    const content = $('main > div');
-    return content ? { parent: content, after: null } : null;
-  }
-
   // запасной путь: тип, статус и попытки — по самой странице задания
   const ST_WORDS = { 'не начато': 'appointed', 'пора начать': 'appointed', 'на доработке': 'reworking', 'не зачтено': 'failed', 'на проверке': 'reviewing', 'зачтено': 'approved' };
   function guessTask(p) {
@@ -668,28 +686,6 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       ${acts ? `<div class="hdpx-tb-acts">${acts}</div>` : ''}</div>${live}${dr}${running ? '' : lastCard(p.task)}`;
   }
 
-  function ensureTaskBar(p) {
-    topicTasks(p.topic);  // из кэша, раз в минуту — заново (статус после решения)
-    const a = taskAnchor();
-    let bar = $('.hdpx-taskbar');
-    let float = $('.hdpx-float');
-    if (a) {
-      if (float) float.remove();
-      if (!bar) { bar = el('div', 'hdpx-taskbar'); bar.setAttribute('role', 'region'); bar.setAttribute('aria-label', 'HDP-бот'); }
-      if (a.after ? a.after.nextElementSibling !== bar : a.parent.firstElementChild !== bar) {
-        if (a.after) a.after.insertAdjacentElement('afterend', bar); else a.parent.prepend(bar);
-      }
-    } else {
-      if (bar) bar.remove();
-      if (Date.now() - S.routeAt < 2500) return;  // страница ещё грузится
-      if (!float) { float = el('div', 'hdpx-float'); document.body.append(float); }
-      bar = float;
-    }
-    bar.dataset.task = p.task;
-    bar.dataset.topic = p.topic;
-    swap(bar, taskBarHtml(p));
-  }
-
   async function solve(btn, p, mode) {
     const t = taskOf(p.topic, p.task) || {};
     const url = taskUrl(p.topic, p.task);
@@ -710,88 +706,37 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return true;
   }
 
-  /* ---------- страница темы ---------- */
-  function ensureTopicBar(p) {
+  /* ---------- страница темы (в панели, на странице ничего не меняем) ---------- */
+  function topicHtml(p) {
     topicTasks(p.topic);
-    const period = $('[data-testid="studentTopicPeriod"]');
-    const meta = period && (period.closest('[class*="_meta_"]') || (period.parentElement && period.parentElement.parentElement));
-    let bar = $('.hdpx-topicbar');
-    if (!meta || !meta.parentElement) { if (bar) bar.remove(); return; }
-    if (!bar) bar = el('div', 'hdpx-topicbar');
-    if (window.innerWidth > 640) {  // в строку с датами темы, справа от них (на цветной шапке)
-      if (meta.lastElementChild !== bar) meta.append(bar);
-    } else if (meta.nextElementSibling !== bar) meta.insertAdjacentElement('afterend', bar);  // телефон: своей строкой ниже
-    bar.dataset.topic = p.topic;
-    const tasks = cachedTasks(p.topic) || [];
-    const autos = tasks.filter(autoOk).filter(t => !S.running.has(t.uuid));
-    const inWork = tasks.filter(t => S.running.has(t.uuid)).length;
-    const html = `<span class="hdpx-pop-wrap"><button class="hdpx-btn hdpx-s hdpx-white" data-a="chooser" aria-expanded="${S.chooser}">📖 Подготовь меня</button>
-      ${S.chooser ? `<span class="hdpx-pop" role="menu"><span class="hdpx-pop-h">За сколько подготовить?</span>
-        ${[[1, '⚡ 1 минута', 'главное'], [5, '📝 5 минут', 'конспект и вопросы'], [10, '📚 10 минут', 'подробно, с задачами']].map(([m, a, b]) =>
-          `<button class="hdpx-pop-i" role="menuitem" data-a="tprep" data-m="${m}"><b>${a}</b><small>${b}</small></button>`).join('')}</span>` : ''}</span>
-      ${autos.length ? `<button class="hdpx-btn hdpx-s hdpx-white" data-a="tauto">⚡ Автотесты темы (${autos.length})</button>` : ''}
-      ${inWork ? `<span class="hdpx-chip-w">${spin}Решаю: ${inWork}</span>` : ''}`;
-    swap(bar, html);
-  }
-
-  // маленькие кнопки на карточках заданий — в своём слое поверх карточки (правый верхний угол), в карточки не вставляем:
-  // у них position: static, а менять родные элементы нельзя. Положение — по getBoundingClientRect при прокрутке и смене страницы.
-  function ensureMinis(p) {
     const tasks = cachedTasks(p.topic);
-    let layer = $('.hdpx-minis');
-    if (!tasks) return;
-    if (!layer) { layer = el('div', 'hdpx-minis'); document.body.append(layer); }
-    const seen = new Set();
-    for (const a of $$('a[href*="/task/"]', $('main') || $('[data-testid="pageContent"]') || document.body)) {
-      if (a.closest('[data-hdpx]')) continue;
-      const m = (a.getAttribute('href') || '').match(RX_HREF);
-      if (!m) continue;
-      const t = tasks.find(x => x.uuid === m[2]);
-      if (!t) continue;
-      let html;
-      if (S.running.has(t.uuid)) html = `<span class="hdpx-mini-run">${spin}решаю</span>`;
-      else if (isTest(t)) html = (done(t) || t.left === 0 ? '' : `<button class="hdpx-mb" data-a="mini" data-m="do" title="Решить и сдать" aria-label="Решить и сдать: ${esc(t.title)}">⚡</button>`)
-        + `<button class="hdpx-mb" data-a="mini" data-m="show" title="Только ответы" aria-label="Только ответы: ${esc(t.title)}">👁</button>`;
-      else html = t.status === 'approved' ? '' : `<button class="hdpx-mb" data-a="mini" data-m="write" title="Написать ответ" aria-label="Написать ответ: ${esc(t.title)}">✍️</button>`;
-      if (!html) continue;
-      seen.add(t.uuid);
-      let mini = $(`.hdpx-mini[data-task="${t.uuid}"]`, layer);
-      if (!mini) { mini = el('span', 'hdpx-mini'); mini.dataset.task = t.uuid; layer.append(mini); }
-      mini.dataset.topic = m[1];
-      mini.classList.toggle('hdpx-mini-on', S.running.has(t.uuid));
-      MINI.set(mini, a);
-      swap(mini, html);
-    }
-    for (const mini of $$('.hdpx-mini', layer)) if (!seen.has(mini.dataset.task)) { MINI.delete(mini); mini.remove(); }
-    placeMinis();
+    if (!tasks) return `<div class="hdpx-card hdpx-center">${spin}<p class="hdpx-p hdpx-muted">Смотрю тему…</p></div>`;
+    const autos = tasks.filter(autoOk).filter(t => !S.running.has(t.uuid));
+    const title = (S.topics[p.topic] || {}).title || '';
+    const row = t => {
+      let acts;
+      if (S.running.has(t.uuid)) acts = `<span class="hdpx-chip-w">${spin}решаю</span>`;
+      else if (isTest(t)) acts = (done(t) || t.left === 0 ? '' : `<button class="hdpx-mb" data-a="mini" data-m="do" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Решить и сдать">⚡</button>`)
+        + `<button class="hdpx-mb" data-a="mini" data-m="show" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Только ответы">👁</button>`;
+      else acts = t.status === 'approved' ? '' : `<button class="hdpx-mb" data-a="mini" data-m="write" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Написать ответ">✍️</button>`;
+      return `<div class="hdpx-row hdpx-trow"><a class="hdpx-link hdpx-grow" data-a="go" href="/student/topic/${esc(p.topic)}/task/${esc(t.uuid)}">${esc(t.title)}</a>${acts}</div>`;
+    };
+    const open = tasks.filter(t => t.status !== 'approved' && t.req !== false);
+    return `<div class="hdpx-card hdpx-here"><p class="hdpx-h3">📚 Эта тема${title ? ` · ${esc(title)}` : ''}</p>
+      <p class="hdpx-small hdpx-muted">📖 Подготовь меня по теме</p>
+      <div class="hdpx-chips">${[[1, '⚡ 1 мин'], [5, '📝 5 мин'], [10, '📚 10 мин']].map(([m, a]) => `<button class="hdpx-chip" data-a="tprep" data-m="${m}">${a}</button>`).join('')}</div>
+      ${autos.length ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="tauto">⚡ Автотесты темы (${autos.length})</button></div>` : ''}
+      ${open.length ? `<p class="hdpx-small hdpx-muted hdpx-sec">Не сдано: ${open.length}</p>${open.map(row).join('')}` : '<p class="hdpx-small hdpx-muted">Обязательное в теме сдано</p>'}
+      ${tasks.length > open.length ? `<details class="hdpx-more"><summary class="hdpx-small hdpx-muted">Остальные задания (${tasks.length - open.length})</summary>${tasks.filter(t => !open.includes(t)).map(row).join('')}</details>` : ''}</div>`;
   }
 
-  const MINI = new WeakMap();  // своя кнопка -> карточка-ссылка платформы
-  let placing = 0;
-  function placeMinis() {
-    if (placing) return;
-    placing = requestAnimationFrame(() => {
-      placing = 0;
-      const vh = window.innerHeight;
-      for (const mini of $$('.hdpx-minis > .hdpx-mini')) {
-        const a = MINI.get(mini);
-        const card = a && a.isConnected ? ($('[data-testid="cardItem"]', a) || a) : null;
-        const r = card ? card.getBoundingClientRect() : null;
-        if (!r || !r.width || r.bottom < 0 || r.top > vh) { mini.style.display = 'none'; continue; }
-        mini.style.display = '';
-        mini.style.top = `${Math.round(r.top + 10)}px`;
-        mini.style.left = `${Math.round(r.right - 12 - mini.offsetWidth)}px`;
-      }
-    });
+  // «Эта страница» сверху вкладки «Сейчас»
+  function hereCard() {
+    const p = where();
+    if (p.kind === 'task') return `<div class="hdpx-card hdpx-here" data-task="${esc(p.task)}">${taskBarHtml(p)}</div>`;
+    if (p.kind === 'topic') return topicHtml(p);
+    return '';
   }
-  window.addEventListener('scroll', placeMinis, { passive: true, capture: true });
-  window.addEventListener('resize', () => { placeMinis(); schedule(); }, { passive: true });
-  // кнопки видны, пока мышь над карточкой или над ними
-  document.addEventListener('mouseover', e => {
-    const a = e.target.closest && e.target.closest('a[href*="/task/"], .hdpx-mini');
-    const id = a ? (a.classList.contains('hdpx-mini') ? a.dataset.task : ((a.getAttribute('href') || '').match(RX_HREF) || [])[2]) : '';
-    for (const mini of $$('.hdpx-minis > .hdpx-mini')) mini.classList.toggle('hdpx-mini-hover', !!id && mini.dataset.task === id);
-  }, { passive: true });
 
   async function topicAuto(btn, topic) {
     const tasks = (await topicTasks(topic, true)).filter(autoOk).filter(t => !S.running.has(t.uuid));
@@ -837,8 +782,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     }
     ensureTab();
     const p = where();
-    if (p.kind === 'task') ensureTaskBar(p); else $$('.hdpx-taskbar, .hdpx-float').forEach(x => x.remove());
-    if (p.kind === 'topic') { ensureTopicBar(p); ensureMinis(p); } else $$('.hdpx-topicbar, .hdpx-minis').forEach(x => x.remove());
+    const key = location.pathname;
+    if (S.open && key !== S.ctxKey) { S.ctxKey = key; if (p.kind !== 'other') S.tab = 'now'; }
+    if (p.kind !== 'other') topicTasks(p.topic);  // данные для «Эта страница» — заранее, чтобы панель открылась сразу
     if (S.open) {
       const ds = (S.st && S.st.drafts) || [];
       const keys = JSON.stringify(ds.map(d => [d.task, d.text, d.files, d.send_at, d.sending]));
@@ -867,7 +813,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const a = e.target.closest('[data-a]');
     if (!a || !a.closest('[data-hdpx]')) {
       if (S.chooser && !e.target.closest('.hdpx-pop-wrap')) { S.chooser = false; update(); }
-      if (S.open && window.innerWidth > 640 && !e.target.closest('[data-hdpx]') && e.isTrusted) closePanel();  // клик мимо панели
+      if (S.open && !narrow() && !e.target.closest('[data-hdpx]') && e.isTrusted) closePanel();  // клик мимо панели
       return;
     }
     const act = a.dataset.a;
@@ -875,7 +821,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     if (act === 'go') {
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;  // новая вкладка — как обычная ссылка
       e.preventDefault();
-      if (window.innerWidth <= 640) closePanel();
+      if (narrow()) closePanel();
       go(a.getAttribute('href'));
       return;
     }
@@ -903,12 +849,13 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         renderPanel(true);
         break;
       case 'solve': solve(a, p, d.m); break;
-      case 'mini': {
-        const mini = a.closest('.hdpx-mini');
-        solve(a, { topic: mini.dataset.topic, task: mini.dataset.task }, d.m);
-        break;
-      }
+      case 'mini': solve(a, { topic: d.topic, task: d.task }, d.m); break;
       case 'draft': openPanel('now', { draft: d.task }); break;
+      case 'tabvis':
+        S.hideTab = !S.hideTab; store.set('hideTab', S.hideTab);
+        toast(S.hideTab ? 'Кнопка спрятана — панель: тройной тап по странице или Alt+B' : 'Кнопка снова справа');
+        renderPanel(true); ensureTab();
+        break;
       case 'seen': S.seen = (S.st && S.st.last && S.st.last.at) || S.seen; store.set('seen', S.seen); update(); break;
       case 'save': {
         const ok = await saveFirst(a, d.task);
@@ -1038,7 +985,16 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const r = await busy(btn, () => api('/api/site/send', { task, mode: 'at', text: f.t.value }));
     if (r) { S.st = r; S.timeOpen = ''; toast('Время отправки — на черновике'); setTimeout(tick, 800); loadWait(true); }
   }, true);
+  // кнопка спрятана — панель открывают тройной тап (телефон) / тройной клик по странице или Alt+B
+  let taps = [];
+  document.addEventListener('pointerup', e => {
+    if (!S.hideTab || S.open || (e.target.closest && e.target.closest('[data-hdpx], a, button, input, textarea, select, label'))) return;
+    const now = Date.now();
+    taps = taps.filter(t => now - t < 700).concat(now);
+    if (taps.length >= 3) { taps = []; openPanel(); }
+  }, { passive: true });
   document.addEventListener('keydown', e => {
+    if (e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); S.open ? closePanel() : openPanel(); return; }
     if (e.key !== 'Escape') return;
     if (S.chooser) { S.chooser = false; update(); } else if (S.open && !$('.hdpx-modal')) closePanel();
   });
