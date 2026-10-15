@@ -885,3 +885,109 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 .tabbar button[data-tab="coach"] { position: absolute !important; right: -72px !important; top: -3px !important; bottom: auto !important;
   -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: radial-gradient(circle at 50% 35%, rgba(70, 78, 110, .95), rgba(24, 30, 40, .95)) !important; }
 @media (min-width: 700px) { .tabbar button[data-tab="coach"] { right: -72px !important; } }
+
+/* ===================== iOS 26 (Глеб 15.10: «как будто под андроид — сделай максимально айфоновский, фигуры сглаженные и закруглённые») =====================
+   Убрано андроидное: большая зелёная «+» (FAB), неоновое кольцо у кнопки тренера, ЗАГЛАВНЫЕ подписи с разрядкой, острые углы.
+   iOS: подписи обычными буквами (SF Pro), крупные «непрерывные» скругления (концентрические: внутри меньше на отступ),
+   капсулы, тонкие разделители с отступом, большой заголовок → маленький в стеклянной полосе при прокрутке. */
+:root, html[data-scheme] { --r-xl: 28px; --r-lg: 22px; --r-md: 18px; --r-sm: 14px; --sep-ios: rgba(255, 255, 255, .1); }
+
+/* 1. Текст — как в iOS: без капса и разрядки */
+#app *, .sheet *, .tabbar *, #navbar * { text-transform: none !important; letter-spacing: normal !important; }
+#app .hero h1, #app .dhead h1, .sheet h2 { letter-spacing: -.022em !important; }
+#app .sec > .cap h3 { letter-spacing: -.018em !important; }
+#app .dial-v b, #app .wring-in b, #app .tile-v b, #app .big-line .v { letter-spacing: -.025em !important; }
+/* бывшие капс-подписи: «вторичный текст» iOS — 13 px, полужирный, серый */
+.cap h3, .tile-k, .mon-k, .tk, .acts-h b, .label, .as-k, .pl-k { font: 600 13px/1.25 var(--head) !important; color: var(--hint) !important; }
+.card > .cap h3, .wcon .cap h3, .monitor .cap h3 { font: 600 15px/1.25 var(--head) !important; color: var(--ink) !important; }
+.sec > .cap h3 { font: 700 22px/1.2 var(--head) !important; color: var(--ink) !important; }
+.mon-k { color: var(--ink) !important; font-size: 14px !important; }
+.mon-s b { font: 600 14px var(--head) !important; }
+.dial-k { font: 600 13px var(--head) !important; color: var(--ink); margin-top: 8px; }
+.ck { font: 400 16px/1.25 var(--head) !important; color: var(--ink); }
+.wtop-t, .dc-t { font: 600 15px var(--head) !important; }
+.wring-in > span { font: 600 15px/1.3 var(--head) !important; color: rgba(255, 255, 255, .7); }
+.link, .wlink { font: 600 15px var(--head) !important; }
+.wlink { color: var(--periw); }
+.mv em { font: 600 11.5px var(--head) !important; }
+.stat .k, .stat .l { font: 600 13px var(--head) !important; color: var(--hint) !important; }
+.wordmark { display: none; }
+
+/* 2. Скругления: крупные и концентрические, кнопки и бейджи — капсулы */
+.card, .wcon, .list, .monitor, details.about, .winsight { border-radius: 28px !important; }
+.tile, .mon, .stat, .outrow { border-radius: 24px !important; }
+.card .stat, .card .list, .tonight > div { border-radius: 18px !important; }
+.btn, .chip, .seg, .seg button, .send, .coach-link, .act-v, .mon-b, .cfoot, .mepill, .datecap, .dc-t, input, .ask textarea { border-radius: 999px !important; }
+textarea:not(.ask textarea) { border-radius: 20px !important; }
+.act-ic, .row .ic, .se-ic, .feat-ic { border-radius: 30% !important; }  /* как иконки приложений */
+.addsq { border-radius: 50% !important; }
+.msg { border-radius: 22px !important; }
+.msg.me { border-bottom-right-radius: 8px !important; } .msg.them { border-bottom-left-radius: 8px !important; }
+.sheet { border-radius: 38px 38px 0 0 !important; }
+.bar, .bar > i, .rtrack, .stbar, .stbar span, .zbar, .zbar span, .stagebar, .scale21, .band21, .seg3 i, .zones { border-radius: 999px !important; }
+.zbar, .stagebar, .zones { gap: 3px !important; }
+.zbar span, .stagebar span, .zones span { border-radius: 999px !important; }
+.mark21 { border-radius: 999px; width: 6px; margin-left: -3px; }
+.wcon::before { border-radius: 4px; }
+.wring .arc { stroke-linecap: round !important; }
+.tri { border-radius: 2px; }
+
+/* 3. Списки как в iOS: тонкие разделители с отступом от иконки, светлые шевроны */
+.crow { border-bottom: 0 !important; position: relative; }
+.crow + .crow::before, .mrow + .mrow::before, .act + .act::before { content: ""; position: absolute; left: 34px; right: 0; top: 0; height: .5px; background: var(--sep-ios); }
+.act + .act::before { left: 50px; } .mrow + .mrow::before { left: 22px; }
+.mrow, .act { position: relative; border-top: 0 !important; }
+.jr-q + .jr-q { border-top: .5px solid var(--sep-ios) !important; }
+.chev::after { color: rgba(235, 235, 245, .3) !important; }
+
+/* 4. Переключатели «Нет / Да» — сегменты iOS */
+.jr-yn { background: rgba(118, 118, 128, .24); padding: 2px; border-radius: 999px; gap: 0 !important; }
+.jr-yn button { height: 32px !important; min-width: 54px !important; background: transparent !important; color: var(--ink) !important; font: 600 14px var(--head) !important;
+  transition: background-color .3s var(--ios), color .3s, box-shadow .3s !important; }
+.jr-yn button.on.no { background: rgba(255, 255, 255, .92) !important; color: #0b1013 !important; box-shadow: 0 3px 8px rgba(0, 0, 0, .25); }
+.jr-yn button.on.yes { background: var(--teal) !important; color: #04150e !important; box-shadow: 0 3px 8px rgba(0, 0, 0, .25); }
+.seg { background: rgba(118, 118, 128, .24) !important; padding: 2px !important; }
+.seg button { font: 600 14px var(--head) !important; min-height: 32px; }
+
+/* 5. Нижнее меню как в iOS 26: стеклянная капсула, обычные вкладки (без FAB), отдельный стеклянный круг тренера справа */
+.tabbar button { font: 500 10.5px/1.15 var(--head) !important; gap: 2px !important; padding: 7px 2px 6px !important; }
+.tabbar button .ico { width: 25px; height: 25px; stroke-width: 1.9; }
+.tabbar button.on { color: var(--teal) !important; }
+.tabbar button.on[data-tab="today"] .ico, .tabbar button.on[data-tab="trends"] .ico { fill: currentColor; }
+.tabbar button[data-tab="plus"] { font-size: 10.5px !important; gap: 2px !important; }
+.tabbar button[data-tab="plus"] .i { width: auto !important; height: auto !important; background: none !important; color: inherit !important; margin: 0 !important; }
+.tabbar button[data-tab="plus"] .ico { width: 25px; height: 25px; padding: 2px; border-radius: 50%; box-shadow: inset 0 0 0 1.9px currentColor; stroke-width: 2.2; }
+.tabbar button[data-tab="coach"] { width: 58px !important; height: 58px !important; top: 0 !important; right: -68px !important; color: #fff !important;
+  background: rgba(255, 255, 255, .12) !important; -webkit-backdrop-filter: blur(28px) saturate(185%) !important; backdrop-filter: blur(28px) saturate(185%) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), inset 0 0 0 .5px rgba(255, 255, 255, .16), 0 12px 30px rgba(0, 0, 0, .45) !important; }
+.tabbar button[data-tab="coach"].on { color: var(--teal) !important; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), inset 0 0 0 .5px rgba(255, 255, 255, .16), 0 12px 30px rgba(0, 0, 0, .45) !important; }
+.tabbar button[data-tab="coach"] .ico { fill: currentColor; fill-opacity: .18; }
+.tabbar { right: 80px !important; }
+.tabbar .tab-ind { top: 5px; bottom: 5px; background: rgba(255, 255, 255, .13); }
+
+/* 6. Кнопки и мелочи в духе iOS */
+.btn { min-height: 50px; font: 600 17px var(--head) !important; }
+.btn.primary { color: #04150e !important; }
+.btn.sm { min-height: 36px; font-size: 15px !important; }
+.coach-link { font: 600 15px var(--head) !important; padding: 10px 16px !important; }
+.addsq { width: 32px !important; height: 32px !important; background: rgba(255, 255, 255, .14) !important; color: #fff !important; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2); }
+.mepill .fl .ico { fill: var(--orange); }
+.outrow { font: 600 17px var(--head) !important; }
+.mon-b { min-width: 30px; height: 30px; }
+.avatar { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2) !important; }
+.dial .arc, .kring .arc, .mini .arc { stroke-linecap: round; }
+
+/* 7. Навигация iOS: маленький заголовок в стеклянной полосе появляется, когда большой уехал вверх */
+#navbar { position: fixed; z-index: 30; left: 0; right: 0; top: 0; padding: calc(var(--top, 0px) + 6px) 12px 8px; display: grid; grid-template-columns: 44px 1fr 44px; align-items: center;
+  pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .28s var(--ios), transform .28s var(--ios);
+  background: rgba(14, 20, 24, .55); -webkit-backdrop-filter: blur(28px) saturate(185%); backdrop-filter: blur(28px) saturate(185%); box-shadow: inset 0 -.5px 0 rgba(255, 255, 255, .12); }
+#navbar.show { opacity: 1; transform: none; pointer-events: auto; }
+#navbar b { text-align: center; font: 600 17px var(--head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#navbar button { width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--teal); padding: 0; }
+#navbar button .ico { width: 24px; height: 24px; stroke-width: 2.2; }
+#navbar button[hidden] { visibility: hidden; }
+.hero, .dhead { position: relative !important; top: auto !important; background: none !important; box-shadow: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+.hero h1, .dhead h1 { font-size: 32px !important; }
+#navbar button[hidden] { display: grid !important; visibility: hidden; }
+.tabbar button[data-tab="coach"] { font-size: 0 !important; gap: 0 !important; padding: 0 !important; }
+.tabbar button[data-tab="coach"] .ico { width: 26px; height: 26px; }
