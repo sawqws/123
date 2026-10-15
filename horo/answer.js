@@ -36,15 +36,19 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     const ed = page.locator('[contenteditable=true].mce-content-body').first();
     await ed.waitFor({ timeout: 30000 });
     if (attach.length) {
+      // Файлы — по одному: если выбрать сразу несколько, сайт иногда теряет часть (из трёх держался только второй и третий).
       let uploads = 0;
-      page.on('response', r => { if (r.request().method() === 'POST' && /store|upload|file/i.test(r.url())) { uploads++; console.log('  [загрузка]', r.status(), r.url().split('/api/')[1] || r.url()); } });
-      const [chooser] = await Promise.all([
-        page.waitForEvent('filechooser', { timeout: 15000 }),
-        page.locator('[data-testid=attachButton]').click(),
-      ]);
-      await chooser.setFiles(attach);
-      for (let i = 0; i < 60 && uploads < attach.length; i++) await page.waitForTimeout(500);
-      await page.waitForTimeout(2000);
+      page.on('response', r => { if (r.request().method() === 'POST' && /horodigital\.ru\/store\/t\/upload/.test(r.url())) { uploads++; console.log('  [загрузка]', r.status(), r.url().split('/api/')[1] || r.url()); } });
+      for (let i = 0; i < attach.length; i++) {
+        const before = uploads;
+        const [chooser] = await Promise.all([
+          page.waitForEvent('filechooser', { timeout: 15000 }),
+          page.locator('[data-testid=attachButton]').click(),
+        ]);
+        await chooser.setFiles([attach[i]]);
+        for (let k = 0; k < 60 && uploads <= before; k++) await page.waitForTimeout(500);
+        await page.waitForTimeout(2500);
+      }
       await page.screenshot({ path: __dirname + '/tmp/attach.png' });
       if (uploads < attach.length) console.log('  предупреждение: загрузок видно', uploads, 'из', attach.length, '(см. horo/tmp/attach.png)');
     }
@@ -73,6 +77,10 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     console.log(`Статус: ${p.status.type}`);
     console.log('Отправлено:\n' + (last ? htmlToText(last.answer.text) : '(ответ не найден)'));
     if (last) console.log('Прикреплено файлов: ' + last.answer.attachments.length + (last.answer.attachments.length ? ' (' + last.answer.attachments.map(a => a.fileName).join(', ') + ')' : ''));
+    if (attach.length && (!last || last.answer.attachments.length < attach.length)) {
+      // дошли не все картинки — это ошибка, а не «успех»: учитель получит неполный ответ
+      throw new Error(`Прикрепилось файлов ${last ? last.answer.attachments.length : 0} из ${attach.length} — ответ неполный, отправь заново с --replace`);
+    }
   } finally {
     await close(s);
   }
