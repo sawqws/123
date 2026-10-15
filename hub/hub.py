@@ -222,10 +222,27 @@ def card(title, lines=(), foot="", expand=False):
     return text
 
 
+LIMIT = 4096  # длина сообщения в Telegram (после разбора разметки)
+
+
+def plain(text):
+    """HTML Telegram -> простой текст (тегов нет, &lt; -> <): запасной вариант, когда разметка не принялась."""
+    return html.unescape(re.sub(r"</?[a-z-]+(?: [^>]*)?>", "", str(text)))
+
+
 def send(chat, text, buttons=None):
+    """Сообщение с HTML. 400 (битая разметка, слишком длинно) — повторяем простым текстом и резаным до 4096:
+    важное сообщение не должно пропасть из-за тега."""
     extra = {"reply_markup": {"inline_keyboard": buttons}} if buttons else {}
-    return tg("sendMessage", chat_id=chat, text=text, parse_mode="HTML",
-              link_preview_options={"is_disabled": True}, **extra)
+    try:
+        return tg("sendMessage", chat_id=chat, text=text, parse_mode="HTML",
+                  link_preview_options={"is_disabled": True}, **extra)
+    except urllib.error.HTTPError as e:
+        if e.code != 400 or not re.search(r"parse entities|too long|entities|text is empty", getattr(e, "detail", ""), re.I):
+            raise
+        flat = plain(text)
+        flat = flat if len(flat) <= LIMIT else flat[:LIMIT - 1] + "…"
+        return tg("sendMessage", chat_id=chat, text=flat or "…", link_preview_options={"is_disabled": True}, **extra)
 
 
 def edit(chat, mid, text, buttons=None):
@@ -1044,6 +1061,7 @@ def watch():
 # Ключ создаёт владелец кнопкой, выключить можно в любой момент; о каждой команде Главный пишет владельцу.
 jobs = {}
 fails = []
+fails_lock = threading.Lock()
 public_ip = None
 
 
@@ -1280,7 +1298,7 @@ def tell(text):
         if owner():
             send(owner(), text)
     except Exception as e:
-        print("tell:", e)
+        print("tell:", e, str(getattr(e, "detail", ""))[:200])
 
 
 CMDLOG = []  # что делал Claude: (время, что, зачем) — последние 50, смотреть в /claude → «📜 Что делал»
@@ -1297,6 +1315,8 @@ def log_cmd(what, why=""):
 
 def run_job(cmd, timeout, why=""):
     """Команда в bash в папке репозитория; вывод копится в задаче, Claude забирает его по id."""
+    if sum(1 for j in jobs.values() if not j["done"]) >= 8:  # не даём забить сервер горой одновременных команд
+        raise ValueError("уже идёт 8 команд — дождись окончания")
     jid = secrets.token_hex(4)
     job = jobs[jid] = {"id": jid, "cmd": cmd, "done": False, "code": None, "out": "", "started": time.time()}
     for k in sorted(jobs, key=lambda k: jobs[k]["started"])[:-50]:
@@ -1328,6 +1348,10 @@ def run_job(cmd, timeout, why=""):
 def remote_api(action, body):
     if action == "status":
         return {"apps": apps(), "server": server(), "paid": setting("paid")}
+    if action in ("logs", "restart"):  # имя — не флаг для pm2 (--update-env и т. п.)
+        nm = str(body.get("name") or "")
+        if not nm or nm.startswith("-") or len(nm) > 80:
+            raise ValueError("неверное имя бота")
     if action == "logs":
         lines = max(10, min(int(body.get("lines") or 60), 1000))
         code, out = sh("pm2", "logs", str(body["name"]), "--nostream", "--lines", str(lines), "--raw", timeout=30)
@@ -1473,15 +1497,20 @@ class Web(BaseHTTPRequestHandler):
             body = body if isinstance(body, dict) else {}
             return self.app_api(lambda b_: app_action(b_.get("action"), b_.get("arg")), body)
         now = time.time()
-        fails[:] = [t for t in fails if now - t < 3600]
-        if len(fails) >= 20:
-            return self.reply(429, {"error": "слишком много неверных ключей, вход закрыт на час"})
+        with fails_lock:
+            fails[:] = [t for t in fails if now - t < 3600]
+            locked = len(fails) >= 20
         if not remote_on():
             return self.reply(403, {"error": "вход для Claude выключен — включи в Главном: /claude"})
+        # верный ключ проходит всегда (256 бит не подобрать): иначе любой, кто 20 раз ошибётся, запер бы владельца на час
         if not check_key(self.headers.get("Authorization") or ""):
-            fails.append(now)
-            if len(fails) == 20:
-                tell("⚠️ 20 попыток с неверным ключом за час — вход для Claude закрыт на час. "
+            if locked:
+                return self.reply(429, {"error": "слишком много неверных ключей, вход закрыт на час"})
+            with fails_lock:
+                fails.append(now)
+                first = len(fails) == 20
+            if first:
+                tell("⚠️ 20 попыток с неверным ключом за час — неверные ключи отклоняются ещё час. "
                      "Если это не ты, нажми «♻️ Новый ключ» в /claude.")
             return self.reply(401, {"error": "неверный ключ"})
         try:
@@ -1927,12 +1956,18 @@ def main():
     threading.Thread(target=set_menu, args=(True,), daemon=True).start()  # узнаёт IP — дальше кнопка и в меню
     threading.Thread(target=check_secretary, daemon=True).start()  # Секретаря нет — поставить
     print("Главный запущен")
+    fails_poll = 0
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
+            fails_poll = 0
         except Exception as e:
-            print("getUpdates:", e)
-            time.sleep(5)
+            # 409 Conflict — старый опрос ещё доживает свои ≤50 с после перезапуска: ждём тихо, без шквала в логе
+            conflict = getattr(e, "code", 0) == 409
+            fails_poll = min(fails_poll + 1, 6)
+            if not conflict or fails_poll == 1:
+                print("getUpdates:", e)
+            time.sleep(min(2 * fails_poll, 15) if conflict else min(5 * fails_poll, 60))
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1

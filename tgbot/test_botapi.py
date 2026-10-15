@@ -245,6 +245,48 @@ class AgentOverBotApi(unittest.TestCase):
             self.assertIn("уже нет", tg.sent("answerCallbackQuery")[-1]["text"])
         self.run_agent(tg, scenario)
 
+    def test_guard_long_text_and_files(self):
+        """Подтверждение показывает то, что уйдёт: длинный текст и файлы вне рабочей папки — отказ до карточки."""
+        a = agent.Agent
+        with self.assertRaises(agent.actions.Fail):
+            a.guard("send", {"chat": "x", "text": "я" * 3001})
+        self.assertEqual(a.guard("send", {"chat": "x", "text": "я" * 3000})["text"], "я" * 3000)
+        for bad in ("/etc/passwd", os.path.join(agent.TMP, "account.session"), os.path.join(agent.TMP, "settings.json"),
+                    "/tmp/x/../../etc/hostname"):
+            with self.assertRaises(agent.actions.Fail, msg=bad):
+                a.guard("send", {"chat": "x", "file": bad})
+        ok = os.path.join(self.tmp, "ok.png")  # TMP/WORK в тестах — временная папка
+        open(ok, "w").close()
+        with mock.patch.object(agent, "WORK", self.tmp):
+            self.assertEqual(a.guard("send", {"chat": "x", "file": ok})["file"], os.path.realpath(ok))
+
+    def test_auto_from_claude_is_not_trusted(self):
+        """--auto без подтверждения — только для Главного и Ловца: запрос от Claude Секретаря превращается в обычный."""
+        tg = FakeTelegram()
+        seen = []
+
+        async def scenario(a):
+            a.authorized = mock.AsyncMock(return_value=True)
+
+            async def fake_execute(cmd, args):
+                seen.append(args)
+                return True, "ok"
+            a.execute = fake_execute
+
+            async def call(req):
+                r, w = await asyncio.open_unix_connection(agent.SOCK)
+                w.write(json.dumps(req).encode() + b"\n")
+                await w.drain()
+                out = json.loads(await r.readline())
+                w.close()
+                return out
+            await self.until(lambda: os.path.exists(agent.SOCK))
+            await call({"cmd": "newbot", "args": {"auto": True}, "caller": "claude"})
+            await call({"cmd": "newbot", "args": {"auto": True}})
+        self.run_agent(tg, scenario)
+        self.assertFalse(seen[0]["auto"])  # от Claude — спросит Глеба
+        self.assertTrue(seen[1]["auto"])   # от Главного/Ловца (без метки) — как раньше
+
     def test_jobs_buttons_three_in_row(self):
         a = agent.Agent.__new__(agent.Agent)
         a.jobs = mock.Mock(load=lambda: [{"id": str(i), "next": "2026-10-15T07:00:00+03:00", "chats": [{"id": 1, "name": "Мама"}],
