@@ -111,7 +111,7 @@ class Table:
         x0, y0, x1, y1 = self.cell(r, c)
         pad = 14
         maxw, maxh = x1 - x0 - 2 * pad, y1 - y0 - 2 * pad
-        for s in ([size] if size else range(44, 15, -2)):
+        for s in ([size] if size else range(52, 15, -2)):  # он пишет крупно
             lines = self._wrap(text, s, maxw)
             if len(lines) * s * 1.3 <= maxh and all(self._w(l, s) <= maxw for l in lines):
                 break
