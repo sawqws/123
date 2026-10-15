@@ -37,7 +37,8 @@ async function copy(text, what) {
 }
 
 function openLink(url) {
-  if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank');
+  if (!/^https:\/\//i.test(String(url || ''))) return;  // только обычные https-ссылки
+  if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank', 'noopener');
 }
 
 // Фото отдаются только с подписью Telegram — грузим через fetch и показываем blob

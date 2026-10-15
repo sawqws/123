@@ -836,6 +836,95 @@ class Buttons(Chats):
                     self.assertLessEqual(len(x["text"]), 24, x["text"])
 
 
+class Audit(Flow):
+    """Находки полной проверки: порча state.json, вытеснение папок, повторные нажатия, лишние права Claude."""
+
+    def test_corrupt_state_kept_aside(self):
+        with open(avito.STATE, "w") as f:
+            f.write('{"owner": 7, "ads": [')  # обрыв записи
+        self.assertEqual(avito.load(), {})
+        self.assertTrue(os.path.exists(avito.STATE + ".bad"))  # копия, а не молчаливая потеря
+        self.assertFalse(os.path.exists(avito.STATE))
+
+    def test_state_file_private_and_atomic(self):
+        avito.st["av_keys"] = {"id": "x", "secret": "y"}
+        avito.save()
+        self.assertEqual(os.stat(avito.STATE).st_mode & 0o777, 0o600)  # в файле ключи Авито
+        self.assertFalse(os.path.exists(avito.STATE + ".tmp"))
+        self.assertEqual(avito.load()["av_keys"]["id"], "x")
+
+    def test_cleanup_keeps_live_folders(self):
+        d1 = avito.draft(create=True)
+        keep = dict(d1, title="Живое", photos=[{"orig": "x", "clean": None}])
+        avito.st["ads"] = [keep]
+        avito.st.pop("draft")
+        d = None
+        for _ in range(20):  # куча пустых черновиков не должна вытеснять папку настоящего объявления
+            avito.archive()
+            d = avito.draft(create=True)
+        self.assertTrue(os.path.isdir(os.path.join(avito.DRAFTS, d1["id"])))
+        self.assertTrue(os.path.isdir(os.path.join(avito.DRAFTS, d["id"])))
+        stale = os.path.join(avito.DRAFTS, "20200101-000000-dead")
+        os.makedirs(stale)
+        avito.cleanup_old()
+        self.assertFalse(os.path.exists(stale))  # а лишнее чистится
+
+    def test_write_busy_does_not_duplicate_info(self):
+        d = self.make_ad()
+        d["job"] = "write"
+        before = d["info"]
+        code, res = avito.api_post("/api/write", {"id": d["id"], "info": "ещё чехол"})
+        self.assertEqual(code, 409)
+        self.assertEqual(d["info"], before)
+
+    def test_info_capped(self):
+        d = avito.draft(create=True)
+        for _ in range(10):
+            avito.add_info(d, "слово " * 300)
+        self.assertLessEqual(len(d["info"]), 4000)
+
+    def test_bad_content_length(self):
+        import socket
+        import threading
+        from http.server import ThreadingHTTPServer
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), avito.Web)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with mock.patch.object(avito, "web_user", lambda h: {"id": 7}):
+                for bad in ("-5", "abc"):  # раньше read(-5) ждал конца потока, а «abc» ронял обработчик
+                    c = socket.create_connection(srv.server_address, timeout=5)
+                    c.sendall(f"POST /api/new HTTP/1.1\r\nHost: x\r\nContent-Length: {bad}\r\n\r\n".encode())
+                    self.assertIn(b" 400 ", c.recv(200).split(b"\r\n")[0] + b" ")
+                    c.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_claude_tools_locked_down(self):
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return mock.Mock(returncode=0, stdout=json.dumps({"result": "ok"}), stderr="")
+        with mock.patch.object(ai.subprocess, "run", run):
+            ai.claude("привет")
+            img = os.path.join(avito.DATA, "p.jpg")
+            write_file(img, b"x" * 200)
+            ai.claude("с фото", [img])
+        no_img, with_img = calls
+        for banned in ("Bash", "Edit", "Write", "Glob", "Grep"):
+            self.assertIn(banned, no_img)
+            self.assertIn(banned, with_img)
+        self.assertIn("Read", no_img[no_img.index("--disallowedTools"):])  # без фото читать диск нечем
+        self.assertNotIn("Read", with_img[with_img.index("--disallowedTools"):])  # с фото — только Read
+
+    def test_market_links_only_avito_https(self):
+        self.assertEqual(market.safe_url("/moskva/x_1"), "https://www.avito.ru/moskva/x_1")
+        self.assertEqual(market.safe_url("javascript:alert(1)"), "")
+        self.assertEqual(market.safe_url("https://evil.test/x"), "")
+        self.assertEqual(market.safe_url("http://www.avito.ru/x"), "")
+
+
 class InitData(unittest.TestCase):
     def setUp(self):
         avito.st.clear()

@@ -89,7 +89,14 @@ def load():
     try:
         with open(STATE) as f:
             return json.load(f)
-    except (OSError, ValueError):
+    except OSError:
+        return {}
+    except ValueError:  # файл порчен (диск, обрыв записи) — не затираем: откладываем копию и начинаем заново
+        try:
+            os.replace(STATE, STATE + ".bad")
+            print("state.json повреждён — копия в state.json.bad")
+        except OSError:
+            pass
         return {}
 
 
@@ -97,8 +104,16 @@ def save():
     with lock:
         os.makedirs(DATA, exist_ok=True)
         tmp = STATE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(st, f, ensure_ascii=False, indent=1)
+        for attempt in range(3):  # другой поток мог дописать поле объявления посреди обхода
+            try:
+                text = json.dumps(st, ensure_ascii=False, indent=1)
+                break
+            except RuntimeError:
+                if attempt == 2:
+                    raise
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # в файле ключи Авито
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
         os.replace(tmp, STATE)
 
 
@@ -115,14 +130,17 @@ def draft(create=False):
         return d
 
 
-def cleanup_old(keep=KEEP_ADS):
-    """Храним папки последних 15 объявлений, остальные удаляем."""
+def cleanup_old():
+    """Удаляем папки объявлений, которых уже нет в списке (текущее и последние 15). Пустые черновики, у которых
+    ничего не сохранилось, раньше занимали «места» и вытесняли папки настоящих объявлений — фото пропадали."""
     try:
         dirs = sorted(os.listdir(DRAFTS))
     except OSError:
         return
-    for name in dirs[:-keep]:
-        shutil.rmtree(os.path.join(DRAFTS, name), ignore_errors=True)
+    live = {a.get("id") for a in [st.get("draft")] + list(st.get("ads") or []) if a}
+    for name in dirs:
+        if name not in live:
+            shutil.rmtree(os.path.join(DRAFTS, name), ignore_errors=True)
 
 
 def ddir(d):
@@ -407,7 +425,7 @@ def add_info(d, text):
     text = (text or "").strip()
     if text:
         with lock:
-            d["info"] = (d.get("info", "") + "\n" + text).strip()
+            d["info"] = (d.get("info", "") + "\n" + text).strip()[-4000:]  # промпт Claude не растёт без конца
             save()
 
 
@@ -1243,7 +1261,7 @@ def on_text(chat, text, now=False):
         later(check_market, chat)  # «сколько такое стоит?» — средняя цена
         return
     with lock:
-        d["info"] = (d.get("info", "") + "\n" + text).strip()
+        d["info"] = (d.get("info", "") + "\n" + text).strip()[-4000:]  # промпт Claude не растёт без конца
         save()
     if d.get("title"):
         later(write, chat, text)
@@ -1572,6 +1590,8 @@ def api_post(path, body, user=None):
         request = str(body.get("request") or "").strip()[:500]
         if not (info or request or d.get("info") or d.get("photos")):
             return 400, {"error": "Расскажи о вещи или добавь фото"}
+        if d.get("job"):  # занят — не дописываем рассказ второй раз при повторном нажатии
+            return 409, {"error": "Ещё занят — секунду"}
         add_info(d, info)
         if d.get("title") and info and not request:
             request = info
@@ -1678,7 +1698,12 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if not web_user(self.headers):
             return self.reply(401, {"error": "Открой приложение из Telegram"})
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0:  # rfile.read(-1) ждал бы конца потока вечно
+            return self.reply(400, {"error": "Плохой запрос"})
         if path == "/api/upload":
             if n > MAX_UPLOAD:
                 return self.reply(413, {"error": "Фото больше 15 МБ"})
