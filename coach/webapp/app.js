@@ -227,7 +227,7 @@
     rows.forEach((r, i) => {
       const v = r[key]; if (v == null) return;
       const h = Math.max(2, v / top * CH), x = i * slot + gap / 2;
-      s += `<rect class="gb" style="--i:${Math.round(i / n * 24)}" x="${x.toFixed(1)}" y="${(CH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(3, bw / 2).toFixed(1)}" fill="${typeof color === 'function' ? color(r) : color}"><title>${r.day}: ${v}</title></rect>`;
+      s += `<rect class="gb" style="--i:${Math.round(i / n * 24)}" x="${x.toFixed(1)}" y="${(CH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(6, bw / 2).toFixed(1)}" fill="${typeof color === 'function' ? color(r) : color}"><title>${r.day}: ${v}</title></rect>`;
     });
     if (ref) rows.forEach((r, i) => {
       const v = r[ref]; if (v == null) return;
@@ -304,6 +304,7 @@
     view.innerHTML = `<div class="${cls}">${html}</div>`;
     if (moving) stagger();
     animate(document, !moving);
+    if (F.navSync) F.navSync();
     if (S.tab === 'coach' && anim !== false) window.scrollTo(0, document.body.scrollHeight);
   }
   const initial = () => { const n = ((S.data && S.data.user && S.data.user.name) || '').trim(); return n ? esc(n[0].toUpperCase()) : I.user; };
@@ -1167,12 +1168,22 @@
       else eat();
     }
   });
-  // шапка становится стеклянной, когда под ней поехало содержимое (как навигация iOS)
+  // шапка становится стеклянной, когда под ней поехало содержимое; большой заголовок уехал — маленький появляется в полосе (как iOS)
+  const navbar = document.createElement('header');
+  navbar.id = 'navbar'; navbar.innerHTML = `<button type="button" data-a="back" aria-label="Назад">${I.back}</button><b></b><span></span>`;
+  document.body.append(navbar);
   let scTick = false;
-  addEventListener('scroll', () => {
-    if (scTick) return; scTick = true;
-    requestAnimationFrame(() => { scTick = false; document.body.classList.toggle('scrolled', window.scrollY > 6); });
-  }, { passive: true });
+  function navSync() {
+    scTick = false;
+    document.body.classList.toggle('scrolled', window.scrollY > 6);
+    const h1 = view.querySelector('.hero h1, .dhead h1');
+    if (!h1) { navbar.classList.remove('show'); return; }
+    navbar.querySelector('b').textContent = h1.textContent.trim();
+    navbar.querySelector('button').hidden = !S.screen;
+    navbar.classList.toggle('show', h1.getBoundingClientRect().bottom < 52);
+  }
+  addEventListener('scroll', () => { if (!scTick) { scTick = true; requestAnimationFrame(navSync); } }, { passive: true });
+  F.navSync = () => requestAnimationFrame(navSync);
   // свайп от левого края — «назад», как в iOS: экран едет за пальцем, отпустил дальше трети или смахнул — закрылся
   (() => {
     let x0 = null, y0 = 0, t0 = 0, dx = 0, on = false;
