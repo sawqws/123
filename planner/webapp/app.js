@@ -9,7 +9,9 @@ const pad = n => String(n).padStart(2, '0');
 const plural = (n, a, b, c) => { n = Math.abs(n); const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
 const haptic = k => Kit.haptic(k === 'light' || k === 'medium' ? 'tap' : k);
 // ошибки — всегда понятным «⚠️ …»: нет связи, сервер упал, причина от сервера
+let inflight = 0;  // запросы на запись в пути — фоновое обновление их не перебивает
 async function api(path, body) {
+  if (body) inflight++;
   try {
     return await Kit.api('api/' + path, body);
   } catch (e) {
@@ -18,6 +20,8 @@ async function api(path, body) {
     const err = new Error('⚠️ ' + msg[0].toUpperCase() + msg.slice(1));
     err.status = e.status;
     throw err;
+  } finally {
+    if (body) inflight--;
   }
 }
 
@@ -1050,9 +1054,21 @@ async function boot() {
   render();
   if (p === '/settings') settingsSheet();
   // в полночь (и когда приложение снова открыли) обновляем «сегодня»
-  document.addEventListener('visibilitychange', async () => {
-    if (document.hidden) return;
-    try { const d = await api('all'); const was = S.today; load(d); if (S.sel === was) S.sel = S.today; if (!sheetEl) render(); } catch (e) { /* */ }
-  });
+  // и тихо раз в 3 минуты, пока приложение открыто: задачи, добавленные в чате, появляются сами
+  let refreshing = false;
+  async function refresh() {
+    if (refreshing || inflight) return;
+    refreshing = true;
+    try {
+      const d = await api('all');
+      if (inflight) return;  // пока грузили, что-то начали сохранять — не затираем
+      const was = S.today; load(d); if (S.sel === was) S.sel = S.today;
+      const ae = document.activeElement;
+      const typing = ae && ae.matches('input:not([type=range]), textarea') && ae.value;  // недописанное не стираем перерисовкой
+      if (!sheetEl && !typing) render();
+    } catch (e) { /* без связи — оставляем как есть */ } finally { refreshing = false; }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  setInterval(() => { if (!document.hidden) refresh(); }, 180000);
 }
 boot();

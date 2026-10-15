@@ -312,6 +312,12 @@ def can_support(uid):
     return bool(uid) and (uid == owner() or uid in ALLOWED)
 
 
+def can_set_mode(uid):
+    """Режим «чат/приложение» один на весь бот. В обычном режиме бот личный — можно; в PUBLIC меняет владелец
+    (пока владельца нет — любой, иначе первый выбор был бы невозможен)."""
+    return not PUBLIC or can_support(uid) or not (owner() or ALLOWED)
+
+
 def sup_row(uid):
     """Ряд с кнопкой «🛠 Поддержка» для главных меню — только тем, кому она доступна."""
     return [support.Support.button()] if can_support(uid) else []
@@ -539,7 +545,9 @@ def goals_view(uid):
         part = [g for g in goals if g["horizon"] == hz]
         if part:
             lines.append(f"<b>{HORIZON[hz]}</b>")
-            lines += [goal_line(uid, g) for g in part]
+            lines += [goal_line(uid, g) for g in part[:12]]
+            if len(part) > 12:
+                lines.append(f"<i>… и ещё {len(part) - 12} — в планере</i>")
     rows, row = [], []
     for g in goals[:9]:
         row.append(btn(short(f"{g['emoji']} {g['title']}", 24), f"g|{g['id']}"))
@@ -579,6 +587,15 @@ def goal_view(uid, gid):
     return card(g["emoji"] or "🎯", title, body, " · ".join(extra).capitalize()), with_app(rows, "🎯 Открыть цель", f"/goal/{gid}")
 
 
+def note_when(uid, created):
+    """«9 окт» — дата заметки в часовом поясе пользователя (в базе время UTC: ночью дата иначе съезжала бы на день)."""
+    try:
+        d = datetime.datetime.fromisoformat(created).astimezone(user_now(db.user(uid)).tzinfo)
+    except ValueError:
+        d = datetime.datetime.fromisoformat(created[:10])
+    return f"{d.day} {MONTHS_GEN[d.month - 1][:3]}"
+
+
 def notes_view(uid):
     notes = db.notes(uid)
     goals = {g["id"]: g for g in db.goals(uid)}
@@ -589,7 +606,7 @@ def notes_view(uid):
     for n in notes[:8]:
         g = goals.get(n["goal"])
         tag = f"{g['emoji']} " if g else ""
-        when = n["created"][8:10].lstrip("0") + " " + MONTHS_GEN[int(n["created"][5:7]) - 1][:3]
+        when = note_when(uid, n["created"])
         lines.append(f"• {tag}{esc(short(n['text'], 110))} <i>{when}</i>")
     more = f"Ещё {len(notes) - 8} — в планере" if len(notes) > 8 else "Новая: «заметка: …»"
     return card("📝", "Заметки", lines, more), with_app([[home_btn()]], "📝 Все заметки", "/notes")
@@ -803,11 +820,20 @@ def on_voice(chat, uid, msg, box):
     handle_text(chat, uid, text, mid, heard=text)  # дальше — как будто это написали; статус заменится карточкой
 
 
+SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|_KEY)$", re.I)
+
+
+def clean_env():
+    """Окружение для `claude -p`: без токенов ботов и чужих ключей (свой вход Claude — ANTHROPIC_*/CLAUDE_* — остаётся)."""
+    return {k: v for k, v in os.environ.items()
+            if k.startswith(("ANTHROPIC_", "CLAUDE_")) or not SECRET_ENV.search(k)}
+
+
 def claude(prompt, cwd, timeout=240):
     """`claude -p` в отдельной папке (без чужих CLAUDE.md); картинки читает инструментом Read."""
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--allowedTools", "Read", "--max-turns", "4", *NO_TOOLS]
     try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=clean_env())
     except FileNotFoundError:
         raise AIError("на сервере нет Claude Code — напиши задачи текстом") from None
     except subprocess.TimeoutExpired:
@@ -880,11 +906,13 @@ def on_photo(chat, uid, msg, box):
 def report_tasks(chat, mid, emoji, tasks, today, heard=None):
     """Карточка «Добавил N задач» (из фото или видео)."""
     lines = []
-    for t in tasks:
+    for t in tasks[:15]:
         when = (repeat_text(t["repeat"]) if t["repeat"]
                 else human_date(datetime.date.fromisoformat(t["date"]), today).lower() if t["date"] else "без даты")
-        lines.append(f"• {esc(t['title'])} — {when}" + (f" · {t['time']}" if t["time"] else "")
+        lines.append(f"• {esc(short(t['title'], 80))} — {when}" + (f" · {t['time']}" if t["time"] else "")
                      + (" <b>!</b>" if t["important"] else ""))
+    if len(tasks) > 15:
+        lines.append(f"<i>… и ещё {len(tasks) - 15} — в планере</i>")
     first = tasks[0]["date"]
     note = f"🎙 «{esc(short(heard, 200))}»" if heard else "Поправить можно в планере"
     replace(chat, mid, card(emoji, f"Добавил {len(tasks)} {plural(len(tasks), 'задачу', 'задачи', 'задач')}", lines, note),
@@ -1018,7 +1046,9 @@ def on_callback(cq):
     kind = data[0]
     try:
         if kind == "mode":  # 💬 чат / 📱 приложение
-            if data[1] in MODES:
+            if data[1] in MODES and not can_set_mode(uid):  # режим общий на весь бот — меняет владелец
+                note = "Режим меняет владелец"
+            elif data[1] in MODES:
                 set_mode(data[1])
                 show(chat, mid, card("✅", "Режим: " + MODES[data[1]], note="Сменить — /mode или кнопка «⚙️ Режим»"))
                 welcome(chat, cq["from"].get("first_name"), today)
@@ -1177,7 +1207,10 @@ def _export(chat, uid):
 
 def update(chat):
     def git(*a):
-        return subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True)
+        try:
+            return subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(a, 1, "", "git не ответил за 2 минуты")
     res = git("pull", "--ff-only", "origin", "main")
     ok = res.returncode == 0
     send(chat, card("🔄", "Обновление" if ok else "Не обновилось", esc((res.stdout + res.stderr).strip()[-1500:] or "ok"),
@@ -1260,31 +1293,55 @@ def in_window(now, hhmm, minutes):
     return start <= now < start + datetime.timedelta(minutes=minutes)
 
 
+def transient(e):
+    """Стоит ли повторить отправку: сеть, 429 и 5xx — да; 400/403 (заблокировал бота, плохая разметка) — нет."""
+    return not (isinstance(e, TgError) and e.code in (400, 401, 403, 404))
+
+
 def tick():
     for u in db.users():
-        uid = u["id"]
-        if not allowed(uid):
-            continue
-        now = user_now(u)
-        day = now.date()
-        iso = day.isoformat()
-        # напоминания (на сегодня и на завтра — если напоминание «за час» переходит через полночь)
-        for d in (day, day + datetime.timedelta(days=1)):
-            for t in db.day(uid, d):
-                if t["done"] or not t["time"] or t["remind"] < 0:
-                    continue
-                h, m = map(int, t["time"].split(":"))
-                at = now.replace(year=d.year, month=d.month, day=d.day, hour=h, minute=m, second=0, microsecond=0)
-                fire = at - datetime.timedelta(minutes=t["remind"])
-                if fire <= now < fire + datetime.timedelta(minutes=10) and db.mark_sent(f"r:{t['id']}:{d}:{t['time']}:{t['remind']}"):
-                    when = "Сейчас" if t["remind"] == 0 else f"Через {t['remind']} мин"
-                    note = esc(" ".join(t["note"].split())[:200]) if t["note"] else None
+        try:
+            tick_user(u)
+        except Exception as e:  # у одного пользователя сбой (закрыл бота, плохой пояс) — остальные не страдают
+            print("tick", u.get("id"), e)
+            traceback.print_exc()
+
+
+def tick_user(u):
+    uid = u["id"]
+    if not allowed(uid):
+        return
+    now = user_now(u)
+    day = now.date()
+    iso = day.isoformat()
+    # напоминания (на сегодня и на завтра — если напоминание «за час» переходит через полночь)
+    for d in (day, day + datetime.timedelta(days=1)):
+        for t in db.day(uid, d):
+            if t["done"] or not t["time"] or t["remind"] < 0:
+                continue
+            h, m = map(int, t["time"].split(":"))
+            at = now.replace(year=d.year, month=d.month, day=d.day, hour=h, minute=m, second=0, microsecond=0)
+            fire = at - datetime.timedelta(minutes=t["remind"])
+            key = f"r:{t['id']}:{d}:{t['time']}:{t['remind']}"
+            if fire <= now < fire + datetime.timedelta(minutes=10) and db.mark_sent(key):
+                when = "Сейчас" if t["remind"] == 0 else f"Через {t['remind']} мин"
+                note = esc(" ".join(t["note"].split())[:200]) if t["note"] else None
+                try:
                     send(uid, card("⏰", f"{when} · {t['time']}", esc(t["title"]), note),
                          [[btn("✅ Сделано", f"r|{t['id']}|{d.isoformat()}", "success")]])
-        if in_window(now, u["morning"], 180) and db.mark_sent(f"m:{uid}:{iso}"):
-            morning(uid, uid, now)
-        if in_window(now, u["evening"], 120) and db.mark_sent(f"e:{uid}:{iso}"):
-            evening(uid, uid, now)
+                except Exception as e:
+                    print("reminder:", e)
+                    if transient(e):  # сеть/лимит — следующий проход (через 20 с) попробует снова
+                        db.unmark_sent(key)
+    for kind, hhmm, minutes, fn in (("m", u["morning"], 180, morning), ("e", u["evening"], 120, evening)):
+        key = f"{kind}:{uid}:{iso}"
+        if in_window(now, hhmm, minutes) and db.mark_sent(key):
+            try:
+                fn(uid, uid, now)
+            except Exception as e:
+                print("digest:", kind, e)
+                if transient(e):
+                    db.unmark_sent(key)
 
 
 def scheduler():
@@ -1294,6 +1351,7 @@ def scheduler():
             tick()
             if last_backup != datetime.date.today():
                 db.backup(os.path.join(DATA, "backups"))
+                db.prune_sent(60)  # старые отметки «уже отправлено» не копим вечно
                 last_backup = datetime.date.today()
         except Exception as e:
             print("scheduler:", e)
@@ -1306,6 +1364,8 @@ def scheduler():
 def asset_version():
     h = hashlib.sha1()
     for f in sorted(os.listdir(WEB)):
+        if not os.path.isfile(os.path.join(WEB, f)):
+            continue
         with open(os.path.join(WEB, f), "rb") as fh:
             h.update(fh.read())
     return h.hexdigest()[:10]
@@ -1318,8 +1378,13 @@ def view(uid, kind, obj):
     return obj
 
 
+BODY_LIMIT = 1_000_000          # обычные запросы — до 1 МБ
+BODY_LIMIT_SUPPORT = 16_000_000  # «🛠 Поддержка» со скриншотом (до 10 МБ картинки в base64)
+
+
 class Web(BaseHTTPRequestHandler):
     server_version = "Ritm/1"
+    timeout = 30  # зависшее соединение не держит поток вечно
 
     def log_message(self, fmt, *args):  # без шума в логах
         pass
@@ -1342,6 +1407,8 @@ class Web(BaseHTTPRequestHandler):
         if path == "/health":
             return self.reply(200, "ok", "text/plain")
         if path.startswith("/api/"):
+            if path != "/api/all":  # остальное меняет данные — только POST
+                return self.reply(405, {"error": "Только POST"})
             return self.api(path, {})
         if path in ("/", "/index.html"):
             with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
@@ -1361,18 +1428,30 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}") if n else {}
-        except ValueError:
-            return self.reply(400, {"error": "bad json"})
+            limit = BODY_LIMIT_SUPPORT if path == "/api/support" else BODY_LIMIT
+            if n > limit:
+                left = min(n, 32_000_000)  # тело дочитываем и выбрасываем — иначе клиент увидит обрыв вместо ответа
+                while left > 0:
+                    chunk = self.rfile.read(min(left, 65536))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+                self.close_connection = True
+                return self.reply(413, {"error": "Слишком большой запрос"})
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+        except (ValueError, OSError):
+            return self.reply(400, {"error": "Не разобрал запрос"})
         if not isinstance(body, dict):
-            return self.reply(400, {"error": "bad json"})
+            return self.reply(400, {"error": "Не разобрал запрос"})
         self.api(path, body)
 
     def api(self, path, body):
         user = check_init_data(self.headers.get("X-Init-Data") or "")
         if not user:
             return self.reply(401, {"error": "Открой планер через Telegram"})
-        uid = user["id"]
+        uid = user.get("id") if isinstance(user, dict) else None
+        if not isinstance(uid, int):
+            return self.reply(401, {"error": "Открой планер через Telegram"})
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный планер"})
         db.user(uid, user.get("first_name"))
@@ -1380,11 +1459,20 @@ class Web(BaseHTTPRequestHandler):
             self.reply(200, route(uid, path, body))
         except PermissionError as e:
             self.reply(403, {"error": str(e)})
-        except (ValueError, KeyError, TypeError) as e:  # TypeError — поле не того типа ({"id": null}, "date": 5)
-            self.reply(400, {"error": str(e).strip("'")})
+        except (ValueError, KeyError, TypeError) as e:
+            self.reply(400, {"error": human_error(e)})
         except Exception:
             traceback.print_exc()  # подробности — в pm2 logs, человеку — понятное
             self.reply(500, {"error": "Сервер споткнулся — попробуй ещё раз через минуту"})
+
+
+def human_error(e):
+    """Текст ошибки запроса для человека: без «'id'», «invalid literal…» и прочего питоновского."""
+    msg = str(e).strip("'\"")
+    if isinstance(e, TypeError) or re.fullmatch(r"\w+", msg) or re.search(
+            r"invalid literal|isoformat|unpack|NoneType|not supported|object", msg):
+        return "Неверные данные запроса — обнови приложение и попробуй ещё раз"
+    return msg[:200] or "Неверные данные запроса"
 
 
 def route(uid, path, b):
@@ -1396,12 +1484,14 @@ def route(uid, path, b):
         return data
     if path == "/api/mode":  # «💬 Перейти в чат» из приложения (или обратно): в чат сразу приходит главное меню
         m = str(b.get("mode") or "")
+        if not can_set_mode(uid):  # режим общий на весь бот — менять его может только владелец
+            raise PermissionError("Режим меняет владелец")
         set_mode(m)
         if m == "chat":
             welcome(uid, db.user(uid).get("name"), today_of(uid))
         return {"mode": m}
     if path == "/api/task":
-        t = db.save_task(uid, b)
+        t = db.save_task(uid, b, today_of(uid))
         return {"task": t, "goals": [view(uid, "goal", g) for g in db.goals(uid)]}
     if path == "/api/task/delete":
         db.delete_task(uid, int(b["id"]), b.get("date"))
@@ -1410,7 +1500,7 @@ def route(uid, path, b):
         done = db.toggle(uid, int(b["id"]), b.get("date"), b.get("done"))
         return {"done": done, "task": db.task(uid, int(b["id"])), "goals": [view(uid, "goal", g) for g in db.goals(uid)]}
     if path == "/api/goal":
-        return {"goal": view(uid, "goal", db.save_goal(uid, b))}
+        return {"goal": view(uid, "goal", db.save_goal(uid, b, today_of(uid)))}
     if path == "/api/goal/delete":
         return {"ok": db.delete_goal(uid, int(b["id"]))}
     if path == "/api/note":
@@ -1511,6 +1601,7 @@ def caddyfile(ip):
         "\tadmin off\n"
         "}\n"
         f"https://{host} {{\n"
+        "\tencode zstd gzip\n"
         f"\treverse_proxy 127.0.0.1:{PORT}\n"
         "}\n"
         f"https://{ip} {{\n"
@@ -1519,6 +1610,7 @@ def caddyfile(ip):
         "\t\t\tprofile shortlived\n"
         "\t\t}\n"
         "\t}\n"
+        "\tencode zstd gzip\n"
         f"\treverse_proxy 127.0.0.1:{PORT}\n"
         "}\n"
         # бот-тренер «Форма» (coach/) на этом же сервере: порт 443 один, поэтому его адрес держит этот Caddy
@@ -1586,28 +1678,45 @@ def start_caddy(binary, conf_path):
     return proc
 
 
+def setup_caddy():
+    """Узнаёт IP, пишет Caddyfile, запускает Caddy -> (процесс, адреса, путь к бинарю, путь к конфигу)."""
+    global https_note
+    ip = server_ip()
+    if not ip:
+        raise RuntimeError("не узнал IP сервера")
+    conf, cands = caddyfile(ip)
+    os.makedirs(CADDY_DIR, exist_ok=True)
+    conf_path = os.path.join(CADDY_DIR, "Caddyfile")
+    tmp = conf_path + ".new"
+    with open(tmp, "w") as f:
+        f.write(conf)
+    os.replace(tmp, conf_path)  # конфиг пишем целиком или не пишем — Caddy не прочитает половину файла
+    binary = caddy_bin()
+    proc = start_caddy(binary, conf_path)
+    https_note = "Caddy получает сертификат"
+    return proc, cands, binary, conf_path
+
+
 def https():
     global https_note
-    proc = cands = None
+    proc = cands = binary = conf_path = None
     try:
-        ip = server_ip()
-        if not ip:
-            raise RuntimeError("не узнал IP сервера")
-        conf, cands = caddyfile(ip)
-        os.makedirs(CADDY_DIR, exist_ok=True)
-        conf_path = os.path.join(CADDY_DIR, "Caddyfile")
-        with open(conf_path, "w") as f:
-            f.write(conf)
-        binary = caddy_bin()
-        proc = start_caddy(binary, conf_path)
-        https_note = "Caddy получает сертификат"
+        proc, cands, binary, conf_path = setup_caddy()
     except Exception as e:
         https_note = f"Caddy не запустился: {e}"
         print(https_note)
     fallback = False
     started = time.time()
+    last_try = time.time()
     misses = 0  # адрес меняем только после трёх неудачных проверок подряд, а не от одного сбоя
     while True:
+        if not proc and time.time() - last_try > 60:  # IP не узнали / Caddy не скачался — пробуем снова, а не навсегда сдаёмся
+            last_try = time.time()
+            try:
+                proc, cands, binary, conf_path = setup_caddy()
+            except Exception as e:
+                https_note = f"Caddy не запустился: {e}"
+                print(https_note)
         if proc and proc.poll() is not None:  # Caddy упал (например, порт 443 занят) — пробуем снова
             print("Caddy остановился, перезапускаю")
             https_note = "Caddy перезапускается (занят порт 80/443?)"

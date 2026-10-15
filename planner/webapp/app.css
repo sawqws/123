@@ -321,3 +321,12 @@ body.kb .tabbar { transform: translate(-50%, 160%); opacity: 0; }
 
 /* настройки: «💬 Перейти в чат» под поддержкой */
 .mode-list { margin-top: 10px; }
+
+/* ---------- iPad и широкие окна: ряды-«ленты» переносятся, а не обрезаются у края ---------- */
+@media (min-width: 600px) {
+  .goal-chips { flex-wrap: wrap; overflow: visible; margin: 0; padding: 2px 0 10px; }
+  .gchip { width: calc((100% - 20px) / 3); }
+  .gchip.add { width: calc((100% - 20px) / 3); }
+  .sheet .chips { flex-wrap: wrap; overflow: visible; margin: 0; padding: 2px 0; }
+  .chip { max-width: 100%; }
+}
