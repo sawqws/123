@@ -55,7 +55,16 @@ const { open, close, api, download, loadTask, htmlToText, images, TMP, EDU } = r
         });
       }
       const opts = q.options || q.answers || q.variants;
-      if (Array.isArray(opts)) opts.forEach((o, k) => console.log(`  вариант ${k + 1}: ${htmlToText(o.text || (o.description && o.description.text) || (o.header && o.header.htmlText) || JSON.stringify(o))}`));
+      if (Array.isArray(opts)) for (const [k, o] of opts.entries()) {
+        const im = o.description && o.description.image && o.description.image.location;
+        const txt = htmlToText(o.text || (o.description && o.description.text) || (o.header && o.header.htmlText) || '');
+        // Вариант-картинка без текста: сохраняем, в answers.json для него — uuid.
+        if (im && !txt) {
+          const f = path.join(dir, `opt${q._n}_${k + 1}.png`);
+          await download(s.page, im, f);
+          console.log(`  вариант ${k + 1} [${o.uuid}]: картинка ${f}`);
+        } else console.log(`  вариант ${k + 1}: ${txt || JSON.stringify(o)}`);
+      }
       const rest = Object.keys(q).filter(k => !['header', 'uuid', 'type', 'score', 'caseSensitive', 'text', 'selections', 'penalty', '_n', 'options'].includes(k));
       if (rest.length) console.log('  прочие поля:', JSON.stringify(Object.fromEntries(rest.map(k => [k, q[k]]))).slice(0, 800));
     }
