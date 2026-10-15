@@ -598,6 +598,30 @@ def home(chat, mid=None):
     return show(chat, mid, card("👑 <b>Главный</b>", lines, foot), btns)
 
 
+def full_menu(chat, mid=None):
+    """/1 — полное меню: все действия Главного на одном экране, в любом режиме (чат или приложение)."""
+    rows = apps()
+    sec = secretary_status()
+    down = [a for a in rows or [] if a["status"] != "online"]
+    lines = ["⚠️ pm2 не отвечает" if rows is None else
+             ("🔴 Не работает: " + ", ".join(esc(short(a["label"])) for a in down)) if down else
+             f"🟢 Все боты работают · {len(rows)}",
+             "⚪️ Секретарь не отвечает" if sec is None else
+             "👤 Аккаунт подключён" if sec.get("account") else "👤 Аккаунт не подключён"]
+    btns = [[b(TASK_BTN, "task", "primary")],
+            [b("🤖 Боты", "bots", "danger" if down else None),
+             b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary"),
+             b("🧠 Психолог", "psy")],
+            [b("🛠 Сделать бота", "mk"), b("✏️ Доработать", "fix"), b("📂 Все боты", "all")],
+            [b("⬆️ Обновить всех", "upd"), b("🖥 Сервер", "srv"), b("➕ Поставить", "add")],
+            [b("⏰ Напоминания", "rmd|list"), b("🤖 Claude", "cl"), b("⚙️ Режим", "mode|ask")]]
+    last = [x for x in (studio_button(rows), app_button()) if x]
+    if last:
+        btns.append(last)
+    return show(chat, mid, card("☰ <b>Полное меню</b>", lines, "<i>/1 — открыть снова, /start — короткая главная</i>"),
+                btns)
+
+
 def bots_screen(chat, mid=None):
     rows = apps()
     if rows is None:
@@ -632,16 +656,26 @@ def more(chat, mid):
 
 
 def app_card(chat, mid, name):
-    a = next((x for x in apps() or [] if x["name"] == name), None)
+    """Карточка бота: состояние, перезапуск, логи и «✏️ Доработать» — Claude правит его код (чинит, добавляет функции)."""
+    rows = apps()
+    a = next((x for x in rows or [] if x["name"] == name), None)
     if not a:
         return show(chat, mid, card("🤷 <b>Нет такого бота</b>", [f"{esc(name)} нет в pm2."]), [[b("‹ Назад", "bots")]])
     ok = a["status"] == "online"
-    lines = ["🟢 Работает " + ago(a["uptime"]) if ok else "🔴 Не работает: " + esc(a["status"]),
-             f"• Память {a['mem']} МБ · CPU {a['cpu']}%",
-             f"• Перезапусков: {a['restarts']}"]
-    return show(chat, mid, card(f"<b>{esc(a['label'])}</b>", lines),
-                [[b("🔄 Перезапустить", f"rs|{name}", "primary"), b("📜 Логи", f"lg|{name}")],
-                 [b("‹ Назад", "bots")]])
+    about = (maker.CATALOG.get(name) or ())[5:6]
+    lines = [esc(about[0])] if about else []
+    lines += ["🟢 Работает " + ago(a["uptime"]) if ok else "🔴 Не работает: " + esc(a["status"]),
+              f"• Память {a['mem']} МБ · CPU {a['cpu']}%",
+              f"• Перезапусков: {a['restarts']}"]
+    btns = []
+    if name in dict(maker.targets(rows)):
+        btns.append([b("✏️ Доработать", f"fix|{name}", "primary"), b("➕ Новая функция", f"fix|{name}")])
+    btns += [[b("🔄 Перезапустить", f"rs|{name}", None if btns else "primary"), b("📜 Логи", f"lg|{name}")]]
+    slug = next((s for s, i in maker.made().items() if i.get("pm2") == name), None)
+    btns.append([b("‹ Назад", "bots")] + ([b("🗑 Удалить", f"del?|{slug}", "danger")] if slug else []))
+    return show(chat, mid, card(f"<b>{esc(a['label'])}</b>", lines,
+                                "<i>✏️ Доработать — напиши, что починить, поменять или добавить</i>" if len(btns) > 2 else ""),
+                btns)
 
 
 # ---------- 🧠 Психолог (разбор переписок делает Секретарь через аккаунт Глеба) ----------
@@ -1669,7 +1703,10 @@ def on_message(msg):
         return to_secretary({"message": msg}, chat)
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     wait = setting("wait")
-    if cmd in ("/start", "/bots", "/menu") or text in MENU_TEXTS:
+    if cmd == "/1":
+        setting("wait", None)
+        full_menu(chat)
+    elif cmd in ("/start", "/bots", "/menu") or text in MENU_TEXTS:
         setting("wait", None)
         bots_screen(chat) if cmd == "/bots" else home(chat)
     elif cmd == "/mode":
@@ -1857,6 +1894,9 @@ def callback(chat, mid, uid, data):
     elif data[0] == "bots":
         setting("wait", None)
         bots_screen(chat, mid)
+    elif data[0] == "full":
+        setting("wait", None)
+        full_menu(chat, mid)
     elif data[0] == "mode":  # 💬 чат / 📱 приложение
         setting("wait", None)
         on_mode(chat, mid, arg) if arg in MODES else mode_card(chat, mid)
@@ -1878,6 +1918,7 @@ def callback(chat, mid, uid, data):
         note = "Поднимаю Секретаря…"
         bg(chat, revive, True)
     elif data[0] == "app":
+        setting("wait", None)  # «‹ Отмена» из «Доработать» возвращает сюда
         app_card(chat, mid, arg)
     elif data[0] == "rs" and arg:
         note = "Перезапускаю…"
@@ -1943,7 +1984,7 @@ def callback(chat, mid, uid, data):
     return note
 
 
-COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
+COMMANDS = [("1", "Полное меню"), ("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
             ("bots", "Боты и сервер"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
