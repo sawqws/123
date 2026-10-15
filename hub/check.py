@@ -22,12 +22,17 @@ ui = None
 maker = None
 TEST_TIMEOUT = 420
 CRAWL = dict(depth=3, max=60, wait=6)
-PARALLEL_TESTS = 4
+PARALLEL_TESTS = 3  # у сервера 1 ядро: больше — только толкотня
 PARALLEL_CRAWL = 4
 COMMON = "common"  # общие модули (kit, поддержка, медиа) — проверяются отдельной строкой
 running = threading.Lock()
-TRACE = re.compile(r"^Traceback \(most recent call last\)", re.M)
+TRACE = re.compile(r"^Traceback \(most recent call last\):", re.M)
 EXC = re.compile(r"^\s*([\w.]*(?:Error|Exception|Interrupt|Exit)\b.*)$", re.M)
+# так бот останавливает pm2 (перезапуск, «Обновить всех») — не ошибка
+NOT_BUGS = re.compile(r"^(?:KeyboardInterrupt|SystemExit|asyncio\.exceptions\.CancelledError|concurrent\.futures\._base\.CancelledError)\b")
+TOKEN = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{20,}")
+# тестам не видно секретов: токены ботов и список ботов Студии закрыты пустым файлом (свой mount namespace)
+SECRETS = "/etc/*.env /root/bots/*/.env /root/bots/*/data/*.env /root/bots/registry.json"
 
 
 # ---------- что проверять ----------
@@ -78,6 +83,46 @@ def tests_of(t):
 
 # ---------- части проверки ----------
 
+def mask(text):
+    return TOKEN.sub("‹токен›", text or "")
+
+
+_sandbox = []
+
+
+def sandboxed(cmd):
+    """Команда теста в своём mount namespace, где /etc/*.env и т. п. — пустые: тест не прочитает настоящие токены
+    и не зависит от того, какие боты стоят на сервере. Нет unshare/прав — как есть. Плюс nice: боты важнее."""
+    if not _sandbox:
+        try:
+            ok = subprocess.run(["unshare", "-m", "--propagation", "private", "true"], capture_output=True,
+                                timeout=10).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        _sandbox.append(ok)
+    if not _sandbox[0]:
+        return ["nice", "-n", "10", *cmd]
+    hide = f'for f in {SECRETS}; do [ -f "$f" ] && mount --bind /dev/null "$f"; done; exec nice -n 10 "$@"'
+    return ["unshare", "-m", "--propagation", "private", "sh", "-c", hide, "sh", *cmd]
+
+
+def worktree():
+    """Чистая копия кода (HEAD, с локальными правками «Доработать») — тесты не трогают живые данные ботов
+    (horo/tmp, */data — их в копии нет) и не мешают друг другу. Не вышло — тесты идут в самом репозитории."""
+    path = os.path.join(ui.DATA, "check", "src")
+    ui.sh("git", "-C", ui.REPO, "worktree", "remove", "--force", path, timeout=60)
+    ui.sh("rm", "-rf", path, timeout=60)
+    ui.sh("git", "-C", ui.REPO, "worktree", "prune", timeout=60)
+    code, _ = ui.sh("git", "-C", ui.REPO, "worktree", "add", "--detach", "--force", path, "HEAD", timeout=120)
+    return path if code == 0 and os.path.isdir(path) else None
+
+
+def drop_worktree(path):
+    if path:
+        ui.sh("git", "-C", ui.REPO, "worktree", "remove", "--force", path, timeout=60)
+        ui.sh("git", "-C", ui.REPO, "worktree", "prune", timeout=60)
+
+
 def TEST_ENV():
     """Окружение тестов без токенов и ключей Главного: тест не должен достучаться до настоящего Telegram."""
     keep = ("PATH", "LANG", "LC_ALL", "TZ", "PLAYWRIGHT_BROWSERS_PATH", "NODE_PATH")
@@ -87,7 +132,7 @@ def TEST_ENV():
 def run_test(cwd, cmd):
     """(ok, хвост вывода) одного файла тестов."""
     try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=TEST_TIMEOUT,
+        p = subprocess.run(sandboxed(cmd), cwd=cwd, capture_output=True, text=True, timeout=TEST_TIMEOUT,
                            stdin=subprocess.DEVNULL, env=TEST_ENV())
     except subprocess.TimeoutExpired:
         return False, f"не уложился в {TEST_TIMEOUT // 60} мин"
@@ -103,7 +148,7 @@ def failure(out, limit=500):
     exc = EXC.findall(out)
     msg = (", ".join(dict.fromkeys(heads[:4])) + (": " if heads else "")) + (exc[-1].strip() if exc else
                                                                                out.strip().splitlines()[-1] if out.strip() else "")
-    return msg[:limit]
+    return mask(msg)[:limit]
 
 
 def log_errors(proc, seen):
@@ -122,9 +167,12 @@ def log_errors(proc, seen):
             text = f.read().decode("utf-8", "replace")
     except OSError:
         return 0, ""
-    n = len(TRACE.findall(text))
-    exc = EXC.findall(text) if n else []
-    return n, (exc[-1].strip()[:240] if exc else "")
+    errs = []
+    for block in TRACE.split(text)[1:]:  # каждый Traceback: итог — первая строка без отступа
+        last = next((ln.strip() for ln in block.splitlines() if ln.strip() and not ln[:1].isspace()), "")
+        if not NOT_BUGS.match(last):
+            errs.append(last)
+    return len(errs), mask(errs[-1])[:240] if errs else ""
 
 
 def crawl(username, out_path, on_line=None):
@@ -213,9 +261,14 @@ def check_all(full=False, live=None, now=time.time):
     ui.setting("check_logs", seen)
     ui.setting("check_restarts", restarts)
     # 2. тесты (и общих модулей) параллельно; 3. живой обход — параллельно с ними
+    src = worktree()
+    base = src or ui.REPO
+    for b in bots:
+        if b["cwd"] == ui.REPO:
+            b["cwd"] = base
     jobs = [(b["pm2"], b["cwd"], rel, cmd) for b in bots for rel, cmd in tests_of(b)]
-    common = [(COMMON, ui.REPO, os.path.relpath(p, ui.REPO), ["python3", os.path.relpath(p, ui.REPO)])
-              for p in sorted(glob.glob(os.path.join(ui.REPO, COMMON, "test_*.py")))]
+    common = [(COMMON, base, os.path.relpath(p, base), ["python3", os.path.relpath(p, base)])
+              for p in sorted(glob.glob(os.path.join(base, COMMON, "test_*.py")))]
     if common:
         state[COMMON] = {"pm2": COMMON, "label": "🧱 Общие модули", "problems": [], "tests": [0, 0], "clicks": None}
     jobs += common
@@ -238,6 +291,14 @@ def check_all(full=False, live=None, now=time.time):
                 live.tests_done += 1
         if live:
             live.show()
+
+    def chain(group):  # тесты одной папки делят её файлы — по очереди
+        for j in group:
+            one_test(j)
+
+    groups = {}
+    for j in jobs:
+        groups.setdefault((j[1], os.path.dirname(j[2])), []).append(j)
 
     def one_crawl(b):
         u = b.get("username")
@@ -271,14 +332,17 @@ def check_all(full=False, live=None, now=time.time):
                 crawls.append({**b, "username": names[b["pm2"]]})
         # Главный — последним: его чат с Глебом тот же, где идёт проверка
         crawls.sort(key=lambda b: b["pm2"] == ui.SELF)
-    with ThreadPoolExecutor(PARALLEL_TESTS) as tp, ThreadPoolExecutor(PARALLEL_CRAWL) as cp:
-        futs = [tp.submit(one_test, j) for j in jobs] + [cp.submit(one_crawl, b) for b in crawls]
-        for f in futs:
-            try:
-                f.result()
-            except Exception as e:
-                traceback.print_exc()
-                print("проверка:", e, file=sys.stderr)
+    try:
+        with ThreadPoolExecutor(PARALLEL_TESTS) as tp, ThreadPoolExecutor(PARALLEL_CRAWL) as cp:
+            futs = [tp.submit(chain, g) for g in groups.values()] + [cp.submit(one_crawl, b) for b in crawls]
+            for f in futs:
+                try:
+                    f.result()
+                except Exception as e:
+                    traceback.print_exc()
+                    print("проверка:", e, file=sys.stderr)
+    finally:
+        drop_worktree(src)
     res = {"at": now(), "full": full, "secs": round(now() - t0), "bots": []}
     for s in state.values():
         res["bots"].append({**s, "ok": not s["problems"], "tests": f"{s['tests'][0]}/{s['tests'][1]}"})

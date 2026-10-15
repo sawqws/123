@@ -30,7 +30,8 @@ class CheckTest(Base):
                 f.write(body)
         self.err = os.path.join(self.repo, "coach-err.log")
         with open(self.err, "w") as f:
-            f.write("Traceback (most recent call last):\n  File x\nKeyError: 'sleep'\n")
+            f.write("Traceback (most recent call last):\n  File x\nKeyError: 'sleep'\n"
+                    "Traceback (most recent call last):\n  File y\nKeyboardInterrupt\n")  # перезапуск pm2 — не ошибка
         self.procs = [{"name": n, "pm2_env": {"status": "online", "restart_time": 2, "exec_interpreter": "python3",
                                              "pm_err_log_path": self.err if n == "coach-bot" else ""}}
                       for n in ("horo-bot", "coach-bot", "hub-bot")]
@@ -58,7 +59,7 @@ class CheckTest(Base):
         self.assertFalse(coach["ok"])
         self.assertEqual(coach["tests"], "0/1")
         self.assertTrue(any("нет кнопки «Вода»" in p for p in coach["problems"]), coach["problems"])
-        self.assertTrue(any("KeyError" in p for p in coach["problems"]))
+        self.assertIn("в логе 1 ошибок, последняя: KeyError: 'sleep'", coach["problems"])
         # вторая проверка: старые ошибки лога не повторяются, новый перезапуск — виден
         self.procs[1]["pm2_env"]["restart_time"] = 5
         coach = {b["pm2"]: b for b in check.check_all()["bots"]}["coach-bot"]
@@ -76,6 +77,16 @@ class CheckTest(Base):
             check.fix_one(U, "horo-bot")  # здоров — Claude не зовём
         self.assertEqual([p for p, _ in fixes], ["coach-bot"])
         self.assertIn("перезапускался", fixes[0][1])
+
+    def test_tokens_hidden_and_sandbox(self):
+        out = "FAIL: test_apply\nAssertionError: ['8649915091:AAG4oKDNAohsmZwxiSPzUG_yj6F6pFabc'] != []"
+        self.assertNotIn("AAG4", check.failure(out))
+        self.assertIn("‹токен›", check.failure(out))
+        cmd = check.sandboxed(["python3", "x.py"])
+        self.assertEqual(cmd[-2:], ["python3", "x.py"])
+        self.assertIn("nice", " ".join(cmd))
+        if cmd[0] == "unshare":
+            self.assertIn("/etc/*.env", cmd[6])
 
     def test_full_crawls_every_bot_hub_last(self):
         seen = []
