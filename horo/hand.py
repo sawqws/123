@@ -178,8 +178,9 @@ if os.path.exists(_lp):
 # к одной высоте по классу буквы, стоят ровно на строке и обведены одним пером одной толщины
 # (Глеб 15.10: «буквы разного размера и как будто криво вырезаны»).
 NORM = {}
-NORM_GAP = 0.2     # промежуток между буквами, в высотах строчной
-NORM_SPACE = 0.75  # пробел
+NORM_GAP = 0.16    # просвет между буквами (от края штриха до края штриха), в высотах строчной — везде одинаковый
+NORM_SPACE = 0.6   # просвет между словами
+PROFILE_Y = np.linspace(0.1, 1.4, 14)   # уровни, по которым меряем просвет (как кернинг у шрифта); хвосты вниз не считаем
 NORM_PEN = 0.17    # толщина пера, в высотах строчной (как в его записях)
 _np_ = os.path.join(_here, 'fonts', 'gleb_norm.npz')
 if os.path.exists(_np_):
@@ -191,7 +192,14 @@ if os.path.exists(_np_):
         _cut = np.nonzero(np.isnan(_flat[:, 0]))[0]
         _parts = [p for p in np.split(_flat, _cut) if len(p)]
         _parts = [p[~np.isnan(p[:, 0])] for p in _parts]
-        NORM[chr(int(_k))] = ([p for p in _parts if len(p)], float(_z[_k + 'w']))
+        _st = [p for p in _parts if len(p)]
+        _P = np.concatenate(_st)
+        _lp, _rp = [], []   # профиль буквы: левый и правый край штриха на уровнях полосы строчной
+        for _y in PROFILE_Y:
+            _r = _P[np.abs(_P[:, 1] - _y) < 0.07]
+            _lp.append(_r[:, 0].min() if len(_r) else np.nan)
+            _rp.append(_r[:, 0].max() if len(_r) else np.nan)
+        NORM[chr(int(_k))] = (_st, float(_z[_k + 'w']), np.array(_lp), np.array(_rp))
 
 BOLD = 0.2   # толщина его пера в записях — в высотах строчной (на листе алфавита он писал тоньше, ~0.11)
 _bolded = {}
@@ -327,20 +335,41 @@ class Hand:
         out, x = [], 0.0
         live = False
         norm = self.exact and bool(NORM)
+        prev = None   # предыдущая буква ровной азбуки: (x, масштаб, правый профиль, был ли пробел)
         for ch in s:
             if ch == ' ':
+                if norm and prev is not None:
+                    prev = prev[:3] + (True,)
+                    continue
                 x += xh * ((NORM_SPACE if norm else 0.7) if self.exact else random.uniform(0.55, 0.85)); continue
             sup0 = ch in '²³⁴⁵'
             nc = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '—': '-', 'ё': 'е', '«': '', '»': ''}.get(ch, ch)
             if norm and nc == '':
                 continue
             if norm and nc in NORM:   # его буква из ровной азбуки: один размер, ровно на строке, одно перо
-                st, w = NORM[nc]
+                st, w, lp, rp = NORM[nc]
                 kk = xh * (0.68 if sup0 else 1.0)
                 up = xh * 0.8 if sup0 else 0.0
-                out.append((nc, x, up, kk, dict(norm=st)))
-                x += w * kk + xh * NORM_GAP * (0.5 if sup0 else 1.0)
+                pen = NORM_PEN * xh
+                if prev is None:   # первая буква: хвост «у» не вылезает левее начала строки
+                    gx = x - min(0.0, min(float(q[:, 0].min()) for q in st)) * kk
+                else:   # просвет между краями штрихов одинаковый — по профилю, как кернинг у шрифта
+                    px_, pk, prp, sp = prev
+                    gap = (NORM_SPACE if sp else NORM_GAP) * xh + pen
+                    both = ~np.isnan(prp) & ~np.isnan(lp) & (not sup0) & (pk == kk)
+                    if nc in ',.;:!?)':   # знаки — сразу за буквой, не подныривая под неё
+                        gx = px_ + np.nanmax(prp) * pk + 0.08 * xh + pen - np.nanmin(lp) * kk
+                    elif sp:   # пробел — от края до края слов, одинаковый
+                        gx = px_ + np.nanmax(prp) * pk + gap - np.nanmin(lp) * kk
+                    elif both.any():
+                        gx = max(px_ + prp[both] * pk + gap - lp[both] * kk)
+                    else:
+                        gx = px_ + np.nanmax(prp) * pk + gap - np.nanmin(lp) * kk
+                out.append((nc, gx, up, kk, dict(norm=st)))
+                prev = (gx, kk, rp, False)
+                x = gx + w * kk
                 continue
+            prev = None
             sup = ch in '²³⁴⁵'
             dot = ch == '·' and '·' not in BANK and '.' in BANK  # точка умножения — его точка, поднятая к середине
             c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '·': '.' if dot else '·'}.get(ch, ch)
@@ -507,9 +536,14 @@ class Hand:
     # ---------- обводка ----------
     def circle(self, cx, cy, rx, ry):
         """Небрежный овал одним движением, конец заходит за начало."""
-        if self.exact:   # Apple Pencil: ровный овал, начало сверху слева, конец чуть заходит за начало
-            pts = [(cx + rx * math.cos(a), cy + ry * math.sin(a))
-                   for a in (math.radians(-120) - t * 1.07 * 2 * math.pi for t in np.linspace(0, 1, 160))]
+        if self.exact:   # овал одним движением, как стилусом: чуть наклонён, к концу шире, конец заходит за начало
+            rot = -0.18
+            pts = []
+            for t in np.linspace(0, 1, 160):
+                a = math.radians(-110) - t * 1.12 * 2 * math.pi
+                k = 1 + 0.07 * t + 0.03 * math.sin(3 * a)
+                ex, ey = rx * k * math.cos(a), ry * k * math.sin(a)
+                pts.append((cx + ex * math.cos(rot) - ey * math.sin(rot), cy + ex * math.sin(rot) + ey * math.cos(rot)))
             self.stroke(pts)
             return
         st = random.uniform(0, 2 * math.pi); turn = random.uniform(1.08, 1.25)

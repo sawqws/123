@@ -106,43 +106,63 @@ def strokes(mask, px, k, keep_small=False):
     return [p for p, l in zip(out, ln) if l >= 0.06 * tot] or out
 
 
+# центральная линия пера (толщина пера добавит по ~0.085 сверху и снизу): низ, верх строчной, выносные, заглавные
+LO, XTOP = 0.08, 0.92
+TOPS = {'asc': 1.3, 't': 1.15, 'cap': 1.4, 'digit': 1.35}
+WIDE = set('жмшщюыцтmwMWЖШЩЮ')    # широкие по природе — ширину не трогаем
+NARROW = set("ilj1!.,:;'|()")
+XW = 0.72                          # обычная ширина строчной (по основной части), к ней мягко подтягиваем
+
+
 def glyph(ch, st):
     b = binary_for(ch, st)
     if b is None:
         return None
     mask, left, top, px = b
-    r0, r1 = body(mask, ch)
-    t_body = top - r0 * px                  # верх основной части над строкой
-    b_body = top - (r1 + 1) * px            # низ
-    c = cls(ch)
-    if c == 'desc':
-        h = max(t_body, 0.2)
-        scale = TARGET['x'] / h
-        shift = 0.0                          # строку не трогаем: хвост ниже строки — как у него
-    else:
-        h = max(t_body - b_body, 0.2)
-        scale = TARGET.get(ch, TARGET[c]) / h
-        shift = b_body                       # ровно на строку
     k = 4                                    # увеличение маски перед скелетом
     out = []
     for p in strokes(mask, px, k, ch in DOTTED):
         x = (p[:, 0] / k) * px + left
         y = top - (p[:, 1] / k) * px
-        out.append(np.stack([x, (y - shift) * scale], 1))
+        out.append(np.stack([x, y], 1))
     if not out:
         return None
-    # ширина — по основной части буквы (полоса строчной у строчных, высота заглавной у заглавных):
-    # хвост «у» влево, черта «б» вправо, перекладина «П» заходят к соседям, как у него, и не раздвигают буквы
+    # мерим по самой букве (без точки над i и дужки й)
+    ln = [np.hypot(*np.diff(o, axis=0).T).sum() if len(o) > 1 else 0 for o in out]
+    main = np.concatenate([o for o, l in zip(out, ln) if l >= 0.3 * max(ln)])
+    c = cls(ch)
+    ys = main[:, 1]
+    if c == 'desc':
+        hi = np.percentile(ys[ys > 0.1 * ys.max()], 98)
+        lo = 0.0                              # строка с листа; хвост уходит ниже, как у него
+    elif c == 'x':
+        hi, lo = np.percentile(ys, 98), np.percentile(ys, 2)
+    else:
+        hi, lo = ys.max(), np.percentile(ys, 2)
+    T = TOPS.get(c, XTOP)
+    sc = (T - LO) / max(hi - lo, 1e-3)
+    out = [np.stack([o[:, 0] * sc, LO + (o[:, 1] - lo) * sc], 1) for o in out]
+    # ширина — по основной части буквы (полоса строчной; у заглавных и цифр — их высота):
+    # хвост «у» влево, черта «б» вправо заходят к соседям и не раздвигают буквы
     allp = np.concatenate(out)
-    hi = 1.5 if c in ('cap', 'digit') else 0.95
-    band = allp[(allp[:, 1] > 0.05) & (allp[:, 1] < hi)]
+    top_band = T if c in ('cap', 'digit') else XTOP
+    band = allp[(allp[:, 1] > LO + 0.02) & (allp[:, 1] < top_band)]
     if len(band) < 5:
         band = allp
     x0, x1 = band[:, 0].min(), band[:, 0].max()
-    out = [np.stack([(o[:, 0] - x0) * scale, o[:, 1]], 1).astype(np.float32) for o in out]
-    w = float((x1 - x0) * scale)
-    # точка над i/j — маленький штрих: оставляем как есть
-    return out, w
+    sx = 1.0
+    if ch.islower() and ch not in WIDE and ch not in NARROW and x1 - x0 > 0.15:
+        sx = float(np.clip((XW / (x1 - x0)) ** 0.5, 0.85, 1.25))   # слишком узкие и слишком широкие — ближе к обычной
+    out = [np.stack([(o[:, 0] - x0) * sx, o[:, 1]], 1).astype(np.float32) for o in out]
+    if ch in 'ij':   # точка — его точка, но ровно над палочкой, на одной высоте у всех i/j
+        mx = max(len(o) for o in out)
+        stem = next(o for o in out if len(o) == mx)
+        tx = float(stem[np.argmax(stem[:, 1]), 0])
+        out = [stem, np.array([[tx, 1.3], [tx + 0.01, 1.31]], np.float32)]
+    if ch in 'йЙ':   # дужка — чуть выше, чтобы в мелком тексте «й» не сливалась с «и»
+        mx = max(len(o) for o in out)
+        out = [o if len(o) == mx else o + np.array([0, 0.12], np.float32) for o in out]
+    return out, float((x1 - x0) * sx)
 
 
 def pick(ch):
