@@ -114,6 +114,7 @@ BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
 BTN_PREP = "📖 Подготовка"
 BTN_EXAMS = "🎯 Подтверждения"
+BTN_WAIT = "⏳ Ожидание"
 BTN_MODE = "⚙️ Режим"
 BTN_DELAY_ON, BTN_DELAY_OFF = "⏳ Задержка: вкл", "⏳ Задержка: выкл"  # старые надписи (клавиатура обновится сама)
 SEND_CHOICES = [("0", "сразу"), ("2-5", "2–5 мин"), ("4-12", "4–12 мин"), ("15-40", "15–40 мин")]  # отправка учителю
@@ -123,7 +124,7 @@ ALIASES = {  # старые надписи кнопок (клавиатура у
     "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
 BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
-           BTN_APP, BTN_MORE, BTN_PREP, BTN_EXAMS, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF, *SEND_LABELS}
+           BTN_APP, BTN_MORE, BTN_PREP, BTN_EXAMS, BTN_WAIT, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF, *SEND_LABELS}
 
 
 def menu_kb():
@@ -142,7 +143,7 @@ def menu_kb():
         rows = [
             [b(BTN_DO, "primary"), b(BTN_SHOW)],
             [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
-            [b(BTN_EXAMS), b(BTN_PREP)],  # подтверждения и контрольные 2.0 / 3.0 — отдельной кнопкой (Глеб, 15.10)
+            [b(BTN_EXAMS), b(BTN_WAIT), b(BTN_PREP)],  # подтверждения 2.0/3.0 и что скоро уйдёт учителю (Глеб, 15.10)
             [b(BTN_ALL), b(BTN_HAND)],  # почерк — на виду (Глеб искал его, когда он был только в «Ещё»)
             [b(BTN_MODE), b(btn_delay()), b(BTN_MORE)],  # задержка — отдельной кнопкой, не только /delay
         ]
@@ -161,6 +162,7 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Оценки</b> — и сколько до следующей\n"
     "<b>Учителя</b> — комментарии и доработки\n"
     "<b>Автотесты</b> — сдам все новые тесты пачкой\n"
+    "<b>Ожидание</b> — что скоро уйдёт учителю (во сколько), черновики и задания в работе\n"
     "<b>Подтверждения</b> — все подтверждения и контрольные 2.0 и 3.0: что сдано, что на доработке\n"
     "<b>Подготовка</b> — к проверочной по тому, что прошли: за 1, 5 или 10 минут (или по своему ТЗ)\n"
     "<b>Голосовое</b> — как текст\n"
@@ -173,6 +175,7 @@ HELP = (  # HTML: отправляется с raw_html=True
 )
 COMMANDS = [  # меню команд у поля ввода
     ("start", "Главное меню"), ("exams", "Подтверждения и контрольные 2.0 / 3.0"),
+    ("wait", "Что скоро отправится учителю"),
     ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
     ("site", "Сайт HDP в браузере"),
     ("mode", "Чат или приложение"),
@@ -1455,6 +1458,68 @@ def due_sends(now=None):
         submit_draft(owner(), d["task"])
 
 
+# ---------- ⏳ Ожидание: что скоро уйдёт учителю ----------
+# Глеб, 15.10: «лист ожидания — что скоро отправится». Отправки по таймеру (во сколько, ⚡ Сейчас / ✖ Отменить),
+# черновики, которые ждут его «Отправить», то, что отправляется прямо сейчас, и задания в работе / в очереди.
+
+def short(text, n=14):
+    text = (text or "Задание").strip()
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def waiting(now=None):
+    """(по таймеру — по времени, ждут «Отправить», отправляются сейчас, решаются/в очереди)."""
+    now = now or time.time()
+    ds = all_drafts()
+    with sending_lock:
+        sending = set(SENDING)
+    with running_lock:
+        work = sorted(running)
+    timed = sorted((d for d in ds if d.get("send_at") and d["task"] not in sending), key=lambda d: d["send_at"])
+    held = [d for d in ds if not d.get("send_at") and d["task"] not in sending]
+    return timed, held, [d for d in ds if d["task"] in sending], work
+
+
+def waiting_card(now=None):
+    """HTML и кнопки «⏳ Ожидание»."""
+    now = now or time.time()
+    timed, held, sending, work = waiting(now)
+    today = datetime.datetime.fromtimestamp(now, MSK).date()
+    parts, rows = ["⏳ <b>Ожидание</b>"], []
+    if timed:
+        lines = []
+        for d in timed:
+            when = datetime.datetime.fromtimestamp(d["send_at"], MSK)
+            left = max(0, int(d["send_at"] - now))
+            soon = f"через {left // 60} мин" if left < 3600 else f"через {left // 3600} ч {left % 3600 // 60} мин"
+            day = "" if when.date() == today else " завтра"
+            lines.append(f"📬 {esc(d['title'])} — <b>{day.strip() + ' ' if day else ''}в {when:%H:%M}</b> <i>({soon})</i>")
+            rows.append([(f"⚡ {short(d['title'])}", f"now:{d['task']}"), ("✖ Отменить", f"hold:{d['task']}")])
+        parts.append("<b>Отправлю учителю</b>\n<blockquote>" + "\n".join(lines) + "</blockquote>")
+    if sending:
+        parts.append("<b>Отправляю сейчас</b>\n<blockquote>" + "\n".join(f"📤 {esc(d['title'])}" for d in sending)
+                     + "</blockquote>")
+    if held:
+        parts.append("<b>Ждут твоего «Отправить»</b>\n<blockquote>" + "\n".join(f"📄 {esc(d['title'])}" for d in held)
+                     + "</blockquote>")
+        rows += [[(f"✅ {short(d['title'])}", f"send:{d['task']}"), ("✏️ Править", f"ed:{d['task']}")] for d in held[:6]]
+    if work:
+        parts.append("<b>Решаю или в очереди</b>\n<blockquote>" + "\n".join(
+            f"🧠 {esc(drafts.task_info(t)[1] or 'Задание')}" for t in work) + "</blockquote>")
+    if len(parts) == 1:
+        parts.append("<i>Ничего не ждёт: таймеров на отправку нет, черновиков и заданий в работе тоже</i>")
+    rows.append([("🔄 Обновить", "w:upd")])
+    return "\n".join(parts), kb(*rows)
+
+
+def send_waiting(chat, mid=None):
+    text, markup = waiting_card()
+    if mid:
+        edit(chat, mid, text, markup)
+    else:
+        send(chat, text, markup=markup, raw_html=True)
+
+
 def sender_loop():
     while True:
         try:
@@ -1548,6 +1613,10 @@ def on_callback(cq):
         return
     if data.startswith("mode:"):  # 💬 чат / 📱 приложение
         on_mode(chat, mid, cq["id"], data[5:])
+        return
+    if data == "w:upd":  # ⏳ ожидание: обновить на месте
+        quiet("answerCallbackQuery", callback_query_id=cq["id"])
+        send_waiting(chat, mid)
         return
     if data.startswith("ex:"):  # 🎯 подтверждения: ex:2 / ex:3 / ex:all, ex:upd:<то же> — свежие с сайта
         parts = data.split(":")
@@ -1682,7 +1751,7 @@ def more_kb():
         [("❗ Просрочки", "m:late"), ("🛠 Поддержка", "sup|ask")],  # sup|… ловит support.Support
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
         [("❓ Помощь", "m:help"), ("⚙️ Режим", "m:mode")] + app,
-        [(btn_delay(), "m:human")],
+        [(btn_delay(), "m:human"), ("⏳ Ожидание", "w:upd")],
     ]
     return kb(*rows)
 
@@ -2421,6 +2490,10 @@ def handle(msg):
         return
     if text.startswith("/help"):
         send(chat, HELP, menu=True, raw_html=True)
+        return
+    if text.startswith("/wait") or text == BTN_WAIT:
+        mode.pop(chat, None)
+        send_waiting(chat)
         return
     if text.startswith("/exams") or text == BTN_EXAMS:
         mode.pop(chat, None)
