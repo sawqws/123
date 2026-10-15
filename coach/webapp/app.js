@@ -6,6 +6,13 @@
   // (closest('[data-support]') находит body) — создаём кнопку сами и снимаем атрибут.
   Kit.supportFab(); delete document.body.dataset.support;
   const view = $('#view');
+  // Модули (journal.js, plan.js, …) подключаются ДО app.js и кладут функцию в window.FormaModules; app.js вызывает
+  // каждую с объектом F перед стартом. Что модуль может: F.screens[вид] — экран «подробностей» (открыть: F.openScreen(вид, арг)),
+  // F.actions[data-a] — обработчик кнопки, F.views[вкладка] — заменить вкладку, F.slots.<место> — куски HTML, F.onData — после загрузки.
+  const F = window.F = { screens: {}, actions: {}, views: {}, onData: [],
+    slots: { homeTop: [], homeAfterOutlook: [], homeAfterMyDay: [], homeJournal: [], homeAfterDashboard: [],
+      healthTop: [], healthAfterMonitor: [], healthBottom: [], sleep: [], rec: [], strain: [], coachTop: [], plus: [] } };
+  const slot = (name, ...args) => F.slots[name].map(fn => { try { return fn(...args) || ''; } catch (e) { console.error(name, e); return ''; } }).join('');
   const S = { data: null, tab: 'today', dayData: null, range: 30, series: {}, history: null, progress: undefined,
     asking: false, eating: false, briefing: false, progressing: false, photo: false };
 
@@ -195,7 +202,7 @@
   }
   function render(anim) {
     if (!S.data) return;
-    const html = S.screen && S.tab === 'today' ? screenView(S.screen) : { today: todayView, trends: trendsView, food: foodView, coach: coachView }[S.tab]();
+    const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: foodView, coach: coachView }[S.tab])();
     view.removeAttribute('aria-busy');
     view.innerHTML = `<div class="${anim ? 'enter' : ''}">${html}</div>`;
     animate();
@@ -374,6 +381,7 @@
         <div class="pg-t"><b>${esc(dateWord(t.day))}</b><span>${dateLine(t.day)}</span></div>
         <button class="pg" data-a="day" data-v="1" aria-label="Следующий день" ${isToday ? 'disabled' : ''}>${I.next}</button></div>
       <button class="avatar ghost" data-a="summary" data-v="day" aria-label="Сводка и советы">${I.stats}</button></header>`;
+    h += slot('homeTop', t, isToday);
     if (st.n) h += `<div class="streak rise">${I.flame}<b class="num">${st.n}${st.full ? '+' : ''}</b>${plural(st.n, 'день', 'дня', 'дней')} подряд с WHOOP</div>`;
     h += `<section class="dials rise">
         ${dial(sleepP, 'var(--sleep)', sleepV != null ? `<b class="num">${cnt(sleepV)}<small>%</small></b>` : '<b>—</b>', 'Сон', s ? hm(s.hours) : '', 'sleep')}
@@ -389,11 +397,14 @@
       ${isToday ? `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
         <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Узнать у тренера</button></div>` : ''}</section>`;
 
+    h += slot('homeAfterOutlook', t, isToday);
     h += strainCoach(t, isToday);
     h += myDay(t);
+    h += slot('homeAfterMyDay', t, isToday);
     if (isToday) h += sleepPlanner(t);
-    if (isToday) h += `<div class="sec rise">${cap('Мой дневник')}<div class="pair">${waterCard(t.water)}${foodMini(t)}</div></div>`;
+    if (isToday) h += `<div class="sec rise">${cap('Мой дневник')}${slot('homeJournal', t, isToday)}<div class="pair">${waterCard(t.water)}${foodMini(t)}</div></div>`;
     h += dashboard(t);
+    h += slot('homeAfterDashboard', t, isToday);
     h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Оценка и советы</b>
       <span class="muted">день · неделя · месяц · всё время</span></span><span class="chev"></span></button>`;
     if (isToday && d.connected) h += `<p class="foot">${synced} · <button class="link" data-a="sync">Обновить</button></p>`;
@@ -481,9 +492,9 @@
   }
 
   // ---------- экраны подробностей: сон, восстановление, нагрузка ----------
-  function openScreen(kind) {
+  function openScreen(kind, arg) {
     haptic('tap');
-    S.screen = kind; S.scrollY = window.scrollY;
+    S.screen = kind; S.screenArg = arg; S.scrollY = window.scrollY;
     render(true); window.scrollTo(0, 0);
   }
   function closeScreen() {
@@ -501,7 +512,9 @@
 
   function screenView(kind) {
     const d = S.data, t = S.dayData || d.today;
-    return { sleep: sleepScreen, rec: recScreen, strain: strainScreen }[kind](t, d);
+    const own = { sleep: sleepScreen, rec: recScreen, strain: strainScreen }[kind];
+    if (own) return own(t, d) + slot(kind, t, d);
+    return F.screens[kind] ? F.screens[kind](t, d, S.screenArg) : dHead('Нет экрана', '', 'var(--ink)');
   }
 
   // фазы сна: какую долю ночи занял каждый этап (подробной по минутам кривой WHOOP API не отдаёт — только итоги по фазам)
@@ -702,7 +715,9 @@
   function trendsView() {
     const t = S.data.today;
     let h = hero('Здоровье', `${dateWord(t.day)}, ${dateLine(t.day)}`);
+    h += slot('healthTop', t);
     h += monitorCard(t);
+    h += slot('healthAfterMonitor', t);
     h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Оценка недели и месяца</b>
       <span class="muted">цифры против прошлого периода и советы тренера</span></span><span class="chev"></span></button>`;
     const pr = S.progress;
@@ -728,6 +743,7 @@
     h += card('Нагрузка', num(avg(rows, 'strain'), 1), 'в среднем', `<span class="num">${wk} ${plural(wk, 'тренировка', 'тренировки', 'тренировок')}</span>`, bars(rows, 'strain', { max: 21, color: 'var(--strain)' }), 'var(--strain)');
     h += card('ВСР', num(avg(rows, 'hrv')), 'мс', 'выше — лучше', line(rows, 'hrv', 'var(--rec-blue)', avg(rows, 'hrv')));
     h += card('Пульс покоя', num(avg(rows, 'rhr')), 'уд/мин', 'ниже — лучше', line(rows, 'rhr', 'var(--rec-blue)', avg(rows, 'rhr')));
+    h += slot('healthBottom', t, rows);
     return h;
   }
   async function loadSeries(n) {
@@ -913,6 +929,7 @@
       ${row('water', '500', I.drop, 'var(--water)', 'Вода +500 мл', 'бутылка')}
       ${row('tab', 'coach', I.coach, 'var(--teal)', 'Спросить тренера', 'по твоим данным WHOOP')}
       ${row('summary', 'week', I.stats, 'var(--rec-blue)', 'Оценка и советы', 'день · неделя · месяц')}
+      ${slot('plus', row)}
       ${d.connected ? row('sync', '', I.sync, 'var(--hint)', 'Обновить данные WHOOP', d.synced ? `были в ${clock(d.synced)}` : 'загрузить сейчас') : ''}</div>`);
     // действие выполняет общий обработчик кликов (он ниже по всплытию); лист закрываем сразу — иначе он спрячет «Назад» следующего листа
     el.addEventListener('click', ev => { if (ev.target.closest('[data-a]')) el.close(); });
@@ -989,6 +1006,7 @@
     } else if (a === 'copy') {
       try { await navigator.clipboard.writeText(v); haptic('success'); toast('Скопировано', 'ok'); } catch (e) { toast('Выдели и скопируй адрес'); }
     } else if (a === 'open') { if (tg) tg.openLink(v); else window.open(v, '_blank'); }
+    else if (F.actions[a]) F.actions[a](el, v, ev);
     else if (a === 'tochat') {  // режим «💬 чат»: бот запомнит и пришлёт главное меню в чат, приложение закрывается
       try { await busy(el, () => api('/api/mode', { mode: 'chat' })); } catch (e) { fail(e); return; }
       S.data.mode = 'chat';
@@ -1023,7 +1041,8 @@
         <div class="card"><div class="empty"><span class="e">⚠️</span><b>Не загрузилось</b>${esc(e.message)}</div><button class="btn primary" onclick="location.reload()">Повторить</button></div>`;
       return;
     }
-    if (['sleep', 'rec', 'strain'].includes(p)) S.screen = p;
+    if (['sleep', 'rec', 'strain'].includes(p) || F.screens[p]) S.screen = p;
+    F.onData.forEach(fn => { try { fn(S.data); } catch (e) { console.error(e); } });
     render(true);
     if (S.tab === 'trends') { if (!S.series[S.range]) loadSeries(S.range); loadProgress(); }
     if (S.tab === 'coach') loadHistory();
@@ -1034,8 +1053,14 @@
     setInterval(async () => {
       if (document.hidden || document.querySelector('.sheet') || S.asking || S.eating || S.briefing || S.photo || S.dayData) return;
       if (document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName)) return;
-      try { S.data = await api('/api/all'); if (S.tab !== 'coach') render(false); } catch (e) { /* тихо */ }
+      try { S.data = await api('/api/all'); F.onData.forEach(fn => { try { fn(S.data); } catch (e) { console.error(e); } }); if (S.tab !== 'coach' && !S.screen) render(false); } catch (e) { /* тихо */ }
     }, 120000);
   }
+  // всё, чем пользуются модули
+  Object.assign(F, { S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
+    isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
+    dHead, cap, head, hero, chartCard, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
+    summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0 });
+  (window.FormaModules || []).forEach(m => { try { m(F); } catch (e) { console.error('модуль', e); } });
   start();
 })();

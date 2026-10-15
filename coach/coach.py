@@ -48,6 +48,14 @@ import insights  # noqa: E402
 import store  # noqa: E402
 import water  # noqa: E402
 import whoop  # noqa: E402
+# Разделы как в приложении WHOOP — каждый в своём файле f_*.py:
+#   route(app, uid, path, body, today) -> dict | None   (свои /api/…; None — не мой путь)
+#   extra(app, uid, today) -> dict                       (добавка к /api/all в data["ext"][имя])
+#   context_lines(app, uid, today) -> [str]              (строки для Claude: тренер видит и это)
+import f_assess  # noqa: E402  оценки недели и месяца, календарь
+import f_journal  # noqa: E402  дневник: привычки «да/нет» и их влияние на восстановление
+import f_plan  # noqa: E402  мой план: цели недели, планер сна
+FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
@@ -383,7 +391,14 @@ def profile(uid):
 
 def context(uid, day=None):
     day = day or today_of(uid)
-    return insights.text_context(db, uid, day, profile(uid), whoop.body(db, uid))
+    text, t = insights.text_context(db, uid, day, profile(uid), whoop.body(db, uid))
+    extra = []
+    for name, m in FEATURES.items():
+        try:
+            extra += (m.context_lines(sys.modules[__name__], uid, day) if hasattr(m, "context_lines") else [])
+        except Exception:  # раздел сломался — тренер всё равно отвечает
+            traceback.print_exc()
+    return (text + "\n" + "\n".join(extra) if extra else text), t
 
 
 # ---------- WHOOP ----------
@@ -1800,7 +1815,7 @@ def route(uid, path, b):
             "today": day_payload(uid, today), "series": insights.series(db, uid, today, 30),
             "redirect": redirect_url(), "thinking": uid in busy,
             "goals": db.goals(uid), "morning": u["profile"].get("morning") or store.MORNING_DEFAULT,
-            "mode": ui_mode(uid),
+            "mode": ui_mode(uid), "ext": features_extra(uid, today),
         }
     if path == "/api/mode":  # «💬 Перейти в чат» из приложения: режим «чат» и главное меню — в чат
         m = set_mode(uid, str(b.get("mode") or ""))
@@ -1905,7 +1920,24 @@ def route(uid, path, b):
         if not link:
             raise ValueError("сначала ключи WHOOP: напиши боту /connect")
         return {"url": link}
+    for m in FEATURES.values():
+        if hasattr(m, "route"):
+            out = m.route(sys.modules[__name__], uid, path, b, today)
+            if out is not None:
+                return out
     raise KeyError("нет такого метода")
+
+
+def features_extra(uid, today):
+    out = {}
+    for name, m in FEATURES.items():
+        if hasattr(m, "extra"):
+            try:
+                out[name] = m.extra(sys.modules[__name__], uid, today)
+            except Exception:  # один раздел не должен ронять всё приложение
+                traceback.print_exc()
+                out[name] = None
+    return out
 
 
 def serve():
