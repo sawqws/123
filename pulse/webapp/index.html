@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#070708">
+  <title>Пульс</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <link rel="stylesheet" href="kit.css?v={{v}}">
+  <link rel="stylesheet" href="app.css?v={{v}}">
+</head>
+<body data-support="api/support">
+  <main id="app">
+    <header class="hero" id="hero">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><path d="M3 17h6l3-8 5 15 4-11 2 4h6"/></svg>
+      </div>
+      <div class="titles">
+        <h1>Пульс</h1>
+        <div class="sub">Чаты Claude Code</div>
+      </div>
+      <div class="end"><span id="live" class="pill live-pill dot">на связи</span></div>
+    </header>
+    <div id="view">
+      <div class="sum"><div class="sk" style="height:76px"></div><div class="sk" style="height:76px"></div>
+        <div class="sk" style="height:76px"></div></div>
+      <div class="card"><div class="sk" style="height:96px"></div></div>
+      <div class="card"><div class="sk" style="height:96px"></div></div>
+    </div>
+  </main>
+  <nav id="tabs"></nav>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="kit.js?v={{v}}"></script>
+  <script src="app.js?v={{v}}"></script>
+</body>
+</html>
