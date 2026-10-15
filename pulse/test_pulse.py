@@ -130,6 +130,7 @@ class Bot(unittest.TestCase):
     def setUp(self):
         pulse.st.clear()
         pulse.st["owner"] = 42
+        pulse.st["alerts"] = {k: True for k in pulse.ALERTS}  # в тестах уведомлений — включены
         self.sent = []
         self.p = mock.patch.object(pulse, "tg", side_effect=lambda m, **k: self.sent.append((m, k)) or
                                    {"ok": True, "result": {"message_id": 7}})
@@ -177,6 +178,13 @@ class Bot(unittest.TestCase):
         pulse.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
         self.assertIn("% контекста", self.sent[-1][1]["text"])
+
+    def test_quiet_by_default(self):
+        pulse.st.pop("alerts")
+        self.assertFalse(any(pulse.alerts().values()))
+        pulse.ingest(summary())
+        pulse.notify(pulse.ingest(summary("waiting")) + pulse.ingest(summary("question", question="?")))
+        self.assertEqual([m for m, _ in self.sent if m == "sendMessage"], [])
 
     def test_window_learning(self):
         w, sure = pulse.window("claude-opus-5-5", 100_000)
