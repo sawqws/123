@@ -167,7 +167,8 @@ class Bot(unittest.TestCase):
         text = self.sent[-1][1]["text"]
         self.assertNotIn("**", text)
         self.assertIn("<b>бота</b>", text)
-        self.assertIn("👉 <b>Для тебя:</b> нажми /start.", text)
+        self.assertIn("👉 нажми /start.", text)
+        self.assertIn("— готово", text)
         self.assertEqual(pulse.split_reply("a\n\n**Для тебя:** b"), ("a", "b"))
         self.assertEqual(pulse.split_reply("просто ответ"), ("просто ответ", ""))
 
@@ -175,7 +176,7 @@ class Bot(unittest.TestCase):
         pulse.ingest(summary())
         pulse.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
-        self.assertIn("Контекст", self.sent[-1][1]["text"])
+        self.assertIn("% контекста", self.sent[-1][1]["text"])
 
     def test_window_learning(self):
         w, sure = pulse.window("claude-opus-5-5", 100_000)
@@ -206,7 +207,7 @@ class Bot(unittest.TestCase):
         self.assertIn("Бот мониторинга", text)
         self.assertIn("1 из 2", text)
         self.assertIn("⌨️ Тесты", text)
-        self.assertIn("≈75%", text)
+        self.assertIn("🟡 75% контекста", text)
         d = pulse.detail_text(pulse.visible()[0])
         self.assertIn("✅ Репортёр", d)
         self.assertIn("PR #170", d)

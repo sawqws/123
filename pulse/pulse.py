@@ -424,35 +424,52 @@ def first_line(text, n=110):
     return ""
 
 
+def ctx_short(v):
+    """«34% контекста»; от 60% — цветная точка, чтобы заметить."""
+    pct = v["ctx"]["pct"]
+    return ("" if pct < 60 else ctx_dot(pct) + " ") + f"{pct}% контекста"
+
+
+def first_par(text, n=300):
+    """Первый абзац ответа (Markdown) — коротко, для уведомления."""
+    text = str(text or "").strip()
+    par = re.split(r"\n\s*\n", text, 1)[0]
+    if len(par) > n:
+        cut = par.rfind(" ", 0, n)
+        par = par[:cut if cut > n // 2 else n].rstrip(" ,.;:") + "…"
+    return par
+
+
 def block(v, now=None):
-    """Один чат на живой карточке: заголовок со статусом + цитата (контекст, план, что сейчас)."""
+    """Один чат на карточке (вариант 1 «Коротко», Глеб 15.10): заголовок · время, серая строка цифр, одна строка дела."""
     now = now or time.time()
     st_ = v["status"]
-    if st_ in ("working", "question"):
+    if st_ == "working":
         start = (v["turn"] or {}).get("started") or (v["prompt"] or {}).get("at")
-        when = f" · {ago(now - start)}" if start else ""
+        when = ago(now - start) if start else "работает"
+    elif st_ == "question":
+        when = "ждёт ответа"
     elif st_ == "waiting":
-        when = f" · {ago(now - (v['updated'] or now))}"
+        sec = now - (v["updated"] or now)
+        when = "готово только что" if sec < 60 else f"готово {ago(sec)} назад"
+    elif st_ == "offline":
+        when = f"нет связи {ago(now - (v['seen'] or now))}"
     else:
-        when = f" · {ago(now - (v['seen'] or now))}"
-    head = f"{v['emoji']} <b>{esc(clip(v['title'], 48))}</b>\n<i>{v['label']}{when}</i>"
-    lines = [ctx_line(v)]
-    if plan_line(v):
-        lines.append(plan_line(v))
-    if st_ == "question":
-        lines.append(f"❓ {esc(clip(v['question'], 140))}")
+        when = "закрыт"
+    nums = [ctx_short(v)] + ([f"план {v['done']} из {v['total']}"] if v["total"] else [])
+    out = [f"{v['emoji']} <b>{esc(clip(v['title'], 44))}</b> · {when}", f"<i>{' · '.join(nums)}</i>"]
+    if st_ == "question" and v["question"]:
+        out.append(esc(clip(v["question"], 90)))
     elif st_ == "working":
         cur = current_task(v)
-        if cur:
-            lines.append(f"▸ {esc(clip(cur, 70))}")
-        if v["action"]:
-            lines.append(esc(clip(v["action"], 70)))
-    else:
-        main, you = split_reply(v["reply"])
-        line = first_line(you) or first_line(main)
+        line = f"▸ {cur}" if cur else v["action"]
         if line:
-            lines.append(("👉 " if you else "💬 ") + esc(line))
-    return head + "\n" + quote("\n".join(lines))
+            out.append(esc(clip(line, 70)))
+    elif st_ == "waiting":
+        _, you = split_reply(v["reply"])
+        if you:
+            out.append("👉 " + esc(first_line(you, 100)))
+    return "\n".join(out)
 
 
 def counts(vs):
@@ -473,25 +490,18 @@ def home_text(now=None):
     vs = visible(now)
     if not vs:
         return fmt("📡 Пульс", "Пока ни одного чата Claude Code.\nОткрой чат — он появится здесь через "
-                   "несколько секунд: контекст, план, что делает.", "Карточка обновляется сама")
-    body = "\n\n".join(block(v, now) for v in vs[:8])
+                   "несколько секунд.", "Карточка обновляется сама")
     hid = hidden_count(now)
-    foot = f"Обновлено {datetime.fromtimestamp(now, TZ):%H:%M:%S} · само" + (f" · скрыто {hid}" if hid else "")
-    return f"<b>📡 Пульс</b> · {counts(vs)}\n\n{body}\n\n<i>{foot}</i>"
+    foot = f"\n\n<i>скрыто {hid}</i>" if hid else ""
+    return "<b>📡 Пульс</b>\n\n" + "\n\n".join(block(v, now) for v in vs[:8]) + foot
 
 
 def home_buttons(vs=None):
     vs = visible() if vs is None else vs
-    rows, row = [], []
-    for v in vs[:8]:
-        row.append(btn(f"{v['emoji']} {v['title']}", f"s|{v['id']}"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
+    chats = [btn(f"{v['emoji']} {clip(v['title'], 12)}", f"s|{v['id']}") for v in vs[:9]]
+    rows = [chats[i:i + 3] for i in range(0, len(chats), 3)]
     rows += app_buttons()
-    rows.append([btn("🔄 Обновить", "home"), btn("🔔 Уведомления", "al"), btn("⚙️ Ещё", "more")])
+    rows.append([btn("🔄", "home"), btn("⚙️", "more")])
     return rows
 
 
@@ -537,46 +547,37 @@ def md(text, limit=None):
 def detail_text(v, now=None):
     now = now or time.time()
     c = v["ctx"]
-    start = (v["turn"] or {}).get("started")
-    when = f" · {ago(now - start)}" if start and v["status"] in ("working", "question") else ""
-    parts = [f"{v['emoji']} <b>{esc(v['title'])}</b>\n<i>{v['label']}{when}</i>"]
-    ctx = [ctx_line(v), f"{kilo(c['tokens'])} из {kilo(c['window'])} токенов"
-           + (f" · сжатий {c['compacts']}" if c["compacts"] else "")]
-    if plan_line(v):
-        ctx.append(plan_line(v))
-    parts.append(quote("\n".join(ctx)))
+    lines = [block(v, now).split("\n", 1)[0]]
+    nums = [f"{'' if c['sure'] else '≈'}{c['pct']}% контекста ({kilo(c['tokens'])} из {kilo(c['window'])})"]
+    if c["compacts"]:
+        nums.append(f"сжатий {c['compacts']}")
+    if v["total"]:
+        nums.append(f"план {v['done']} из {v['total']}")
+    lines.append(f"<i>{' · '.join(nums)}</i>")
+    parts = ["\n".join(lines)]
     if v["status"] == "question" and v["question"]:
-        opts = "".join(f"\n• {esc(o)}" for o in v.get("options") or [])
-        parts.append("<b>❓ Спрашивает</b>\n" + quote(esc(v["question"]) + opts))
-    elif v["status"] == "working":
-        cur = current_task(v)
-        turn = v["turn"] or {}
-        stats = [f"шагов {turn.get('tools') or 0}"] + ([f"файлов {turn['nedits']}"] if turn.get("nedits") else []) + \
-            ([f"коммитов {turn['commits']}"] if turn.get("commits") else []) + \
-            ([f"агентов {turn['agents']}"] if turn.get("agents") else [])
-        now_lines = ([f"▸ {esc(cur)}"] if cur else []) + ([esc(v["action"])] if v["action"] else []) + \
-            [f"<i>{' · '.join(stats)}</i>"]
-        parts.append("<b>⏱ Сейчас</b>\n" + quote("\n".join(now_lines)))
-    if v["prompt"]:
-        at = v["prompt"].get("at")
-        t = f" · {datetime.fromtimestamp(at, TZ):%H:%M}" if at else ""
-        parts.append(f"<b>💬 Твой запрос</b>{t}\n" + quote(esc(clip(v["prompt"].get("text"), 600)),
-                                                           expandable=len(v["prompt"].get("text") or "") > 250))
+        parts.append("❓ " + esc(v["question"]) + "".join(f"\n• {esc(o)}" for o in v.get("options") or []))
     if v["tasks"]:
         icon = {"completed": "✅", "in_progress": "▸"}
-        rows = "\n".join(f"{icon.get(t.get('status'), '○')} {esc(clip(t.get('subject'), 80))}" for t in v["tasks"][:20])
-        parts.append(f"<b>📋 План</b>\n" + quote(rows, expandable=len(v["tasks"]) > 6))
+        parts.append("\n".join(f"{icon.get(t.get('status'), '○')} {esc(clip(t.get('subject'), 80))}"
+                               for t in v["tasks"][:20]))
+    if v["status"] == "working" and v["action"]:
+        turn = v["turn"] or {}
+        parts.append(f"{esc(v['action'])}\n<i>шагов {turn.get('tools') or 0}"
+                     + (f" · файлов {turn['nedits']}" if turn.get("nedits") else "") + "</i>")
+    if v["prompt"]:
+        parts.append("💬 <i>" + esc(clip(v["prompt"].get("text"), 300)) + "</i>")
+    if v["reply"] and v["status"] != "working":
+        main, you = split_reply(v["reply"])
+        if main:
+            parts.append(quote(md(main, 1200), expandable=len(main) > 400))
+        if you:
+            parts.append("👉 " + md(you, 500))
     prs = (v["turn"] or {}).get("prs") or []
     if prs:
         parts.append("🔗 " + " · ".join(f'<a href="{esc(u)}">PR #{esc(u.rsplit("/", 1)[-1])}</a>' for u in prs[:5]))
-    if v["reply"] and v["status"] != "working":
-        main, you = split_reply(v["reply"])
-        if you:
-            parts.append("<b>👉 Для тебя</b>\n" + quote(md(you, 500)))
-        if main:
-            parts.append("<b>🗨️ Ответ</b>\n" + quote(md(main, 1200), expandable=True))
     text = "\n\n".join(parts)
-    while len(text) > 4000 and len(parts) > 2:  # самое длинное — ответ; если не влезло, убираем с конца
+    while len(text) > 4000 and len(parts) > 2:
         parts.pop()
         text = "\n\n".join(parts)
     return text[:4000]
@@ -586,7 +587,7 @@ def detail_buttons(v):
     rows = []
     if v["url"]:
         rows.append([link("↗️ Открыть чат", v["url"])])
-    rows.append([btn("🔄 Обновить", f"s|{v['id']}"), btn("🙈 Скрыть", f"h|{v['id']}"), btn("← Все", "home")])
+    rows.append([btn("← Все", "home"), btn("🔄", f"s|{v['id']}"), btn("🙈 Скрыть", f"h|{v['id']}")])
     return rows
 
 
@@ -625,7 +626,7 @@ def more_text():
 
 
 def more_buttons():
-    rows = [[btn("⚙️ Режим", "mode"), support.Support.button()]]
+    rows = [[btn("🔔 Уведомления", "al"), btn("⚙️ Режим", "mode")], [support.Support.button()]]
     if hidden_count():
         rows.append([btn("👁 Показать скрытые", "unhide")])
     rows.append([btn("← Назад", "home")])
@@ -642,37 +643,34 @@ def mode_card(chat, mid=None):
 # ---------- уведомления и живая карточка ----------
 
 def notify(events):
+    """Уведомления в стиле карточки: заголовок — что случилось, 1 абзац ответа, «👉 Для тебя», кнопка «Открыть чат»."""
     chat = owner_id()
     if not chat:
         return
     a = alerts()
     for kind, v, extra in events:
-        buttons = [([link("↗️ Открыть чат", v["url"])] if v["url"] else []) + [btn("🔎 Подробно", f"s|{v['id']}")]]
+        buttons = [[link("↗️ Открыть чат", v["url"])]] if v["url"] else [[btn("🔎 Подробно", f"s|{v['id']}")]]
         title = esc(clip(v["title"], 60))
-        foot = " · ".join(x for x in [f"{v['done']} из {v['total']} по плану" if v["total"] else "",
-                                       f"контекст {'' if v['ctx']['sure'] else '≈'}{v['ctx']['pct']}%"] if x)
         try:
             if kind == "done" and a["done"]:
                 main, you = split_reply(v["reply"])
-                text = f"✅ <b>{title}</b> · готово"
+                lines = [f"✅ <b>{title}</b> — готово"]
                 if main:
-                    text += "\n" + quote(md(main, 900), expandable=len(main) > 350)
+                    lines.append(md(first_par(main)))
                 if you:
-                    text += "\n👉 <b>Для тебя:</b> " + md(you, 500)
-                send(chat, f"{text}\n<i>{foot}</i>", buttons)
+                    lines.append("👉 " + md(you, 400))
+                send(chat, "\n".join(lines), buttons)
             elif kind == "question" and a["question"]:
                 opts = "".join(f"\n• {esc(o)}" for o in v.get("options") or [])
-                send(chat, f"❓ <b>{title}</b> · спрашивает\n" + quote(esc(v["question"] or first_line(v["reply"], 400))
-                                                                      + opts) + "\n<i>Ответь в чате</i>", buttons)
+                send(chat, f"❓ <b>{title}</b> — вопрос\n{esc(v['question'] or first_line(v['reply'], 300))}{opts}",
+                     buttons)
             elif kind == "ctx" and a["ctx"]:
-                tip = {60: "Пока нормально, но большие задачи лучше начинать в новом чате.",
-                       80: "Скоро автосжатие — часть подробностей забудется. Пора закругляться.",
-                       90: "Почти полный. Напиши в чате «121» и продолжи в новом."}[extra]
-                send(chat, f"{ctx_dot(extra)} <b>{title}</b> · контекст {extra}%\n" + quote(ctx_line(v) + "\n" + tip),
-                     buttons)
+                tip = {60: "Большие задачи лучше начинать в новом чате.",
+                       80: "Скоро автосжатие — часть подробностей забудется.",
+                       90: "Почти полный — напиши в чате «121» и продолжи в новом."}[extra]
+                send(chat, f"{ctx_dot(extra)} <b>{title}</b> — {extra}% контекста\n{tip}", buttons)
             elif kind == "offline" and a["offline"]:
-                send(chat, f"💤 <b>{title}</b> · нет связи\n" + quote("Сводок нет больше 3 минут: чат закрыт, уснул или упал."),
-                     buttons)
+                send(chat, f"💤 <b>{title}</b> — нет связи\nСводок нет больше 3 минут: чат закрыт или уснул.", buttons)
         except Exception as e:
             print("notify:", e)
 
