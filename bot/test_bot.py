@@ -1274,7 +1274,7 @@ class SiteTest(BotTest):
             self.assertEqual(req("GET", "/site/")[0], 200)
             self.assertEqual(req("GET", "/site/site.js")[0], 200)
             self.assertEqual(req("GET", "/site/../bot.py")[0], 404)
-            self.assertEqual(req("GET", "/", {"Host": "hdp.1-2-3-4.sslip.io"})[1], "/site/")
+            self.assertEqual(req("GET", "/", {"Host": "hdp.1-2-3-4.sslip.io"})[1], "/student")  # зеркало платформы
             self.assertEqual(req("GET", "/api/state", {"X-Site": "1"})[0], 401)
             # плохая ссылка — без входа
             st, loc, cookie, _ = req("GET", "/site/login?c=nope")
