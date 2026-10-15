@@ -86,7 +86,7 @@
   }
   F.screens.more = moreScreen;
   // аватар в шапке — экран «Ещё»; «Заполнить профиль» в Питании и др. — сразу лист профиля
-  F.actions.profile = el => el.classList.contains('avatar') ? F.openScreen('more') : F.profileSheet();
+  F.actions.profile = el => el.classList.contains('avatar') || el.classList.contains('mepill') ? F.openScreen('more') : F.profileSheet();
   F.actions['more-edit'] = () => {
     F.profileSheet();
     // лист закрылся (сохранили или нет) — обновить цифры на экране: цели меняются без «Сохранить»

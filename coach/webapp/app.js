@@ -118,18 +118,55 @@
       stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${c.toFixed(2)}" data-off="${off.toFixed(2)}"/></svg><div class="kring-in">${inner}</div></div>`;
   }
   const bar = (p, color) => `<div class="bar"><i style="width:0;background:${color}" data-w="${p}%"></i></div>`;
-  function animate() {
+  // Анимации: только transform/opacity/stroke (120 Гц без рывков). Карточки ниже экрана оживают, когда до них докрутили (reveal).
+  const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
+  const outside = el => !!el.closest('.later');
+  // instant — тихое обновление (данные раз в 2 минуты, вода, еда): всё сразу на месте, без повторной анимации
+  function animate(root = document, instant = false) {
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      document.querySelectorAll('.arc[data-off]').forEach(el => { el.style.strokeDashoffset = el.dataset.off; });
-      document.querySelectorAll('[data-w]').forEach(el => { el.style.width = el.dataset.w; });
-      document.querySelectorAll('.cnt[data-count]').forEach(el => {
-        const to = Number(el.dataset.count), d = Number(el.dataset.d || 0), t0 = performance.now();
+      root.querySelectorAll('.arc[data-off]').forEach(el => { if (!outside(el)) { el.style.strokeDashoffset = el.dataset.off; delete el.dataset.off; } });
+      root.querySelectorAll('[data-w]').forEach(el => { if (!outside(el)) { el.style.width = el.dataset.w; el.classList.add('w-in'); delete el.dataset.w; } });
+      root.querySelectorAll('.cnt[data-count]').forEach(el => {
+        if (outside(el)) return;
+        if (instant) { delete el.dataset.count; return; }
+        const to = Number(el.dataset.count), d = Number(el.dataset.d || 0), t0 = performance.now(), dur = 1300;
         delete el.dataset.count;
-        if (matchMedia('(prefers-reduced-motion: reduce)').matches || !isFinite(to)) return;
-        const tick = now => { const k = Math.min(1, (now - t0) / 900), e = 1 - Math.pow(1 - k, 3); el.textContent = num(to * e, d); if (k < 1) requestAnimationFrame(tick); };
+        if (REDUCED.matches || !isFinite(to)) return;
+        const tick = now => { const k = Math.min(1, (now - t0) / dur), e = k === 1 ? 1 : 1 - Math.pow(2, -10 * k); el.textContent = num(to * e, d); if (k < 1) requestAnimationFrame(tick); };
         requestAnimationFrame(tick);
       });
     }));
+  }
+  // карточки появляются по мере прокрутки: всё, что ниже экрана, ждёт своей очереди
+  // в автоснимках (shots.js, navigator.webdriver) страница снимается целиком — показываем всё сразу; #motion — проверка анимаций
+  const revealer = 'IntersectionObserver' in window && !(navigator.webdriver && !location.hash.includes('motion')) ? new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    revealer.unobserve(e.target);
+    e.target.classList.remove('later'); e.target.classList.add('shown');
+    animate(e.target);
+  }), { rootMargin: '0px 0px -6% 0px' }) : null;
+  function stagger() {
+    let i = 0;
+    view.querySelectorAll('.rise').forEach(el => {
+      if (revealer && !REDUCED.matches && el.getBoundingClientRect().top > innerHeight + 10) { el.classList.add('later'); revealer.observe(el); }
+      else el.style.setProperty('--i', Math.min(i++, 10));
+    });
+  }
+  // переходы между экранами как в iOS: View Transitions (iOS 18+, Chrome), иначе — въезд нового экрана
+  function nav(kind, fn) {
+    const root = document.documentElement;
+    if (REDUCED.matches) { fn(); return; }
+    // переход ещё идёт (двойной тап): ждём, пока он применит своё состояние, и только потом наше — иначе старое перезапишет новое
+    if (S.vt) { S.vt.updateCallbackDone.catch(() => {}).finally(() => { S.navKind = kind; try { fn(); } finally { S.navKind = null; } }); return; }
+    if (document.startViewTransition) {
+      root.dataset.nav = kind;
+      try {
+        const vt = S.vt = document.startViewTransition(() => { S.inVT = true; try { fn(); } finally { S.inVT = false; } });
+        vt.finished.catch(() => {}).finally(() => { if (S.vt === vt) { delete root.dataset.nav; S.vt = null; } });
+        return;
+      } catch (e) { delete root.dataset.nav; S.vt = null; }
+    }
+    S.navKind = kind; try { fn(); } finally { S.navKind = null; }
   }
 
   // ---------- графики (SVG без библиотек) ----------
@@ -159,7 +196,7 @@
     rows.forEach((r, i) => {
       const v = r[key]; if (v == null) return;
       const h = Math.max(2, v / top * CH), x = i * slot + gap / 2;
-      s += `<rect x="${x.toFixed(1)}" y="${(CH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(3, bw / 2).toFixed(1)}" fill="${typeof color === 'function' ? color(r) : color}"><title>${r.day}: ${v}</title></rect>`;
+      s += `<rect class="gb" style="--i:${Math.round(i / n * 24)}" x="${x.toFixed(1)}" y="${(CH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(3, bw / 2).toFixed(1)}" fill="${typeof color === 'function' ? color(r) : color}"><title>${r.day}: ${v}</title></rect>`;
     });
     if (ref) rows.forEach((r, i) => {
       const v = r[ref]; if (v == null) return;
@@ -185,10 +222,10 @@
       const yb = y(base);
       s += `<line class="norm" x1="0" x2="${W}" y1="${yb.toFixed(1)}" y2="${yb.toFixed(1)}"/><text class="norm-t" x="${W}" y="${(yb > 18 ? yb - 6 : yb + 14).toFixed(1)}" text-anchor="end">норма ${num(base)}</text>`;
     }
-    s += `<path d="${d} L${P[P.length - 1][0].toFixed(1)},${CH} L${P[0][0].toFixed(1)},${CH} Z" fill="url(#${id})"/>`;
-    s += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`;
+    s += `<path class="fillin" d="${d} L${P[P.length - 1][0].toFixed(1)},${CH} L${P[0][0].toFixed(1)},${CH} Z" fill="url(#${id})"/>`;
+    s += `<path class="draw" pathLength="1" d="${d}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`;
     const last = P[P.length - 1];
-    s += `<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${color}" stroke="#1a2227" stroke-width="2"/>`;
+    s += `<circle class="dotin" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${color}" stroke="#1a2227" stroke-width="2"/>`;
     return svg(W, s, rows);
   }
   const avg = (rows, k) => { const v = rows.map(r => r[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
@@ -201,10 +238,24 @@
   const TABS = [{ id: 'today', icon: I.home, label: 'Главная' }, { id: 'trends', icon: I.health, label: 'Здоровье' },
     { id: 'plus', icon: I.plus, label: 'Добавить' }, { id: 'food', icon: I.food, label: 'Питание' }, { id: 'coach', icon: I.coach, label: 'Тренер' }];
   let tabs;
+  // подложка активной вкладки переезжает пружиной (меню перерисовывается целиком — помним, откуда ехать)
+  function tabInd() {
+    const bar = $('#tabs'); if (!bar) return;
+    const on = bar.querySelector('button.on:not([data-tab="coach"]):not([data-tab="plus"])');
+    let ind = bar.querySelector('.tab-ind');
+    if (!ind) {
+      ind = document.createElement('i'); ind.className = 'tab-ind'; bar.append(ind);
+      if (S.indX != null) { ind.style.transition = 'none'; ind.style.transform = `translateX(${S.indX}px)`; ind.style.width = S.indW + 'px'; ind.style.opacity = S.indO; void ind.offsetWidth; ind.style.transition = ''; }
+    }
+    if (!on) { ind.style.opacity = 0; S.indO = 0; return; }
+    S.indX = on.offsetLeft; S.indW = on.offsetWidth; S.indO = 1;
+    ind.style.transform = `translateX(${S.indX}px)`; ind.style.width = S.indW + 'px'; ind.style.opacity = 1;
+  }
   function go(tab) {
     if (tab === 'plus') { tabs.set(S.tab); plusSheet(); return; }
     if (S.tab === tab && !S.screen) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    S.tab = tab; S.screen = null; tabs.set(tab); render(true); window.scrollTo(0, 0);
+    S.tab = tab; S.screen = null; tabs.set(tab);
+    nav('tab', () => { render(true); window.scrollTo(0, 0); });
     if (tab === 'trends' && !S.series[S.range]) loadSeries(S.range);
     if (tab === 'trends' && S.progress === undefined) loadProgress();
     if (tab === 'coach' && !S.history) loadHistory();
@@ -213,8 +264,13 @@
     if (!S.data) return;
     const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: foodView, coach: coachView }[S.tab])();
     view.removeAttribute('aria-busy');
-    view.innerHTML = `<div class="${anim ? 'enter' : ''}">${html}</div>`;
-    animate();
+    if (revealer) revealer.disconnect();
+    // «назад» возвращает прежний экран как был — без повторного набегания цифр и колец
+    const moving = (anim || S.navKind || S.inVT) && !S.popping;
+    const cls = [S.inVT ? 'enter vt' : S.navKind ? `enter nav-${S.navKind}` : anim ? 'enter' : '', moving ? '' : 'calm'].join(' ').trim();
+    view.innerHTML = `<div class="${cls}">${html}</div>`;
+    if (moving) stagger();
+    animate(document, !moving);
     if (S.tab === 'coach' && anim !== false) window.scrollTo(0, document.body.scrollHeight);
   }
   const initial = () => { const n = ((S.data && S.data.user && S.data.user.name) || '').trim(); return n ? esc(n[0].toUpperCase()) : I.user; };
@@ -329,7 +385,7 @@
   // «My Dashboard»: плитки показателей со стрелкой к норме за 30 дней
   function tile({ k, v, d = 0, unit = '', base, goodUp, ex, sub }) {
     return `<button class="tile" data-a="explain" data-v="${ex}"><span class="tile-k">${k}</span>
-      <span class="tile-v"><b class="num">${v == null ? '—' : num(v, d)}</b><small>${unit}</small></span>
+      <span class="tile-v"><b class="num">${v == null ? '—' : cnt(v, d)}</b><small>${unit}</small></span>
       <span class="tile-d">${vs(v, base, goodUp, d) || `<span class="vs flat">${sub || (base != null ? `норма ${num(base, d)}` : 'нет нормы')}</span>`}</span></button>`;
   }
   function dashboard(t) {
@@ -487,12 +543,14 @@
   // ---------- экраны подробностей: сон, восстановление, нагрузка ----------
   function openScreen(kind, arg) {
     haptic('tap');
-    S.screen = kind; S.screenArg = arg; S.scrollY = window.scrollY;
-    render(true); window.scrollTo(0, 0);
+    S.scrollY = window.scrollY;
+    S.screen = kind; S.screenArg = arg;
+    nav('push', () => { render(true); window.scrollTo(0, 0); });
   }
   function closeScreen() {
-    S.screen = null; haptic('select');
-    render(false); window.scrollTo(0, S.scrollY || 0);
+    haptic('select');
+    S.screen = null;
+    nav('pop', () => { S.popping = true; try { render(false); } finally { S.popping = false; } window.scrollTo(0, S.scrollY || 0); });
   }
   const dHead = (title, sub, color) => `<header class="dhead"><button class="avatar ghost" data-a="back" aria-label="Назад">${I.back}</button>
     <div class="titles"><h1 style="--c:${color}">${title}</h1><div class="sub">${sub}</div></div></header>`;
@@ -1003,8 +1061,9 @@
   async function shiftTo(nd) {
     if (nd > S.data.today.day || nd === (S.dayData || S.data.today).day) return;
     haptic('select');
-    if (nd === S.data.today.day) { S.dayData = null; render(true); return; }
-    try { S.dayData = (await api('/api/day', { d: nd })).day; render(true); } catch (e) { fail(e); }
+    const dir = nd > (S.dayData || S.data.today).day ? 'next' : 'prev';
+    if (nd === S.data.today.day) { S.dayData = null; nav(dir, () => render(true)); return; }
+    try { S.dayData = (await api('/api/day', { d: nd })).day; nav(dir, () => render(true)); } catch (e) { fail(e); }
   }
   const shiftDay = k => shiftTo(isoDay(new Date(parseDay((S.dayData || S.data.today).day).getTime() + k * 864e5)));
 
@@ -1082,6 +1141,8 @@
     const p = (new URLSearchParams(location.search).get('p') || '').replace(/^\//, '');
     if (['trends', 'health', 'food', 'coach'].includes(p)) S.tab = p === 'health' ? 'trends' : p;
     tabs = Kit.tabbar($('#tabs'), TABS, S.tab, go);
+    const setTab = tabs.set; tabs.set = t => { setTab(t); tabInd(); };
+    tabInd(); addEventListener('resize', tabInd);
     try { S.data = await api('/api/all'); } catch (e) {
       view.removeAttribute('aria-busy');
       view.innerHTML = `${'<header class="hero"><div class="titles"><h1>Форма</h1><div class="sub">Тренер по данным WHOOP</div></div></header>'}
@@ -1107,7 +1168,7 @@
   Object.assign(F, { S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
     isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
     dHead, cap, head, hero, chartCard, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
-    summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0 });
+    summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav });
   (window.FormaModules || []).forEach(m => { try { m(F); } catch (e) { console.error('модуль', e); } });
   start();
 })();

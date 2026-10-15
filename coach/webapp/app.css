@@ -131,8 +131,6 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent-line); bo
 .note { border: 0; align-items: flex-start; border-radius: var(--r-md); }
 .note .ico { width: 18px; height: 18px; color: var(--sleep); }
 .empty .e .ico { width: 40px; height: 40px; margin: 0 auto; color: var(--hint); }
-.enter > * { animation: kit-rise .4s var(--ease) both; }
-.enter .rise { animation: kit-rise .4s var(--ease) both; }
 
 /* шапки */
 .hero { gap: 12px; }
@@ -655,3 +653,136 @@ body.has-tabbar { padding-bottom: calc(96px + var(--bottom)); }
 body.has-tabbar .sup-fab { bottom: calc(86px + var(--bottom)); }
 @media (min-width: 700px) { .tabbar { left: calc(50% - 300px); right: calc(50% - 220px); padding: 6px; } .tabbar button[data-tab="coach"] { right: calc(50% - 300px); } }
 .dial .chev-s svg { transform: none; width: 11px; height: 11px; }
+
+/* ===== движение: пружины, переходы как в iOS, всё на transform/opacity ===== */
+:root, html[data-scheme] {
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --spring: cubic-bezier(.34, 1.3, .64, 1); --spring-soft: var(--ease-out); --spring-bounce: cubic-bezier(.34, 1.56, .64, 1);
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root, html[data-scheme] {
+    --spring: linear(0, 0.0207, 0.0743, 0.1495, 0.2375, 0.3312, 0.4255, 0.5163, 0.6012, 0.6783, 0.7469, 0.8065, 0.8573, 0.8997, 0.9344, 0.9621, 0.9836, 0.9999, 1.0117, 1.0197, 1.0248, 1.0275, 1.0284, 1.0279, 1.0264, 1.0243, 1.0219, 1.0192, 1.0165, 1.014, 1.0115, 1.0093, 1.0073, 1.0056, 1.0042, 1.0029, 1.0019, 1.0011, 1.0005, 1, 1);
+    --spring-soft: linear(0, 0.0155, 0.055, 0.1097, 0.1734, 0.2413, 0.3101, 0.3776, 0.4422, 0.5029, 0.5591, 0.6106, 0.6575, 0.6996, 0.7374, 0.771, 0.8009, 0.8272, 0.8503, 0.8706, 0.8883, 0.9037, 0.9172, 0.9288, 0.9389, 0.9476, 0.9551, 0.9616, 0.9672, 0.972, 0.9761, 0.9796, 0.9826, 0.9852, 0.9874, 0.9893, 0.9909, 0.9923, 0.9935, 0.9945, 1);
+    --spring-bounce: linear(0, 0.0341, 0.1219, 0.2437, 0.3828, 0.5256, 0.6619, 0.7845, 0.8891, 0.9736, 1.0377, 1.0827, 1.1106, 1.124, 1.1258, 1.1191, 1.1063, 1.09, 1.0722, 1.0543, 1.0375, 1.0227, 1.0103, 1.0005, 0.9932, 0.9882, 0.9853, 0.9841, 0.9843, 0.9854, 0.9872, 0.9893, 0.9916, 0.9938, 0.9959, 0.9977, 0.9991, 1.0003, 1.0011, 1.0016, 1);
+  }
+}
+html { -webkit-tap-highlight-color: transparent; }
+/* карточки входят по очереди; что ниже экрана — когда докрутили */
+.enter .rise { animation: f-rise .7s var(--spring-soft) both; animation-delay: calc(var(--i, 0) * 45ms); }
+.enter.vt .rise { animation: none; }
+.rise.later { opacity: 0; transform: translateY(22px) scale(.985); animation: none !important; }
+.rise.shown { animation: f-rise .75s var(--spring-soft) both !important; animation-delay: 0s !important; }
+@keyframes f-rise { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
+
+/* запасной переход (без View Transitions): новый экран въезжает */
+.enter.nav-push { animation: f-push .55s var(--spring-soft) both; }
+.enter.nav-pop { animation: f-pop .5s var(--spring-soft) both; }
+.enter.nav-tab { animation: f-tab .45s var(--spring-soft) both; }
+.enter.nav-next { animation: f-next .5s var(--spring-soft) both; }
+.enter.nav-prev { animation: f-prev .5s var(--spring-soft) both; }
+.enter[class*="nav-"] .rise { animation-duration: .6s; }
+@keyframes f-push { from { opacity: .3; transform: translateX(60px); } to { opacity: 1; transform: none; } }
+@keyframes f-pop { from { opacity: .3; transform: translateX(-40px); } to { opacity: 1; transform: none; } }
+@keyframes f-tab { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes f-next { from { opacity: 0; transform: translateX(36px); } to { opacity: 1; transform: none; } }
+@keyframes f-prev { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: none; } }
+
+/* View Transitions: экран уезжает/въезжает как в iOS, меню и кнопка поддержки стоят на месте */
+.tabbar { view-transition-name: f-tabbar; }
+.sup-fab { view-transition-name: f-fab; }
+::view-transition-group(f-tabbar), ::view-transition-group(f-fab) { animation: none; }
+::view-transition-old(f-tabbar), ::view-transition-old(f-fab) { display: none; }
+::view-transition-new(f-tabbar), ::view-transition-new(f-fab) { animation: none; }
+::view-transition-group(root) { animation-duration: .5s; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .5s; animation-timing-function: var(--spring-soft); mix-blend-mode: normal; }
+html[data-nav="push"]::view-transition-old(root) { animation-name: vt-out-left; }
+html[data-nav="push"]::view-transition-new(root) { animation-name: vt-in-right; box-shadow: -18px 0 40px rgba(0, 0, 0, .5); }
+html[data-nav="pop"]::view-transition-old(root) { animation-name: vt-out-right; z-index: 2; box-shadow: -18px 0 40px rgba(0, 0, 0, .5); }
+html[data-nav="pop"]::view-transition-new(root) { animation-name: vt-in-left; }
+html[data-nav="tab"]::view-transition-old(root) { animation: vt-fade-out .22s ease both; }
+html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in .45s var(--spring-soft) both; }
+html[data-nav="next"]::view-transition-old(root) { animation-name: vt-day-out-l; animation-duration: .35s; }
+html[data-nav="next"]::view-transition-new(root) { animation-name: vt-day-in-r; }
+html[data-nav="prev"]::view-transition-old(root) { animation-name: vt-day-out-r; animation-duration: .35s; }
+html[data-nav="prev"]::view-transition-new(root) { animation-name: vt-day-in-l; }
+@keyframes vt-out-left { to { transform: translateX(-28%); opacity: .55; } }
+@keyframes vt-in-right { from { transform: translateX(100%); } }
+@keyframes vt-out-right { to { transform: translateX(100%); } }
+@keyframes vt-in-left { from { transform: translateX(-28%); opacity: .55; } }
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-fade-in { from { opacity: 0; transform: scale(.985); } }
+@keyframes vt-day-out-l { to { opacity: 0; transform: translateX(-12%); } }
+@keyframes vt-day-in-r { from { opacity: 0; transform: translateX(14%); } }
+@keyframes vt-day-out-r { to { opacity: 0; transform: translateX(12%); } }
+@keyframes vt-day-in-l { from { opacity: 0; transform: translateX(-14%); } }
+
+/* нажатия: мягко вдавливается, отпускается пружиной */
+.btn, .tile, .mon, .act, .crow, .mrow, .outrow, .chip, .seg button, .tabbar button, .addsq, .card.tap, .row.tap, .row[data-a], .dial, .mepill, .datecap .pg,
+.syncpill, .wbtn, .coach-link, .wlink, .send, .avatar, .summary-entry, [data-a="suggest"], [data-a="ask-go"] {
+  transition: transform .5s var(--spring-bounce), opacity .2s, background-color .25s, color .25s, box-shadow .25s; will-change: transform; }
+.btn:active, .tile:active, .mon:active, .act:active, .outrow:active, .chip:active, .addsq:active, .card.tap:active, .row.tap:active, .row[data-a]:active,
+.mepill:active, .syncpill:active, .wbtn:active, .coach-link:active, .send:active, .avatar:active, .summary-entry:active, [data-a="suggest"]:active {
+  transform: scale(.96); transition-duration: .12s; transition-timing-function: ease-out; }
+.dial:active { transform: scale(.94); transition-duration: .12s; }
+.crow:active, .mrow:active { transform: scale(.985); opacity: 1; background: rgba(255, 255, 255, .03); transition-duration: .12s; }
+.tabbar button:active { transform: scale(.88); transition-duration: .1s; }
+.tabbar button[data-tab="coach"]:active, .tabbar button[data-tab="plus"]:active .i { transform: scale(.9); }
+
+/* кольца: дуга рисуется пружиной, по очереди */
+.arc { transition: stroke-dashoffset 1.6s var(--spring-soft) !important; }
+.dials .dial:nth-child(2) .arc { transition-delay: .08s !important; }
+.dials .dial:nth-child(3) .arc { transition-delay: .16s !important; }
+.wring .arc { transition-duration: 1.8s !important; }
+.wring-c { animation: f-ring-in .8s var(--spring) both; }
+@keyframes f-ring-in { from { transform: scale(.9); opacity: 0; } to { transform: none; opacity: 1; } }
+.wcon::before { transition: none; }
+
+/* полоски: растут из левого края (scaleX — без перерасчёта раскладки) */
+[data-w] { transform: scaleX(0); transform-origin: left center; }
+.w-in { transform: scaleX(1); transform-origin: left center; transition: transform 1.2s var(--spring-soft) !important; }
+
+/* графики: столбики растут снизу по очереди, линия рисуется, точка выпрыгивает */
+.rise:not(.later) .gb { transform-box: fill-box; transform-origin: 50% 100%; animation: f-bar .9s var(--spring) both; animation-delay: calc(var(--i, 0) * 22ms + .1s); }
+.rise:not(.later) .draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: f-draw 1.4s var(--ease-out) .1s forwards; }
+.rise:not(.later) .fillin { animation: f-fade .9s ease .5s both; }
+.rise:not(.later) .dotin { transform-box: fill-box; transform-origin: center; animation: f-pop-in .6s var(--spring-bounce) 1.2s both; }
+.rise.later .gb, .rise.later .draw, .rise.later .fillin, .rise.later .dotin { opacity: 0; }
+@keyframes f-bar { from { transform: scaleY(0); } to { transform: none; } }
+@keyframes f-draw { to { stroke-dashoffset: 0; } }
+@keyframes f-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes f-pop-in { from { transform: scale(0); } to { transform: none; } }
+
+/* нижнее меню: подложка переезжает пружиной, иконка подпрыгивает */
+.tabbar { isolation: isolate; }
+.tabbar .tab-ind { position: absolute; z-index: -1; left: 0; top: 6px; bottom: 6px; border-radius: 999px; background: rgba(255, 255, 255, .1); pointer-events: none;
+  transition: transform .6s var(--spring), width .6s var(--spring), opacity .25s; will-change: transform; }
+.tabbar button.on { background: none !important; }
+.tabbar button.on .i { animation: f-tab-pop .6s var(--spring-bounce); }
+@keyframes f-tab-pop { 0% { transform: scale(.82); } 100% { transform: none; } }
+
+/* листы: выезжают мягкой пружиной, фон затемняется плавно */
+.sheet { transition: transform .6s var(--spring-soft) !important; will-change: transform; }
+.sheet-backdrop { transition: opacity .4s ease !important; }
+
+/* скелеты — мягкий перелив */
+.sk { background: linear-gradient(100deg, rgba(255, 255, 255, .05) 30%, rgba(255, 255, 255, .11) 50%, rgba(255, 255, 255, .05) 70%) 0 0 / 300% 100%; animation: f-shimmer 1.4s linear infinite; }
+@keyframes f-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+/* сообщения в чате тренера всплывают */
+.msg { animation: f-msg .5s var(--spring) both; transform-origin: bottom left; }
+.msg.me { transform-origin: bottom right; }
+@keyframes f-msg { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+.toast { transition: transform .5s var(--spring), opacity .3s !important; }
+
+html { scroll-behavior: auto; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  [data-w] { transform: none; }
+}
+/* тихое обновление (данные раз в 2 минуты, вода, ответы в дневнике) — всё сразу на месте, без повторной анимации */
+.calm .arc, .calm .w-in { transition: none !important; }
+.calm .gb, .calm .draw, .calm .fillin, .calm .dotin, .calm .wring-c { animation: none !important; }
+.calm .draw { stroke-dasharray: none; stroke-dashoffset: 0; }
+/* в чате всплывают только последние сообщения, а не вся история при каждой перерисовке */
+.chat .msg { animation: none; }
+.chat .msg:nth-last-child(-n+2) { animation: f-msg .5s var(--spring) both; }
