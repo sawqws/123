@@ -113,13 +113,13 @@
       if (!S.st && !S.seenLast && state.last) { S.seenLast = state.last.at; store.set('seenLast', S.seenLast); }  // старое не показываем
       S.st = state;
       S.running = new Set(run.running || []);
-      const busyNow = state.busy || S.running.size > 0;
+      const busyNow = state.working || state.busy || S.running.size > 0;
       if (S.wasBusy && !busyNow) setTimeout(() => loadOv(false), 4000);  // бот обновит данные после решения
       if (before !== [...S.running].join()) render();
       S.wasBusy = busyNow;
       dock();
     } catch (e) { /* сеть моргнула — следующий опрос */ }
-    const fast = (S.st && S.st.busy) || S.running.size || (S.prep && S.prep.running);
+    const fast = (S.st && (S.st.working || S.st.busy)) || S.running.size || (S.prep && S.prep.running);
     S.timer = setTimeout(tick, fast ? 2500 : 10000);
   }
 
@@ -490,7 +490,7 @@
     const el = $('#dock');
     if (!s || S.authed === false) { el.innerHTML = ''; return; }
     const parts = [];
-    if (s.live && s.busy) {
+    if (s.live) {
       const frac = s.live.frac;
       parts.push(`<div class="dock"><div class="hd"><span class="spin" style="width:18px;height:18px;border-width:2px"></span><b>${esc(s.live.title)}</b><span class="muted">${s.live.secs || 0} с</span></div>
         <div class="sub">${esc(s.live.sub)}${s.live.step ? ' · ' + esc(s.live.step) : ''}</div>
@@ -506,7 +506,7 @@
         <div class="acts"><button class="btn small primary" data-a="draft-open" data-task="${esc(dr.task || '')}">Посмотреть и отправить</button></div></div>`);
     }
     const l = s.last;
-    if (l && l.at > S.seenLast && l.at > Date.now() / 1000 - 3600 && !(s.live && s.busy)) {
+    if (l && l.at > S.seenLast && l.at > Date.now() / 1000 - 3600 && !s.live) {
       parts.push(`<div class="dock ${l.ok ? 'ok' : 'fail'}"><div class="hd"><span>${l.ok ? (l.show ? '👁' : '✅') : '⚠️'}</span><b>${esc(l.title)}</b>
         <button class="x" data-a="last-x" aria-label="Закрыть">✕</button></div>
         ${l.score ? `<div class="sub">Баллы: ${esc(l.score.join(' из '))}</div>` : ''}

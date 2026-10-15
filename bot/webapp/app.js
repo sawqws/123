@@ -24,7 +24,7 @@ async function loadOverview(fresh) {
     const changed = r.data && (!S.data || r.data.at !== S.data.at);
     S.loading = r.loading; S.error = r.error || '';
     if (changed) { S.data = r.data; render(); } else if (!S.data) render(); else renderHead();
-  } catch (e) { S.error = e.message; renderHead(); if (!S.data) render(); }
+  } catch (e) { S.error = e.message; S.loading = false; renderHead(); if (!S.data) render(); }  // не загрузилось — крутилка «Обновить» не должна зависнуть
 }
 
 async function poll() {
@@ -34,7 +34,7 @@ async function poll() {
     S.state = st; S.polledAt = Date.now();
     S.loading = st.loading; S.error = st.error || '';
     if (S.data && st.at && st.at !== S.data.at && !st.loading) loadOverview();
-    if (prev && prev.busy && !st.busy) finished(st);
+    if (prev && (prev.working || prev.busy) && !(st.working || st.busy)) finished(st);
     renderLive(); renderStatus(); renderHead();
   } catch (e) { /* сеть моргнула — следующий опрос */ }
 }
@@ -79,7 +79,14 @@ let tabs;
 
 function render() {
   const v = q('#view');
+  // данные пришли, пока Глеб печатает ссылку или ТЗ: поле перерисовывается — вернуть фокус и курсор, иначе клавиатура закроется
+  const act = document.activeElement;
+  const keep = act && (act.id === 'link' || act.id === 'pp-tz') ? { id: act.id, a: act.selectionStart, b: act.selectionEnd } : null;
   v.innerHTML = S.tab === 'tasks' ? tasksView() : S.tab === 'prep' ? Prep.view() : S.tab === 'grades' ? gradesView() : teachersView();
+  if (keep) {
+    const el = q('#' + keep.id);
+    if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.a, keep.b); } catch (e) { /* поле без выделения */ } }
+  }
   q('#title').textContent = TITLES[S.tab];
   renderHead(); renderLive(); renderStatus(); badges();
 }
@@ -108,7 +115,8 @@ function badges() {
 function renderLive() {
   const box = q('#live');
   const st = S.state || {};
-  if (!st.busy) { if (box.innerHTML) { box.innerHTML = ''; box.dataset.key = ''; } return; }
+  const working = st.working || st.busy;  // решается хоть одно задание (busy — только когда заняты все места)
+  if (!working) { if (box.innerHTML) { box.innerHTML = ''; box.dataset.key = ''; } return; }
   const l = st.live || { title: 'Работаю', sub: '', step: '', done: [], frac: null, secs: 0 };
   const pct = l.frac == null ? null : Math.round(l.frac * 100);
   const key = S.tab === 'tasks' ? 'full:' + l.title : 'mini';
@@ -131,6 +139,7 @@ function renderLive() {
     bar.classList.toggle('indet', pct == null);
     q('i', bar).style.width = (pct || 0) + '%';
     set('.pct', pct == null ? 'идёт работа' : pct + '%');
+    set('.live-f span:last-child', st.others ? `и ещё ${st.others} в работе · результат придёт сюда и в чат` : 'результат придёт сюда и в чат');
     const c = q('.clock', box);
     c.dataset.secs = l.secs || 0;
     c.textContent = mmss(l.secs || 0);
@@ -146,11 +155,12 @@ function renderStatus() {
   const st = S.state || {};
   const l = st.last;
   const ds = st.drafts || (st.draft ? [st.draft] : []);
-  const key = JSON.stringify([!st.busy && l && l.at > S.seen ? l.at : 0, ds.map(d => [d.task, d.title, d.files])]);
+  const idle = !(st.working || st.busy);
+  const key = JSON.stringify([idle && l && l.at > S.seen ? l.at : 0, ds.map(d => [d.task, d.title, d.files])]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   let out = '';
-  if (!st.busy && l && l.at > S.seen) out += resultCard(l);
+  if (idle && l && l.at > S.seen) out += resultCard(l);
   for (const d of ds) {  // черновиков может быть несколько — у каждого своя карточка
     out += `<button class="card banner rise" data-a="draft" data-task="${esc(d.task || '')}"><span class="ic">📄</span>
       <span class="main"><div class="title">Черновик для учителя</div><div class="hint">${esc(d.title)}</div></span><span class="chev"></span></button>`;

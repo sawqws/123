@@ -11,6 +11,8 @@ import json
 import os
 import re
 import shutil
+import threading
+from zoneinfo import ZoneInfo
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TMP = os.path.join(REPO, "horo", "tmp")
@@ -76,19 +78,36 @@ def clear(task):
 
 
 def write(task, text):
+    """Текст черновика — целиком или никак (не полфайла, если упали посреди записи)."""
     os.makedirs(task_dir(task), exist_ok=True)
-    with open(text_path(task), "w") as f:
+    tmp = f"{text_path(task)}.{threading.get_ident()}.part"
+    with open(tmp, "w") as f:
         f.write(text.strip() + "\n")
+    os.replace(tmp, text_path(task))
+
+
+_files_lock = threading.Lock()
 
 
 def add_file(task, data, name, replace=False):
+    """Кладёт картинку в draft_files под следующим номером. Несколько фото подряд (альбом) приходят
+    параллельно — номер берётся под замком, чтобы одно фото не затёрло другое."""
     d = files_dir(task)
-    if replace:
-        shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, f"{len(os.listdir(d)) + 1:02d}_{os.path.basename(name)}")
-    with open(path, "wb") as f:
-        f.write(data)
+    base = os.path.basename(name) or "photo.jpg"
+    with _files_lock:
+        if replace:
+            shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+        n = len(os.listdir(d)) + 1
+        while True:
+            path = os.path.join(d, f"{n:02d}_{base}")
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+                break
+            except FileExistsError:
+                n += 1
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
     return path
 
 
@@ -97,7 +116,7 @@ def record_edit(task, title, before, after):
     if before.strip() == after.strip():
         return False
     os.makedirs(STYLE_DIR, exist_ok=True)
-    row = {"date": datetime.date.today().isoformat(), "task": task, "title": title,
+    row = {"date": datetime.datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat(), "task": task, "title": title,
            "before": before.strip(), "after": after.strip()}
     with open(EDITS, "a") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")

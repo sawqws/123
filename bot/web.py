@@ -40,6 +40,10 @@ SESSION_TTL = 30 * 86400    # сколько браузер помнит вхо�
 PORT = int(os.environ.get("HORO_WEB_PORT") or 8788)
 BIN = os.path.join(os.path.dirname(HERE), "horo", "tmp", "bin", "cloudflared")  # если cloudflared не установлен
 
+# маршруты, которые что-то делают (решают, сдают, меняют настройки): GET на них не принимаем
+WRITE = {"/api/solve", "/api/auto", "/api/human", "/api/mode", "/api/support", "/api/check", "/api/alphabet",
+         "/api/draft/send", "/api/draft/drop", "/api/draft/save", "/api/prep/run"}
+
 url = os.environ.get("HORO_WEB_URL", "").rstrip("/")  # текущий https-адрес приложения
 _cfg = {}
 
@@ -176,6 +180,7 @@ def watch_site():
 
 class Web(BaseHTTPRequestHandler):
     server_version = "HDP/1"
+    timeout = 60  # медленный или оборванный клиент не держит поток вечно
 
     def log_message(self, fmt, *args):  # без шума в логах pm2
         pass
@@ -190,8 +195,12 @@ class Web(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")  # код входа из ссылки не уходит в чужие запросы
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):  # клиент закрыл страницу, не дождавшись ответа
+            pass
 
     def cookie(self):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -241,6 +250,8 @@ class Web(BaseHTTPRequestHandler):
         if path == "/health":
             return self.reply(200, "ok", "text/plain")
         if path.startswith("/api/"):
+            if path in WRITE:  # действия — только POST (GET могут повторить предпросмотр ссылок, расширения и т. п.)
+                return self.reply(405, {"error": "Это действие — только POST"})
             return self.api(path, {})
         if path == "/site" or path.startswith("/site/"):
             return self.site(path)
