@@ -1549,9 +1549,13 @@ def on_callback(cq):
     if data.startswith("mode:"):  # 💬 чат / 📱 приложение
         on_mode(chat, mid, cq["id"], data[5:])
         return
-    if data == "ex:upd":  # 🎯 подтверждения: обновить с сайта
-        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Обновляю с сайта…")
-        threading.Thread(target=send_exams, args=(chat, mid, True), daemon=True).start()
+    if data.startswith("ex:"):  # 🎯 подтверждения: ex:2 / ex:3 / ex:all, ex:upd:<то же> — свежие с сайта
+        parts = data.split(":")
+        fresh = parts[1] == "upd"
+        key = (parts[2] if len(parts) > 2 else "all") if fresh else parts[1]
+        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Обновляю с сайта…" if fresh else "")
+        lvl = int(key) if key in ("2", "3") else None
+        threading.Thread(target=send_exams, args=(chat, lvl, fresh), daemon=True).start()
         return
     if data.startswith("pp:"):  # 📖 подготовка: шаги правятся на месте
         on_prep_button(chat, mid, cq["id"], data[3:])
@@ -2420,7 +2424,12 @@ def handle(msg):
         return
     if text.startswith("/exams") or text == BTN_EXAMS:
         mode.pop(chat, None)
-        threading.Thread(target=send_exams, args=(chat,), daemon=True).start()
+        arg = text[6:].strip().lower() if text.startswith("/exams") else ""
+        if arg in ("2", "2.0", "3", "3.0", "all", "все"):   # /exams 2 — сразу список
+            lvl = None if arg in ("all", "все") else int(arg[0])
+            threading.Thread(target=send_exams, args=(chat, lvl), daemon=True).start()
+        else:
+            exams_choice(chat)
         return
     if text.startswith("/prep") or text == BTN_PREP:
         mode.pop(chat, None)
@@ -2834,23 +2843,26 @@ def exam_line(x):
     return f'{x["icon"]} {x["sicon"]} <a href="{esc(x["url"])}">{esc(x["subj"])} · {esc(title)}</a> — {esc(", ".join(bits))}'
 
 
-def exams_messages(data):
-    """HTML-сообщения (каждое ≤ 3900 знаков с разметкой): шапка, по уровню 2.0 и 3.0 — несданное цитатой,
-    зачтённое — свёрнутой цитатой. Цитаты не режутся посреди: длинный список — несколькими цитатами."""
-    items = exam_items(data)
+def exams_messages(data, lvl=None):
+    """HTML-сообщения (каждое ≤ 3900 знаков с разметкой): шапка, по уровню 2.0 и 3.0 (или только lvl) — несданное
+    цитатой, зачтённое — свёрнутой цитатой. Цитаты не режутся посреди: длинный список — несколькими цитатами."""
+    items = [x for x in exam_items(data) if lvl in (None, x["lvl"])]
+    name = f"Подтверждения {lvl}.0" if lvl else "Подтверждения и контрольные"
     if not items:
-        return [card("Подтверждения", note="Подтверждений и контрольных на сайте не нашёл", icon="🎯")]
+        return [card(name, note="На сайте таких нет" if lvl else "Подтверждений и контрольных на сайте не нашёл",
+                     icon="🎯")]
     n = lambda f: sum(f(x) for x in items)
-    head = ("🎯 <b>Подтверждения и контрольные</b>\n<i>зачтено " + str(n(lambda x: x["status"] == "approved"))
+    head = (f"🎯 <b>{name}</b>\n<i>зачтено " + str(n(lambda x: x["status"] == "approved"))
             + f" из {len(items)} · на доработке " + str(n(lambda x: x["status"] in ("reworking", "failed")))
             + " · не сдано " + str(n(lambda x: x["status"] == "appointed"))
             + " · на проверке " + str(n(lambda x: x["status"] == "reviewing")) + "</i>")
     blocks = [head]
-    for lvl in (2, 3):
-        mine = [x for x in items if x["lvl"] == lvl]
+    for lv in (2, 3):
+        mine = [x for x in items if x["lvl"] == lv]
         if not mine:
             continue
-        blocks.append(f"<b>{lvl}.0</b>")
+        if not lvl:
+            blocks.append(f"<b>{lv}.0</b>")
         for tag, rows in (("blockquote", [x for x in mine if x["status"] != "approved"]),
                           ("blockquote expandable", [x for x in mine if x["status"] == "approved"])):
             lines = ([f"✅ зачтено: {len(rows)}"] if "expandable" in tag and rows else []) + [exam_line(x) for x in rows]
@@ -2871,8 +2883,18 @@ def exams_messages(data):
     return msgs + ([cur] if cur else [])
 
 
-def send_exams(chat, mid=None, fresh=False):
-    """Список подтверждений: данные не старше 10 минут, иначе (и по «🔄 Обновить») — свежие с сайта."""
+def exams_choice(chat):
+    """«🎯 Подтверждения»: сначала выбор — 2.0, 3.0 или все (на кнопке — сколько не зачтено)."""
+    items = exam_items(overview() or {})
+    left = lambda lv: sum(x["status"] != "approved" and lv in (None, x["lvl"]) for x in items)
+    lab = lambda text, lv: text + (f" · {left(lv)}" if items and left(lv) else "")
+    send(chat, card("Подтверждения", note="Какие показать? На кнопке — сколько ещё не зачтено" if items
+                    else "Какие показать?", icon="🎯"),
+         markup=kb([(lab("2.0", 2), "ex:2"), (lab("3.0", 3), "ex:3"), (lab("Все", None), "ex:all")]), raw_html=True)
+
+
+def send_exams(chat, lvl=None, fresh=False):
+    """Список подтверждений (lvl 2, 3 или все): данные не старше 10 минут, иначе (и по «🔄 Обновить») — свежие с сайта."""
     data = overview()
     if fresh or not data or time.time() - (data.get("at") or 0) / (1000 if (data.get("at") or 0) > 1e11 else 1) > 600:
         live = Live(chat, "Смотрю подтверждения", "с сайта", progress=False)
@@ -2884,9 +2906,12 @@ def send_exams(chat, mid=None, fresh=False):
     if not data:
         send(chat, err(OV.get("error") or "Не получилось взять задания с сайта"), menu=True, raw_html=True)
         return
-    msgs = exams_messages(data)
+    msgs = exams_messages(data, lvl)
+    tag = str(lvl) if lvl else "all"
+    nav = [("🔄 Обновить", f"ex:upd:{tag}")] + [(t, f"ex:{c}") for t, c in (("2.0", "2"), ("3.0", "3"), ("Все", "all"))
+                                                 if c != tag]
     for k, text in enumerate(msgs):
-        send(chat, text, markup=kb([("🔄 Обновить", "ex:upd")]) if k == len(msgs) - 1 else None, raw_html=True)
+        send(chat, text, markup=kb(nav) if k == len(msgs) - 1 else None, raw_html=True)
 
 
 # ---------- 📖 Подготовка к проверочной ----------

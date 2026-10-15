@@ -6,6 +6,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -1856,6 +1857,27 @@ class ExamsTest(unittest.TestCase):
 
     def test_empty(self):
         self.assertIn("не нашёл", bot.exams_messages({"topics": []})[0])
+
+    def test_one_level(self):
+        two = "\n".join(bot.exams_messages(self.DATA, 2))
+        three = "\n".join(bot.exams_messages(self.DATA, 3))
+        self.assertIn("Подтверждения 2.0", two)
+        self.assertNotIn("/task/e", two)                 # 3.0 в списке 2.0 нет
+        self.assertIn("зачтено 1 из 4", two)
+        self.assertIn("/task/e", three)
+        self.assertIn("зачтено 0 из 1", three)
+        self.assertNotIn("<b>3.0</b>", three)             # заголовок уровня лишний, он в шапке
+
+    def test_choice_and_buttons(self):
+        sent = []
+        with mock.patch.object(bot, "send", lambda chat, text, **kw: sent.append((text, kw.get("markup")))), \
+                mock.patch.object(bot, "overview", lambda: dict(self.DATA, at=time.time() * 1000)):
+            bot.exams_choice(42)
+            self.assertIn("ex:2", sent[-1][1]); self.assertIn("ex:3", sent[-1][1]); self.assertIn("ex:all", sent[-1][1])
+            self.assertIn("2.0 · 3", sent[-1][1])           # не зачтено на 2.0: a, h, g
+            bot.send_exams(42, 3)
+            self.assertIn("Подтверждения 3.0", sent[-1][0])
+            self.assertIn("ex:upd:3", sent[-1][1])
 
 
 if __name__ == "__main__":
