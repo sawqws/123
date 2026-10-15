@@ -77,6 +77,31 @@ async function api(page, url) {
   return JSON.parse(res.t).data;
 }
 
+// PUT к API из контекста страницы (с куками сессии), тело — JSON.
+async function apiPut(page, url, body) {
+  const res = await page.evaluate(async ([u, b]) => {
+    const r = await fetch(u, { method: 'PUT', credentials: 'include', headers: { 'content-type': 'application/json' },
+                               body: JSON.stringify(b), signal: AbortSignal.timeout(60000) });
+    return { s: r.status, t: await r.text() };
+  }, [url.startsWith('http') ? url : BASE + url, body]);
+  if (res.s < 200 || res.s >= 300) throw new Error(`API ${res.s}: ${url}\n${res.t.slice(0, 300)}`);
+  return res.t;
+}
+
+// Черновик поля «Введи ответ» сайт хранит у себя (/api/drafts) и сохраняет сам, пока в поле что-то есть.
+// После отправки он оставался с тем же текстом и файлами — Глеб открывал задание и видел «вторую попытку»
+// с тем же, но не отправленным. Чистим его сами.
+const draftUrl = progress => `/api/drafts/v1/studentMessage/${progress}_v2`;
+async function getDraft(page, progress) {
+  const d = await api(page, `/api/drafts/v1/studentMessage?key=${progress}_v2`).catch(() => null);
+  const v = d && d[0] && d[0].payload && d[0].payload.value;
+  return v || { attachments: [], message: '' };
+}
+async function clearDraft(page, progress) {
+  await apiPut(page, draftUrl(progress), { payload: { value: { attachments: [], message: '' } } });
+}
+const draftEmpty = v => !(v.attachments || []).length && !(v.message || '').replace(/<[^>]+>|&nbsp;|\s/g, '');
+
 async function download(page, src, file) {
   const b64 = await page.evaluate(async u => {
     const r = await fetch(u, { credentials: 'include', signal: AbortSignal.timeout(60000) });
@@ -134,4 +159,4 @@ const SUBJ_ICONS = [
 ];
 const subjIcon = name => (SUBJ_ICONS.find(([k]) => String(name).toLowerCase().startsWith(k)) || [0, '📘'])[1];
 
-module.exports = { open, close, api, download, parseUrl, loadTask, htmlToText, images, subjIcon, BASE, TMP, EDU };
+module.exports = { apiPut, getDraft, clearDraft, draftEmpty, open, close, api, download, parseUrl, loadTask, htmlToText, images, subjIcon, BASE, TMP, EDU };
