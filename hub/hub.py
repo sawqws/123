@@ -52,6 +52,9 @@ import maker  # noqa: E402
 import media  # noqa: E402
 
 maker.ui = sys.modules[__name__]
+import check  # noqa: E402
+
+check.ui, check.maker = sys.modules[__name__], maker
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -614,7 +617,8 @@ def full_menu(chat, mid=None):
              b("🧠 Психолог", "psy")],
             [b("🛠 Сделать бота", "mk"), b("✏️ Доработать", "fix"), b("📂 Все боты", "all")],
             [b("⬆️ Обновить всех", "upd"), b("🖥 Сервер", "srv"), b("➕ Поставить", "add")],
-            [b("⏰ Напоминания", "rmd|list"), b("🤖 Claude", "cl"), b("⚙️ Режим", "mode|ask")]]
+            [b("🧪 Проверка ботов", "chk", "success"), b("⏰ Напоминания", "rmd|list")],
+            [b("🤖 Claude", "cl"), b("⚙️ Режим", "mode|ask")]]
     last = [x for x in (studio_button(rows), app_button()) if x]
     if last:
         btns.append(last)
@@ -640,7 +644,7 @@ def bots_screen(chat, mid=None):
     btns += pairs([b(clip(a["label"]), f"app|{a['name']}", None if a["status"] == "online" else "danger")
                    for a in rows if a["name"] != SELF])
     btns += [[b("⬆️ Обновить всех", "upd"), b("✏️ Доработать", "fix")],
-             [b("📂 Все боты", "all"), b("🖥 Сервер", "srv")],
+             [b("📂 Все боты", "all"), b("🖥 Сервер", "srv"), b("🧪 Проверка", "chk")],
              [b("‹ Главная", "home"), b("⋯ Ещё", "more")]]
     return show(chat, mid, card(f"🤖 <b>Боты</b> · работает {up} из {len(rows)}", lines), btns)
 
@@ -1732,6 +1736,9 @@ def on_message(msg):
         send(chat, HELP)
     elif cmd == "/app":
         open_app(chat)
+    elif cmd == "/test":  # «/check» — проверка аккаунта у Секретаря, не путать
+        setting("wait", None)
+        check.ask(chat)
     elif cmd == "/server":
         server_card(chat, None)
     elif cmd == "/claude":
@@ -1894,6 +1901,9 @@ def callback(chat, mid, uid, data):
     elif data[0] == "bots":
         setting("wait", None)
         bots_screen(chat, mid)
+    elif data[0] == "chk":
+        note = check.on_callback(chat, mid, data)
+        note = STALE if note is None else note
     elif data[0] == "full":
         setting("wait", None)
         full_menu(chat, mid)
@@ -1985,7 +1995,7 @@ def callback(chat, mid, uid, data):
 
 
 COMMANDS = [("1", "Полное меню"), ("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
-            ("bots", "Боты и сервер"), ("login", "Войти в аккаунт"),
+            ("bots", "Боты и сервер"), ("test", "Проверка всех ботов"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
 ABOUT = "Боты на сервере и личный секретарь: пишите или говорите что угодно."
