@@ -1,1 +1,91 @@
-/* plan */
+/* plan — «Мой план»: цели недели с точками пн–вс, планер сна, лист настройки целей */
+
+/* точки дней: выполнено — заливка цветом цели, нет — пустой круг, сегодня — обводка, впереди — точка, нет данных — черта */
+.pl-dots { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); align-items: center; justify-items: center; gap: 2px; }
+.pl-d { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.pl-d i { display: block; width: 14px; height: 14px; border-radius: 50%; box-sizing: border-box; }
+.pl-d em { font: 700 10.5px/1 var(--head); font-style: normal; text-transform: uppercase; letter-spacing: .06em; color: var(--hint); }
+.pl-d em.on { color: var(--ink); }
+.pl-done { background: var(--c); box-shadow: 0 0 10px -2px color-mix(in srgb, var(--c) 70%, transparent); }
+.pl-miss { background: rgba(255, 255, 255, .06); border: 1.5px solid rgba(255, 255, 255, .22); }
+.pl-today { border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+.pl-future { transform: scale(.42); background: rgba(255, 255, 255, .22); }
+.pl-nodata { height: 2px !important; border-radius: 2px !important; background: rgba(255, 255, 255, .25); margin: 6px 0; }
+
+/* карточка на главной */
+.plan-mini { display: block; width: 100%; padding: 6px 18px 0; border: 0; color: inherit; font: inherit; text-align: left; }
+.pl-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(128px, 1.3fr) 52px; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--sep); }
+.pl-row:first-child { border-top: 0; }
+.pl-t { font: 700 14px/1.2 var(--head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-row .pl-d i { width: 11px; height: 11px; }
+.pl-row .pl-nodata { margin: 4.5px 0; }
+.pl-c { text-align: right; font: 700 18px/1 var(--num); color: var(--ink); white-space: nowrap; }
+.pl-c small, .pl-gc small { font: 700 .62em var(--num); color: var(--hint); }
+.pl-c.done, .pl-gc.done { color: var(--teal); }
+.pl-c.nodata, .pl-gc.nodata { color: var(--hint); }
+.pl-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 -18px; padding: 13px 18px;
+  border-top: 1px solid var(--sep); font-size: 13.5px; color: var(--hint); }
+.pl-more .chev::after { content: "›"; font-size: 22px; line-height: 1; color: rgba(255, 255, 255, .35); }
+
+/* экран */
+.pl-hero { display: flex; align-items: center; gap: 18px; }
+.pl-hero .kring-in b { font-size: 28px; }
+.pl-hero-t { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pl-hero-t b { font: 800 15px/1.3 var(--head); text-transform: uppercase; letter-spacing: .06em; }
+.pl-hero-t .small { margin: 0; }
+.pl-goal { margin-bottom: 12px; }
+.pl-gh { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.pl-ic { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.pl-ic .ico { width: 19px; height: 19px; }
+.pl-gm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pl-gm b { font: 800 13.5px/1.2 var(--head); text-transform: uppercase; letter-spacing: .08em; }
+.pl-gm .muted { font-size: 12.5px; line-height: 1.3; }
+.pl-gc { flex: none; font: 700 28px/1 var(--num); color: var(--ink); }
+.pl-st { margin: 14px 0 0 !important; color: var(--ink); }
+.pl-st.done { color: var(--teal); }
+.pl-st.behind { color: var(--hint); }
+
+/* планер сна */
+.pl-bed { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 4px 0 16px; }
+.pl-bed .tk { font: 800 11px/1.2 var(--head); text-transform: uppercase; letter-spacing: .1em; color: var(--hint); }
+.pl-bed > b { font: 700 54px/1 var(--num); color: var(--sleep); }
+.pl-opts { display: flex; flex-direction: column; gap: 8px; }
+.pl-opt { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 14px; border: 0; border-radius: var(--r-md);
+  background: var(--card-2); color: var(--ink); font: inherit; text-align: left; cursor: pointer; transition: box-shadow .2s, background .2s; }
+.pl-opt:active { transform: scale(.985); }
+.pl-opt.on { background: color-mix(in srgb, var(--sleep) 16%, var(--card-2)); box-shadow: inset 0 0 0 1.5px var(--sleep); }
+.pl-on { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .3); box-sizing: border-box; }
+.pl-opt.on .pl-on { border: 6px solid var(--sleep); }
+.pl-om { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pl-om b { font: 800 13px/1.2 var(--head); text-transform: uppercase; letter-spacing: .08em; }
+.pl-om span { font-size: 12.5px; color: var(--hint); }
+.pl-opt > .num { font: 700 20px/1 var(--num); }
+.pl-wake { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--sep); }
+.pl-wk { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pl-wk b { font: 800 13px/1.2 var(--head); text-transform: uppercase; letter-spacing: .08em; }
+.pl-wk .muted { font-size: 12.5px; }
+.pl-wake input { flex: none; width: 116px; padding: 10px 12px; font: 700 18px var(--num); text-align: center; color-scheme: dark; }
+.pl-reset { display: block; margin: 10px 0 0; padding: 4px 0; background: none; border: 0; cursor: pointer; }
+.pl-foot { margin: 6px 8px 0; line-height: 1.45; }
+
+/* лист «Изменить цели» */
+.pl-lead { margin: -6px 2px 14px; }
+.pl-eg { padding: 14px; margin-bottom: 10px; border-radius: var(--r-lg); background: var(--card-2); }
+.pl-egh { display: flex; align-items: center; gap: 12px; }
+.pl-egb { margin-top: 12px; }
+.pl-eg.off .pl-egb { display: none; }
+.pl-eg.off .pl-ic { color: var(--hint); background: rgba(255, 255, 255, .06); }
+.pl-eg .seg { background: rgba(255, 255, 255, .06); margin-bottom: 10px; }
+.pl-step { display: flex; align-items: center; gap: 10px; }
+.pl-step button { flex: none; width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .08);
+  color: var(--ink); font: 700 20px/1 var(--num); cursor: pointer; }
+.pl-step button:active { transform: scale(.92); }
+.pl-step b { min-width: 56px; text-align: center; font: 700 22px/1 var(--num); }
+.pl-step .muted { font-size: 13px; }
+.pl-bt { margin-top: 12px; padding-top: 12px; }
+.sheet .btn.primary[data-save] { width: 100%; margin-top: 8px; }
+
+@media (min-width: 700px) {
+  .pl-row { grid-template-columns: minmax(0, 1fr) minmax(200px, 1.6fr) 60px; }
+}
