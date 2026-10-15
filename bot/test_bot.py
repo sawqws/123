@@ -1916,5 +1916,142 @@ class WaitTest(BotTest):
         self.assertIn("Ожидание", self.last()[0])
 
 
+class MirrorTest(BotTest):
+    """🧩 Зеркало сайта (bot/site/mirror/overlay.js): маршруты /api/site/* поверх тех же функций, что кнопки в чате."""
+
+    def setUp(self):
+        super().setUp()
+        bot.save_settings({"owner": CHAT})
+
+    def make_draft(self, **extra):
+        self.say(URL)  # бот решил задание с проверкой учителем — черновик с картинкой
+        d = bot.draft(TASK)
+        d.update(extra)
+        bot.set_draft(d)
+        return d
+
+    def test_wait(self):
+        now = 1_800_000_000
+        bot.set_draft({"task": "t1", "url": URL, "title": "Гринёв", "pairs": [], "own_files": False,
+                       "send_at": now + 2 * 3600 + 5 * 60})
+        bot.set_draft({"task": "t2", "url": URL, "title": "Карта", "pairs": [], "own_files": False})
+        bot.save_settings({**bot.load_settings(), "active": {TASK: {"url": URL}}})
+        with bot.running_lock:
+            bot.running.add(TASK)
+        try:
+            w = bot.app_site_wait(now=now)
+        finally:
+            with bot.running_lock:
+                bot.running.discard(TASK)
+        self.assertEqual([x["task"] for x in w["timed"]], ["t1"])
+        self.assertEqual(w["timed"][0]["soon"], "через 2 ч 5 мин")
+        when = bot.datetime.datetime.fromtimestamp(now + 2 * 3600 + 5 * 60, bot.MSK)
+        self.assertEqual(w["timed"][0]["hhmm"], f"{when:%H:%M}")
+        self.assertEqual([x["task"] for x in w["held"]], ["t2"])
+        self.assertEqual(w["work"], [{"task": TASK, "title": "Конспект §5", "url": URL}])
+        self.assertEqual(w["sending"], [])
+        self.assertIn("sending", bot.app_state()["drafts"][0])          # у черновиков в /api/state — таймер и отправка
+        self.assertEqual(bot.app_state()["drafts"][0]["send_at"], now + 2 * 3600 + 5 * 60)
+
+    def test_send_modes(self):
+        self.make_draft()
+        with self.assertRaises(ValueError):
+            bot.app_site_send({"task": TASK, "mode": "at", "text": "когда-нибудь"})
+        with self.assertRaises(ValueError):
+            bot.app_site_send({"task": TASK, "mode": "at", "at": int(time.time()) - 60})   # время прошло
+        at = int(time.time()) + 3600
+        bot.app_site_send({"task": TASK, "mode": "at", "at": at})
+        self.assertEqual(bot.draft(TASK)["send_at"], at)
+        self.assertIn("Отправлю", self.last()[0])
+        bot.app_site_hold({"task": TASK})                                # ✖ Отменить таймер
+        self.assertNotIn("send_at", bot.draft(TASK))
+        self.assertIn("Не отправляю", self.last()[0])
+        bot.set_delay_range("0")
+        bot.app_site_send({"task": TASK, "mode": "later"})               # «с задержкой» даже при «сразу» — 4–12 мин
+        left = bot.draft(TASK)["send_at"] - time.time()
+        self.assertTrue(4 * 60 - 5 <= left <= 12 * 60 + 5, left)
+        self.assertEqual(self.nodes, [])                                 # ничего ещё не ушло
+        bot.app_site_send({"task": TASK, "mode": "now"})                 # ⚡ Сразу
+        self.assertEqual(self.nodes[-1][:2], ("horo/answer.js", URL))
+        self.assertIsNone(bot.draft(TASK))
+        with self.assertRaises(ValueError):
+            bot.app_site_send({"task": TASK, "mode": "now"})
+
+    def test_send_by_setting_and_text_time(self):
+        self.make_draft()
+        bot.app_site_send({"task": TASK, "mode": "at", "text": "через 40 минут"})
+        self.assertAlmostEqual(bot.draft(TASK)["send_at"], time.time() + 40 * 60, delta=5)
+        bot.set_delay_range("0")
+        bot.app_site_send({"task": TASK, "mode": "send"})                 # по настройке «сразу» — отправлено
+        self.assertEqual(self.nodes[-1][0], "horo/answer.js")
+        self.make_draft()
+        with self.assertRaises(ValueError):
+            bot.app_site_send({"task": TASK, "mode": "boom"})
+
+    def test_settings(self):
+        s = bot.app_site_settings_set({"delay": "15-40", "human": False})
+        self.assertEqual((s["delay"], s["label"], s["human"]), ("15-40", "15–40 мин", False))
+        self.assertEqual(bot.btn_delay(), "⏳ Отправка: 15–40 мин")       # та же настройка, что в чате
+        with self.assertRaises(ValueError):
+            bot.app_site_settings_set({"delay": "1-999"})
+        self.assertEqual([c["v"] for c in bot.app_site_settings()["choices"]], ["0", "2-5", "4-12", "15-40"])
+
+    def test_times(self):
+        times = bot.app_site_times()["times"]
+        self.assertTrue(times and all(t["at"] > time.time() for t in times))
+        self.assertEqual(times[0]["label"], "через 30 мин")
+
+    def test_draft_files(self):
+        self.make_draft()
+        pathlib.Path(drafts.files_dir(TASK), "list.pdf").write_bytes(b"%PDF")
+        r = bot.app_site_draft_files({"task": TASK})
+        self.assertEqual([f["name"] for f in r["files"]], ["hand.png", "list.pdf"])
+        self.assertEqual(r["files"][0]["data"], "data:image/png;base64,cG5n")   # b"png"
+        self.assertEqual(r["files"][1]["data"], "")                             # PDF — только имя
+        with self.assertRaises(ValueError):
+            bot.app_site_draft_files({"task": "нет-такого"})
+
+    def test_exams(self):
+        data = dict(ExamsTest.DATA, at=time.time() * 1000)
+        with mock.patch.object(bot, "overview", lambda: data):
+            r = bot.app_site_exams({"lvl": "3"})
+            self.assertEqual([x["url"].rsplit("/", 1)[1] for x in r["items"]], ["e"])
+            self.assertEqual(r["left"], {"2": 3, "3": 1, "all": 4})
+            self.assertEqual(len(bot.app_site_exams({})["items"]), 5)
+        self.assertEqual(self.reads, [])                                  # свежие данные — без похода на сайт
+        self.ov = dict(ExamsTest.DATA, at=1)
+        bot.app_site_exams({})                                            # старые — обновил с сайта
+        self.assertEqual(len(self.reads), 1)
+
+    def test_prep_topic(self):
+        topics = [{"uuid": "11111111-1111-1111-1111-111111111111", "subj": "Химия", "title": "Атомы",
+                   "start": "2026-10-01", "deadline": "2026-10-20", "tasks": []}]
+        runs = []
+        with mock.patch.object(bot, "prep_topics", lambda fetch=True: topics), \
+                mock.patch.object(bot, "prep_run", lambda chat, minutes, more=False: runs.append(minutes)):
+            bot.app_site_prep({"topic": topics[0]["uuid"], "minutes": 10})
+            self.assertEqual(runs, [10])
+            self.assertEqual(bot.PREP_CTX[CHAT]["subj"], "Химия")
+            self.assertEqual([t["uuid"] for t in bot.PREP_CTX[CHAT]["topics"]], [topics[0]["uuid"]])
+            with self.assertRaises(ValueError):
+                bot.app_site_prep({"topic": "../x", "minutes": 5})
+
+    def test_routes_and_overlay_files(self):
+        for path in ("/api/site/wait", "/api/site/exams", "/api/site/times", "/api/site/send", "/api/site/hold",
+                     "/api/site/settings", "/api/site/settings/set", "/api/site/draft/files", "/api/site/prep"):
+            self.assertIn(path, bot.ROUTES)
+        mirror = os.path.join(HERE, "site", "mirror")
+        js = pathlib.Path(mirror, "overlay.js").read_text()
+        css = pathlib.Path(mirror, "overlay.css").read_text()
+        for path in ("/api/site/wait", "/api/site/exams", "/api/site/send", "/api/site/hold", "/api/solve",
+                     "/api/draft/save", "/api/draft/drop", "/api/prep/state", "/api/site/settings/set"):
+            self.assertIn(path, js)
+        self.assertIn("'X-Site': '1'", js)
+        import re as _re
+        classes = set(_re.findall(r"\.([a-zA-Z][\w-]*)\s*[{,:.\[ >]", _re.sub(r"/\*.*?\*/", "", css, flags=_re.S)))
+        foreign = {c for c in classes if not c.startswith("hdpx")}
+        self.assertEqual(foreign, set(), "в overlay.css только свои классы hdpx-")
+
+
 if __name__ == "__main__":
     unittest.main()

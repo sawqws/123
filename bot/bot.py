@@ -18,6 +18,7 @@
 в черновик, иначе Claude ищет на нём задание (ссылку или название из списка) и предлагает решить.
 Видео и кружки: речь — как голосовое, кадры — как фото.
 """
+import base64
 import datetime
 import html
 import io
@@ -2752,8 +2753,10 @@ def refresh_overview():
 
 
 def app_draft_info(d):
+    with sending_lock:
+        now = d["task"] in SENDING
     return {"task": d["task"], "title": d["title"], "url": d["url"], "text": drafts.read(d["task"]),
-            "files": len(drafts.files(d["task"]))}
+            "files": len(drafts.files(d["task"])), "send_at": d.get("send_at") or 0, "sending": now}
 
 
 def app_state(_=None):
@@ -3302,6 +3305,155 @@ def app_site_running(_):
 
 
 ROUTES.update({"/api/site/theory": app_site_theory, "/api/site/running": app_site_running})
+
+
+# ---------- 🧩 Зеркало: функции бота поверх настоящего horodigital.ru (bot/site/mirror/overlay.js) ----------
+# Ожидание, подтверждения, отправка черновика «сразу / с задержкой / ко времени», настройки отправки, картинки
+# черновика, подготовка по одной теме. Всё — те же функции, что у кнопок в чате (now:/later:/at:/hold:, sd:, ⏳, 🎯).
+
+def site_task_url(task):
+    """Ссылка на задание в работе (из active в настройках) или пусто."""
+    return ((load_settings().get("active") or {}).get(task) or {}).get("url", "")
+
+
+def site_when(at, now):
+    when = datetime.datetime.fromtimestamp(at, MSK)
+    left = max(0, int(at - now))
+    soon = f"через {left // 60} мин" if left < 3600 else f"через {left // 3600} ч {left % 3600 // 60} мин"
+    day = "" if when.date() == datetime.datetime.fromtimestamp(now, MSK).date() else "завтра "
+    return {"at": int(at), "left": left, "hhmm": f"{when:%H:%M}", "when": f"{day}в {when:%H:%M}", "soon": soon}
+
+
+def app_site_wait(_=None, now=None):
+    """⏳ Ожидание для сайта: по таймеру (во сколько и через сколько), отправляются сейчас, ждут «Отправить», в работе."""
+    now = now or time.time()
+    timed, held, sending, work = waiting(now)
+    brief = lambda d: {"task": d["task"], "title": d["title"], "url": d["url"]}
+    return {"timed": [{**brief(d), **site_when(d["send_at"], now)} for d in timed],
+            "sending": [brief(d) for d in sending], "held": [brief(d) for d in held],
+            "work": [{"task": t, "title": drafts.task_info(t)[1] or "Задание", "url": site_task_url(t)} for t in work],
+            "busy": lock.locked(), "delay": delay_label()}
+
+
+def app_site_exams(b):
+    """🎯 Подтверждения для сайта: пункты exam_items (lvl: 2, 3 или все), данные старше 10 минут — обновляются."""
+    data = overview()
+    at = (data or {}).get("at") or 0
+    stale = not data or time.time() - at / (1000 if at > 1e11 else 1) > 600
+    if (b.get("fresh") or stale) and not OV["loading"]:
+        OV["loading"] = True
+        threading.Thread(target=refresh_overview, daemon=True).start()
+        data = overview() or data
+    items = exam_items(data or {})
+    lvl = str(b.get("lvl") or "all")
+    left = lambda lv: sum(x["status"] != "approved" and lv in (None, x["lvl"]) for x in items)
+    return {"items": [x for x in items if lvl not in ("2", "3") or str(x["lvl"]) == lvl],
+            "left": {"2": left(2), "3": left(3), "all": left(None)}, "at": (data or {}).get("at") or 0,
+            "loading": OV["loading"], "error": OV["error"]}
+
+
+def app_site_times(_=None):
+    """Варианты «🕐 Ко времени» — те же, что кнопки в чате."""
+    return {"times": [{"label": lab, "at": ts} for lab, ts in time_choices()]}
+
+
+def app_site_send(b):
+    """Отправка черновика с сайта: mode = send (по настройке «⏳ Отправка») · now (сразу) · later (с задержкой, даже
+    если в настройке «сразу» — тогда 4–12 мин) · at (к моменту at, epoch, или ко времени словами text: «19:40»)."""
+    d = draft(str(b.get("task") or "") or None)
+    if not d:
+        raise ValueError("Черновика уже нет")
+    chat, mode = owner(), str(b.get("mode") or "send")
+    if mode == "at":
+        try:
+            at = int(b.get("at") or 0)
+        except (TypeError, ValueError):
+            at = 0
+        at = at or parse_time(str(b.get("text") or "")) or 0
+        if not time.time() + 30 <= at <= time.time() + 3 * 86400 + 600:
+            raise ValueError("Не понял время — напиши, например, 19:40 или «через 40 минут»")
+        schedule_send(chat, d["task"], at=at)
+    elif mode == "now":
+        d.pop("send_at", None)
+        set_draft(d)
+        threading.Thread(target=submit_draft, args=(chat, d["task"]), daemon=True).start()
+    elif mode == "later":
+        rng = delay_range()
+        threading.Thread(target=schedule_send, args=(chat, d["task"], send_delay(rng if rng != "0" else "4-12")),
+                         daemon=True).start()
+    elif mode == "send":
+        threading.Thread(target=schedule_send, args=(chat, d["task"]), daemon=True).start()
+    else:
+        raise ValueError("Не знаю такой отправки")
+    return app_state()
+
+
+def app_site_hold(b):
+    """«✖ Отменить» таймер отправки (как кнопка hold: в чате): черновик остаётся."""
+    d = draft(str(b.get("task") or "") or None)
+    if not d:
+        raise ValueError("Черновика уже нет")
+    if d.pop("send_at", None):
+        set_draft(d)
+        remember_mids(d["task"], send(owner(), card("Не отправляю", note=f"{esc(d['title'])} · таймер отменён на сайте, "
+                                                    "черновик остался", icon="👌"),
+                                      markup=draft_kb(d["task"]), raw_html=True))
+    return app_state()
+
+
+def app_site_settings(_=None):
+    return {"human": human_on(), "delay": delay_range(), "label": delay_label(),
+            "choices": [{"v": v, "label": lab} for v, lab in SEND_CHOICES]}
+
+
+def app_site_settings_set(b):
+    """Настройки «⏳ Отправка» с сайта: delay — задержка ответа учителю, human — паузы в тестах «как человек»."""
+    if "delay" in b:
+        if str(b["delay"]) not in dict(SEND_CHOICES):
+            raise ValueError("Такой задержки нет")
+        set_delay_range(str(b["delay"]))
+    if "human" in b:
+        set_human(bool(b["human"]))
+    return app_site_settings()
+
+
+DRAFT_SHOW = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+              ".gif": "image/gif"}
+DRAFT_SHOW_MAX = 12_000_000  # всего байт картинок в одном ответе (дальше — только имена)
+
+
+def app_site_draft_files(b):
+    """Картинки черновика (решение от руки, заполненная таблица) для сайта — data: URL; PDF — только имя."""
+    d = draft(str(b.get("task") or "") or None)
+    if not d:
+        raise ValueError("Черновика уже нет")
+    out, total = [], 0
+    for path in drafts.files(d["task"]):
+        name = os.path.basename(path)
+        kind = DRAFT_SHOW.get(os.path.splitext(name)[1].lower())
+        size = os.path.getsize(path)
+        if not kind or total + size > DRAFT_SHOW_MAX:
+            out.append({"name": name, "data": ""})
+            continue
+        total += size
+        with open(path, "rb") as f:
+            out.append({"name": name, "data": f"data:{kind};base64," + base64.b64encode(f.read()).decode()})
+    return {"task": d["task"], "files": out}
+
+
+def app_site_prep(b):
+    """«📖 Подготовь меня» на странице темы: тема (uuid) и минуты -> та же подготовка, что в приложении."""
+    uid, topics = str(b.get("topic") or ""), prep_topics(fetch=False)
+    t = next((x for x in topics if x.get("uuid") == uid), None) if UUID.fullmatch(uid) else None
+    if not t:
+        raise ValueError("Этой темы нет в данных бота — обнови их и попробуй ещё раз")
+    return app_prep_run({"subj": prep.subject_of(t), "topics": [uid], "minutes": b.get("minutes") or 5})
+
+
+ROUTES.update({"/api/site/wait": app_site_wait, "/api/site/exams": app_site_exams, "/api/site/times": app_site_times,
+               "/api/site/send": app_site_send, "/api/site/hold": app_site_hold,
+               "/api/site/settings": app_site_settings, "/api/site/settings/set": app_site_settings_set,
+               "/api/site/draft/files": app_site_draft_files, "/api/site/prep": app_site_prep})
 
 
 def app_kb(text="✨ Открыть приложение"):
