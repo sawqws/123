@@ -155,6 +155,19 @@ class BotTest(unittest.TestCase):
         names = [os.path.basename(f) for f in drafts.files(TASK)]
         self.assertEqual(names, ["01_photo.jpg", "02_photo.jpg"])
 
+    def test_album_photos_do_not_overwrite_each_other(self):
+        """Фото приходят параллельно (альбом): под одним номером не пишем, второе не затирает первое."""
+        self.say(URL)
+        task = bot.draft()["task"]
+        # настоящие потоки (Thread в тестах подменён на синхронный): проверяем номера под замком
+        real = bot.REAL_THREAD
+        ts = [real(target=drafts.add_file, args=(task, b"x%d" % i, "p.jpg")) for i in range(8)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        got = [os.path.basename(f) for f in drafts.files(task) if f.endswith("_p.jpg")]
+        self.assertEqual(len(got), 8)
+        self.assertEqual(len(set(got)), 8)
+
     def test_send_waits_like_a_human(self):
         self.say(URL)
         with mock.patch.object(bot, "SEND_DELAY", "5-5"):
@@ -950,6 +963,124 @@ class BotTest(unittest.TestCase):
             self.assertEqual(len(self.msgs), n)
             self.assertNotIn("не сдаю", str([p for m, p in calls if m == "editMessageText" and p["message_id"] == 30]))
 
+    def edit_with(self, *errors):
+        """Правка сообщения, на которую Telegram отвечает перечисленными ошибками 400 (потом — успехом)."""
+        import io
+        import urllib.error
+        calls, queue = [], list(errors)
+
+        def tg(method, **p):
+            calls.append((method, p))
+            if method == "editMessageText" and queue:
+                raise urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(
+                    json.dumps({"ok": False, "error_code": 400, "description": queue.pop(0)}).encode()))
+            return {"ok": True, "result": {"message_id": 99}}
+        return calls, mock.patch.object(bot, "tg", tg)
+
+    def test_edit_failures_are_soft(self):
+        """editMessageText 400: «не изменено» — молча; разметка не принята — тот же текст без неё; сообщения
+        нет — новое сообщение; у живой карточки (resend=False) новое не шлём."""
+        logs = []
+        with mock.patch("builtins.print", lambda *a: logs.append(a)):
+            calls, patch = self.edit_with("Bad Request: message is not modified: specified new message content")
+            with patch:
+                bot.edit(CHAT, 7, "<b>то же</b>")
+            self.assertEqual([m for m, _ in calls], ["editMessageText"])
+            self.assertEqual(logs, [])  # ничего в лог
+
+            calls, patch = self.edit_with("Bad Request: can't parse entities: Unsupported start tag \"x\" at byte offset 3")
+            with patch:
+                bot.edit(CHAT, 7, "<b>жирный</b> и <x>тег", bot.kb([("Ок", "m:more")]))
+            self.assertEqual([m for m, _ in calls], ["editMessageText", "editMessageText"])
+            self.assertNotIn("parse_mode", calls[1][1])
+            self.assertEqual(calls[1][1]["text"], "жирный и тег")
+            self.assertIn("m:more", calls[1][1]["reply_markup"])  # кнопки остались
+
+            calls, patch = self.edit_with("Bad Request: message to edit not found")
+            with patch:
+                bot.edit(CHAT, 7, bot.card("Готово", icon="✅"), bot.kb([("Ок", "m:more")]))
+            self.assertEqual([m for m, _ in calls], ["editMessageText", "sendMessage"])
+            self.assertIn("Готово", calls[1][1]["text"])
+            self.assertIn("m:more", calls[1][1]["reply_markup"])
+
+            calls, patch = self.edit_with("Bad Request: message to edit not found")
+            with patch:
+                bot.edit(CHAT, 7, "статус", resend=False)  # живая карточка уже удалена — не воскрешаем
+            self.assertEqual([m for m, _ in calls], ["editMessageText"])
+            self.assertEqual(logs, [])
+            with patch:  # удалить то, чего нет, и снять кнопки у удалённого — тоже тихо
+                pass
+            calls, patch = self.edit_with()
+            with patch:
+                bot.edit(CHAT, 7, "x" * 9000)  # длиннее лимита — режется, а не 400
+            self.assertLessEqual(len(calls[0][1]["text"]), 4096)
+
+    def test_live_card_is_not_edited_after_done(self):
+        """Тикер карточки не правит сообщение, которое уже удалено (иначе в логе 400 «message to edit not found»)."""
+        calls, patch = self.edit_with()
+        with patch:
+            live = bot.Live(CHAT, "Решаю", progress=False)
+            n = len(calls)
+            live.refresh()
+            self.assertEqual(len(calls), n + 1)
+            live.done()
+            calls_after = len(calls)
+            live.refresh()
+            live.step("ещё шаг", 0.5)
+        self.assertEqual(len(calls), calls_after)
+        self.assertEqual(calls[-1][0], "deleteMessage")
+
+    def test_app_shows_progress_while_slots_are_free(self):
+        """Приложение показывает живой ход, когда решается хоть одно задание (раньше — только когда заняты все 3 места)."""
+        self.assertEqual((bot.app_state()["working"], bot.app_state()["live"]), (False, None))
+        calls, patch = self.edit_with()
+        with patch:
+            live = bot.Live(CHAT, "Решаю задание", "Тест", progress=False)
+            bot.lock.acquire()  # одно задание из трёх
+            try:
+                st = bot.app_state()
+                self.assertEqual((st["busy"], st["working"], st["others"]), (False, True, 0))
+                self.assertEqual(st["live"]["title"], "Решаю задание")
+                second = bot.Live(CHAT, "Второе", progress=False)
+                self.assertEqual(bot.app_state()["others"], 1)
+                second.done()
+                self.assertEqual(bot.app_state()["live"]["title"], "Решаю задание")  # осталось первое
+            finally:
+                bot.lock.release()
+                live.done()
+        self.assertEqual((bot.app_state()["working"], bot.app_state()["live"]), (False, None))
+
+    def test_children_do_not_get_the_bot_token(self):
+        """Скрипты и Claude запускаются без токена бота (задание с сайта — чужой текст)."""
+        with mock.patch.dict(bot.os.environ, {"TELEGRAM_TOKEN": "secret", "HORO_LOGIN": "x"}):
+            env = bot.child_env(A="1")
+        self.assertNotIn("TELEGRAM_TOKEN", env)
+        self.assertEqual((env["HORO_LOGIN"], env["A"]), ("x", "1"))
+
+    def test_due_send_uses_fresh_draft(self):
+        """Отложенная отправка берёт свежий черновик: отменили («hold») — не уходит."""
+        bot.set_draft({"task": TASK, "url": URL, "title": "Т", "pairs": [], "own_files": False, "send_at": 100}, active=True)
+        d = bot.draft(TASK)
+        d.pop("send_at")
+        bot.set_draft(d)
+        bot.due_sends(now=200)
+        self.assertEqual(self.nodes, [])
+
+    def test_old_inbox_is_cleaned(self):
+        import time
+        old, new = os.path.join(bot.INBOX, "old"), os.path.join(bot.INBOX, "new")
+        os.makedirs(old)
+        os.makedirs(new)
+        pathlib.Path(old, "a.jpg").write_bytes(b"x")
+        t = time.time() - 20 * 86400
+        os.utime(old, (t, t))
+        self.assertEqual(bot.clean_inbox(14), 1)
+        self.assertEqual((os.path.exists(old), os.path.exists(new)), (False, True))
+
+    def test_time_words_are_bounded(self):
+        self.assertIsNone(bot.parse_time("через 99999 ч"))
+        self.assertIsNotNone(bot.parse_time("через 2 ч"))
+
     def test_crash_is_reported_not_silent(self):
         """Сбой в обработчике: крутилка у кнопки снимается, Глебу — «⚠️ Что-то сломалось», а не тишина."""
         calls, patch = self.all_calls()
@@ -1008,6 +1139,10 @@ class AppTest(BotTest):
             self.assertEqual(get("/app.js")[0], 200)
             self.assertEqual(get("/../bot.py")[0], 404)
             self.assertEqual(get("/%2e%2e%2fbot.py")[0], 404)
+            self.assertEqual(get("/api/auto", self.init_data())[0], 405)  # действия — не по GET
+            self.assertEqual(get("/api/draft/send", self.init_data())[0], 405)
+            self.assertEqual(get("/api/overview", self.init_data())[0], 200)  # чтение — по GET
+            self.assertEqual(get("/api/auto", None)[0], 405)  # 405 и без входа: даже не пробуем
 
             def post(path, body, uid=CHAT):
                 c = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=10)

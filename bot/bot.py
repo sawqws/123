@@ -25,6 +25,7 @@ import json
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -340,19 +341,78 @@ def send(chat, text, menu=False, markup=None, raw_html=False, effect=None):
     return mid
 
 
+HARMLESS = ("message is not modified", "message to edit not found", "message to delete not found",
+            "message can't be edited", "message can't be deleted", "message_id_invalid", "message to react not found",
+            "query is too old", "query id is invalid")  # устарело или уже сделано — не ошибка
+
+
+def tg_why(e):
+    """Описание ошибки Telegram (нижним регистром): из тела ответа HTTPError, иначе текст исключения."""
+    why = getattr(e, "_why", None)
+    if why is not None:
+        return why
+    body = b""
+    try:
+        body = e.read() if hasattr(e, "read") else b""
+    except Exception:
+        pass
+    try:
+        why = str(json.loads(body).get("description") or "")
+    except Exception:
+        why = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
+    why = (why or str(e)).lower()
+    try:
+        e._why = why
+    except Exception:
+        pass
+    return why
+
+
 def quiet(method, **params):
     """Вызов Telegram, ошибка которого не важна (правка, удаление, реакция)."""
     try:
         return call(method, **params)
     except Exception as e:
-        if "not modified" not in str(getattr(e, "read", lambda: b"")() or e):
-            print(method, e)
+        why = tg_why(e)
+        if not any(h in why for h in HARMLESS):
+            print(method, e, "—", why[:200])
 
 
-def edit(chat, mid, text, markup=None):
-    if mid:
-        quiet("editMessageText", chat_id=chat, message_id=mid, text=premium(text, True), parse_mode="HTML",
-              disable_web_page_preview="true", **({"reply_markup": markup} if markup else {}))
+def edit(chat, mid, text, markup=None, resend=True):
+    """Правка сообщения на месте. Не изменилось — молча; разметку не принял — тем же текстом без неё; сообщение
+    удалено или не правится — resend: то же новым сообщением (карточку живого статуса так не воскрешаем)."""
+    if not mid:
+        return
+    if len(text) > 4000:
+        text = split(text)[0]
+    params = dict(chat_id=chat, message_id=mid, text=premium(text, True), parse_mode="HTML",
+                  disable_web_page_preview="true", **({"reply_markup": markup} if markup else {}))
+    try:
+        call("editMessageText", **params)
+        return
+    except urllib.error.HTTPError as e:
+        why = tg_why(e)
+        if "not modified" in why:
+            return
+        if "parse entities" in why or "can't parse" in why or "unsupported start tag" in why:
+            params.pop("parse_mode")
+            params["text"] = html.unescape(re.sub(r"<[^>]+>", "", text))[:4000]
+            try:
+                call("editMessageText", **params)
+            except Exception as e2:
+                if "not modified" not in tg_why(e2):
+                    print("editMessageText (без разметки):", e2)
+            return
+        if resend and any(w in why for w in ("message to edit not found", "message can't be edited", "message_id_invalid")):
+            try:
+                send(chat, text, markup=markup, raw_html=True)
+            except Exception as e2:
+                print("edit -> send:", e2)
+            return
+        if not any(h in why for h in HARMLESS):
+            print("editMessageText", e, "—", why[:200])
+    except Exception as e:
+        print("editMessageText", e)
 
 
 def delete(chat, mid):
@@ -393,7 +453,9 @@ class Live:
         self.done_steps, self.current, self.frac = [], "", 0.0
         self.t0, self.tick = time.time(), 0
         self.stop = threading.Event()
+        self.lock = threading.Lock()  # правка (тикер и шаги Claude) не должна обгонять удаление карточки
         Live.active = self  # приложение показывает ту же работу, что и карточка в чате
+        Live.items.append(self)
         self.mid = send(chat, self.render(), raw_html=True)
         quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
@@ -437,9 +499,12 @@ class Live:
         self.refresh()
 
     def refresh(self):
-        if self.sub_fn and not self.sub:
-            self.sub = self.sub_fn() or ""
-        edit(self.chat, self.mid, self.render())
+        with self.lock:
+            if self.stop.is_set():  # работа закончена, карточка удалена или удаляется
+                return
+            if self.sub_fn and not self.sub:
+                self.sub = self.sub_fn() or ""
+            edit(self.chat, self.mid, self.render(), resend=False)
 
     def loop(self):
         while not self.stop.wait(3):
@@ -450,9 +515,12 @@ class Live:
 
     def done(self):
         self.stop.set()
-        if Live.active is self:
-            Live.active = None
-        delete(self.chat, self.mid)
+        if self in Live.items:
+            Live.items.remove(self)
+        if Live.active is self:  # параллельно идут несколько заданий — показываем самое свежее из оставшихся
+            Live.active = Live.items[-1] if Live.items else None
+        with self.lock:
+            delete(self.chat, self.mid)
 
     def state(self):
         """Для приложения: то же, что на карточке, без HTML."""
@@ -465,6 +533,7 @@ class Live:
 
 
 Live.active = None
+Live.items = []  # все идущие сейчас карточки (заданий до HDP_PARALLEL, плюс проверка, подготовка…)
 
 
 def plain(x):
@@ -529,9 +598,10 @@ def save_emoji(chat, msg):
         send(chat, err("Премиум-эмодзи в сообщении не нашёл", "Пришли именно премиум-эмодзи из набора Telegram Premium"),
              menu=True, raw_html=True)
         return
-    s = load_settings()
-    s.setdefault("emoji", {}).update(found)
-    save_settings(s)
+    with settings_lock:
+        s = load_settings()
+        s.setdefault("emoji", {}).update(found)
+        save_settings(s)
     shown = sorted({a for a in found if "\ufe0f" not in a} | {a for a in found if a.replace("\ufe0f", "") not in found})
     send(chat, card("Запомнил премиум-эмодзи", esc(" ".join(shown)), "Сбросить все: /emoji_reset", "✨"),
          menu=True, raw_html=True)
@@ -551,9 +621,16 @@ def save_settings(s):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
     with settings_lock:
         tmp = f"{SETTINGS}.{threading.get_ident()}"
-        with open(tmp, "w") as f:
-            json.dump(s, f)
-        os.replace(tmp, SETTINGS)
+        try:
+            with open(tmp, "w") as f:
+                json.dump(s, f)
+            os.replace(tmp, SETTINGS)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def owner():
@@ -576,7 +653,8 @@ def ui_mode():
 def set_mode(m):
     if m not in MODES:
         raise ValueError("Режим — chat или app")
-    s = load_settings(); s["mode"] = m; save_settings(s)
+    with settings_lock:
+        s = load_settings(); s["mode"] = m; save_settings(s)
 
 
 def mode_note():
@@ -617,11 +695,21 @@ def on_mode(chat, mid, cq_id, key):
 
 # ---------- Работа ----------
 
+def child_env(**extra):
+    """Окружение для скриптов и Claude: без токена бота (им он не нужен; задание с сайта — чужой текст, а Claude
+    умеет запускать код)."""
+    env = {k: v for k, v in os.environ.items() if k != "TELEGRAM_TOKEN"}
+    env.update(extra)
+    return env
+
+
 def node(*args, timeout=300, prog="node"):
     try:
-        res = subprocess.run([prog, *args], cwd=REPO, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run([prog, *args], cwd=REPO, capture_output=True, text=True, timeout=timeout, env=child_env())
     except subprocess.TimeoutExpired:
         return False, "⚠️ Сайт не ответил вовремя, попробуй позже."
+    except FileNotFoundError:
+        return False, f"⚠️ На сервере нет {prog} — нужна переустановка (install.sh)."
     if res.returncode != 0:
         print(prog, *args, "->", res.returncode, (res.stderr or res.stdout)[-3000:])  # подробности — в лог pm2
         return False, explain(res.stderr or res.stdout)
@@ -651,8 +739,9 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
         + (["--allowedTools", *tools] if tools else [])
     try:
         proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                env={**os.environ, "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "900000",
-                                     **({} if human_on() else {"HORO_FAST": "1"})})
+                                start_new_session=True,  # своя группа: по таймауту убиваем и node/Chromium, что он запустил
+                                env=child_env(BASH_DEFAULT_TIMEOUT_MS="900000", BASH_MAX_TIMEOUT_MS="900000",
+                                              **({} if human_on() else {"HORO_FAST": "1"})))
         # submit.js сдаёт тест «как человек» (паузы до 6 мин) — обычные 2 мин на команду его бы оборвали
     except FileNotFoundError:
         return False, "⚠️ Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
@@ -661,7 +750,10 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
     def watchdog():
         if not finished.wait(timeout):
             late.set()
-            proc.kill()
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (OSError, AttributeError):
+                proc.kill()
 
     REAL_THREAD(target=watchdog, daemon=True).start()
     result, other = None, []
@@ -1199,9 +1291,12 @@ def add_draft_photo(chat, msg, task=None):
         print("draft photo:", e)
         send(chat, err("Не получилось скачать фото, пришли ещё раз"), markup=draft_kb(d["task"]), raw_html=True)
         return
-    drafts.add_file(d["task"], data, name, replace=not d["own_files"])  # первое своё фото заменяет мои картинки
-    d["own_files"] = True
-    set_draft(d, active=True)
+    with settings_lock:  # альбом — несколько фото сразу: «первое своё фото заменяет мои картинки» — только первое
+        d = draft(d["task"]) or d
+        first = not d.get("own_files")
+        d["own_files"] = True
+        set_draft(d, active=True)
+        drafts.add_file(d["task"], data, name, replace=first)
     n = len(drafts.files(d["task"]))
     remember_mids(d["task"], msg.get("message_id"), send(
         chat, card("Фото добавил", note=f"{esc(d['title'])} · всего {n} {plural(n, 'картинка', 'картинки', 'картинок')}. "
@@ -1324,7 +1419,8 @@ def parse_time(text, now=None):
     m = re.search(r"через\s+(\d+)\s*(мин|ч)", t)
     if m:
         n = int(m.group(1))
-        return int((now + (datetime.timedelta(hours=n) if m.group(2) == "ч" else datetime.timedelta(minutes=n))).timestamp())
+        delta = datetime.timedelta(hours=n) if m.group(2) == "ч" else datetime.timedelta(minutes=n)
+        return int((now + delta).timestamp()) if delta <= datetime.timedelta(days=3) else None
     m = re.search(r"(?<!\d)(\d{1,2})[:.](\d{2})(?!\d)", t)
     if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
         return None
@@ -1337,11 +1433,16 @@ def parse_time(text, now=None):
 def due_sends(now=None):
     """Черновики, у которых подошло время отправки, — отправить (зовётся раз в 20 с)."""
     now = now or time.time()
-    for d in all_drafts():
-        if d.get("send_at") and d["send_at"] <= now:
+    for old in all_drafts():
+        if not old.get("send_at") or old["send_at"] > now:
+            continue
+        with settings_lock:  # пока шёл обход, Глеб мог отменить отправку или поправить черновик
+            d = draft(old["task"])
+            if not d or not d.get("send_at") or d["send_at"] > now:
+                continue
             d.pop("send_at")
             set_draft(d)
-            submit_draft(owner(), d["task"])
+        submit_draft(owner(), d["task"])
 
 
 def sender_loop():
@@ -1487,12 +1588,9 @@ def on_callback(cq):
             adjust_hand(key, int(sign[0]))
             threading.Thread(target=send_sample, args=(chat, "Перерисовал"), daemon=True).start()
         return
-    try:
-        tg("answerCallbackQuery", callback_query_id=cq["id"])
-        tg("editMessageReplyMarkup", chat_id=chat, message_id=mid,  # убрать кнопки: не нажать дважды
-           reply_markup=json.dumps({"inline_keyboard": []}))
-    except urllib.error.HTTPError as e:
-        print("callback:", e)
+    quiet("answerCallbackQuery", callback_query_id=cq["id"])  # по отдельности: «запрос устарел» не мешает убрать кнопки
+    quiet("editMessageReplyMarkup", chat_id=chat, message_id=mid,  # убрать кнопки: не нажать дважды
+          reply_markup=json.dumps({"inline_keyboard": []}))
     if data.startswith("all:"):
         mode.pop(chat, None)
         rows = pending.pop(chat, [])
@@ -1869,7 +1967,8 @@ def update(chat):
         return
     if git("diff", "--name-only", old, "HEAD", "--", "package.json", "package-lock.json").stdout.strip():
         subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=REPO, capture_output=True)
-    s = load_settings(); s["updated"] = chat; save_settings(s)
+    with settings_lock:
+        s = load_settings(); s["updated"] = chat; save_settings(s)
     send(chat, card("Обновляюсь", log, "Перезапускаюсь — напишу, когда поднимусь", "🔄"), raw_html=True)
     tg("getUpdates", offset=offset, timeout=0)  # подтверждаем /update, чтобы не выполнить его повторно
     os._exit(0)  # pm2 сам запустит бота заново
@@ -2094,6 +2193,25 @@ seen = {}  # chat -> что нашёл на последнем фото: {"url",
 
 def inbox():
     return os.path.join(INBOX, time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4])
+
+
+def clean_inbox(days=14):
+    """Фото и кадры видео из чата копились в horo/tmp/inbox навсегда — удаляем старше days дней. -> сколько убрано."""
+    import shutil
+    gone, edge = 0, time.time() - days * 86400
+    try:
+        names = os.listdir(INBOX)
+    except OSError:
+        return 0
+    for name in names:
+        path = os.path.join(INBOX, name)
+        try:
+            if os.path.getmtime(path) < edge:
+                shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+                gone += 1
+        except OSError as e:
+            print("inbox:", e)
+    return gone
 
 
 def as_text(msg, text):
@@ -2339,7 +2457,8 @@ def handle(msg):
         threading.Thread(target=install_planner, args=(chat, m.group(0), msg.get("message_id")), daemon=True).start()
         return
     if text.startswith("/emoji_reset"):
-        s = load_settings(); s.pop("emoji", None); save_settings(s)
+        with settings_lock:
+            s = load_settings(); s.pop("emoji", None); save_settings(s)
         send(chat, "👌 Премиум-эмодзи сброшены, снова обычные", menu=True)
         return
     if text.startswith("/emoji"):
@@ -2390,6 +2509,8 @@ def handle(msg):
         set_delay_range(SEND_DELAY if on else "0")
         send(chat, send_card(), menu=True, raw_html=True)  # клавиатура обновится: на кнопке новое состояние
         return
+    if mode.get(chat, "").startswith("at:") and len(text) > 40 and not text.startswith("/"):
+        mode.pop(chat, None)  # длинный текст — не время, а правка или просьба: обычное сообщение
     if mode.get(chat, "").startswith("at:") and text and not text.startswith("/") and text not in BUTTONS:
         at = parse_time(text)
         task = mode.pop(chat)[3:]
@@ -2539,9 +2660,13 @@ def app_state(_=None):
     """Что сейчас происходит: опрашивается приложением раз в пару секунд."""
     d = draft()
     ov = overview()
+    lives = list(Live.items)
+    live = Live.active if Live.active in lives else (lives[-1] if lives else None)
     return {
-        "busy": lock.locked(),
-        "live": Live.active.state() if Live.active and lock.locked() else None,
+        "busy": lock.locked(),  # заняты ВСЕ места — новое задание встанет в очередь
+        "working": lock.busy() > 0 or bool(lives),  # что-то решается прямо сейчас (хоть одно задание)
+        "live": live.state() if live else None,
+        "others": max(0, len(lives) - 1),  # сколько ещё идёт рядом с показанным
         "last": LAST or None,
         "draft": app_draft_info(d) if d else None,
         "drafts": [app_draft_info(x) for x in all_drafts()],
@@ -3015,13 +3140,20 @@ def main():
     threading.Thread(target=setup_profile, daemon=True).start()
     web.start(TOKEN, owner, ROUTES, on_app_url)
     print("Бот запущен")
-    print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
-    threading.Thread(target=retry_alphabet, daemon=True).start()
+
+    def alphabet_startup():  # по очереди (оба правят один файл букв) и не задерживая приём сообщений
+        print("alphabet renorm:", py("horo/alphabet.py", "renorm"))  # старый алфавит — к размеру каждой буквы
+        retry_alphabet()
+    threading.Thread(target=alphabet_startup, daemon=True).start()
+    threading.Thread(target=clean_inbox, daemon=True).start()
     threading.Thread(target=sender_loop, daemon=True).start()
     threading.Thread(target=resume_active, daemon=True).start()  # задания, прерванные перезапуском  # отложенные «как человек» отправки учителю
-    s = load_settings()
-    if s.pop("updated", None):  # поднялись после /update
-        save_settings(s)
+    with settings_lock:
+        s = load_settings()
+        updated = s.pop("updated", None)
+        if updated:
+            save_settings(s)
+    if updated:  # поднялись после /update
         try:
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
             send(owner(), card("Обновился", note=esc(head), icon="✨"), menu=True, raw_html=True)
@@ -3061,8 +3193,11 @@ def thread_crash(args):
 
 def on_update(u, sup=None):
     """Одно обновление Telegram (из цикла main; тесты зовут его же): поддержка, кнопка или сообщение."""
-    if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
-        return
+    try:
+        if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
+            return
+    except Exception as e:  # сбой поддержки не должен ронять приём сообщений
+        print("support:", e)
     cq = u.get("callback_query")
     if cq:
         msg = cq.get("message") or {}
@@ -3084,7 +3219,8 @@ def on_update(u, sup=None):
     if "chat" not in msg:
         return
     if not owner() and (msg.get("text") or "").startswith("/start"):
-        s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
+        with settings_lock:
+            s = load_settings(); s["owner"] = uid; save_settings(s)  # первый /start — это владелец
         print("Владелец бота:", uid)
     if uid != owner():
         return
