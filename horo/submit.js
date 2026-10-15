@@ -1,11 +1,16 @@
 // Вводит ответы в тест и отправляет его.
-// usage: node horo/submit.js <ссылка на задание> <answers.json> [--no-submit]
+// usage: node horo/submit.js <ссылка на задание> <answers.json> [--no-submit] [--defer] [--continue-only]
+//
+// --defer (или HORO_DEFER=1): ответы вводятся быстро, но тест НЕ сдаётся — бот сдаст его позже сам
+//   (Глеб, 15.10: «решить максимально быстро, сдать через какое-то время»); пишется horo/tmp/<задание>/defer.json.
+// --continue-only: только продолжить начатую попытку (бот досдаёт отложенный тест) — новую не начинать.
+// После сдачи последней строкой: «БАЛЛЫ: 15/17» и «ПОПЫТКИ: 1/3» (сколько использовано из скольких).
 //
 // answers.json — ответы по номерам вопросов:
 //   manualInput:     "1": "ha hecho"
 //   blanks:          "2": ["was", "were", "not"]   (пропуски по порядку в тексте: и списки, и поля для ввода)
 //   singleSelection: "3": "текст варианта"         (точно как в fetch.js)
-//   multipleSelection: "4": ["вариант A", "вариант C"]
+//   multipleSelection: "4": ["вариант A", "вариант C"]   (вариант-картинка без текста — его uuid)
 //   sequence:        "5": ["первый", "второй", ...]  (тексты вариантов в нужном порядке)
 //   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]
 //   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать)
@@ -16,11 +21,10 @@ const { open, close, loadTask, BASE, TMP } = require('./lib');
 const args = process.argv.slice(2);
 const [url, ansFile] = args.filter(a => !a.startsWith('--'));
 const noSubmit = args.includes('--no-submit');
-// Как человек: над каждым вопросом «думает» 20–45 с (всего не больше HORO_PACE_MAX с, по умолчанию 6 мин),
-// чтобы попытка не выглядела сданной за полминуты. --fast — без пауз (проверка вручную).
-const fast = args.includes('--fast') || process.env.HORO_FAST === '1';
-const PACE_MAX = Number(process.env.HORO_PACE_MAX || 360) * 1000;
-const think = (page, N) => fast ? 0 : page.waitForTimeout(Math.min(PACE_MAX / N, 20000 + Math.random() * 25000));
+const defer = args.includes('--defer') || process.env.HORO_DEFER === '1';
+const continueOnly = args.includes('--continue-only');
+// «Как человек» теперь не паузами над вопросами (решение шло по 5–6 минут), а отложенной сдачей (--defer):
+// попытка начата сейчас, сдана через несколько минут. --fast оставлен для совместимости.
 const ANS = JSON.parse(fs.readFileSync(ansFile, 'utf8'));
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -41,12 +45,14 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     // Попытку создаёт кнопка «Начать» (или «Продолжить», если её уже начали).
     await page.goto(t.taskUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    const start = page.getByRole('button', { name: /^(Начать|Продолжить|Попробовать ещё раз)$/ });
+    const start = page.getByRole('button', { name: continueOnly ? /^Продолжить$/ : /^(Начать|Продолжить|Попробовать ещё раз)$/ });
     await start.first().waitFor({ timeout: 30000 }).catch(() => {});
     if (await start.count()) {
       console.log('Нажимаю:', await start.first().innerText());
       await start.first().click();
       await page.waitForTimeout(3000);
+    } else if (continueOnly) {
+      throw new Error('Нет начатой попытки: тест уже сдан или попытка закрыта');
     } else if (!page.url().includes('/questions/')) {
       throw new Error('Нет кнопки «Начать»: возможно, попытки закончились или тест уже сдан');
     }
@@ -104,7 +110,7 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const optText = o => (o.text || (o.description && o.description.text) || '').trim();
         const want = [].concat(a);
         const ids = want.map(w => {
-          const o = q.options.find(o => optText(o) === w);
+          const o = q.options.find(o => o.uuid === w || optText(o) === w);
           if (!o) throw new Error(`Вопрос ${n}: нет варианта «${w}»`);
           return o.uuid;
         });
@@ -164,12 +170,15 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         throw new Error(`Вопрос ${n}: тип ${q.type} скрипт пока не умеет`);
       }
 
-      await think(page, N);  // ответ введён — «перечитывает» перед следующим
       if (n < N) {
         await page.click('[data-testid=testFormNextButton]');
         await page.waitForTimeout(2000);
       } else if (noSubmit) {
         console.log('--no-submit: ответы введены, тест не отправлен');
+      } else if (defer) {
+        fs.writeFileSync(path.join(TMP, t.task, 'defer.json'),
+          JSON.stringify({ url: t.taskUrl, answers: path.resolve(ansFile), N, at: Date.now() }));
+        console.log(`\nОТЛОЖЕНО: ответы на все ${N} вопросов внесены, тест НЕ сдан — его сдаст бот позже. Больше ничего не запускай.`);
       } else {
         prog(N);
         await page.getByRole('button', { name: 'Отправить на проверку' }).click();
@@ -177,6 +186,13 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         await page.waitForLoadState('networkidle').catch(() => {});
         const res = (await page.evaluate(() => document.body.innerText)).split('Только обязательные').pop().trim();
         console.log('\nРЕЗУЛЬТАТ:\n' + res.replace(/\n+/g, '\n').slice(0, 400));
+        // баллы и попытки — из API (их читает бот: вторая попытка, если не 100%)
+        const after = await loadTask(page, url).catch(() => null);
+        const done = after && [...after.attempts].filter(a => a.status && a.status.type === 'completed')
+          .sort((x, y) => String(x.updatedAt).localeCompare(String(y.updatedAt)));
+        const last = done && done[done.length - 1];
+        if (last && last.grade) console.log(`БАЛЛЫ: ${last.grade.scoreValue}/${after.meta.maximumScoreValue}`);
+        if (after) console.log(`ПОПЫТКИ: ${after.attempts.length}/${after.meta.availableAttemptsCount}`);
       }
     }
   } finally {
