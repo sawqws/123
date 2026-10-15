@@ -109,7 +109,7 @@
     if (!p) return F.closeScreen();
     F.haptic('select');
     F.S.screen = p.screen; F.S.screenArg = p.arg;
-    F.render(false); window.scrollTo(0, p.y || 0);
+    F.nav('pop', () => { F.S.popping = true; try { F.render(false); } finally { F.S.popping = false; } window.scrollTo(0, p.y || 0); });
   };
 
   // ---------- подсказки тренеру (WHOOP Coach) ----------
