@@ -493,6 +493,7 @@
         <div class="state-t">${esc(head.t)}</div><div class="hint">${esc(head.s)}</div></div></div>
         ${liveText ? `<div class="note live-note"><span class="spin"></span><span>${esc(liveText)}</span></div>` : ''}
         <button class="btn primary" data-act="update" ${upd ? 'disabled' : ''}>${upd ? 'Обновляю…' : '⬆️ Обновить всех'}</button></section>
+      ${checkCard(d.check)}
       <div class="label">Боты<span class="more tnum">${run.length} из ${bots.length}</span></div>
       <div class="list">${bots.map(botRow).join('')}</div>
       <div class="list sup-list"><button class="row tap" data-act="support"><span class="ic">🛠</span><div class="main">
@@ -500,6 +501,41 @@
         <span class="end chev"></span></button></div>
       ${serverCard(d)}`;
   }
+  // 🧪 Проверка ботов: идёт — ход; прошла — коротко: всё ли в порядке и у кого что сломано (+ «🛠» починить)
+  function checkCard(c) {
+    if (!c) return '';
+    const go = (dis) => `<div class="btns"><button class="btn tonal" data-act="chk" data-arg="run" ${dis}>⚡ Быстро</button>
+      <button class="btn tonal" data-act="chk" data-arg="full" ${dis}>🔬 Полностью</button></div>`;
+    if (c.running) {
+      const p = c.progress || {};
+      const bits = [p.of ? `тесты ${p.tests} из ${p.of}` : 'готовлю', p.clicks ? `кнопок ${p.clicks}` : ''].filter(Boolean).join(' · ');
+      return `<div class="label">Проверка</div><section class="card chk-card"><div class="note live-note"><span class="spin"></span>
+        <span>${esc(p.full ? '🔬 Полная' : '⚡ Быстрая')} · ${esc(bits)}</span></div>${go('disabled')}</section>`;
+    }
+    const l = c.last;
+    let body = '<div class="hint">Все боты и сам Главный: работают ли, ошибки в логах, тесты, все кнопки.</div>';
+    if (l) {
+      const bad = l.bots.filter((b) => !b.ok);
+      const when = new Date(l.at * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      body = !bad.length ? `<div class="state-t">✅ Все ${l.bots.length} в порядке</div><div class="hint tnum">${when} · ${l.full ? 'полная' : 'быстрая'}</div>`
+        : `<div class="state-t">Сломано ${bad.length} из ${l.bots.length}</div><div class="hint tnum">${when}</div>
+          <div class="chk-list">${bad.map((b) => `<div class="chk-row"><span>❌</span><div class="main"><b>${esc(b.title)}</b>
+            <div class="hint">${esc(b.gist)}</div></div>${b.fix ? `<button class="btn tonal sm" data-act="chkfix" data-arg="${esc(b.pm2)}">🛠 Починить</button>` : ''}</div>`).join('')}</div>
+          ${bad.filter((b) => b.fix).length > 1 ? '<button class="btn primary" data-act="chkfix" data-arg="">🛠 Починить всё</button>' : ''}`;
+    }
+    return `<div class="label">Проверка</div><section class="card chk-card">${body}${go('')}</section>`;
+  }
+  async function runCheck(a) {
+    const act = a.dataset.act, arg = a.dataset.arg;
+    if (act === 'chk' && arg === 'full' && !(await confirmBox('Полная проверка нажмёт все кнопки всех ботов с твоего аккаунта (опасные — не жмёт). 10–15 минут. Начать?'))) return;
+    try {
+      const r = await busy(a, () => api('action', { action: act === 'chk' ? 'check' : arg ? 'check_fix' : 'check_fixall', arg }));
+      haptic('success');
+      toast(r.text, 'ok');
+      loadHub();
+    } catch (er) { haptic('error'); toast(er.message, 'err'); }
+  }
+
   function botRow(b) {
     const st = statusOf(b);
     const bits = [];
@@ -756,6 +792,7 @@
     if (act === 'revive') return revive(a);
     if (act === 'unqueue') { S.queued = null; haptic('select'); return paintLive(); }
     if (act === 'update') return updateAll(a);
+    if (act === 'chk' || act === 'chkfix') return runCheck(a);
     if (act === 'support') return support();
     if (act === 'memory') return memorySheet();
     if (act === 'jobexample') {
