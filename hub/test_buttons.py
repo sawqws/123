@@ -189,6 +189,13 @@ class Crawl:
             mock.patch.object(hub, "server", return_value={"mem_total": 2000, "mem_free": 700, "disk_total": 40.0,
                                                            "disk_free": 25.0, "load": "0.4", "uptime": 90000}),
             mock.patch.object(hub, "threading", SyncThreading()), mock.patch.object(hub.maker, "threading", SyncThreading()),
+            mock.patch.object(hub.check, "threading", SyncThreading()),  # 🧪 Проверка: прогон — поддельный
+            mock.patch.object(hub.check, "check_all", lambda full=False, live=None: {
+                "at": 1, "full": full, "secs": 61, "bots": [
+                    {"pm2": "coach-bot", "label": "⚡ Тренер «Форма»", "ok": False, "tests": "1/2", "clicks": None,
+                     "problems": ["тест coach/test_coach.py: AssertionError"]},
+                    {"pm2": "kpp-bot", "label": "🚧 КПП", "ok": False, "tests": "1/2", "clicks": 4,
+                     "problems": ["кнопка /start › 📋: сбой"]}]}),
             mock.patch.object(hub, "time", NoSleep()), mock.patch.object(hub.maker, "time", NoSleep()),
             mock.patch.object(hub.maker, "BOTS", self.bots_dir),
             mock.patch.object(hub.maker, "claude", side_effect=self.fake_claude),
