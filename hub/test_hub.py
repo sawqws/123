@@ -97,6 +97,41 @@ class HubTest(Base):
         hub.on_message(self.msg("привет", uid=99))
         self.assertIn("личный", self.last()[0])  # чужой текст Секретарю не уходит
 
+    def test_full_menu(self):
+        """/1 — полное меню в любом режиме: все действия на одном экране, кнопки работают."""
+        hub.setting("mode", "app")
+        hub.on_message(self.msg("/1"))
+        text, btns = self.last()
+        self.assertIn("Полное меню", text)
+        for data in ('"task"', '"bots"', '"psy"', '"mk"', '"fix"', '"all"', '"upd"', '"srv"', '"add"', '"rmd|list"', '"cl"', '"mode|ask"'):
+            self.assertIn(data, btns)
+        rows = json.loads(btns)["inline_keyboard"]
+        self.assertTrue(all(len(r) <= 3 for r in rows))
+        self.assertTrue(all(len(btn["text"]) <= 24 for r in rows for btn in r))
+        self.cq("full")
+        self.assertIn("Полное меню", self.last()[0])
+        self.assertEqual(hub.COMMANDS[0][0], "1")
+
+    def test_bot_card_fix(self):
+        """Боты → бот → «✏️ Доработать»: ждём, что поменять, и отдаём Claude именно этот бот; «Отмена» — назад к боту."""
+        self.cq("app|coach-bot")
+        text, btns = self.last()
+        self.assertIn("fix|coach-bot", btns)
+        self.assertIn("WHOOP", text)
+        self.cq("fix|coach-bot")
+        self.assertEqual(hub.setting("wait"), "fix|coach-bot")
+        self.assertIn("app|coach-bot", self.last()[1])
+        self.cq("app|coach-bot")  # «‹ Отмена»
+        self.assertIsNone(hub.setting("wait"))
+        self.cq("fix|coach-bot")
+        fixes = []
+        with mock.patch.object(hub.maker, "fix", lambda chat, pm2, tz: fixes.append((pm2, tz))), \
+                mock.patch.object(hub.maker.threading, "Thread",
+                                  lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args))):
+            hub.on_message(self.msg("добавь кнопку «Вода» на главный экран"))
+        self.assertEqual(fixes, [("coach-bot", "добавь кнопку «Вода» на главный экран")])
+        self.assertIsNone(hub.setting("wait"))
+
     def answers(self):
         return [kw.get("text") for k, kw in self.sent if k == "answerCallbackQuery"]
 
