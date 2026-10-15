@@ -1812,5 +1812,51 @@ for _name in dir(BotTest):  # заготовки BotTest без его тест�
         setattr(PrepTest, _name, None)
 
 
+class ExamsTest(unittest.TestCase):
+    """🎯 Подтверждения: какие задания попадают в список, уровни, порядок и длина сообщений."""
+    DATA = {"topics": [
+        {"uuid": "t1", "subj": "Химия", "icon": "⚗️", "deadline": "2020-01-10", "tasks": [
+            {"uuid": "a", "title": "Подтверждение 2.0", "status": "appointed", "lvl": 2},
+            {"uuid": "b", "title": "Подготовка к подтверждению", "status": "appointed", "lvl": 2},
+            {"uuid": "c", "title": "Irregular verbs test", "status": "approved", "lvl": 1},
+            {"uuid": "d", "title": "Химическая символика 2.0", "status": "appointed", "lvl": 2}]},
+        {"uuid": "t2", "subj": "Математика", "icon": "📐", "deadline": "2099-11-09", "tasks": [
+            {"uuid": "e", "title": "Подтверждение 3.0", "status": "reworking", "lvl": 3, "pct": 55, "pass": 80},
+            {"uuid": "f", "title": "Подтверждение 2.0", "status": "approved", "lvl": 2, "pct": 100},
+            {"uuid": "g", "title": "Итоговая работа «Дроби»", "status": "reviewing", "lvl": 2},
+            {"uuid": "h", "title": "Test 2.0", "status": "appointed", "lvl": 2}]},
+    ]}
+
+    def test_items(self):
+        items = bot.exam_items(self.DATA)
+        self.assertEqual([x["url"].rsplit("/", 1)[1] for x in items], ["h", "a", "g", "f", "e"])  # 2.0: несданное выше, по предмету
+        self.assertEqual({x["url"].rsplit("/", 1)[1]: x["lvl"] for x in items}["e"], 3)
+
+    def test_text(self):
+        msgs = bot.exams_messages(self.DATA)
+        text = "\n".join(msgs)
+        self.assertIn("зачтено 1 из 5", text)
+        self.assertIn("55% из 80%", text)                 # доработка: сколько есть и сколько нужно
+        self.assertIn("❗ срок был 10.01", text)           # срок прошёл
+        self.assertIn("до 09.11", text)
+        self.assertIn("https://horodigital.ru/student/topic/t2/task/e", text)
+        self.assertNotIn("Подготовка", text)
+        self.assertNotIn("Irregular", text)
+        self.assertNotIn("символика", text)
+        self.assertTrue(text.index("<b>2.0</b>") < text.index("<b>3.0</b>"))
+
+    def test_long_list_split(self):
+        many = {"topics": [{"uuid": f"t{i}", "subj": "Предмет", "icon": "📘", "deadline": "", "tasks": [
+            {"uuid": f"x{i}", "title": "Подтверждение 2.0", "status": "appointed", "lvl": 2}]} for i in range(80)]}
+        msgs = bot.exams_messages(many)
+        self.assertGreater(len(msgs), 1)
+        for m in msgs:
+            self.assertLessEqual(len(m), 3900)
+            self.assertEqual(m.count("<blockquote"), m.count("</blockquote>"))   # цитаты не разрезаны
+
+    def test_empty(self):
+        self.assertIn("не нашёл", bot.exams_messages({"topics": []})[0])
+
+
 if __name__ == "__main__":
     unittest.main()

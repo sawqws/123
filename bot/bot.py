@@ -113,6 +113,7 @@ BTN_HELP = "❓ Помощь"
 BTN_APP = "✨ Приложение"
 BTN_MORE = "⚙️ Ещё"
 BTN_PREP = "📖 Подготовка"
+BTN_EXAMS = "🎯 Подтверждения"
 BTN_MODE = "⚙️ Режим"
 BTN_DELAY_ON, BTN_DELAY_OFF = "⏳ Задержка: вкл", "⏳ Задержка: выкл"  # старые надписи (клавиатура обновится сама)
 SEND_CHOICES = [("0", "сразу"), ("2-5", "2–5 мин"), ("4-12", "4–12 мин"), ("15-40", "15–40 мин")]  # отправка учителю
@@ -122,7 +123,7 @@ ALIASES = {  # старые надписи кнопок (клавиатура у
     "📊 Мои оценки": BTN_GRADES, "✍️ Мой почерк": BTN_HAND,
 }
 BUTTONS = {BTN_DO, BTN_SHOW, BTN_LIST, BTN_LATE, BTN_ALL, BTN_COMM, BTN_GRADES, BTN_HAND, BTN_CHECK, BTN_HELP,
-           BTN_APP, BTN_MORE, BTN_PREP, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF, *SEND_LABELS}
+           BTN_APP, BTN_MORE, BTN_PREP, BTN_EXAMS, BTN_MODE, BTN_DELAY_ON, BTN_DELAY_OFF, *SEND_LABELS}
 
 
 def menu_kb():
@@ -134,14 +135,15 @@ def menu_kb():
     if ui_mode() == "app" and APP_URL:
         rows = [
             [{"text": "📱 Приложение", "web_app": {"url": APP_URL + "/"}, "style": "primary"}],
-            [b(BTN_DO), b(BTN_LIST), b(BTN_PREP)],
+            [b(BTN_DO), b(BTN_LIST), b(BTN_EXAMS)],  # подготовка — в приложении и /prep
             [b(BTN_MODE), b(BTN_MORE)],  # задержка в режиме приложения — в его настройках
         ]
     else:
         rows = [
             [b(BTN_DO, "primary"), b(BTN_SHOW)],
             [b(BTN_LIST), b(BTN_GRADES), b(BTN_COMM)],
-            [b(BTN_PREP), b(BTN_ALL), b(BTN_HAND)],  # почерк — на виду (Глеб искал его, когда он был только в «Ещё»)
+            [b(BTN_EXAMS), b(BTN_PREP)],  # подтверждения и контрольные 2.0 / 3.0 — отдельной кнопкой (Глеб, 15.10)
+            [b(BTN_ALL), b(BTN_HAND)],  # почерк — на виду (Глеб искал его, когда он был только в «Ещё»)
             [b(BTN_MODE), b(btn_delay()), b(BTN_MORE)],  # задержка — отдельной кнопкой, не только /delay
         ]
     return json.dumps({
@@ -159,6 +161,7 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<b>Оценки</b> — и сколько до следующей\n"
     "<b>Учителя</b> — комментарии и доработки\n"
     "<b>Автотесты</b> — сдам все новые тесты пачкой\n"
+    "<b>Подтверждения</b> — все подтверждения и контрольные 2.0 и 3.0: что сдано, что на доработке\n"
     "<b>Подготовка</b> — к проверочной по тому, что прошли: за 1, 5 или 10 минут (или по своему ТЗ)\n"
     "<b>Голосовое</b> — как текст\n"
     "<b>Фото, скриншот</b> — найду задание и решу; при черновике — фото в него\n"
@@ -169,7 +172,8 @@ HELP = (  # HTML: отправляется с raw_html=True
     "<i>Всё то же — в приложении: кнопка «HDP» слева от поля ввода</i>"
 )
 COMMANDS = [  # меню команд у поля ввода
-    ("start", "Главное меню"), ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
+    ("start", "Главное меню"), ("exams", "Подтверждения и контрольные 2.0 / 3.0"),
+    ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
     ("site", "Сайт HDP в браузере"),
     ("mode", "Чат или приложение"),
     ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
@@ -1545,6 +1549,10 @@ def on_callback(cq):
     if data.startswith("mode:"):  # 💬 чат / 📱 приложение
         on_mode(chat, mid, cq["id"], data[5:])
         return
+    if data == "ex:upd":  # 🎯 подтверждения: обновить с сайта
+        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Обновляю с сайта…")
+        threading.Thread(target=send_exams, args=(chat, mid, True), daemon=True).start()
+        return
     if data.startswith("pp:"):  # 📖 подготовка: шаги правятся на месте
         on_prep_button(chat, mid, cq["id"], data[3:])
         return
@@ -2410,6 +2418,10 @@ def handle(msg):
     if text.startswith("/help"):
         send(chat, HELP, menu=True, raw_html=True)
         return
+    if text.startswith("/exams") or text == BTN_EXAMS:
+        mode.pop(chat, None)
+        threading.Thread(target=send_exams, args=(chat,), daemon=True).start()
+        return
     if text.startswith("/prep") or text == BTN_PREP:
         mode.pop(chat, None)
         threading.Thread(target=prep_menu, args=(chat,), daemon=True).start()
@@ -2777,6 +2789,104 @@ ROUTES = {
     "/api/draft/send": app_draft("send"), "/api/draft/drop": app_draft("drop"), "/api/draft/save": app_draft("save"),
     "/api/check": app_chat(check), "/api/alphabet": app_chat(send_alphabet),
 }
+
+
+# ---------- 🎯 Подтверждения и контрольные 2.0 / 3.0 ----------
+# Все такие задания по всем предметам (из overview.json — темы с сайта): что сдано, что на проверке, что на доработке
+# (результат и сколько нужно для зачёта), что ещё не начато — со ссылками. Глеб, 15.10: «отдельная кнопка».
+
+EXAM = re.compile(r"подтвержд|контрольн|итогов\w* работ|unit test|test\s*[23][.,]0|тест на уровень|проверочн", re.I)
+EXAM_SKIP = re.compile(r"подготовк", re.I)          # «Подготовка к подтверждению» — не само подтверждение
+EXAM_ST = {  # статус: (значок, слово, порядок — несданное выше)
+    "reworking": ("🔁", "на доработке", 0), "failed": ("❌", "не зачтено", 0), "appointed": ("📝", "не сдано", 1),
+    "reviewing": ("🕓", "на проверке", 2), "approved": ("✅", "зачтено", 3),
+}
+
+
+def exam_items(data):
+    """Подтверждения и контрольные из тем overview.json: [(уровень 2|3, пункт)], несданные первыми."""
+    out = []
+    for tp in (data or {}).get("topics") or []:
+        for t in tp.get("tasks") or []:
+            title = (t.get("title") or "").strip()
+            if not EXAM.search(title) or EXAM_SKIP.search(title):
+                continue
+            lvl = 3 if "3.0" in title else 2 if "2.0" in title else (3 if (t.get("lvl") or 2) >= 3 else 2)
+            st = EXAM_ST.get(t.get("status"), ("•", t.get("status") or "", 1))
+            out.append({"lvl": lvl, "icon": st[0], "word": st[1], "order": st[2], "subj": tp.get("subj") or "",
+                        "sicon": tp.get("icon") or "", "title": title, "deadline": tp.get("deadline") or "",
+                        "pct": t.get("pct") if t.get("pct") is not None else (t.get("max") if t.get("score") is None
+                                                                             and t.get("status") != "appointed" else None),
+                        "pass": t.get("pass"), "status": t.get("status"),
+                        "url": f"https://horodigital.ru/student/topic/{tp.get('uuid')}/task/{t.get('uuid')}"})
+    out.sort(key=lambda x: (x["lvl"], x["order"], x["subj"], x["title"]))
+    return out
+
+
+def exam_line(x):
+    bits = [x["word"]]
+    if x["pct"] is not None:
+        bits.append(f"{x['pct']}%" + (f" из {x['pass']}%" if x["pass"] and x["status"] in ("reworking", "failed") else ""))
+    if x["status"] in ("appointed", "reworking", "failed") and re.match(r"\d{4}-\d\d-\d\d", x["deadline"]):
+        late = x["deadline"][:10] < time.strftime("%Y-%m-%d")
+        bits.append(("❗ срок был " if late else "до ") + ".".join(reversed(x["deadline"][:10].split("-")[1:])))
+    title = x["title"] if len(x["title"]) <= 60 else x["title"][:57] + "…"
+    return f'{x["icon"]} {x["sicon"]} <a href="{esc(x["url"])}">{esc(x["subj"])} · {esc(title)}</a> — {esc(", ".join(bits))}'
+
+
+def exams_messages(data):
+    """HTML-сообщения (каждое ≤ 3900 знаков с разметкой): шапка, по уровню 2.0 и 3.0 — несданное цитатой,
+    зачтённое — свёрнутой цитатой. Цитаты не режутся посреди: длинный список — несколькими цитатами."""
+    items = exam_items(data)
+    if not items:
+        return [card("Подтверждения", note="Подтверждений и контрольных на сайте не нашёл", icon="🎯")]
+    n = lambda f: sum(f(x) for x in items)
+    head = ("🎯 <b>Подтверждения и контрольные</b>\n<i>зачтено " + str(n(lambda x: x["status"] == "approved"))
+            + f" из {len(items)} · на доработке " + str(n(lambda x: x["status"] in ("reworking", "failed")))
+            + " · не сдано " + str(n(lambda x: x["status"] == "appointed"))
+            + " · на проверке " + str(n(lambda x: x["status"] == "reviewing")) + "</i>")
+    blocks = [head]
+    for lvl in (2, 3):
+        mine = [x for x in items if x["lvl"] == lvl]
+        if not mine:
+            continue
+        blocks.append(f"<b>{lvl}.0</b>")
+        for tag, rows in (("blockquote", [x for x in mine if x["status"] != "approved"]),
+                          ("blockquote expandable", [x for x in mine if x["status"] == "approved"])):
+            lines = ([f"✅ зачтено: {len(rows)}"] if "expandable" in tag and rows else []) + [exam_line(x) for x in rows]
+            cur = []
+            for ln in lines:
+                if cur and sum(len(c) + 1 for c in cur) + len(ln) > 3600:
+                    blocks.append(f"<{tag}>" + "\n".join(cur) + "</blockquote>")
+                    cur = []
+                cur.append(ln)
+            if cur:
+                blocks.append(f"<{tag}>" + "\n".join(cur) + "</blockquote>")
+    msgs, cur = [], ""
+    for b in blocks:
+        if cur and len(cur) + len(b) + 1 > 3900:
+            msgs.append(cur)
+            cur = ""
+        cur = (cur + "\n" + b) if cur else b
+    return msgs + ([cur] if cur else [])
+
+
+def send_exams(chat, mid=None, fresh=False):
+    """Список подтверждений: данные не старше 10 минут, иначе (и по «🔄 Обновить») — свежие с сайта."""
+    data = overview()
+    if fresh or not data or time.time() - (data.get("at") or 0) / (1000 if (data.get("at") or 0) > 1e11 else 1) > 600:
+        live = Live(chat, "Смотрю подтверждения", "с сайта", progress=False)
+        try:
+            refresh_overview()
+        finally:
+            live.done()
+        data = overview() or data
+    if not data:
+        send(chat, err(OV.get("error") or "Не получилось взять задания с сайта"), menu=True, raw_html=True)
+        return
+    msgs = exams_messages(data)
+    for k, text in enumerate(msgs):
+        send(chat, text, markup=kb([("🔄 Обновить", "ex:upd")]) if k == len(msgs) - 1 else None, raw_html=True)
 
 
 # ---------- 📖 Подготовка к проверочной ----------
