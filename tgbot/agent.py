@@ -1323,6 +1323,10 @@ class Agent:
 
     # ---------- оформление бота ----------
 
+    def kb(self):
+        """Клавиатура у поля ввода. В Главном она его (☰ полное меню в квадратике) — свою не ставим, иначе перебьём."""
+        return None if self.via_hub else MENU
+
     async def welcome(self, me=None, fresh=False):
         if me is None and await self.authorized():
             me = await self.client.get_me()
@@ -1334,7 +1338,7 @@ class Agent:
                 f"<blockquote>{esc(EXAMPLES)}</blockquote>\n"
                 "<i>Ничего не меняю в Telegram без вашего «да».</i>")
         if me:
-            buttons = MENU
+            buttons = self.kb()
         else:
             body += "\n\n👉 Чтобы я вёл ваш Telegram, подключите аккаунт — это минута. На вопросы отвечаю и без этого."
             buttons = [[Button.inline("🔑 Войти в аккаунт", "login:", style="primary")]]
@@ -1531,7 +1535,7 @@ class Agent:
         if text == "/cancel":
             was = self.login or self.psy
             self.login, self.psy = None, False
-            await self.say(card("Отменил") if was else card("Нечего отменять"), buttons=MENU if was else None)
+            await self.say(card("Отменил") if was else card("Нечего отменять"), buttons=self.kb() if was else None)
         elif self.login:
             await self.on_login(ev)
         elif text.startswith("/start"):
@@ -1636,7 +1640,7 @@ class Agent:
         if s.pop("updated", None) and self.owner():
             save_settings(s)
             head = subprocess.run(["git", "log", "-1", "--format=%h %s"], cwd=REPO, capture_output=True, text=True).stdout.strip()
-            await self.say(card("✦ Обновился", esc(head)), buttons=MENU)
+            await self.say(card("✦ Обновился", esc(head)), buttons=self.kb())
         if not self.via_hub:
             self.support = support.Support(
                 self.bot.token, "Секретарь", folders=["tgbot"], pm2="tg-agent", allowed=lambda uid: uid == self.owner(),

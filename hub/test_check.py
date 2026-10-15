@@ -66,7 +66,10 @@ class CheckTest(Base):
         self.assertFalse(any("KeyError" in p for p in coach["problems"]))
         self.assertTrue(any("перезапускался 3" in p for p in coach["problems"]))
         text, btns = check.report(hub.setting("check_last"))
-        self.assertIn("проблемы у 1", text)
+        self.assertIn("Сломано 1 из", text)
+        self.assertIn("❌ Тренер «Форма» — ", text)
+        self.assertNotIn("нет кнопки", text)  # подробности — только по «📋 Подробно»
+        self.assertIn("нет кнопки «Вода»", check.report(hub.setting("check_last"), details=True)[0])
         flat = [x for r in btns for x in r]
         self.assertTrue(all(len(r) <= 3 for r in btns))
         self.assertTrue(all(len(x["text"]) <= 24 for x in flat))
@@ -130,7 +133,8 @@ class CheckTest(Base):
             check.run(U, None, full=True)  # Секретаря нет — живой обход честно отменяется
         texts = [kw.get("text", "") for k, kw in self.sent if k == "sendMessage"]
         self.assertTrue(any("Живой обход недоступен" in t for t in texts))
-        self.assertIn("Все боты в порядке", texts[-1])
+        self.assertIn("Все 1 в порядке", texts[-1])
+        self.assertLess(len(texts[-1]), 60)  # отчёт — одна строка
         self.assertFalse(check.running.locked())
 
 

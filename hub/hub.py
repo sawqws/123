@@ -601,8 +601,75 @@ def home(chat, mid=None):
     return show(chat, mid, card("👑 <b>Главный</b>", lines, foot), btns)
 
 
+# ☰ Полное меню — клавиатура у поля ввода: свёрнута в квадратик справа (не is_persistent), по нажатию — все
+# действия; после выбора сама сворачивается (one_time). Кнопки Секретаря (📬, 🗂) — те же тексты, что у него.
+KB_VERSION = 1
+KB_ROWS = [["✨ Поручить", "🤖 Боты", "👤 Аккаунт"],
+           ["🧪 Проверка", "🛠 Сделать бота", "✏️ Доработать"],
+           ["📬 Что я пропустил", "🧠 Разбор чата", "🗂 Навести порядок"],
+           ["⬆️ Обновить всех", "🖥 Сервер", "📂 Все боты"],
+           ["⏰ Напоминания", "⚙️ Режим", "⋯ Ещё"]]
+KB_TEXTS = {t for r in KB_ROWS for t in r}
+
+
+def keyboard():
+    return {"keyboard": [[{"text": t} for t in r] for r in KB_ROWS], "resize_keyboard": True,
+            "one_time_keyboard": True, "is_persistent": False, "input_field_placeholder": "Напишите задачу или ☰ справа"}
+
+
+def ensure_keyboard(chat, force=False):
+    """Один раз на версию (и по /start): поставить клавиатуру-меню. Сообщение короткое — он видит, где меню."""
+    if not force and setting("kb_ver") == KB_VERSION:
+        return
+    try:
+        tg("sendMessage", chat_id=chat, text="☰ Меню — квадратик справа от поля ввода", reply_markup=keyboard())
+        setting("kb_ver", KB_VERSION)
+    except Exception as e:
+        print("клавиатура:", repr(e), flush=True)
+
+
+def on_kb(chat, text, msg):
+    """Нажатие кнопки клавиатуры-меню → тот же экран, что у кнопок в сообщениях."""
+    if text == "✨ Поручить":
+        task_card(chat)
+    elif text == "🤖 Боты":
+        bots_screen(chat)
+    elif text == "👤 Аккаунт":
+        to_secretary({"message": {**msg, "text": "/menu"}}, chat)
+    elif text == "🧪 Проверка":
+        check.ask(chat)
+    elif text == "🛠 Сделать бота":
+        maker.ask_make(chat)
+    elif text == "✏️ Доработать":
+        maker.ask_fix(chat)
+    elif text == "🧠 Разбор чата":
+        psy_card(chat)
+    elif text in ("📬 Что я пропустил", "🗂 Навести порядок"):
+        to_secretary({"message": msg}, chat)
+    elif text == "⬆️ Обновить всех":
+        if updating():
+            send(chat, "⏳ Уже обновляю — итог придёт сюда.")
+        else:
+            progress("Скачиваю свежий код из main…", kind="update")
+            bg(chat, update_all)
+    elif text == "🖥 Сервер":
+        server_card(chat, None)
+    elif text == "📂 Все боты":
+        bg(chat, maker.show_all)
+    elif text == "⏰ Напоминания":
+        with lock:
+            st = load()
+            res = digest.callback(st, "rmd|list")
+            save(st)
+        send(chat, res[1], (res[2] or []) + [[b("‹ Назад", "more")]]) if res else send(chat, HELP)
+    elif text == "⚙️ Режим":
+        mode_card(chat)
+    elif text == "⋯ Ещё":
+        more(chat, None)
+
+
 def full_menu(chat, mid=None):
-    """/1 — полное меню: все действия Главного на одном экране, в любом режиме (чат или приложение)."""
+    """Полное меню одним сообщением (/menu_all; основное полное меню — клавиатура-квадратик у поля ввода)."""
     rows = apps()
     sec = secretary_status()
     down = [a for a in rows or [] if a["status"] != "online"]
@@ -622,8 +689,7 @@ def full_menu(chat, mid=None):
     last = [x for x in (studio_button(rows), app_button()) if x]
     if last:
         btns.append(last)
-    return show(chat, mid, card("☰ <b>Полное меню</b>", lines, "<i>/1 — открыть снова, /start — короткая главная</i>"),
-                btns)
+    return show(chat, mid, card("☰ <b>Полное меню</b>", lines), btns)
 
 
 def bots_screen(chat, mid=None):
@@ -1730,11 +1796,16 @@ def on_message(msg):
         return to_secretary({"message": msg}, chat)
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     wait = setting("wait")
-    if cmd == "/1":
+    if cmd == "/1":  # старая команда — то же полное меню
         setting("wait", None)
         full_menu(chat)
+    elif not cmd and text in KB_TEXTS:  # клавиатура-меню (квадратик у поля ввода)
+        setting("wait", None)
+        on_kb(chat, text, msg)
     elif cmd in ("/start", "/bots", "/menu") or text in MENU_TEXTS:
         setting("wait", None)
+        if cmd == "/start":
+            ensure_keyboard(chat)
         bots_screen(chat) if cmd == "/bots" else home(chat)
     elif cmd == "/mode":
         setting("wait", None)
@@ -2017,7 +2088,7 @@ def callback(chat, mid, uid, data):
     return note
 
 
-COMMANDS = [("1", "Полное меню"), ("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
+COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
             ("bots", "Боты и сервер"), ("test", "Проверка всех ботов"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
@@ -2052,6 +2123,8 @@ def main():
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=set_menu, args=(True,), daemon=True).start()  # узнаёт IP — дальше кнопка и в меню
     threading.Thread(target=check_secretary, daemon=True).start()  # Секретаря нет — поставить
+    if owner():  # новая клавиатура-меню после обновления — один раз
+        threading.Thread(target=ensure_keyboard, args=(owner(),), daemon=True).start()
     print("Главный запущен")
     fails_poll = 0
     while True:
