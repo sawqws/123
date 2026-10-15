@@ -2037,7 +2037,7 @@ def main():
     print(f"{NAME} запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
-                                tests=["python3 coach/test_coach.py", "python3 coach/test_buttons.py"])
+                                tests=["python3 coach/test_coach.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

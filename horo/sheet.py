@@ -26,7 +26,7 @@ from hand import Hand
 
 SCREEN_INK = SHEET_INK = (90, 160, 240)   # голубой, как в его заметках iPad (скрин и лист тёмные)
 PAPER, GRID = (36, 37, 37), (58, 60, 62)   # фон как у скрина задания, линии клетки чуть светлее
-PEN = 5
+PEN = 3.0   # черта дроби, скобки — как штрих его букв (≈0.1 высоты строчной), а не жирнее
 SCREEN_SIZE, SHEET_SIZE = 58, 60
 PAGE_W, PAGE_H, CELL = 1768, 2500, 52
 
@@ -85,18 +85,11 @@ def pack(line, size, maxw):
     return rows
 
 
-def hexpr(h, items, x, y, size, seed):
-    """Строка как рукой: строка чуть уходит вверх/вниз, размер и шаг между частями гуляют."""
-    rnd = random.Random(seed)
-    slope = rnd.uniform(-0.009, 0.006)
-    s = size * rnd.uniform(0.93, 1.07)
-    x0 = x = x + rnd.uniform(-12, 18)
-    y = y + rnd.uniform(-6, 6)
+def hexpr(h, items, x, y, size, seed=None):
+    """Строка как Apple Pencil (Глеб, 15.10: «не рука»): ровно по строке, один размер, одинаковые промежутки."""
     for it in items:
-        yy = y + slope * (x - x0) + rnd.uniform(-3, 3)
-        ss = s * rnd.uniform(0.96, 1.04)
-        x = h.text(it, x, yy, ss) if isinstance(it, str) else h.frac(it[0], it[1], x, yy, ss)
-        x += rnd.uniform(-2, 7)
+        x = h.text(it, x, y, size) if isinstance(it, str) else h.frac(it[0], it[1], x, y, size)
+        x += size * 0.45 * 0.12   # между частями — тот же промежуток, что между буквами
     return x
 
 
@@ -158,7 +151,7 @@ class Work:
         os.makedirs(out_dir, exist_ok=True)
         files = []
         if os.path.exists(self.shot):
-            h = Hand(Image.open(self.shot), ink=SCREEN_INK, width=PEN, seed=21, mess=1.3, slant=0.06)
+            h = Hand(Image.open(self.shot), ink=SCREEN_INK, width=PEN, seed=21)
             for n, _, ans in self.done:
                 it = self.items.get(n)
                 if it and ans:
@@ -179,7 +172,7 @@ class Work:
             if h is not None:
                 pages.append(os.path.join(out_dir, f'{start + len(pages)}_sheet.jpg'))
                 h.save(pages[-1])
-            h = Hand(paper(), ink=SHEET_INK, width=PEN, seed=31 + len(pages), mess=1.3, slant=0.06)
+            h = Hand(paper(), ink=SHEET_INK, width=PEN, seed=31 + len(pages))
             y = CELL * 2 + size
 
         new_page()
@@ -188,14 +181,14 @@ class Work:
             if y > CELL * 2 + size and y + rowh * min(len(rows), 3) > PAGE_H - CELL:
                 new_page()   # пример не начинаем в самом низу страницы
             if n is not None:
-                h.text(f'{n})', left + rnd.uniform(-6, 8), y + rnd.uniform(-5, 5), size)
+                h.text(f'{n})', left, y, size)
             for r in rows:
                 if y > PAGE_H - CELL - size:
                     new_page()
                 k = min(1.0, maxw / width(r, size))   # одна дробь шире листа — пишем её чуть мельче, а не за край
                 hexpr(h, r, left + 120, y, size * max(k, 0.6), seed=rnd.randrange(1 << 16))
                 y += rowh
-            y += CELL * rnd.uniform(0.5, 0.9)
+            y += CELL * 0.7
         pages.append(os.path.join(out_dir, f'{start + len(pages)}_sheet.jpg'))
         h.save(pages[-1])
         return pages

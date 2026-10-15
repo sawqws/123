@@ -63,7 +63,6 @@ CELL_W = (W - 2 * SIDE) / COLS
 CELL_H = (H - TOP - BOTTOM) / ROWS
 XH = 80                    # высота строчной буквы в шаблоне, px
 ZOOM = 4                   # буквы со листа увеличиваем перед скелетом: линия плавная, а не лесенкой
-THIN = 0.55                # порог картинки буквы: при нём толщина линии как на его листе
 MARK = 60                  # размер угловой метки
 BIT = 34                   # размер метки номера страницы
 BG, LINE, HINT, MAGENTA = (30, 30, 32), (78, 78, 82), (120, 120, 126), (230, 0, 200)
@@ -191,7 +190,10 @@ def ink(a):
     """Маска написанного: цветное или светлое, в отличие от серого шаблона."""
     a = a.astype(int)
     chroma = a.max(-1) - a.min(-1)
-    return ((chroma > 22) & ~_magenta(a)) | (a.mean(-1) > 185)  # 22: тонкие линии после сжатия Telegram бледнеют
+    on = ((chroma > 22) & ~_magenta(a)) | (a.mean(-1) > 185)  # 22: тонкие линии после сжатия Telegram бледнеют
+    # не просто «есть/нет», а сколько чернил в пикселе: край штрика мягкий, как у настоящего пера (stamp_from)
+    level = np.clip(np.maximum((chroma - 14) / 150.0, (a.mean(-1) - 170) / 70.0), 0, 1)
+    return np.where(on, np.maximum(1, (level * 255).astype(np.uint8)), 0).astype(np.uint8)
 
 
 def prune(sk, length):
@@ -227,14 +229,14 @@ def prune(sk, length):
     return sk
 
 
-def glyph_from(mask, base, tiny=False):
+def glyph_from(mask, base, tiny=False, soft=None):
     """Маска клетки -> (точки скелета в единицах XH, ширина) или None, если пусто.
     tiny: знак из точек (. , : ;) — мелкие пятна не выбрасываем."""
     from skimage.morphology import skeletonize
     lab, n = ndimage.label(mask, np.ones((3, 3)))
     if not n:
         return None
-    area = ndimage.sum(mask, lab, range(1, n + 1))
+    area = ndimage.sum(mask > 0, lab, range(1, n + 1))
     keep = np.isin(lab, 1 + np.nonzero(area >= (4 if tiny else 25))[0])   # убрать пылинки от сжатия
     if keep.sum() < (6 if tiny else 60):
         return None
@@ -248,14 +250,20 @@ def glyph_from(mask, base, tiny=False):
     ys, xs = np.nonzero(prune(sk, 0.9 * width))
     x0 = xs.min()
     pts = np.stack([(xs - x0) / (XH * ZOOM), (base * ZOOM - ys) / (XH * ZOOM)], 1).astype(np.float32)
-    return pts, float((xs.max() - x0) / (XH * ZOOM)), stamp_from(keep, base, x0)
+    return pts, float((xs.max() - x0) / (XH * ZOOM)), stamp_from(keep, base, x0, soft)
 
 
-def stamp_from(keep, base, x0):
-    """Буква как есть — картинкой (Глеб, 14.10: «бери буквы из моего алфавита без изменений»): мягкая маска
-    чернил в ZOOM раз крупнее, края сглажены. -> (альфа uint8, левый край, верх) в единицах XH от x0 и строки."""
-    soft = ndimage.gaussian_filter(ndimage.zoom(keep.astype(np.float32), ZOOM, order=1), ZOOM * 0.45)
-    a = np.clip((soft - THIN) / 0.25, 0, 1)  # маска чернил с ореолом сжатия толще его линии — берём середину
+def stamp_from(keep, base, x0, soft=None):
+    """Буква как есть — картинкой (Глеб, 14.10: «бери буквы из моего алфавита без изменений»): настоящая
+    яркость чернил листа (мягкий край пера), в ZOOM раз крупнее. -> (альфа uint8, левый край, верх) в единицах
+    XH от x0 и строки. soft — uint8-маска листа (alphabet.ink), без неё — просто маска keep."""
+    if soft is not None:
+        region = ndimage.binary_dilation(keep, iterations=2)
+        base_a = np.where(region, soft.astype(np.float32) / 255.0, 0.0)
+    else:
+        base_a = keep.astype(np.float32)
+    big = ndimage.zoom(base_a, ZOOM, order=1)
+    a = np.clip((ndimage.gaussian_filter(big, ZOOM * 0.3) - 0.22) / 0.5, 0, 1)  # край пера гладкий, середина — чернила
     ys, xs = np.nonzero(a > 0.02)
     if not len(ys):
         return None
@@ -320,7 +328,9 @@ def normalize(glyphs):
     for (c, p, w, st), kb in zip(glyphs, out):
         k, base = kb or (kmed, line if line is not None else 0.0)
         k = min(max(k, kmed / 2.5), kmed * 2.5)  # клякса или обрывок буквы не раздувается в гиганта
-        st = st and (st[0], st[1] * ks_sheet, (st[2] - line0) * ks_sheet + BOTTOM_Y, ks_sheet / (XH * ZOOM))
+        # масштаб один на лист, а «посадка на строку» — у каждой буквы своя, как у линейного скелета: иначе буква,
+        # написанная чуть ниже/выше линейки, проваливалась бы или всплывала в слове
+        st = st and (st[0], st[1] * ks_sheet, (st[2] - base) * ks_sheet + BOTTOM_Y, ks_sheet / (XH * ZOOM))
         res.append((c, ((p - [0, base]) * k + [0, BOTTOM_Y]).astype(np.float32), w * k, st))
     return res
 
@@ -387,7 +397,7 @@ def cells(m, page):
         # подсказку в левом верхнем углу не берём: обрезаем верх клетки; края — рамки
         y_top, y_bot = int(y0 + 70), int(y0 + cell_h - 14)
         sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
-        g = glyph_from(sub, base - y_top, tiny=ch in '.,:;')
+        g = glyph_from(sub, base - y_top, tiny=ch in '.,:;', soft=sub)
         if g is not None:
             out.append((ch, *g))
     return out
@@ -425,7 +435,7 @@ def two_lines(m, seq, up, low, top, bottom, small=True):
         if not small or ch == 'ё' and ndimage.label(down, np.ones((3, 3)))[1] < 2:
             down[:] = False  # маленькую ё без точек не берём: была бы просто «е»
         for mask, c, b in ((upper, ch.upper(), base - y_top), (down, ch, y0 + cell_h * low - y_top)):
-            g = glyph_from(mask, b)
+            g = glyph_from(mask, b, soft=sub)
             if g is not None:
                 out.append((c, *g))
     return out
@@ -439,7 +449,8 @@ def signs3(m, chars):
         x0, x1, y0, _ = cell(i, 6, 6)
         base = y0 + cell_h * UP
         y_top, y_bot = int(y0 + 14), int(y0 + cell_h - 2)
-        g = glyph_from(m[y_top:y_bot, int(x0 + 14):int(x1 - 14)], base - y_top, tiny=ch in '.,:;')
+        sub = m[y_top:y_bot, int(x0 + 14):int(x1 - 14)]
+        g = glyph_from(sub, base - y_top, tiny=ch in '.,:;', soft=sub)
         if g is not None:
             out.append((ch, *g))
     return out

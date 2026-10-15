@@ -227,6 +227,8 @@ class Hand:
         width *= st.get('width', 1.0)
         slant += st.get('slant', 0.0)
         self.k = st.get('size', 1.0)
+        if exact:   # Apple Pencil, не рука (Глеб, 15.10): ни дрожи, ни наклона, ни случайных искажений
+            mess, slant = 0.0, 0.0
         self.m, self.sl = mess, slant
         self.img = img.convert('RGB')
         W, H = self.img.size
@@ -260,11 +262,15 @@ class Hand:
             c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '·': '.' if dot else '·'}.get(ch, ch)
             if c not in BANK and ch not in BANK and ALIAS.get(c) in BANK:
                 c = ALIAS[c]
-            st = (STAMPS.get(ch) or STAMPS.get(c)) if self.exact and not sup else None
+            st = (STAMPS.get(ch) or STAMPS.get(c)) if self.exact else None
             if st:  # его буква как на листе: тот же размер, ровно на строке, одинаковый промежуток
                 a, left, top, px, bw = st[0]
-                out.append((c, x, 0.0, xh, dict(stamp=(a, left, top, px))))
-                x += (left + bw) * xh + xh * GAP
+                kk = xh * (0.68 if sup else 1.0)   # ² ³ — та же его цифра, поменьше и выше строки
+                up = xh * 0.8 if sup else 0.0
+                if sup:
+                    x -= xh * 0.06
+                out.append((c, x, up, kk, dict(stamp=(a, left, top, px))))
+                x += (left + bw) * kk + xh * GAP * (0.5 if sup else 1.0)
                 continue
             real = ch in BANK or c in BANK
             if real:                                     # его настоящая буква: случайный из вариантов, не тот же подряд
@@ -306,7 +312,7 @@ class Hand:
         for c, x, up, k, p in lay:
             gx = x0 + x
             if 'stamp' in p:
-                self._stamp(p['stamp'], gx, base, k)
+                self._stamp(p['stamp'], gx, base - up, k)
                 continue
             gy = base - up + amp * line(gx) + (gx - x0) * tilt + random.uniform(-0.035, 0.035) * m * xh
             for st in ([p['real']] if 'real' in p else glyph(c)[0]):
@@ -344,6 +350,19 @@ class Hand:
         self._draw(lay, x, base, size)
         return x + w
 
+    def _ext(self, lay, xh):
+        """(верх, низ) раскладки в px от строки, y вверх: по его буквам-штампам, у остальных знаков — 1.3 и -0.25 xh."""
+        top, bot = 0.0, 0.0
+        for c, x, up, k, p in lay:
+            if 'stamp' in p:
+                a, left, t, px = p['stamp']
+                top = max(top, up + t * k)
+                bot = min(bot, up + (t - a.shape[0] * px) * k)
+            else:
+                top = max(top, up + 1.3 * xh)
+                bot = min(bot, up - 0.25 * xh)
+        return top, bot
+
     # ---------- дроби ----------
     def frac(self, num, den, x, base, size=40):
         size *= self.k
@@ -352,9 +371,19 @@ class Hand:
         ld, wd = self._layout(den, size)
         w = max(wn, wd)
         y = base - xh * 0.55                             # черта на уровне середины строки
+        sup = any(ch in '²³⁴⁵' for ch in den)
+        if self.exact:  # Apple Pencil: черта ровная и горизонтальная, числитель и знаменатель точно по центру
+            x1, x2 = x, x + w + xh * 0.7
+            gap = 0.3 * xh
+            _, nb = self._ext(ln, xh)                       # хвосты числителя (у, р, д) не должны доставать до черты
+            nt, _ = self._ext(ld, xh)                       # а верх знаменателя (цифры, скобки, б, д) — не упираться в неё
+            self._draw(ln, x1 + (x2 - x1 - wn) / 2, y - gap + min(0.0, nb), size)
+            self._draw(ld, x1 + (x2 - x1 - wd) / 2, y + gap + nt, size)
+            t = np.linspace(0, 1, 40)
+            self.stroke(np.stack([x1 + (x2 - x1) * t, np.full(40, y)], 1))
+            return x2 + xh * 0.3
         x1 = x + random.uniform(-0.1, 0.15) * xh
         x2 = x + w + xh * random.uniform(0.5, 1.2)       # черта уходит дальше записи
-        sup = any(ch in '²³⁴⁵' for ch in den)
         self._draw(ln, x1 + (x2 - x1 - wn) / 2 + random.uniform(-0.3, 0.3) * xh, y - xh * (random.uniform(0.4, 0.55) + 0.01 * min(len(num), 16)), size)  # длинный числитель чуть выше: черта его не задевает
         self._draw(ld, x1 + (x2 - x1 - wd) / 2 + random.uniform(-0.3, 0.3) * xh, y + xh * (random.uniform(1.65, 1.8) + 0.35 * sup), size)
         y1, y2 = y + random.uniform(-0.1, 0.1) * xh, y + random.uniform(-0.15, 0.1) * xh * m

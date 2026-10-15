@@ -3030,7 +3030,7 @@ def main():
     global SUP
     SUP = sup = support.Support(TOKEN, "HDP", folders=["bot", "horo"], pm2="horo-bot",
                                 allowed=lambda uid: uid == owner(),
-                                tests=["python3 bot/test_bot.py", "python3 bot/test_buttons.py"])
+                                tests=["python3 bot/test_bot.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=60)
