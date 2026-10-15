@@ -45,6 +45,12 @@
     weight: svgi('<path d="M6.5 7.5v9M3.5 10v4M17.5 7.5v9M20.5 10v4M6.5 12h11"/>'),
     plug: svgi('<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>'),
     help: svgi('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4M12 16.6v.1"/>'),
+    home: svgi('<path d="M4 10.5L12 4l8 6.5V20h-5.5v-5.5h-5V20H4z"/>'),
+    health: svgi('<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"/><path d="M6.5 12h3l1.5-2.5 2 5 1.5-2.5h3"/>'),
+    plus: svgi('<path d="M12 5v14M5 12h14"/>'),
+    flame: svgi('<path d="M12 21c-3.6 0-6-2.4-6-5.6 0-3.4 2.6-5 3.4-8.4 1.6 1.2 2.4 2.8 2.4 4.4 1-.6 1.6-1.8 1.6-3.2 2.4 1.8 2.6 4.6 2.6 7.2 0 3.2-2.4 5.6-4 5.6z"/>'),
+    cam: svgi('<path d="M4 8h3.5L9 5.5h6L16.5 8H20v11H4z"/><circle cx="12" cy="13" r="3.4"/>'),
+    sync: svgi('<path d="M20 11a8 8 0 0 0-14.6-4.4M4 13a8 8 0 0 0 14.6 4.4"/><path d="M5 3v4h4M19 21v-4h-4"/>'),
   };
   const sportIcon = s => /бокс|кик|единобор|мма|борьб|джиу/i.test(s) ? I.bolt : /бег|ходьб|поход|вело|плав/i.test(s) ? I.run : /силов|пауэр|функц|кроссфит/i.test(s) ? I.weight : I.bolt;
 
@@ -166,7 +172,7 @@
     s += `<path d="${d} L${P[P.length - 1][0].toFixed(1)},${CH} L${P[0][0].toFixed(1)},${CH} Z" fill="url(#${id})"/>`;
     s += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`;
     const last = P[P.length - 1];
-    s += `<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${color}" stroke="#121114" stroke-width="2"/>`;
+    s += `<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${color}" stroke="#1a2227" stroke-width="2"/>`;
     return svg(W, s, rows);
   }
   const avg = (rows, k) => { const v = rows.map(r => r[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
@@ -175,10 +181,12 @@
   const skel = (n = 3) => Array.from({ length: n }, (_, i) => `<div class="sk line" style="width:${[92, 78, 86, 60][i % 4]}%"></div>`).join('');
 
   // ---------- каркас ----------
-  const TABS = [{ id: 'today', icon: I.today, label: 'Сегодня' }, { id: 'trends', icon: I.trends, label: 'Тренды' },
-    { id: 'food', icon: I.food, label: 'Питание' }, { id: 'coach', icon: I.coach, label: 'Тренер' }];
+  // нижнее меню как в WHOOP: Главная · Здоровье · «＋» по центру (быстрые действия) · Питание · Тренер (Coach — в правом углу)
+  const TABS = [{ id: 'today', icon: I.home, label: 'Главная' }, { id: 'trends', icon: I.health, label: 'Здоровье' },
+    { id: 'plus', icon: I.plus, label: 'Добавить' }, { id: 'food', icon: I.food, label: 'Питание' }, { id: 'coach', icon: I.coach, label: 'Тренер' }];
   let tabs;
   function go(tab) {
+    if (tab === 'plus') { tabs.set(S.tab); plusSheet(); return; }
     if (S.tab === tab && !S.screen) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     S.tab = tab; S.screen = null; tabs.set(tab); render(true); window.scrollTo(0, 0);
     if (tab === 'trends' && !S.series[S.range]) loadSeries(S.range);
@@ -281,41 +289,72 @@
       + (all ? statRow({ k: 'Траты', v: c.kcal, unit: ' ккал', base: b.kcal, goodUp: null, ex: 'kcal', sub: b.kcal != null ? `обычно ${big(b.kcal)}` : 'за день' }) : '');
   }
 
-  // полоса дней сверху: кружок с цветом восстановления, как в WHOOP
-  function dayStrip(t) {
-    const ser = (S.data.series || []).slice(-7);
-    if (ser.length < 2) return '';
-    return `<nav class="strip" aria-label="Дни">${ser.map(r => {
-      const dt = parseDay(r.day), on = r.day === t.day, col = C[r.zone] || 'var(--line)';
-      return `<button class="sd ${on ? 'on' : ''}" data-a="goto" data-v="${r.day}" aria-label="${dt.getDate()} ${MON[dt.getMonth()]}" ${on ? 'aria-current="date"' : ''}>
-        <span class="wd">${WD_S[dt.getDay()]}</span><span class="dn" style="--c:${col}">${dt.getDate()}</span></button>`;
-    }).join('')}</nav>`;
+  // серия: сколько дней подряд браслет на руке (есть сон, восстановление или нагрузка), как «Streak» в WHOOP
+  function streak() {
+    const ser = S.data.series || [], has = r => r.recovery != null || r.sleep != null || r.strain != null;
+    let i = ser.length - 1, n = 0;
+    if (i >= 0 && !has(ser[i])) i--;  // сегодня WHOOP мог ещё не прислать — серия не рвётся
+    for (; i >= 0 && has(ser[i]); i--) n++;
+    return { n, full: n > 0 && n >= ser.length - 1 };
   }
+  const cap = (title, right = '') => `<div class="cap"><h3>${title}</h3>${right ? `<span class="cap-r">${right}</span>` : ''}</div>`;
 
-  // «Strain coach»: шкала 0–21, целевой отрезок и где ты сейчас
+  // «Strain Target»: шкала 0–21, целевой отрезок по восстановлению и где ты сейчас
+  const STRAIN_BANDS = [[0, 10, 'Лёгкая'], [10, 14, 'Средняя'], [14, 18, 'Высокая'], [18, 21, 'Макс']];
+  function strainScale(t, sv) {
+    const band = t.band, p = v => `${pct(v, 21)}%`;
+    return `<div class="scale21"><span class="band21" style="left:${band ? p(band[0]) : 0};width:${band ? `calc(${p(band[1])} - ${p(band[0])})` : 0}"></span>
+        ${sv != null ? `<span class="mark21" style="left:${p(sv)}"><b class="num">${num(sv, 1)}</b></span>` : ''}</div>
+      <div class="ticks num">${STRAIN_BANDS.map(([a, b, k]) => `<span style="flex:${b - a}">${k}</span>`).join('')}</div>`;
+  }
   function strainCoach(t, isToday) {
     const c = t.cycle, sv = c && c.strain != null ? c.strain : null, band = t.band;
     if (!band && sv == null) return '';
-    const p = v => `${pct(v, 21)}%`;
     let verdict = '';
     if (band && sv != null && isToday) {
-      verdict = sv < band[0] ? `Можно добавить ${num(band[0] - sv, 1)}–${num(band[1] - sv, 1)} нагрузки — организм готов.`
-        : sv <= band[1] ? 'Ты в целевой зоне — этого хватит на сегодня.'
+      verdict = sv < band[0] ? `До цели ${num(band[0] - sv, 1)}–${num(band[1] - sv, 1)} — организм готов к нагрузке.`
+        : sv <= band[1] ? 'Ты в целевой зоне — на сегодня этого хватит.'
         : 'Цель перевыполнена — остаток дня лучше спокойно.';
     } else if (band) verdict = `Ориентир по восстановлению: ${band[0]}–${band[1]}.`;
-    return `<section class="card rise tap" data-a="detail" data-v="strain" role="button">${head('Цель нагрузки', `<span class="num"><b>${band ? band[0] + '–' + band[1] : '—'}</b></span><span class="chev"></span>`)}
-      <div class="scale21"><span class="band21" style="left:${band ? p(band[0]) : 0};width:${band ? `calc(${p(band[1])} - ${p(band[0])})` : 0}"></span>
-        ${sv != null ? `<span class="mark21" style="left:${p(sv)}"><b class="num">${num(sv, 1)}</b></span>` : ''}</div>
-      <div class="ticks num"><span>0</span><span>7</span><span>14</span><span>21</span></div>
-      ${verdict ? `<p class="small">${verdict}</p>` : ''}</section>`;
+    return `<section class="card rise tap" data-a="detail" data-v="strain" role="button">${cap('Цель нагрузки', `<b class="num" style="color:var(--strain)">${band ? band[0] + '–' + band[1] : '—'}</b><span class="chev"></span>`)}
+      ${strainScale(t, sv)}${verdict ? `<p class="small">${verdict}</p>` : ''}</section>`;
   }
-  // «Sleep planner»: во сколько лечь
+  // «Tonight's Sleep»: сколько нужно и во сколько лечь
   function sleepPlanner(t) {
     const b = t.bedtime;
     if (!b) return '';
-    return `<section class="card rise tap" data-a="detail" data-v="sleep" role="button">${head('Планер сна', `<span class="chev"></span>`)}
-      <div class="planner"><span class="pico">${I.moon}</span><div><div class="pbig num">${esc(b.bed)}</div><div class="psub">лечь до · подъём ${esc(b.wake)}${b.weekend ? ' (выходной)' : ''}</div></div>
-        <div class="pneed num"><b>${hm(b.need)}</b><span>нужно сна</span></div></div></section>`;
+    return `<section class="card rise tap" data-a="detail" data-v="sleep" role="button">${cap('Сон сегодня', '<span class="chev"></span>')}
+      <div class="tonight"><div><span class="tk">Нужно сна</span><b class="num" style="color:var(--teal)">${hm(b.need)}</b></div>
+        <div><span class="tk">Лечь до</span><b class="num">${esc(b.bed)}</b></div>
+        <div><span class="tk">Подъём${b.weekend ? ' · вых.' : ''}</span><b class="num">${esc(b.wake)}</b></div></div></section>`;
+  }
+  // «My Day»: сон и тренировки за день по порядку
+  function myDay(t) {
+    const s = t.sleep, rows = [];
+    if (s) rows.push(`<button class="act" data-a="detail" data-v="sleep"><span class="act-ic" style="--c:var(--sleep)">${I.moon}</span>
+      <span class="act-m"><b>Сон</b><span class="num">${esc(s.start)} – ${esc(s.end)}</span></span>
+      <span class="act-v num" style="--c:var(--sleep)">${hm(s.hours)}</span></button>`);
+    (t.workouts || []).forEach(w => rows.push(`<button class="act" data-a="detail" data-v="strain"><span class="act-ic" style="--c:var(--strain)">${sportIcon(w.sport)}</span>
+      <span class="act-m"><b>${esc(w.sport)}</b><span class="num">${esc(w.start)} · ${w.minutes || '—'} мин${w.kcal ? ` · ${big(w.kcal)} ккал` : ''}</span></span>
+      <span class="act-v num" style="--c:var(--strain)">${w.strain != null ? num(w.strain, 1) : '—'}</span></button>`));
+    return `<div class="sec rise">${cap('Мой день', rows.length ? `${rows.length} ${plural(rows.length, 'запись', 'записи', 'записей')}` : '')}
+      <div class="card acts">${rows.length ? rows.join('') : '<p class="muted small">Сна и тренировок за этот день пока нет — WHOOP пришлёт их после записи.</p>'}</div></div>`;
+  }
+  // «My Dashboard»: плитки показателей со стрелкой к норме за 30 дней
+  function tile({ k, v, d = 0, unit = '', base, goodUp, ex, sub }) {
+    return `<button class="tile" data-a="explain" data-v="${ex}"><span class="tile-k">${k}</span>
+      <span class="tile-v"><b class="num">${v == null ? '—' : num(v, d)}</b><small>${unit}</small></span>
+      <span class="tile-d">${vs(v, base, goodUp, d) || `<span class="vs flat">${sub || (base != null ? `норма ${num(base, d)}` : 'нет нормы')}</span>`}</span></button>`;
+  }
+  function dashboard(t) {
+    const r = t.recovery || {}, s = t.sleep || {}, c = t.cycle || {}, b = t.base || {};
+    return `<div class="sec rise">${cap('Моя панель', 'к норме за 30 дней')}<div class="tiles">
+      ${tile({ k: 'ВСР', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv' })}
+      ${tile({ k: 'Пульс покоя', v: r.rhr, unit: 'уд/мин', base: b.rhr, goodUp: false, ex: 'rhr' })}
+      ${tile({ k: 'Дыхание', v: s.resp, d: 1, unit: 'в мин', base: b.resp, goodUp: null, ex: 'resp' })}
+      ${tile({ k: 'SpO₂', v: r.spo2, d: 1, unit: '%', goodUp: true, ex: 'spo2', sub: 'норма 95–100%' })}
+      ${tile({ k: 'Темп. кожи', v: r.skin_temp, d: 1, unit: '°C', base: b.skin_temp, goodUp: null, ex: 'temp' })}
+      ${tile({ k: 'Калории', v: c.kcal, unit: 'ккал', base: b.kcal, goodUp: null, ex: 'kcal' })}</div></div>`;
   }
 
   function todayView() {
@@ -329,47 +368,38 @@
     const recC = z ? C[z] : 'var(--hint)';
     const sleepP = s ? (s.performance != null ? s.performance / 100 : s.need ? s.hours / s.need : 0) : 0;
     const sleepV = s ? (s.performance != null ? s.performance : s.need ? Math.round(s.hours / s.need * 100) : null) : null;
+    const st = streak();
     let h = `<header class="topbar">${avatar()}
       <div class="pager"><button class="pg" data-a="day" data-v="-1" aria-label="Предыдущий день">${I.back}</button>
         <div class="pg-t"><b>${esc(dateWord(t.day))}</b><span>${dateLine(t.day)}</span></div>
         <button class="pg" data-a="day" data-v="1" aria-label="Следующий день" ${isToday ? 'disabled' : ''}>${I.next}</button></div>
       <button class="avatar ghost" data-a="summary" data-v="day" aria-label="Сводка и советы">${I.stats}</button></header>`;
-    h += dayStrip(t);
-    h += `<section class="dials-card rise"><div class="dials">
-        ${dial(sleepP, 'var(--sleep)', sleepV != null ? `<b class="num">${cnt(sleepV)}<small>%</small></b>` : '<b>—</b>', 'Сон', s ? `${hm(s.hours)} из ${hm(s.need)}` : 'нет данных', 'sleep')}
-        ${dial(r ? r.score / 100 : 0, recC, r ? `<b class="num">${cnt(r.score)}<small>%</small></b>` : '<b>—</b>', 'Восстановление', r ? ZONE[z] : 'ещё не посчитано', 'rec', 130)}
-        ${dial(c && c.strain != null ? c.strain / 21 : 0, 'var(--strain)', c && c.strain != null ? `<b class="num">${cnt(c.strain, 1)}</b>` : '<b>—</b>', 'Нагрузка', t.band ? `цель ${t.band[0]}–${t.band[1]}` : 'из 21', 'strain', 100, t.band ? [t.band[0] / 21, t.band[1] / 21] : null)}
-      </div></section>`;
+    if (st.n) h += `<div class="streak rise">${I.flame}<b class="num">${st.n}${st.full ? '+' : ''}</b>${plural(st.n, 'день', 'дня', 'дней')} подряд с WHOOP</div>`;
+    h += `<section class="dials rise">
+        ${dial(sleepP, 'var(--sleep)', sleepV != null ? `<b class="num">${cnt(sleepV)}<small>%</small></b>` : '<b>—</b>', 'Сон', s ? hm(s.hours) : '', 'sleep')}
+        ${dial(r ? r.score / 100 : 0, recC, r ? `<b class="num">${cnt(r.score)}<small>%</small></b>` : '<b>—</b>', 'Восстановление', r ? ZONE[z] : '', 'rec')}
+        ${dial(c && c.strain != null ? c.strain / 21 : 0, 'var(--strain)', c && c.strain != null ? `<b class="num">${cnt(c.strain, 1)}</b>` : '<b>—</b>', 'Нагрузка', t.band ? `цель ${t.band[0]}–${t.band[1]}` : '', 'strain', 100, t.band ? [t.band[0] / 21, t.band[1] / 21] : null)}
+      </section>`;
 
-    // совет на день + главное действие
+    // «Daily Outlook»: совет на день + «Узнать у тренера»
     const adv = advice(t);
-    h += `<section class="card outlook rise"><div class="label-in">Совет на день</div>
+    h += `<section class="card outlook rise">${cap(isToday ? 'Прогноз на день' : 'Разбор дня', r ? `<i class="zdot" style="background:${recC}"></i>${ZONE[z]}` : '')}
       ${S.briefing ? skel(2) : adv ? `<div class="prose advice">${adv}</div>`
         : `<p class="muted">${!isToday ? 'Разбора за этот день нет.' : d.morning === 'off' ? 'Утренний разбор выключен — время в профиле.' : `Разбор придёт утром, с ${esc(d.morning || '07:00')}, как только WHOOP посчитает сон.`}</p>`}
-      ${isToday ? `<button class="btn primary" data-a="tab" data-v="coach">Спросить тренера</button>
-        <div class="btns">${t.brief || (t.tips || []).length ? '<button class="btn sm ghost" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="btn sm ghost" data-a="brief">Разобрать сейчас</button>' : ''}</div>` : ''}</section>`;
+      ${isToday ? `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
+        <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Узнать у тренера</button></div>` : ''}</section>`;
 
-    h += `<div class="label rise">Ключевые показатели</div><section class="card kstats rise">${keyStats(t)}</section>
-      <p class="hint-line">Нажми на любую цифру или кольцо — объясню, что это значит</p>`;
-
-    h += `<div class="pair">${strainCoach(t, isToday)}${isToday ? sleepPlanner(t) : ''}</div>`;
-
-    if ((t.workouts || []).length) h += `<div class="label rise">Активности</div><div class="list acts rise">${t.workouts.map(workoutRow).join('')}</div>`;
-    if (isToday) h += `<div class="label rise">Журнал</div><div class="pair">${waterCard(t.water)}${foodMini(t)}</div>`;
-    h += `<button class="card summary-entry rise tap" data-a="summary" data-v="day"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Сводка и советы</b>
-      <span class="muted">за день, неделю, месяц и всё время с WHOOP</span></span><span class="chev"></span></button>`;
+    h += strainCoach(t, isToday);
+    h += myDay(t);
+    if (isToday) h += sleepPlanner(t);
+    if (isToday) h += `<div class="sec rise">${cap('Мой дневник')}<div class="pair">${waterCard(t.water)}${foodMini(t)}</div></div>`;
+    h += dashboard(t);
+    h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Оценка и советы</b>
+      <span class="muted">день · неделя · месяц · всё время</span></span><span class="chev"></span></button>`;
     if (isToday && d.connected) h += `<p class="foot">${synced} · <button class="link" data-a="sync">Обновить</button></p>`;
     if (isToday) h += Kit.supportRow('/api/support') + chatRow();
     return h;
   }
-  // тренировка: мини-кольцо нагрузки, вид спорта, время и длительность
-  const workoutRow = w => {
-    const sv = w.strain, r = 17, c = 2 * Math.PI * r;
-    return `<button class="row act" data-a="detail" data-v="strain"><span class="mini" style="--c:var(--strain)"><svg viewBox="0 0 40 40" aria-hidden="true"><circle class="trk" cx="20" cy="20" r="${r}" stroke-width="4"/>
-      <circle class="arc" cx="20" cy="20" r="${r}" stroke-width="4" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${c.toFixed(1)}" data-off="${(c * (1 - pct(sv || 0, 21) / 100)).toFixed(1)}"/></svg><span>${sv != null ? num(sv, 1) : '—'}</span></span>
-      <div class="main"><div class="title">${esc(w.sport)}</div><div class="meta num">${esc(w.start)} · ${w.minutes || '—'} мин · пульс ${w.avg_hr || '—'}/${w.max_hr || '—'}</div></div>
-      <span class="end sico">${sportIcon(w.sport)}</span></button>`;
-  };
   // «💬 Перейти в чат» (внизу «Сегодня» и в профиле): режим «чат» — бот присылает главное меню, приложение закрывается
   function chatRow() {
     const m = S.data && S.data.mode;
@@ -499,6 +529,10 @@
           <span class="stbar"><span style="margin-left:${(i * 3).toFixed(0)}%;width:0;background:${col}" data-w="${Math.max(1.5, p).toFixed(1)}%"></span></span>
           <span class="stv num"><b>${hm(v)}</b><small>${p.toFixed(0)}%</small></span></div>`;
       }).join('')}</div></section>`;
+    // «Restorative sleep»: глубокий + REM — то, что восстанавливает тело и голову
+    const rest = (s.deep || 0) + (s.rem || 0), restP = s.hours ? rest / s.hours * 100 : 0;
+    h += `<section class="card rise">${cap('Восстанавливающий сон', `<b class="num" style="color:var(--teal)">${hm(rest)}</b>`)}
+      ${bar(Math.min(100, restP), 'var(--teal)')}<p class="small muted num">${restP.toFixed(0)}% сна — глубокий ${hm(s.deep)} + REM ${hm(s.rem)}. Обычно хорошо от 40–50%.</p></section>`;
     h += `<div class="grid2 metrics rise">${metric('Эффективность', s.efficiency != null ? s.efficiency + '%' : '—', 'сон / время в постели')}
       ${metric('Режим', s.consistency != null ? s.consistency + '%' : '—', 'ровность отбоя и подъёма')}
       ${metric('Дыхание', s.resp != null ? num(s.resp, 1) : '—', b.resp != null ? `обычно ${num(b.resp, 1)} в мин` : 'в минуту')}
@@ -516,11 +550,11 @@
       <div class="hr-sub num">ВСР ${r.hrv != null ? Math.round(r.hrv) : '—'} мс · пульс покоя ${r.rhr != null ? r.rhr : '—'}</div></section>`;
     h += dAbout('rec');
     if (r.calibrating) h += '<div class="note rise"><span>⏳</span><span>WHOOP ещё калибруется — первые недели цифры неточные.</span></div>';
-    h += `<div class="label rise">Что влияет</div><section class="card kstats rise">${keyStats(t, false)}</section>`;
+    h += `<div class="sec rise">${cap('Что влияет', 'к норме за 30 дней')}<section class="card kstats">${keyStats(t, false)}</section></div>`;
     const rows = lastRows(14);
     h += chartCard('Восстановление, 14 дней', b.recovery != null ? `<span class="num">обычно ${num(b.recovery)}%</span>` : '', bars(rows, 'recovery', { max: 100, color: r2 => C[r2.zone] || 'var(--hint)' }));
-    h += chartCard('ВСР, 14 дней', '<span>выше — лучше</span>', line(rows, 'hrv', 'var(--rec-green)', b.hrv));
-    h += chartCard('Пульс покоя, 14 дней', '<span>ниже — лучше</span>', line(rows, 'rhr', 'var(--rec-red)', b.rhr));
+    h += chartCard('ВСР, 14 дней', '<span>выше — лучше</span>', line(rows, 'hrv', 'var(--rec-blue)', b.hrv));
+    h += chartCard('Пульс покоя, 14 дней', '<span>ниже — лучше</span>', line(rows, 'rhr', 'var(--rec-blue)', b.rhr));
     if (t.brief) h += `<div class="label rise">Разбор тренера</div><div class="card prose rise">${tgHtml(t.brief)}</div>`;
     if ((t.tips || []).length) h += `<div class="label rise">Сигналы тела</div><div class="card tips rise">${t.tips.map(x => `<div class="tip ${x.tone}"><i></i><p>${esc(x.text)}</p></div>`).join('')}</div>`;
     if (t.day === d.today.day) h += `<button class="btn tonal rise" data-a="brief">${t.brief ? 'Обновить разбор' : 'Разобрать сейчас'}</button>`;
@@ -537,6 +571,7 @@
     h += `<section class="hero-ring rise">${ring((sv || 0) / 21, 'var(--strain)', `<b class="num">${cnt(sv, 1)}</b><span>из 21</span>`, 210, band)}
       <div class="hr-sub num">${t.band ? `Цель на сегодня ${t.band[0]}–${t.band[1]}` : 'Шкала 0–21'}${b.strain != null ? ` · обычно ${num(b.strain, 1)}` : ''}</div></section>`;
     h += dAbout('strain');
+    if (t.band || sv != null) h += `<section class="card rise">${cap('Цель нагрузки', t.band ? `<b class="num" style="color:var(--strain)">${t.band[0]}–${t.band[1]}</b>` : '')}${strainScale(t, sv)}</section>`;
     h += `<div class="grid2 metrics rise">${metric('Траты', c ? big(c.kcal) + '<small> ккал</small>' : '—', b.kcal != null ? `обычно ${big(b.kcal)}` : '')}
       ${metric('Тренировки', ws.length, ws.length ? `${ws.reduce((a, w) => a + (w.minutes || 0), 0)} мин` : 'за день нет')}
       ${metric('Пульс средний', c && c.avg_hr ? c.avg_hr : '—', 'уд/мин')}${metric('Пульс макс.', c && c.max_hr ? c.max_hr : '—', 'уд/мин')}</div>`;
@@ -635,34 +670,64 @@
     if (!S.sum[sumPer] || !S.sum[sumPer].summary) sumLoad(sumPer); else sumRender();
   }
 
-  // ---------- Тренды ----------
+  // ---------- Здоровье (Health): монитор здоровья, оценки, тренды ----------
+  // «Health Monitor»: каждый показатель против твоего обычного уровня. Точных границ WHOOP не публикует —
+  // здесь наши: «в норме» — в пределах tol от нормы за 30 дней, «заметно» — до 2×tol, дальше — «сильно».
+  const MONITOR = [
+    { k: 'ВСР', ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
+    { k: 'Пульс покоя', ex: 'rhr', unit: 'уд/мин', get: t => (t.recovery || {}).rhr, base: b => b.rhr, tol: () => 3 },
+    { k: 'Дыхание', ex: 'resp', unit: 'в мин', d: 1, get: t => (t.sleep || {}).resp, base: b => b.resp, tol: () => 1 },
+    { k: 'SpO₂', ex: 'spo2', unit: '%', d: 1, get: t => (t.recovery || {}).spo2, base: () => 97.5, tol: () => 2.5, range: '95–100' },
+    { k: 'Темп. кожи', ex: 'temp', unit: '°C', d: 1, get: t => (t.recovery || {}).skin_temp, base: b => b.skin_temp, tol: () => .5 },
+  ];
+  function monitorCard(t) {
+    const b = t.base || {};
+    let ok = 0, all = 0;
+    const rows = MONITOR.map(m => {
+      const v = m.get(t), base = m.base(b) != null ? m.base(b) : null;
+      let col = 'var(--hint)', word = 'нет данных', range = '';
+      if (base != null) { const tl = m.tol(base); range = m.range || `${num(base - tl, m.d || 0)}–${num(base + tl, m.d || 0)}`; }
+      if (v != null && base != null) {
+        all++;
+        const x = Math.abs(v - base) / m.tol(base);
+        if (x <= 1) { ok++; col = C.green; word = 'в норме'; } else if (x <= 2) { col = C.yellow; word = 'заметно'; } else { col = C.red; word = 'сильно'; }
+      } else if (v != null) word = 'нет нормы';
+      return `<button class="mrow" data-a="explain" data-v="${m.ex}"><i class="mdot" style="background:${col}"></i>
+        <span class="mk">${m.k}<small>${range ? `обычно ${range}` : word}</small></span>
+        <span class="mv"><b class="num">${v == null ? '—' : num(v, m.d || 0)}</b><small>${m.unit}</small><em style="color:${col}">${word}</em></span></button>`;
+    }).join('');
+    return `<section class="card monitor rise">${cap('Монитор здоровья', all ? `<b class="num" style="color:${ok === all ? C.green : ok >= all - 1 ? C.yellow : C.red}">${ok}/${all}</b> в норме` : '')}${rows}</section>`;
+  }
+  const RANGES = [[7, '1Н'], [30, '1М'], [180, '6М']];
   function trendsView() {
-    let h = hero('Тренды', `Последние ${S.range} дней`);
-    h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Сводка и советы</b>
-      <span class="muted">день · неделя · месяц · всё время</span></span><span class="chev"></span></button>`;
-    h += `<div class="seg" role="tablist">${[7, 30, 90].map(n => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${n} дней</button>`).join('')}</div>`;
+    const t = S.data.today;
+    let h = hero('Здоровье', `${dateWord(t.day)}, ${dateLine(t.day)}`);
+    h += monitorCard(t);
+    h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Оценка недели и месяца</b>
+      <span class="muted">цифры против прошлого периода и советы тренера</span></span><span class="chev"></span></button>`;
     const pr = S.progress;
-    h += `<section class="card feature rise">${head('Разбор прогресса', pr && !S.progressing ? '<button class="link" data-a="progress">Обновить</button>' : '')}
+    h += `<section class="card rise">${cap('Разбор прогресса', pr && !S.progressing ? '<button class="link" data-a="progress">Обновить</button>' : '')}
       ${S.progressing ? skel(3) + '<p class="small muted">Разбираю 2 месяца данных — около минуты…</p>'
-        : pr ? `<p class="small muted">от ${dateLine(pr.day)}</p><div class="prose ${pr.text.length > 320 ? 'clamp' : ''}" id="prog">${tgHtml(pr.text)}</div>${pr.text.length > 320 ? '<button class="btn sm ghost" data-a="more">Читать целиком</button>' : ''}`
-        : `<p class="muted">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</p>
+        : pr ? `<p class="small muted">от ${dateLine(pr.day)}</p><div class="prose ${pr.text.length > 320 ? 'clamp' : ''}" id="prog">${tgHtml(pr.text)}</div>${pr.text.length > 320 ? '<button class="link" data-a="more">Читать целиком</button>' : ''}`
+        : `<p class="muted small">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</p>
            <button class="btn primary" data-a="progress">Разобрать прогресс</button>`}</section>`;
+    h += `<div class="sec rise">${cap('Тренды')}<div class="seg" role="tablist">${RANGES.map(([n, l]) => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${l}</button>`).join('')}</div></div>`;
     const rows = S.series[S.range] || (S.range === 30 ? S.data.series : null);
     if (!rows && S.seriesErr === S.range) return h + retryCard('Графики не загрузились', 'series-retry');
     if (!rows) return h + [1, 2, 3].map(() => '<section class="card"><div class="sk line" style="width:40%"></div><div class="sk" style="height:130px;margin-top:14px"></div></section>').join('');
     if (!rows.some(r => r.recovery != null || r.strain != null || r.sleep != null)) {
-      return h + '<div class="empty"><span class="e">📈</span><b>Данных пока нет</b>Подключи WHOOP — графики появятся после первой ночи с браслетом.</div>';
+      return h + `<div class="empty"><span class="e">${I.trends}</span><b>Данных пока нет</b>Подключи WHOOP — графики появятся после первой ночи с браслетом.</div>`;
     }
     const zc = r => C[r.zone] || 'var(--hint)';
-    const card = (title, value, unit, side, chart) => `<section class="card rise">${head(title, side)}
-      <div class="big-line"><span class="v num">${value}</span><span class="u">${unit}</span></div>${chart}</section>`;
-    const greens = rows.filter(r => r.zone === 'green').length, reds = rows.filter(r => r.zone === 'red').length;
-    h += card('Восстановление', num(avg(rows, 'recovery')), '% в среднем', `<span class="num"><i class="dot" style="background:var(--rec-green)"></i>${greens} <i class="dot" style="background:var(--rec-red)"></i>${reds}</span>`, bars(rows, 'recovery', { max: 100, color: zc }));
-    h += card('ВСР', num(avg(rows, 'hrv')), 'мс', 'выше — лучше', line(rows, 'hrv', 'var(--rec-green)', avg(rows, 'hrv')));
-    h += card('Пульс покоя', num(avg(rows, 'rhr')), 'уд/мин', 'ниже — лучше', line(rows, 'rhr', 'var(--rec-red)', avg(rows, 'rhr')));
-    h += card('Сон', hm(avg(rows, 'sleep')), 'в среднем', '<i class="tick"></i>нужно', bars(rows, 'sleep', { color: 'var(--sleep)', ref: 'need' }));
+    const card = (title, value, unit, side, chart, color) => `<section class="card rise">${cap(title, side)}
+      <div class="big-line"><span class="v num" style="color:${color || 'var(--ink)'}">${value}</span><span class="u">${unit}</span></div>${chart}</section>`;
+    const greens = rows.filter(r => r.zone === 'green').length, yellows = rows.filter(r => r.zone === 'yellow').length, reds = rows.filter(r => r.zone === 'red').length;
+    h += card('Восстановление', num(avg(rows, 'recovery')), '% в среднем', `<span class="num"><i class="dot" style="background:${C.green}"></i>${greens}<i class="dot" style="background:${C.yellow}"></i>${yellows}<i class="dot" style="background:${C.red}"></i>${reds}</span>`, bars(rows, 'recovery', { max: 100, color: zc }));
+    h += card('Сон', hm(avg(rows, 'sleep')), 'в среднем', '<i class="tick"></i>нужно', bars(rows, 'sleep', { color: 'var(--sleep)', ref: 'need' }), 'var(--sleep)');
     const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);
-    h += card('Нагрузка', num(avg(rows, 'strain'), 1), 'в среднем', `<span class="num">${wk} ${plural(wk, 'тренировка', 'тренировки', 'тренировок')}</span>`, bars(rows, 'strain', { max: 21, color: 'var(--strain)' }));
+    h += card('Нагрузка', num(avg(rows, 'strain'), 1), 'в среднем', `<span class="num">${wk} ${plural(wk, 'тренировка', 'тренировки', 'тренировок')}</span>`, bars(rows, 'strain', { max: 21, color: 'var(--strain)' }), 'var(--strain)');
+    h += card('ВСР', num(avg(rows, 'hrv')), 'мс', 'выше — лучше', line(rows, 'hrv', 'var(--rec-blue)', avg(rows, 'hrv')));
+    h += card('Пульс покоя', num(avg(rows, 'rhr')), 'уд/мин', 'ниже — лучше', line(rows, 'rhr', 'var(--rec-blue)', avg(rows, 'rhr')));
     return h;
   }
   async function loadSeries(n) {
@@ -714,7 +779,7 @@
     if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="msg them"><span class="dots"><i></i><i></i><i></i></span></div>`;
     h += '</div>';
     h += `<div class="composer"><div class="chips">${SUGGEST.map(s => `<button class="chip" data-a="suggest" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>
-      <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>📷</button>
+      <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${I.cam}</button>
       <textarea id="q" rows="1" placeholder="Спроси тренера…">${esc(S.qDraft || '')}</textarea>
       <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div></div>`;
     return h;
@@ -836,6 +901,23 @@
     sheet(`<h2>Разбор прогресса</h2><p class="small muted">от ${dateLine(S.progress.day)}</p><div class="prose">${tgHtml(S.progress.text)}</div>`);
   }
 
+  // «＋» по центру меню (как в WHOOP): быстрые действия
+  function plusSheet() {
+    haptic('tap');
+    const d = S.data, row = (a, v, ic, col, t, m) => `<button class="row tap" data-a="${a}" data-v="${v}"><span class="ic" style="color:${col}">${ic}</span>
+      <span class="main"><div class="title">${t}</div><div class="meta">${m}</div></span><span class="end chev"></span></button>`;
+    const el = sheet(`<h2>Добавить</h2><div class="list">
+      ${row('photo', 'food', I.cam, 'var(--food)', 'Еда по фото', 'посчитаю ккал и БЖУ')}
+      ${row('meal-new', '', I.food, 'var(--food)', 'Еда вручную', 'название и цифры')}
+      ${row('water', '250', I.drop, 'var(--water)', 'Вода +250 мл', 'стакан')}
+      ${row('water', '500', I.drop, 'var(--water)', 'Вода +500 мл', 'бутылка')}
+      ${row('tab', 'coach', I.coach, 'var(--teal)', 'Спросить тренера', 'по твоим данным WHOOP')}
+      ${row('summary', 'week', I.stats, 'var(--rec-blue)', 'Оценка и советы', 'день · неделя · месяц')}
+      ${d.connected ? row('sync', '', I.sync, 'var(--hint)', 'Обновить данные WHOOP', d.synced ? `были в ${clock(d.synced)}` : 'загрузить сейчас') : ''}</div>`);
+    // действие выполняет общий обработчик кликов (он ниже по всплытию); лист закрываем сразу — иначе он спрячет «Назад» следующего листа
+    el.addEventListener('click', ev => { if (ev.target.closest('[data-a]')) el.close(); });
+  }
+
   // ---------- действия ----------
   async function refresh() {
     try { S.data = await api('/api/all'); S.dayData = null; render(false); } catch (e) { fail(e); }
@@ -933,7 +1015,7 @@
 
   async function start() {
     const p = (new URLSearchParams(location.search).get('p') || '').replace(/^\//, '');
-    if (['trends', 'food', 'coach'].includes(p)) S.tab = p;
+    if (['trends', 'health', 'food', 'coach'].includes(p)) S.tab = p === 'health' ? 'trends' : p;
     tabs = Kit.tabbar($('#tabs'), TABS, S.tab, go);
     try { S.data = await api('/api/all'); } catch (e) {
       view.removeAttribute('aria-busy');
