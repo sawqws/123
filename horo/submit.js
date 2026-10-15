@@ -10,7 +10,7 @@
 //   manualInput:     "1": "ha hecho"
 //   blanks:          "2": ["was", "were", "not"]   (пропуски по порядку в тексте: и списки, и поля для ввода)
 //   singleSelection: "3": "текст варианта"         (точно как в fetch.js)
-//   multipleSelection: "4": ["вариант A", "вариант C"]
+//   multipleSelection: "4": ["вариант A", "вариант C"]   (вариант-картинка без текста — его uuid)
 //   sequence:        "5": ["первый", "второй", ...]  (тексты вариантов в нужном порядке)
 //   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]
 //   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать)
@@ -110,7 +110,7 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const optText = o => (o.text || (o.description && o.description.text) || '').trim();
         const want = [].concat(a);
         const ids = want.map(w => {
-          const o = q.options.find(o => optText(o) === w);
+          const o = q.options.find(o => o.uuid === w || optText(o) === w);
           if (!o) throw new Error(`Вопрос ${n}: нет варианта «${w}»`);
           return o.uuid;
         });
