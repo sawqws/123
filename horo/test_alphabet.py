@@ -287,7 +287,7 @@ class StyleTest(unittest.TestCase):
         try:
             hand.BANK.clear()
             hand.BANK['о'] = [(np.array([[0, 0], [1, 1]], np.float32), 1.0)]
-            lay, _ = hand.Hand(Image.new('RGB', (10, 10)))._layout('o', 44)
+            lay, _ = hand.Hand(Image.new('RGB', (10, 10)), exact=False)._layout('o', 44)  # без штампов с листа
             self.assertIn('real', lay[0][4])  # латинская o нарисована его русской о
         finally:
             hand.BANK.clear(); hand.BANK.update(bank)
