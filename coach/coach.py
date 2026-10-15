@@ -1598,13 +1598,18 @@ def asset_version():
 
 
 PAGE_DONE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light"><title>Форма</title><style>
-body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:#f6f3ee;color:#1f1b17;
-font:17px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;text-align:center}}
-div{{max-width:340px;background:#fff;border:1px solid rgba(70,50,30,.065);border-radius:26px;padding:34px 26px;overflow-wrap:anywhere;
-box-shadow:0 1px 1px rgba(70,45,20,.03),0 12px 32px -16px rgba(70,45,20,.16)}}
-b{{font-size:44px;display:block;margin-bottom:16px}}a{{display:block;margin-top:24px;padding:14px;border-radius:999px;
-background:#c5e9dc;color:#1f1b17;text-decoration:none;font-weight:600}}
+<meta name="color-scheme" content="dark"><meta name="theme-color" content="#070708"><title>Форма</title><style>
+html{{background:#070708}}
+body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;color:#f6f1e7;text-align:center;
+font:17px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+background:radial-gradient(60% 32% at 95% 4%,rgba(224,180,100,.42),transparent 70%),
+radial-gradient(55% 30% at -8% 60%,rgba(150,100,45,.36),transparent 70%),#070708}}
+div{{max-width:340px;background:rgba(255,255,255,.055);border-radius:32px;padding:34px 26px;overflow-wrap:anywhere;
+-webkit-backdrop-filter:blur(24px) saturate(1.7);backdrop-filter:blur(24px) saturate(1.7);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 0 0 1px rgba(255,255,255,.07),0 22px 44px -26px rgba(0,0,0,.9)}}
+b{{font-size:44px;display:block;margin-bottom:16px}}a{{display:block;margin-top:24px;padding:14px;border-radius:999px;font-weight:700;
+background:linear-gradient(180deg,rgba(246,222,170,.62),rgba(196,152,78,.42));color:#fff7e6;text-decoration:none;
+box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 1px rgba(240,210,150,.45),0 12px 28px -12px rgba(214,178,110,.75)}}
 </style><div><b>{icon}</b>{text}<a href="{link}">Вернуться в Telegram</a></div>"""
 
 
