@@ -24,6 +24,9 @@
 }
 
 /* ---------- общее ---------- */
+.hdpx-vv { position: fixed; z-index: 2147483000; pointer-events: none; overflow: hidden; }
+.hdpx-vv > * { pointer-events: auto; }
+.hdpx-vv > .hdpx-toasts { pointer-events: none; }
 .hdpx-tab, .hdpx-drawer, .hdpx-taskbar, .hdpx-float, .hdpx-topicbar, .hdpx-mini, .hdpx-modal, .hdpx-toasts {
   font-family: var(--hdpx-font); font-size: 16px; line-height: 1.3; color: var(--hdpx-text);
   -webkit-font-smoothing: antialiased; box-sizing: border-box; letter-spacing: normal; text-align: left;
@@ -101,7 +104,7 @@
 .hdpx-ava svg { width: 24px; height: 24px; }
 
 /* ---------- вкладка у правого края (как родная вкладка-календарь) ---------- */
-.hdpx-tab { position: fixed; right: 0; bottom: 190px; z-index: 300; width: 32px; height: 64px; padding: 0; display: grid; place-items: center;
+.hdpx-tab { position: absolute; right: 0; bottom: 190px; z-index: 2147483000; width: 32px; height: 64px; padding: 0; display: grid; place-items: center;
   border: 0; border-radius: 8px 0 0 8px; background: var(--hdpx-primary); color: #fff; cursor: pointer;
   box-shadow: var(--hdpx-shadow); transition: background-color .15s, width .15s; }
 .hdpx-tab:hover { background: var(--hdpx-primary-hover); width: 36px; }
@@ -114,7 +117,7 @@
 @keyframes hdpx-pulse { 50% { opacity: .35; } }
 
 /* ---------- выдвижная панель (как родные панели «Хронология» / «Содержание темы») ---------- */
-.hdpx-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 400; width: 24.375rem; max-width: 100vw; display: flex; flex-direction: column;
+.hdpx-drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 2147483001; width: 24.375rem; max-width: 100%; display: flex; flex-direction: column;
   background: var(--hdpx-white); box-shadow: var(--hdpx-shadow); transform: translateX(105%); transition: transform .25s ease; }
 .hdpx-dr-open { transform: none; }
 .hdpx-dr-head { display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--hdpx-bg2); flex: 0 0 auto; }
@@ -247,35 +250,44 @@
 @media (hover: none) { .hdpx-mini { opacity: 1; pointer-events: auto; } }
 
 /* ---------- окно подтверждения, картинка, всплывашки ---------- */
-.hdpx-modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(39, 32, 93, .4); }
+.hdpx-modal { position: absolute; inset: 0; z-index: 2147483002; display: grid; place-items: center; padding: 16px; background: rgba(39, 32, 93, .4); }
 .hdpx-dialog { width: min(440px, 100%); padding: 24px; border-radius: 16px; background: var(--hdpx-white); box-shadow: var(--hdpx-shadow); }
 .hdpx-dialog .hdpx-p { margin-top: 10px; white-space: pre-line; }
 .hdpx-dialog .hdpx-acts { margin-top: 20px; }
 .hdpx-lightbox { cursor: zoom-out; }
-.hdpx-lightbox img { max-width: 100%; max-height: calc(100vh - 32px); border-radius: 8px; background: #fff; }
-.hdpx-lb-x { position: fixed; top: 16px; right: 16px; background: var(--hdpx-white); }
-.hdpx-toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 1100; display: flex; flex-direction: column; align-items: center;
-  gap: 8px; width: max-content; max-width: calc(100vw - 32px); pointer-events: none; }
+.hdpx-lightbox img { max-width: 100%; max-height: calc(100% - 32px); border-radius: 8px; background: #fff; }
+.hdpx-lb-x { position: absolute; top: 16px; right: 16px; background: var(--hdpx-white); }
+.hdpx-toasts { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 2147483003; display: flex; flex-direction: column; align-items: center;
+  gap: 8px; width: max-content; max-width: calc(100% - 32px); pointer-events: none; }
 .hdpx-toast { padding: 12px 16px; border-radius: 8px; background: var(--hdpx-ink); color: #fff; font-size: 15px; line-height: 20px; box-shadow: var(--hdpx-shadow);
   animation: hdpx-in .2s ease; }
 .hdpx-toast-err { background: var(--hdpx-red); }
 @keyframes hdpx-in { from { opacity: 0; transform: translateY(8px); } }
 
 /* ---------- телефон ---------- */
-@media (max-width: 640px) {
-  .hdpx-drawer { width: 100vw; }
-  .hdpx-topicbar { display: flex; margin: 0 0 12px; }
-  .hdpx-topicbar .hdpx-white { background: var(--hdpx-primary); border-color: var(--hdpx-primary); }
-  .hdpx-tb-row { flex-wrap: wrap; }
-  .hdpx-tb-acts { width: 100%; }
-  .hdpx-tb-acts > .hdpx-btn { flex: 1 1 0; padding: 0 10px; }
-  .hdpx-tb-row > .hdpx-ava { width: 32px; height: 32px; flex-basis: 32px; }
-  .hdpx-tb-draft { flex-wrap: wrap; }
-  .hdpx-tb-draft > .hdpx-btn { width: 100%; }
-  .hdpx-float { left: 16px; right: 48px; width: auto; bottom: 88px; }
-  .hdpx-dr-body { padding: 12px; }
-}
+/* по ширине видимой части экрана (класс ставит overlay.js): платформа на телефоне шире экрана, @media по ней ошибается */
+.hdpx-narrow .hdpx-drawer { width: 100%; }
+.hdpx-narrow .hdpx-tb-row { flex-wrap: wrap; }
+.hdpx-narrow .hdpx-tb-acts { width: 100%; }
+.hdpx-narrow .hdpx-tb-acts > .hdpx-btn { flex: 1 1 0; padding: 0 10px; }
+.hdpx-narrow .hdpx-tb-row > .hdpx-ava { width: 32px; height: 32px; flex-basis: 32px; }
+.hdpx-narrow .hdpx-tb-draft { flex-wrap: wrap; }
+.hdpx-narrow .hdpx-tb-draft > .hdpx-btn { width: 100%; }
+.hdpx-narrow .hdpx-dr-body { padding: 12px; }
 @media (prefers-reduced-motion: reduce) {
   .hdpx-drawer, .hdpx-bar i { transition: none; }
   .hdpx-spin, .hdpx-wait::after, .hdpx-rot svg, .hdpx-bar-ind i, .hdpx-badge-dot { animation-duration: 2.4s; }
 }
+
+/* «Эта страница» в панели: кнопки задания и темы (на самой странице ничего не вставляем — она точь-в-точь платформа) */
+.hdpx-here { border-color: var(--hdpx-violet-bg); }
+.hdpx-here .hdpx-tb-row { flex-wrap: wrap; }
+.hdpx-here .hdpx-tb-acts { flex-wrap: wrap; width: 100%; }
+.hdpx-here .hdpx-tb-acts .hdpx-btn { flex: 1 1 auto; }
+.hdpx-here .hdpx-last { margin: 12px 0 0; padding: 12px; }
+.hdpx-here .hdpx-chips { margin-top: 8px; }
+.hdpx-trow { gap: 6px; padding: 8px 0; border-top: 1px solid var(--hdpx-line); font-size: 15px; line-height: 20px; }
+.hdpx-trow .hdpx-link { min-width: 0; overflow-wrap: anywhere; }
+.hdpx-trow .hdpx-chip-w { height: 28px; background: var(--hdpx-bg2); }
+.hdpx-more { margin-top: 8px; }
+.hdpx-more summary { cursor: pointer; padding: 6px 0; }
