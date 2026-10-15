@@ -160,6 +160,23 @@ class Bot(unittest.TestCase):
         pulse.notify(pulse.ingest(summary("waiting")))
         self.assertEqual(len(self.sent), n)  # выключено — молчим
 
+    def test_done_message_is_clean_html(self):
+        pulse.ingest(summary())
+        reply = "Сделал **бота**.\n\n- пункт\n\n**Для тебя:** нажми /start."
+        pulse.notify(pulse.ingest(summary("waiting", reply=reply)))
+        text = self.sent[-1][1]["text"]
+        self.assertNotIn("**", text)
+        self.assertIn("<b>бота</b>", text)
+        self.assertIn("👉 <b>Для тебя:</b> нажми /start.", text)
+        self.assertEqual(pulse.split_reply("a\n\n**Для тебя:** b"), ("a", "b"))
+        self.assertEqual(pulse.split_reply("просто ответ"), ("просто ответ", ""))
+
+    def test_start_shows_card_not_mode_question(self):
+        pulse.ingest(summary())
+        pulse.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
+        self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
+        self.assertIn("Контекст", self.sent[-1][1]["text"])
+
     def test_window_learning(self):
         w, sure = pulse.window("claude-opus-5-5", 100_000)
         self.assertEqual((w, sure), (200_000, False))

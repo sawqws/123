@@ -41,6 +41,18 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "common"))
 import support  # noqa: E402  🛠 /fix — Claude чинит и дорабатывает этого бота
 
+
+def _load_ui():
+    """Markdown → HTML Telegram из tgbot/ui.py (только стандартная библиотека), без tgbot в sys.path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tgbot_ui", os.path.join(REPO, "tgbot", "ui.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+tui = _load_ui()
+
 TOKEN = os.environ.get("PULSE_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
 ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("PULSE_ALLOWED", ""))}
@@ -213,13 +225,14 @@ def claim(uid):
 def window(model, tokens=0):
     """Окно контекста модели: узнаём по первому автосжатию (оно на COMPACT_PCT% окна). До этого — 200 тыс.;
     если чат ушёл за порог сжатия 200 тыс. и не сжался — окно больше (1 млн). -> (окно, точно ли)."""
-    win = st.setdefault("windows", {})
-    w = win.get(model or "?")
+    w = st.setdefault("windows", {}).get(model or "?")
     if w:
         return w, True
-    if tokens > DEFAULT_WINDOW * COMPACT_PCT / 100 * 1.05:
-        return BIG_WINDOW, False
-    return DEFAULT_WINDOW, False
+    big = st.setdefault("big", {})  # модель, у которой чат уже ушёл за порог сжатия 200 тыс. — окно больше
+    if tokens > DEFAULT_WINDOW * COMPACT_PCT / 100 * 1.05 and not big.get(model or "?"):
+        big[model or "?"] = True
+        st["_dirty"] = True
+    return (BIG_WINDOW if big.get(model or "?") else DEFAULT_WINDOW), False
 
 
 def learn_window(model, pre):
@@ -259,7 +272,8 @@ def view(s, now=None):
         "ctx": ctx_of(s), "tasks": tasks, "done": sum(1 for t in tasks if t.get("status") == "completed"),
         "total": len(tasks), "prompt": s.get("prompt"), "nprompts": s.get("nprompts") or 0,
         "prompts": s.get("prompts") or [], "turn": s.get("turn") or {},
-        "action": s.get("action") or "", "question": s.get("question") or "", "reply": s.get("reply") or "",
+        "action": s.get("action") or "", "question": s.get("question") or "", "options": s.get("options") or [],
+        "reply": s.get("reply") or "",
         "started": s.get("started"), "updated": s.get("updated"), "seen": s.get("seen"),
         "repos": s.get("repos") or [],
     }
@@ -281,7 +295,7 @@ def hidden_count(now=None):
 
 
 FIELDS = ("title", "url", "model", "started", "updated", "status", "ctx", "prompt", "prompts", "nprompts", "tasks",
-          "turn", "action", "question", "reply", "repos")
+          "turn", "action", "question", "options", "reply", "repos")
 
 
 def ingest(body, now=None):
@@ -355,7 +369,7 @@ def ago(sec):
 
 
 def kilo(n):
-    return f"{n / 1000:.0f}k" if n < 1_000_000 else f"{n / 1_000_000:.1f}M"
+    return f"{n / 1000:.0f} тыс." if n < 1_000_000 else f"{n / 1_000_000:.1f}".rstrip("0").rstrip(".") + " млн"
 
 
 def bar(pct, n=10):
@@ -363,12 +377,21 @@ def bar(pct, n=10):
     return "▰" * full + "▱" * (n - full)
 
 
+def ctx_dot(pct):
+    return "🟢" if pct < 60 else "🟡" if pct < 80 else "🔴"
+
+
 def ctx_line(v):
+    """🟢 Контекст ▰▰▰▱▱▱▱▱▱▱ 30%  (≈ — окно модели ещё не подтверждено)."""
     c = v["ctx"]
-    dot = "🟢" if c["pct"] < 60 else "🟡" if c["pct"] < 80 else "🔴"
-    approx = "" if c["sure"] else "≈"
-    extra = f" · сжатий {c['compacts']}" if c["compacts"] else ""
-    return f"{dot} {bar(c['pct'])} {approx}{c['pct']}% · {kilo(c['tokens'])}{extra}"
+    return f"{ctx_dot(c['pct'])} Контекст {bar(c['pct'])} {'' if c['sure'] else '≈'}{c['pct']}%"
+
+
+def plan_line(v):
+    if not v["total"]:
+        return ""
+    pct = round(v["done"] * 100 / v["total"])
+    return f"{'✅' if v['done'] == v['total'] else '📋'} План {bar(pct)} {v['done']} из {v['total']}"
 
 
 def current_task(v):
@@ -378,41 +401,71 @@ def current_task(v):
     return ""
 
 
-def progress_line(v, now=None):
-    now = now or time.time()
-    turn = v["turn"] or {}
-    started = turn.get("started") or (v["prompt"] or {}).get("at")
-    took = f" · {ago(now - started)}" if started and v["status"] in ("working", "question") else ""
-    if v["total"]:
-        cur = current_task(v)
-        return f"📋 {v['done']} из {v['total']}{took}" + (f" · ▸ {esc(clip(cur, 60))}" if cur else "")
-    return f"📋 шагов: {turn.get('tools') or 0}{took}"
+FOR_YOU = re.compile(r"\**\s*Для тебя\s*:?\s*\**\s*:?\s*", re.I)
+
+
+def split_reply(text):
+    """Ответ Claude → (основное, «Для тебя: …»). Во всех чатах Глеба ответ кончается блоком «Для тебя»."""
+    text = str(text or "").strip()
+    m = None
+    for m in FOR_YOU.finditer(text):
+        pass
+    if not m:
+        return text, ""
+    return text[:m.start()].rstrip(" \n-—*"), text[m.end():].strip()
+
+
+def first_line(text, n=110):
+    """Первая содержательная строка ответа, без Markdown — для карточки."""
+    for line in str(text or "").split("\n"):
+        line = re.sub(r"[*_`#>]+", "", line).strip(" -•")
+        if line:
+            return clip(line, n)
+    return ""
 
 
 def block(v, now=None):
+    """Один чат на живой карточке: заголовок со статусом + цитата (контекст, план, что сейчас)."""
     now = now or time.time()
-    lines = [f"{v['emoji']} <b>{esc(clip(v['title'], 60))}</b> — {v['label']}"
-             + (f" {ago(now - (v['seen'] or now))}" if v["status"] == "offline" else ""),
-             ctx_line(v), progress_line(v, now)]
-    if v["status"] == "question" and v["question"]:
+    st_ = v["status"]
+    if st_ in ("working", "question"):
+        start = (v["turn"] or {}).get("started") or (v["prompt"] or {}).get("at")
+        when = f" · {ago(now - start)}" if start else ""
+    elif st_ == "waiting":
+        when = f" · {ago(now - (v['updated'] or now))}"
+    else:
+        when = f" · {ago(now - (v['seen'] or now))}"
+    head = f"{v['emoji']} <b>{esc(clip(v['title'], 48))}</b>\n<i>{v['label']}{when}</i>"
+    lines = [ctx_line(v)]
+    if plan_line(v):
+        lines.append(plan_line(v))
+    if st_ == "question":
         lines.append(f"❓ {esc(clip(v['question'], 140))}")
-    elif v["status"] == "working" and v["action"]:
-        lines.append(esc(clip(v["action"], 80)))
-    elif v["prompt"]:
-        lines.append(f"💬 {esc(clip(v['prompt'].get('text'), 90))}")
-    return "\n".join(lines)
+    elif st_ == "working":
+        cur = current_task(v)
+        if cur:
+            lines.append(f"▸ {esc(clip(cur, 70))}")
+        if v["action"]:
+            lines.append(esc(clip(v["action"], 70)))
+    else:
+        main, you = split_reply(v["reply"])
+        line = first_line(you) or first_line(main)
+        if line:
+            lines.append(("👉 " if you else "💬 ") + esc(line))
+    return head + "\n" + quote("\n".join(lines))
 
 
 def counts(vs):
     w = sum(1 for v in vs if v["status"] == "working")
     q = sum(1 for v in vs if v["status"] == "question")
     d = sum(1 for v in vs if v["status"] == "waiting")
-    parts = [f"⚙️ работают: {w}"] + ([f"❓ вопросы: {q}"] if q else []) + [f"✅ ждут тебя: {d}"]
-    return " · ".join(parts)
+    parts = ([f"⚙️ {w} в работе"] if w else []) + ([f"❓ {q} спрашивают"] if q else []) + \
+        ([f"✅ {d} ждут тебя"] if d else [])
+    return " · ".join(parts) or "все чаты спят"
 
 
 def mode_note():
-    return f"Режим: {MODES.get(ui_mode(), 'не выбран')} · /mode"
+    return f"Режим: {MODES.get(ui_mode() or 'chat')} · /mode"
 
 
 def home_text(now=None):
@@ -420,11 +473,11 @@ def home_text(now=None):
     vs = visible(now)
     if not vs:
         return fmt("📡 Пульс", "Пока ни одного чата Claude Code.\nОткрой чат — он появится здесь через "
-                   "несколько секунд: контекст, задачи, что делает.", mode_note())
+                   "несколько секунд: контекст, план, что делает.", "Карточка обновляется сама")
     body = "\n\n".join(block(v, now) for v in vs[:8])
     hid = hidden_count(now)
-    note = f"{counts(vs)}\nОбновлено {datetime.fromtimestamp(now, TZ):%H:%M:%S}" + (f" · скрыто {hid}" if hid else "")
-    return f"<b>📡 Пульс</b>\n{body}\n\n<i>{note}</i>"
+    foot = f"Обновлено {datetime.fromtimestamp(now, TZ):%H:%M:%S} · само" + (f" · скрыто {hid}" if hid else "")
+    return f"<b>📡 Пульс</b> · {counts(vs)}\n\n{body}\n\n<i>{foot}</i>"
 
 
 def home_buttons(vs=None):
@@ -454,7 +507,7 @@ def set_mode(m):
 
 
 def app_buttons(always=False):
-    if not public_url or (ui_mode() == "chat" and not always):
+    if not public_url or (ui_mode() != "app" and not always):
         return []
     return [[{"text": "📱 Открыть Пульс", "web_app": {"url": public_url + "/"}}]]
 
@@ -472,41 +525,60 @@ def home(chat, mid=None, live=True):
     return r
 
 
+def md(text, limit=None):
+    """Markdown ответа Claude → HTML Telegram (tgbot/ui.py); длинное режем по строке, не по слову."""
+    text = str(text or "").strip()
+    if limit and len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        text = text[:cut if cut > limit // 2 else limit].rstrip() + "\n…"
+    return tui.md(text)
+
+
 def detail_text(v, now=None):
     now = now or time.time()
     c = v["ctx"]
-    head = f"{v['emoji']} <b>{esc(v['title'])}</b> — {v['label']}"
-    ctx = (f"🧠 Контекст: {ctx_line(v)}\n{c['tokens']:,} из {c['window']:,} токенов".replace(",", " ")
-           + ("" if c["sure"] else "\n<i>≈ окно уточнится после первого сжатия</i>"))
-    parts = [head, quote(ctx)]
+    start = (v["turn"] or {}).get("started")
+    when = f" · {ago(now - start)}" if start and v["status"] in ("working", "question") else ""
+    parts = [f"{v['emoji']} <b>{esc(v['title'])}</b>\n<i>{v['label']}{when}</i>"]
+    ctx = [ctx_line(v), f"{kilo(c['tokens'])} из {kilo(c['window'])} токенов"
+           + (f" · сжатий {c['compacts']}" if c["compacts"] else "")]
+    if plan_line(v):
+        ctx.append(plan_line(v))
+    parts.append(quote("\n".join(ctx)))
+    if v["status"] == "question" and v["question"]:
+        opts = "".join(f"\n• {esc(o)}" for o in v.get("options") or [])
+        parts.append("<b>❓ Спрашивает</b>\n" + quote(esc(v["question"]) + opts))
+    elif v["status"] == "working":
+        cur = current_task(v)
+        turn = v["turn"] or {}
+        stats = [f"шагов {turn.get('tools') or 0}"] + ([f"файлов {turn['nedits']}"] if turn.get("nedits") else []) + \
+            ([f"коммитов {turn['commits']}"] if turn.get("commits") else []) + \
+            ([f"агентов {turn['agents']}"] if turn.get("agents") else [])
+        now_lines = ([f"▸ {esc(cur)}"] if cur else []) + ([esc(v["action"])] if v["action"] else []) + \
+            [f"<i>{' · '.join(stats)}</i>"]
+        parts.append("<b>⏱ Сейчас</b>\n" + quote("\n".join(now_lines)))
     if v["prompt"]:
         at = v["prompt"].get("at")
-        when = f" · {datetime.fromtimestamp(at, TZ):%H:%M}" if at else ""
-        parts.append(f"<b>💬 Запрос</b>{when}\n" + quote(esc(clip(v["prompt"].get("text"), 700)),
-                                                         expandable=len(v["prompt"].get("text") or "") > 300))
+        t = f" · {datetime.fromtimestamp(at, TZ):%H:%M}" if at else ""
+        parts.append(f"<b>💬 Твой запрос</b>{t}\n" + quote(esc(clip(v["prompt"].get("text"), 600)),
+                                                           expandable=len(v["prompt"].get("text") or "") > 250))
     if v["tasks"]:
         icon = {"completed": "✅", "in_progress": "▸"}
-        rows = "\n".join(f"{icon.get(t.get('status'), '○')} {esc(clip(t.get('subject'), 90))}" for t in v["tasks"][:25])
-        parts.append(f"<b>📋 План: {v['done']} из {v['total']}</b>\n" + quote(rows, expandable=len(v["tasks"]) > 8))
-    turn = v["turn"] or {}
-    stats = [f"шагов {turn.get('tools') or 0}"]
-    if turn.get("nedits"):
-        stats.append(f"файлов {turn['nedits']}")
-    if turn.get("commits"):
-        stats.append(f"коммитов {turn['commits']}")
-    if turn.get("agents"):
-        stats.append(f"агентов работает {turn['agents']}")
-    if turn.get("started") and v["status"] in ("working", "question"):
-        stats.append(f"идёт {ago(now - turn['started'])}")
-    now_line = (f"❓ {esc(clip(v['question'], 300))}" if v["status"] == "question" and v["question"]
-                else esc(v["action"]) if v["status"] == "working" and v["action"] else "")
-    parts.append("<b>⏱ Сейчас</b>\n" + quote("\n".join(x for x in [now_line, " · ".join(stats)] if x)))
-    prs = turn.get("prs") or []
+        rows = "\n".join(f"{icon.get(t.get('status'), '○')} {esc(clip(t.get('subject'), 80))}" for t in v["tasks"][:20])
+        parts.append(f"<b>📋 План</b>\n" + quote(rows, expandable=len(v["tasks"]) > 6))
+    prs = (v["turn"] or {}).get("prs") or []
     if prs:
         parts.append("🔗 " + " · ".join(f'<a href="{esc(u)}">PR #{esc(u.rsplit("/", 1)[-1])}</a>' for u in prs[:5]))
     if v["reply"] and v["status"] != "working":
-        parts.append("<b>🗨️ Последний ответ</b>\n" + quote(esc(clip(v["reply"], 900)), expandable=True))
-    text = "\n".join(parts)
+        main, you = split_reply(v["reply"])
+        if you:
+            parts.append("<b>👉 Для тебя</b>\n" + quote(md(you, 500)))
+        if main:
+            parts.append("<b>🗨️ Ответ</b>\n" + quote(md(main, 1200), expandable=True))
+    text = "\n\n".join(parts)
+    while len(text) > 4000 and len(parts) > 2:  # самое длинное — ответ; если не влезло, убираем с конца
+        parts.pop()
+        text = "\n\n".join(parts)
     return text[:4000]
 
 
@@ -575,22 +647,31 @@ def notify(events):
         return
     a = alerts()
     for kind, v, extra in events:
-        buttons = ([[link("↗️ Открыть чат", v["url"])]] if v["url"] else []) + [[btn("🔎 Подробно", f"s|{v['id']}")]]
+        buttons = [([link("↗️ Открыть чат", v["url"])] if v["url"] else []) + [btn("🔎 Подробно", f"s|{v['id']}")]]
         title = esc(clip(v["title"], 60))
+        foot = " · ".join(x for x in [f"{v['done']} из {v['total']} по плану" if v["total"] else "",
+                                       f"контекст {'' if v['ctx']['sure'] else '≈'}{v['ctx']['pct']}%"] if x)
         try:
             if kind == "done" and a["done"]:
-                prog = f"\n📋 {v['done']} из {v['total']}" if v["total"] else ""
-                send(chat, fmt(f"✅ {title} — готово", esc(clip(v["reply"], 500)) + prog,
-                               "контекст " + ("≈" if not v["ctx"]["sure"] else "") + f"{v['ctx']['pct']}%"), buttons)
+                main, you = split_reply(v["reply"])
+                text = f"✅ <b>{title}</b> · готово"
+                if main:
+                    text += "\n" + quote(md(main, 900), expandable=len(main) > 350)
+                if you:
+                    text += "\n👉 <b>Для тебя:</b> " + md(you, 500)
+                send(chat, f"{text}\n<i>{foot}</i>", buttons)
             elif kind == "question" and a["question"]:
-                send(chat, fmt(f"❓ {title} спрашивает", esc(clip(v["question"] or v["reply"], 500))), buttons)
+                opts = "".join(f"\n• {esc(o)}" for o in v.get("options") or [])
+                send(chat, f"❓ <b>{title}</b> · спрашивает\n" + quote(esc(v["question"] or first_line(v["reply"], 400))
+                                                                      + opts) + "\n<i>Ответь в чате</i>", buttons)
             elif kind == "ctx" and a["ctx"]:
-                tip = {60: "Пока нормально, но длинные задачи лучше в новом чате.",
-                       80: "Скоро автосжатие — часть подробностей потеряется. Пора закругляться.",
+                tip = {60: "Пока нормально, но большие задачи лучше начинать в новом чате.",
+                       80: "Скоро автосжатие — часть подробностей забудется. Пора закругляться.",
                        90: "Почти полный. Напиши в чате «121» и продолжи в новом."}[extra]
-                send(chat, fmt(f"🧠 {title}: контекст {extra}%", ctx_line(v), tip), buttons)
+                send(chat, f"{ctx_dot(extra)} <b>{title}</b> · контекст {extra}%\n" + quote(ctx_line(v) + "\n" + tip),
+                     buttons)
             elif kind == "offline" and a["offline"]:
-                send(chat, fmt(f"💤 {title} — нет связи", "Сводок нет больше 3 минут: чат закрыт, уснул или упал."),
+                send(chat, f"💤 <b>{title}</b> · нет связи\n" + quote("Сводок нет больше 3 минут: чат закрыт, уснул или упал."),
                      buttons)
         except Exception as e:
             print("notify:", e)
@@ -684,9 +765,6 @@ def on_message(msg):
         return
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
-        return
-    if cmd == "/start" and not ui_mode():
-        mode_card(chat)
         return
     if cmd == "/mode":
         mode_card(chat)

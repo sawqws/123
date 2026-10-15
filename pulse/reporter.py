@@ -43,30 +43,42 @@ def ts(iso):
         return None
 
 
+def keep(s, n):
+    """Обрезка с сохранением переносов строк (Markdown ответа: списки, абзацы)."""
+    s = re.sub(r"\n{3,}", "\n\n", str(s or "").strip())
+    return s if len(s) <= n else s[:n - 1].rstrip() + "…"
+
+
+def ru(s):
+    return bool(re.search(r"[а-яё]", str(s or ""), re.I))
+
+
 def action_text(name, inp):
     """Короткое «что делает» по вызову инструмента."""
     inp = inp if isinstance(inp, dict) else {}
     if name == "Bash":
-        return "⌨️ " + clip(inp.get("description") or inp.get("command"), 90)
+        d = inp.get("description") or ""
+        return "⌨️ " + (clip(d, 90) if ru(d) else "команда в терминале")
     if name in EDIT_TOOLS:
         return "✏️ " + os.path.basename(str(inp.get("file_path") or inp.get("notebook_path") or ""))
     if name == "Read":
         return "👀 " + os.path.basename(str(inp.get("file_path") or ""))
     if name in ("Grep", "Glob"):
-        return "🔎 " + clip(inp.get("pattern"), 60)
+        return "🔎 ищет в коде"
     if name in ("Agent", "Task"):
-        return "🤖 агент: " + clip(inp.get("description"), 60)
+        d = inp.get("description") or ""
+        return "🤖 агент" + (": " + clip(d, 60) if ru(d) else "")
     if name in ("WebSearch", "WebFetch"):
-        return "🌐 " + clip(inp.get("query") or inp.get("url"), 70)
+        return "🌐 ищет в интернете"
     if name == "AskUserQuestion":
         return "❓ вопрос тебе"
     if name in ("TaskCreate", "TaskUpdate", "TodoWrite", "TaskList", "TaskGet"):
-        return "📋 план"
+        return "📋 обновляет план"
     if name.startswith("mcp__github__"):
-        return "🐙 GitHub: " + name.split("__")[-1].replace("_", " ")
+        return "🐙 GitHub"
     if name.startswith("mcp__"):
-        return "🔌 " + name.split("__")[-1].replace("_", " ")
-    return "🛠 " + name
+        return "🔌 " + name.split("__")[1].replace("_", " ")
+    return "🛠 " + {"Skill": "навык", "Artifact": "страница", "ToolSearch": "инструменты"}.get(name, name)
 
 
 class Session:
@@ -88,6 +100,7 @@ class Session:
         self.last = None           # 'end' | 'tool' | 'result' | 'prompt' — последнее событие главной ветки
         self.pending = {}          # tool_use id → имя (ещё без результата)
         self.question = ""
+        self.options = []
         self.action = ""
         self.turn = self._turn()
         self.errors = 0
@@ -140,7 +153,7 @@ class Session:
             if not isinstance(c, dict):
                 continue
             if c.get("type") == "text" and c.get("text", "").strip():
-                self.reply = clip(c["text"], 1500)
+                self.reply = keep(c["text"], 3000)
                 self.last = "end" if m.get("stop_reason") == "end_turn" else self.last
             elif c.get("type") == "tool_use":
                 name, inp = c.get("name") or "", c.get("input") or {}
@@ -156,7 +169,9 @@ class Session:
                     self.turn["commits"] += 1
                 elif name == "AskUserQuestion":
                     qs = inp.get("questions") or []
-                    self.question = clip(qs[0].get("question") if qs and isinstance(qs[0], dict) else "", 300)
+                    q = qs[0] if qs and isinstance(qs[0], dict) else {}
+                    self.question = clip(q.get("question"), 300)
+                    self.options = [clip(o.get("label"), 40) for o in q.get("options") or [] if isinstance(o, dict)][:4]
         if m.get("stop_reason") == "end_turn":
             self.last = "end"
 
@@ -181,12 +196,13 @@ class Session:
             self._prompt(text, at)
 
     def _prompt(self, text, at):
-        self.prompts.append({"text": clip(text, 1500), "at": at})
+        self.prompts.append({"text": keep(text, 1500), "at": at})
         del self.prompts[:-8]
         self.turn = self._turn()
         self.turn["started"] = at
         self.last = "prompt"
         self.question = ""
+        self.options = []
         self.action = ""
         self.pending.clear()
 
@@ -249,7 +265,8 @@ class Session:
                      "nedits": len(self.turn["edits"]), "agents": agents},
             "action": self.action if st == "working" else "",
             "question": self.question if st == "question" else "",
-            "reply": self.reply if st != "working" else clip(self.reply, 300),
+            "options": self.options if st == "question" else [],
+            "reply": self.reply if st != "working" else keep(self.reply, 300),
         }
 
 
