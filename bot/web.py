@@ -45,7 +45,8 @@ BIN = os.path.join(os.path.dirname(HERE), "horo", "tmp", "bin", "cloudflared")  
 
 # маршруты, которые что-то делают (решают, сдают, меняют настройки): GET на них не принимаем
 WRITE = {"/api/solve", "/api/auto", "/api/human", "/api/mode", "/api/support", "/api/check", "/api/alphabet",
-         "/api/draft/send", "/api/draft/drop", "/api/draft/save", "/api/prep/run"}
+         "/api/draft/send", "/api/draft/drop", "/api/draft/save", "/api/prep/run",
+         "/api/site/send", "/api/site/hold", "/api/site/settings/set", "/api/site/prep"}
 
 url = os.environ.get("HORO_WEB_URL", "").rstrip("/")  # текущий https-адрес приложения
 _cfg = {}
@@ -287,7 +288,8 @@ class Web(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             if path in WRITE:  # действия — только POST (GET могут повторить предпросмотр ссылок, расширения и т. п.)
                 return self.reply(405, {"error": "Это действие — только POST"})
-            return self.api(path, {})
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            return self.api(path, {k: v[-1] for k, v in q.items()})  # ?lvl=2 → {"lvl": "2"}
         if path == "/site" or path.startswith("/site/"):
             return self.site(path)
         if path == "/" and (self.headers.get("Host") or "").startswith("hdp."):
