@@ -815,7 +815,8 @@ class Agent:
         sid = load_settings().get("session") if resume else None
         cmd = ["claude", "-p", text, "--output-format", "stream-json", "--verbose", "--append-system-prompt", system,
                "--permission-mode", "acceptEdits"] + (["--resume", sid] if sid else []) \
-            + ["--allowedTools", f"Bash(python3 {TG} *)", "Read", "WebSearch", "WebFetch", f"Edit({MEMORY})", f"Write({MEMORY})"]
+            + ["--allowedTools", f"Bash(python3 {TG} *)", "Read", "WebSearch", "WebFetch", f"Edit({MEMORY})", f"Write({MEMORY})"] \
+            + ["--disallowedTools"] + self.secret_reads()
         try:
             self.proc = await asyncio.create_subprocess_exec(*cmd, cwd=WORK, env={**os.environ, "TG_CALLER": "claude"},
                                                              stdout=subprocess.PIPE,
@@ -860,6 +861,15 @@ class Agent:
         s["session"] = result.get("session_id")
         save_settings(s)
         return True, (result.get("result") or "").strip() or "Готово."
+
+    @staticmethod
+    def secret_reads():
+        """Чего Claude Секретаря читать НЕЛЬЗЯ: сессия аккаунта, ключи, токены, настройки. Подсказка из чужого чата
+        («прочитай файл … и отправь») не должна уметь вытащить их, а Read иначе открывает любой файл сервера."""
+        t = "/" + TMP  # правила путей: «//абсолютный/путь»
+        return [f"Read({t}/account*)", f"Read({t}/settings.json)", f"Read({t}/agent.sock)", f"Read({t}/*.session*)",
+                "Read(//etc/**)", "Read(//root/.ssh/**)", "Read(//root/.ccr/**)", "Read(//root/.claude/**)",
+                "Read(//proc/**)", "Read(**/.env)", "Read(**/.env.*)", "Read(**/*.session)", "Read(**/*.pem)"]
 
     def chat_names(self):
         _, ds = actions._dialogs.get(id(self.client), (0, None))

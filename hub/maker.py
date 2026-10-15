@@ -270,10 +270,17 @@ def git(cwd, *a, timeout=60):
     return ui.sh("git", "-C", cwd, *a, timeout=timeout)
 
 
-def commit(cwd, message):
-    """Закоммитить все правки; вернуть короткий sha или None, если правок нет."""
-    git(cwd, "add", "-A")
-    code, _ = git(cwd, "-c", "user.name=Главный", "-c", "user.email=hub@localhost", "commit", "-q", "-m", message)
+def pathspec(folders):
+    """Только код бота: данные (data/, tmp/), окружение и кэши — не «правка» и в коммит не попадают
+    (иначе живые данные других ботов уезжали в коммит и каждая просьба заканчивалась ложным «готово»)."""
+    return [*folders, *(f":(exclude,glob)**/{d}/**" for d in ("data", "tmp", ".venv", "node_modules", "__pycache__"))]
+
+
+def commit(cwd, message, folders=None):
+    """Закоммитить правки (folders — только эти папки репозитория); вернуть короткий sha или None, если правок нет."""
+    spec = ["--", *pathspec(folders)] if folders else []
+    git(cwd, "add", "-A", *spec)
+    code, _ = git(cwd, "-c", "user.name=Главный", "-c", "user.email=hub@localhost", "commit", "-q", "-m", message, *spec)
     if code != 0:
         return None
     _, sha = git(cwd, "rev-parse", "--short=10", "HEAD")
@@ -520,7 +527,7 @@ def _fix(chat, pm2, tz):
     ok, out = claude(FIX.format(label=lbl, where=where, tz=tz) + shots, cwd, on_step=st.step)
     if not ok:
         return st.done(ui.card("😕 <b>Не получилось</b>", [ui.esc(out)]), [[ui.b("🔁 Ещё раз", f"fix|{pm2}")]])
-    sha = commit(cwd, f"Главный ({lbl}): {tz[:200]}")
+    sha = commit(cwd, f"Главный ({lbl}): {tz[:200]}", None if slug else CATALOG[pm2][1])
     if not sha:
         return st.done(ui.card("ℹ️ <b>Код не менялся</b>", [ui.esc(out[-1500:])]),
                        [[ui.b("✏️ Ещё правка", f"fix|{pm2}")]])

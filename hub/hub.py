@@ -115,11 +115,17 @@ def esc(x):
 # ---------- состояние ----------
 
 def load():
-    try:
-        with open(STATE) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    """Состояние Главного. Файл повреждён — берём копию (.bak), а не пустое: иначе следующая запись стёрла бы
+    владельца, ключ Claude, напоминания и срок оплаты."""
+    for path in (STATE, STATE + ".bak"):
+        try:
+            with open(path) as f:
+                st = json.load(f)
+            if isinstance(st, dict):
+                return st
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def save(st):
@@ -127,6 +133,14 @@ def save(st):
     tmp = STATE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(st, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    try:  # прошлая ЦЕЛАЯ версия — запасная (битую поверх хорошей копии не кладём)
+        with open(STATE) as f:
+            json.load(f)
+        shutil.copyfile(STATE, STATE + ".bak")
+    except (OSError, ValueError):
+        pass
     os.replace(tmp, STATE)
 
 
@@ -1047,7 +1061,10 @@ def watch():
         try:
             if owner():
                 for text, btns in watch_once():
-                    send(owner(), text, btns)
+                    try:  # одно не дошедшее сообщение не должно отнимать остальные (состояние уже записано)
+                        send(owner(), text, btns)
+                    except Exception as e:
+                        print("watch send:", e, str(getattr(e, "detail", ""))[:200])
                 studio_auto()
         except Exception as e:
             print("watch:", e)

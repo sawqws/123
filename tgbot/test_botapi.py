@@ -260,6 +260,14 @@ class AgentOverBotApi(unittest.TestCase):
         with mock.patch.object(agent, "WORK", self.tmp):
             self.assertEqual(a.guard("send", {"chat": "x", "file": ok})["file"], os.path.realpath(ok))
 
+    def test_claude_cannot_read_secrets(self):
+        """Claude Секретаря получает запрет читать сессию аккаунта, настройки и ключи сервера."""
+        deny = agent.Agent.secret_reads()
+        t = "/" + agent.TMP
+        for need in (f"Read({t}/account*)", f"Read({t}/settings.json)", "Read(//etc/**)", "Read(**/.env)"):
+            self.assertIn(need, deny)
+        self.assertTrue(all(d.startswith("Read(") and d.endswith(")") for d in deny))
+
     def test_auto_from_claude_is_not_trusted(self):
         """--auto без подтверждения — только для Главного и Ловца: запрос от Claude Секретаря превращается в обычный."""
         tg = FakeTelegram()
