@@ -718,8 +718,6 @@
     h += slot('healthTop', t);
     h += monitorCard(t);
     h += slot('healthAfterMonitor', t);
-    h += `<button class="card summary-entry rise tap" data-a="summary" data-v="week"><span class="se-ic">${I.stats}</span><span class="se-main"><b>Оценка недели и месяца</b>
-      <span class="muted">цифры против прошлого периода и советы тренера</span></span><span class="chev"></span></button>`;
     const pr = S.progress;
     h += `<section class="card rise">${cap('Разбор прогресса', pr && !S.progressing ? '<button class="link" data-a="progress">Обновить</button>' : '')}
       ${S.progressing ? skel(3) + '<p class="small muted">Разбираю 2 месяца данных — около минуты…</p>'
