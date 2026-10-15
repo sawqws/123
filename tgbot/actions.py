@@ -796,7 +796,8 @@ async def newbot(ctx, a):
 # ---------- все боты Глеба: «Начать» и папка ----------
 
 ENV_FILES = ["/etc/horo-bot.env", "/etc/hub-bot.env", "/etc/planner-bot.env", "/etc/coach-bot.env", "/etc/kpp-bot.env",
-             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env", "/etc/catcher-bot.env", "/etc/studio-bot.env"]
+             "/etc/avito-bot.env", "/etc/tg-agent.env", "/etc/eye-bot.env", "/etc/catcher-bot.env", "/etc/studio-bot.env",
+             "/etc/pulse-bot.env"]
 MADE_BOTS = "/root/bots"  # боты, которые сделал Главный (hub/maker.py): /root/bots/<slug>/.env
 
 

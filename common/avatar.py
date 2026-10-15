@@ -44,6 +44,7 @@ BOTS = {
     "studio": dict(title="Студия", glow="#c58ad0", mark="wand", env=("/etc/studio-bot.env", "STUDIO_TOKEN")),
     "catcher": dict(title="Ловец · имена", glow="#6f9bd6", mark="at", env=("/etc/catcher-bot.env", "CATCHER_TOKEN")),
     "sites": dict(title="Студия сайтов", glow="#e08aa5", mark="globe", env=("/etc/studio-sites.env", "STUDIO_TOKEN")),
+    "pulse": dict(title="Пульс · чаты Claude", glow="#3fd1a6", mark="gauge", env=("/etc/pulse-bot.env", "PULSE_TOKEN")),
 }
 ONYX = (12, 11, 10)                     # фон: тёплый почти чёрный
 EMBER = (110, 76, 38)                   # второе свечение снизу слева — тёмное золото, как в образце
@@ -231,6 +232,9 @@ def mark_shapes(mark):
         lat = math.sqrt(r * r - 0.44 ** 2)
         return [(L, arc(0, 0, r, 0, 360, 96)), (L, arc(0, 0, 0.4, 0, 360, 72, ry=r)),
                 (L, [(-r, 0), (r, 0)]), (L, [(-lat, -0.44), (lat, -0.44)]), (L, [(-lat, 0.44), (lat, 0.44)])]
+    if mark == "gauge":  # три кольца-счётчика контекста разной заполненности
+        return [(L, arc(0, 0, 0.94, -90, 200, 80)), (L, arc(0, 0, 0.64, -90, 110, 60)),
+                (L, arc(0, 0, 0.34, -90, 290, 48)), (D, 0, 0, 0.09)]
     raise ValueError("нет знака " + mark)
 
 
