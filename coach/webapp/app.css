@@ -1,7 +1,7 @@
 /* Форма — как приложение WHOOP (Глеб, 15.10: «полностью как WHOOP»). Цвета и шрифты — из WHOOP Brand & Design Guidelines:
    фон — градиент #283339 → #101518, восстановление #16EC06 / #FFDE00 / #FF0026, нагрузка #0093E7, сон #7BA1BB,
    бирюза #00F19F (действия, «хорошо»), синий восстановления #67AEE6 (данные без оценки); заголовки — Proxima Nova
-   (нет — Helvetica Neue), ЗАГЛАВНЫЕ, разрядка 10%; цифры — DIN (на iPhone «DIN Alternate», иначе Barlow).
+   (шрифт — SF Pro: системный на iPhone, Inter там, где SF нет; см. --head ниже).
    kit.css (onyx) общий для всех ботов — здесь он переопределяется только для Тренера. */
 
 :root, html[data-scheme] {
@@ -33,9 +33,9 @@
   --ok: #00f19f; --warn: #ffde00; --err: #ff4d5e;
   --link: var(--teal);
   --gold: var(--teal); --gold-ink: var(--teal);
-  /* шрифт iPhone (Глеб 15.10: «более айфоновский»): текст — SF Pro, цифры — SF Pro Rounded, как в «Здоровье» и «Фитнесе» */
-  --head: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui, "Segoe UI", Roboto, sans-serif;
-  --num: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
+  /* шрифт iPhone (Глеб 15.10: «шрифт всё так же андроида»): везде SF Pro; где его нет (Android, Windows, Desktop) — Inter (fonts.css), а не Roboto */
+  --head: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Helvetica Neue", sans-serif;
+  --num: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", sans-serif;  /* цифры — тоже SF Pro (Rounded выглядел «андроидно») */
   --round: var(--head); --font: var(--head); --font-d: var(--head); --serif: var(--head);
   --r-xl: 16px; --r-lg: 14px; --r-md: 12px; --r-sm: 10px;
   --shadow: none; --shadow-lg: 0 18px 40px -18px rgba(0, 0, 0, .8); --hl: none;
@@ -991,3 +991,8 @@ textarea:not(.ask textarea) { border-radius: 20px !important; }
 #navbar button[hidden] { display: grid !important; visibility: hidden; }
 .tabbar button[data-tab="coach"] { font-size: 0 !important; gap: 0 !important; padding: 0 !important; }
 .tabbar button[data-tab="coach"] .ico { width: 26px; height: 26px; }
+
+/* SF Pro везде: и в kit (--font/--round), и в полях; цифры — моноширинные, как в iOS */
+:root, html[data-scheme] { --font: var(--head); --font-d: var(--head); --round: var(--head); }
+body, button, input, textarea, select, .tabbar button, .sheet, .toast { font-family: var(--head); }
+.num, .dial-v b, .wring-in b, .tile-v b, .cv, .kval b, .mv b, .tonight b, .big-line .v, .stat .v, .act-v, .mon-b { font-feature-settings: "tnum"; }
