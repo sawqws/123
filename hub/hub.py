@@ -588,12 +588,13 @@ def home(chat, mid=None):
     studio = studio_button(rows)
     task_btn = b(TASK_BTN, "task", "primary")  # поручение Секретарю — первой кнопкой, в обоих режимах
     if web:
-        btns = [[web], [task_btn], [bots_btn, b("🧠 Психолог", "psy"), acc_btn], [b("⚙️ Режим", "mode|ask")]]
+        btns = [[web], [task_btn], [bots_btn, b("🧠 Психолог", "psy"), acc_btn],
+                [b("🧪 Проверка", "chk"), b("⚙️ Режим", "mode|ask")]]
         foot += "\n<i>💬 Просто напишите задачу — Секретарь выполнит. Команды тоже работают.</i>"
     else:
         btns = [[task_btn],
                 [bots_btn, acc_btn, b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
-                [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd")],
+                [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd"), b("🧪 Проверка", "chk")],
                 [b("🧠 Психолог", "psy"), b("⚙️ Режим", "mode|ask")]]
         foot += "\n<i>💬 Просто напишите или надиктуйте задачу — Секретарь выполнит. Фото и видео тоже.</i>"
     if studio:  # бот, который делает ботов, — в последний ряд (рядов не прибавляется: экран остаётся коротким)
@@ -1345,6 +1346,7 @@ def app_state():
             "digest": st.get("digest_time") or digest.DEFAULT_TIME,
             "secretary": {"running": (run_all.get(SECRETARY) or {}).get("status") == "online"},
             "mode": ui_mode(),
+            "check": check.app_state(),
             "support": [{"id": pm2, "name": short(lbl)} for pm2, lbl in maker.targets(rows or [])],
             "live": dict(live), "boot": BOOT, "now": time.time()}
 
@@ -1374,6 +1376,8 @@ def app_action(action, arg):
         progress("Скачиваю свежий код из main…", kind="update")
         threading.Thread(target=update_all, args=(owner(),), daemon=True).start()
         return {"ok": True, "text": "Обновляю…", "at": live["at"]}
+    if action in ("check", "check_fix", "check_fixall"):  # 🧪 Проверка ботов
+        return check.app_action(action, arg)
     if action == "mode":  # то же, что POST /app/api/mode {mode}
         return app_mode({"mode": arg})
     if action == "secretary":  # поднять Секретаря (перезапуск или установка) — в фоне, итог придёт в чат

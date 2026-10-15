@@ -197,3 +197,11 @@ html .sheet textarea.sup-text { min-height: 120px; }
 
 /* на iPad плавающая «Поддержка» держится у края колонки, а не у края экрана */
 .sup-fab { right: max(14px, calc((100vw - 560px) / 2 + 14px)); }
+
+/* 🧪 Проверка ботов */
+.chk-list { margin: 10px 0 2px; }
+.chk-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--sep); }
+.chk-row .main { flex: 1; min-width: 0; }
+.chk-row .main > b { display: block; font-weight: 700; }
+.chk-row .btn { flex: none; margin: 0; }
+.chk-card > .btn, .chk-card > .btns { margin-top: 14px; }

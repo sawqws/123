@@ -28,6 +28,7 @@ PARALLEL_CRAWL = 4
 SLOW = {"horo/test_alphabet.py", "horo/test_sheet.py", "horo/test_table.py"}
 COMMON = "common"  # общие модули (kit, поддержка, медиа) — проверяются отдельной строкой
 running = threading.Lock()
+current = []  # [Live] идущей проверки — для приложения
 TRACE = re.compile(r"^Traceback \(most recent call last\):", re.M)
 EXC = re.compile(r"^\s*([\w.]*(?:Error|Exception|Interrupt|Exit)\b.*)$", re.M)
 # так бот останавливает pm2 (перезапуск, «Обновить всех») — не ошибка
@@ -424,6 +425,8 @@ def run(chat, mid=None, full=False):
                                   ["Секретарь не вошёл в аккаунт — проверяю быстро: тесты, логи и pm2."]))
             full = False
         live = Live(chat, mid)
+        live.full = full
+        current[:] = [live]
         res = check_all(full, live)
         if live.mid:  # вместо «⏳ Проверяю…» — отчёт новым сообщением (с уведомлением)
             try:
@@ -435,11 +438,42 @@ def run(chat, mid=None, full=False):
         traceback.print_exc()
         ui.send(chat, ui.card("⚠️ <b>Проверка упала</b>", [ui.esc(str(e)[:300])]), [[ui.b("🔁 Ещё раз", "chk")]])
     finally:
+        current.clear()
         running.release()
 
 
 FIX_TZ = ("Автопроверка («🧪 Проверка ботов» в Главном) нашла проблемы у этого бота. Найди причину каждой и почини "
           "(тест падает из-за бага — чини код, а не тест; тест устарел — обнови его). Проблемы:\n")
+
+
+def app_state():
+    """Для приложения: идёт ли проверка (и сколько сделано) и короткий итог прошлой."""
+    live = current[0] if current else None
+    last = ui.setting("check_last")
+    return {"running": running.locked(),
+            "progress": {"tests": live.tests_done, "of": live.tests_all, "clicks": live.clicks,
+                         "full": getattr(live, "full", False)} if live else None,
+            "last": {"at": last["at"], "full": last["full"], "secs": last["secs"],
+                     "bots": [{"pm2": x["pm2"], "title": ui.short(x["label"]), "ok": x["ok"],
+                               "gist": gist(x["problems"]), "fix": x["pm2"] != COMMON} for x in last["bots"]]}
+            if last else None}
+
+
+def app_action(action, arg):
+    """check (arg run|full), check_fix (arg pm2), check_fixall — из приложения; отчёт и итог — и в чат."""
+    if action == "check":
+        if running.locked():
+            raise ValueError("проверка уже идёт")
+        threading.Thread(target=run, args=(ui.owner(), None, arg == "full"), daemon=True).start()
+        return {"ok": True, "text": "Проверяю — отчёт придёт и в чат"}
+    if action == "check_fix":
+        last = ui.setting("check_last") or {}
+        if not any(b["pm2"] == arg and not b["ok"] for b in last.get("bots", [])):
+            raise ValueError("у этого бота проблем нет")
+        threading.Thread(target=fix_one, args=(ui.owner(), arg), daemon=True).start()
+        return {"ok": True, "text": "Чиню — ход и итог в чате"}
+    threading.Thread(target=fix_all, args=(ui.owner(),), daemon=True).start()
+    return {"ok": True, "text": "Чиню по очереди — ход и итог в чате"}
 
 
 def fix_one(chat, pm2):

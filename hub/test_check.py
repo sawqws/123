@@ -118,8 +118,8 @@ class CheckTest(Base):
         self.assertIn("chk|run", btns)
         self.assertIn("chk|full", btns)
         started = []
-        with mock.patch.object(hub.check.threading, "Thread",
-                               lambda target, args=(), daemon=None: mock.Mock(start=lambda: started.append(target))):
+        with mock.patch.object(check, "threading", mock.Mock(
+                Thread=lambda target, args=(), daemon=None: mock.Mock(start=lambda: started.append(target)))):
             self.cq("chk|run")
         self.assertEqual(started, [check.run])
         self.cq("chk|last")  # отчёта ещё нет — всплывашка, не тишина
@@ -136,6 +136,38 @@ class CheckTest(Base):
         self.assertIn("Все 1 в порядке", texts[-1])
         self.assertLess(len(texts[-1]), 60)  # отчёт — одна строка
         self.assertFalse(check.running.locked())
+
+
+class AppTest(CheckTest):
+    def test_app_and_home(self):
+        """Проверка видна на главном экране чата и в приложении (вкладка «Боты»), запускается и чинит оттуда."""
+        hub.on_message(self.msg("/start"))
+        self.assertIn('"chk"', self.last()[1])
+        self.assertIsNone(hub.app_state()["check"]["last"])
+        check.check_all()
+        started = []
+        fake = mock.Mock(Thread=lambda target, args=(), daemon=None: mock.Mock(start=lambda: started.append((target, args))))
+        with mock.patch.object(check, "threading", fake):  # только у check: настоящий threading не трогаем
+            r = hub.app_action("check", "full")
+            self.assertTrue(r["ok"])
+            self.assertEqual(started[-1], (check.run, (U, None, True)))
+            last = hub.app_state()["check"]["last"]
+            coach = [b for b in last["bots"] if b["pm2"] == "coach-bot"][0]
+            self.assertEqual((coach["ok"], coach["title"]), (False, "Тренер «Форма»"))
+            self.assertIn("тесты", coach["gist"])
+            hub.app_action("check_fix", "coach-bot")
+            self.assertEqual(started[-1], (check.fix_one, (U, "coach-bot")))
+            with self.assertRaises(ValueError):
+                hub.app_action("check_fix", "horo-bot")  # здоров
+            hub.app_action("check_fixall", "")
+            self.assertEqual(started[-1][0], check.fix_all)
+        check.running.acquire()
+        try:
+            self.assertTrue(hub.app_state()["check"]["running"])
+            with self.assertRaises(ValueError):
+                hub.app_action("check", "run")
+        finally:
+            check.running.release()
 
 
 class RiskyTest(unittest.TestCase):
