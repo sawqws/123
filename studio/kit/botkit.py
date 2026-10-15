@@ -777,9 +777,14 @@ class Bot:
                         return self.reply(401, {"error": "Открой приложение из Telegram"})
                     body = dict(urllib.parse.parse_qsl(path.query))
                     if method == "POST":
-                        n = int(self.headers.get("Content-Length") or 0)
                         try:
-                            body = json.loads(self.rfile.read(min(n, 5_000_000)) or b"{}")
+                            n = max(0, int(self.headers.get("Content-Length") or 0))
+                        except ValueError:
+                            return self.reply(400, {"error": "плохой запрос"})
+                        if n > 5_000_000:
+                            return self.reply(413, {"error": "слишком большой запрос"})
+                        try:
+                            body = json.loads(self.rfile.read(n) or b"{}")
                         except ValueError:
                             return self.reply(400, {"error": "плохой JSON"})
                     return self.reply(*bot.call_api(p[5:], user, body))
@@ -803,11 +808,27 @@ class Bot:
                     ctype += "; charset=utf-8"
                 self.reply(200, data, ctype, "public, max-age=3600")
 
+            def guarded(self, method):
+                """Любая ошибка обработчика — понятный 500, а не оборванное соединение без ответа (503/502 в Caddy)."""
+                try:
+                    self.route(method)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                except Exception:
+                    traceback.print_exc()
+                    try:
+                        self.reply(500, {"error": "Ошибка на сервере — попробуй ещё раз"})
+                    except Exception:
+                        pass
+
             def do_GET(self):
-                self.route("GET")
+                self.guarded("GET")
+
+            def do_HEAD(self):
+                self.guarded("HEAD")
 
             def do_POST(self):
-                self.route("POST")
+                self.guarded("POST")
 
         httpd = ThreadingHTTPServer(("127.0.0.1", self.port), H)
         print(f"Мини-приложение: 127.0.0.1:{self.port} → {self.app_url or 'адреса https нет'}", flush=True)
@@ -828,33 +849,69 @@ class Bot:
 
     def setup(self):
         """Имя для ссылок, команды, описание, кнопка приложения, аватар (data/avatar.png или avatar.png)."""
-        steps = [
-            ("getMe", {}),
-            *([("setMyName", {"name": self.tg_name[:64]})] if self.tg_name else []),
-            ("setMyCommands", {"commands": [{"command": c, "description": d[:256]} for c, d in self.commands]}),
-            ("setMyDescription", {"description": (self.about or "")[:512]}),
-            ("setMyShortDescription", {"short_description": (self.short or self.about or "")[:120]}),
-        ]
-        for method, params in steps:
-            try:
-                r = self.call(method, **params)
-                if method == "getMe":
-                    self.me = r.get("result") or {}
-                    self.username = self.me.get("username")
-            except Exception as e:
-                print(method, e, flush=True)
+        try:
+            self.me = self.call("getMe").get("result") or {}
+            self.username = self.me.get("username")
+        except Exception as e:
+            print("getMe", e, flush=True)
+        cmds = [{"command": c, "description": d[:256]} for c, d in self.commands]
+        if self.tg_name:
+            self._profile("setMyName", {"name": self.tg_name[:64]}, "getMyName", lambda r: {"name": r.get("name")})
+        self._profile("setMyCommands", {"commands": cmds}, "getMyCommands",
+                      lambda r: {"commands": [{"command": x.get("command"), "description": x.get("description")}
+                                              for x in r or []]})
+        self._profile("setMyDescription", {"description": (self.about or "")[:512]}, "getMyDescription",
+                      lambda r: {"description": r.get("description", "")})
+        self._profile("setMyShortDescription", {"short_description": (self.short or self.about or "")[:120]},
+                      "getMyShortDescription", lambda r: {"short_description": r.get("short_description", "")})
         self._menu()
         for path in (os.path.join(self.data_dir, "avatar.png"), os.path.join(self.dir, "avatar.png")):
             if os.path.exists(path):
                 stamp = f"{os.path.getsize(path)}:{int(os.path.getmtime(path))}"
-                if self.db.get("_avatar") != stamp:
+                if self.db.get("_avatar") != stamp and \
+                        (self.db.get("_tg_wait") or {}).get("setMyProfilePhoto", 0) <= time.time():
                     try:
                         self.call("setMyProfilePhoto", files={"avatar": path},
                                   photo={"type": "static", "photo": "attach://avatar"})
                         self.db.set("_avatar", stamp)
                     except Exception as e:
+                        if getattr(e, "code", 0) == 429:  # как с именем: не долбить Telegram на каждом старте
+                            try:
+                                after = int(json.loads(getattr(e, "detail", "") or "{}")["parameters"]["retry_after"])
+                            except (KeyError, TypeError, ValueError):
+                                after = 3600
+                            self.db.update("_tg_wait", lambda d: {**d, "setMyProfilePhoto": time.time() + after + 5}, {})
                         print("avatar:", e, flush=True)
                 break
+
+    def _profile(self, method, params, getter, current):
+        """Имя/описание/команды в Telegram — только если поменялись: setMyName у Telegram — пара раз в сутки, иначе
+        429 на ~20 ч. Сделанное помним в db («_tg_set»), после 429 ждём retry_after («_tg_wait»), не дёргая API."""
+        key = json.dumps(params, ensure_ascii=False, sort_keys=True)
+        done, wait = self.db.get("_tg_set") or {}, self.db.get("_tg_wait") or {}
+        if done.get(method) == key or wait.get(method, 0) > time.time():
+            return False
+        try:
+            if current(self.call(getter).get("result") or {}) == params:  # уже так (поставили руками или раньше)
+                self.db.update("_tg_set", lambda d: {**d, method: key}, {})
+                return False
+        except Exception as e:
+            print(getter, e, flush=True)
+        try:
+            self.call(method, **params)
+            self.db.update("_tg_set", lambda d: {**d, method: key}, {})
+            return True
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                try:
+                    after = int(json.loads(getattr(e, "detail", "") or "{}").get("parameters", {}).get("retry_after"))
+                except (TypeError, ValueError):
+                    after = 3600
+                self.db.update("_tg_wait", lambda d: {**d, method: time.time() + after + 5}, {})
+            print(method, e, flush=True)
+        except Exception as e:
+            print(method, e, flush=True)
+        return False
 
     def _scheduler(self):
         while True:

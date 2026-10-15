@@ -118,7 +118,7 @@ document.addEventListener('click', async (ev) => {
       grab.disabled = true;
       const r = await api('grab', { name: grab.dataset.grab });
       render(r);
-      toast(r.result === 'ok' ? '🎯 Поймал @' + grab.dataset.grab : 'Не вышло: ' + r.result, r.result !== 'ok');
+      toast(r.result === 'ok' ? '🎯 Поймал @' + grab.dataset.grab : r.result === 'busy' ? 'Уже занимаю — подожди минуту' : 'Не вышло: ' + r.result, r.result !== 'ok');
       if (r.result === 'ok') { haptic('success'); grab.closest('.end').innerHTML = '🎯'; } else grab.disabled = false;
     } else if (watch) {
       const r = await api('add', { text: watch.dataset.watch });
