@@ -362,10 +362,8 @@ def ask(chat, mid=None):
         bad = sum(1 for x in last["bots"] if not x["ok"])
         foot = (f"<i>Прошлая: {time.strftime('%d.%m %H:%M', time.localtime(last['at']))} · "
                 + (f"проблемы у {bad}" if bad else "всё в порядке") + "</i>")
-    lines = ["Проверю всех ботов, и себя тоже, — всё параллельно:",
-             "• ⚡ <b>Быстро</b> (~3 мин): работают ли, новые ошибки в логах, все тесты и обход всех кнопок без сети",
-             "• 🔬 <b>Полностью</b> (10–15 мин): то же + тесты почерка и все кнопки вживую в Telegram с твоего аккаунта "
-             "(опасные — отправить, заказать, создать — не жму)"]
+    lines = ["⚡ Быстро — ~3 мин: работают ли, логи, все тесты и кнопки без сети",
+             "🔬 Полностью — 10–15 мин: + все кнопки вживую с твоего аккаунта (опасные не жму)"]
     btns = [[ui.b("⚡ Быстро", "chk|run", "primary"), ui.b("🔬 Полностью", "chk|full")]]
     if last:
         btns.append([ui.b("📋 Прошлый отчёт", "chk|last")])
@@ -373,34 +371,47 @@ def ask(chat, mid=None):
     return ui.show(chat, mid, ui.card("🧪 <b>Проверка ботов</b>", lines, foot), btns)
 
 
-def report(res):
-    """(текст, кнопки) отчёта."""
+KINDS = [("не работает", "не работает"), ("перезапускался", "падал"), ("в логе", "ошибки в логе"),
+         ("тест ", "тесты"), ("кнопка ", "кнопки"), ("живой обход", "обход")]
+
+
+def gist(problems):
+    """«тесты 2 · кнопки 1» — что сломано, без подробностей (они — в «📋 Подробно» и в задаче для Claude)."""
+    n = {}
+    for p in problems:
+        k = next((name for pre, name in KINDS if p.startswith(pre)), "другое")
+        n[k] = n.get(k, 0) + 1
+    return " · ".join(k + (f" {v}" if v > 1 else "") for k, v in n.items())
+
+
+def took(secs):
+    return f"{secs // 60} мин {secs % 60} с" if secs >= 60 else f"{secs} с"
+
+
+def report(res, details=False):
+    """(текст, кнопки) — коротко: всё ли в порядке и у кого что сломано одной строкой. details — с подробностями."""
     bad = [x for x in res["bots"] if not x["ok"]]
-    good = [x for x in res["bots"] if x["ok"]]
-    title = (f"✅ <b>Все боты в порядке</b> · {len(good)}" if not bad
-             else f"🧪 <b>Проверка: проблемы у {len(bad)} из {len(res['bots'])}</b>")
-    lines = []
-    for x in bad:
-        extra = f" · тесты {x['tests']}" + (f" · кнопок {x['clicks']}" if x.get("clicks") is not None else "")
-        lines.append(f"❌ <b>{ui.esc(ui.short(x['label']))}</b>{extra}")
-        lines += ["• " + ui.esc(p[:220]) for p in x["problems"][:4]]
-        if len(x["problems"]) > 4:
-            lines.append(f"<i>…и ещё {len(x['problems']) - 4}</i>")
-    if good:
-        lines.append("✅ " + ", ".join(ui.esc(ui.short(x["label"])) for x in good))
-    clicks = sum(x.get("clicks") or 0 for x in res["bots"])
-    tests = sum(int(x["tests"].split("/")[1]) for x in res["bots"])
-    foot = (f"<i>{'🔬 Полная' if res['full'] else '⚡ Быстрая'} · {res['secs'] // 60} мин {res['secs'] % 60} с · "
-            f"файлов тестов {tests}" + (f" · нажато кнопок {clicks}" if res["full"] else "") + "</i>")
-    text = ui.card(title, lines, foot, expand=len(lines) > 12)
-    while len(text) > 4000 and lines:  # длинный отчёт — режем хвост, кнопки «Починить» всё равно у всех
-        lines = lines[:-2]
-        text = ui.card(title, lines + ["<i>…полностью — после починки</i>"], foot, expand=True)
+    if not bad:
+        text = f"✅ <b>Все {len(res['bots'])} в порядке</b> · {took(res['secs'])}"
+    else:
+        lines = []
+        for x in bad:
+            lines.append(f"❌ {ui.esc(ui.short(x['label']))} — {gist(x['problems'])}")
+            if details:
+                lines += ["<i>" + ui.esc(p[:200]) + "</i>" for p in x["problems"][:5]]
+        text = ui.card(f"🧪 <b>Сломано {len(bad)} из {len(res['bots'])}</b> · {took(res['secs'])}", lines,
+                       expand=details)
+        while len(text) > 4000 and lines:
+            lines = lines[:-1]
+            text = ui.card(f"🧪 <b>Сломано {len(bad)} из {len(res['bots'])}</b>", lines, expand=True)
     btns = ui.pairs([ui.b(ui.clip("🛠 " + ui.short(x["label"])), f"chk|fix|{x['pm2']}")
                      for x in bad if x["pm2"] != COMMON], 3)
-    if len(bad) > 1:
-        btns.append([ui.b("🛠 Починить всё", "chk|fixall", "primary")])
-    btns.append([ui.b("🔁 Ещё раз", "chk"), ui.b("‹ Главная", "home")])
+    tail = [ui.b("🛠 Починить всё", "chk|fixall", "primary")] if len(bad) > 1 else []
+    if bad and not details:
+        tail.append(ui.b("📋 Подробно", "chk|more"))
+    if tail:
+        btns.append(tail)
+    btns.append([ui.b("🔁 Ещё раз", "chk")])
     return text, btns
 
 
@@ -414,13 +425,12 @@ def run(chat, mid=None, full=False):
             full = False
         live = Live(chat, mid)
         res = check_all(full, live)
-        text, btns = report(res)
-        ui.send(chat, text, btns)  # новым сообщением — чтобы пришло уведомление
-        if live.mid:
+        if live.mid:  # вместо «⏳ Проверяю…» — отчёт новым сообщением (с уведомлением)
             try:
-                ui.edit(chat, live.mid, "🧪 Проверка закончена — отчёт ниже.")
+                ui.tg("deleteMessage", chat_id=chat, message_id=live.mid)
             except Exception:
                 pass
+        ui.send(chat, *report(res))
     except Exception as e:
         traceback.print_exc()
         ui.send(chat, ui.card("⚠️ <b>Проверка упала</b>", [ui.esc(str(e)[:300])]), [[ui.b("🔁 Ещё раз", "chk")]])
@@ -460,11 +470,11 @@ def on_callback(chat, mid, data):
             return "Проверка уже идёт"
         threading.Thread(target=run, args=(chat, mid, arg == "full"), daemon=True).start()
         return "Проверяю…"
-    if arg == "last":
+    if arg in ("last", "more"):
         last = ui.setting("check_last")
         if not last:
             return "Отчёта ещё нет"
-        ui.show(chat, mid, *report(last))
+        ui.show(chat, mid, *report(last, details=arg == "more"))
         return ""
     if arg == "fix" and len(data) > 2:
         threading.Thread(target=fix_one, args=(chat, data[2]), daemon=True).start()

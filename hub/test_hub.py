@@ -110,7 +110,33 @@ class HubTest(Base):
         self.assertTrue(all(len(btn["text"]) <= 24 for r in rows for btn in r))
         self.cq("full")
         self.assertIn("Полное меню", self.last()[0])
-        self.assertEqual(hub.COMMANDS[0][0], "1")
+
+    def test_keyboard_menu(self):
+        """☰ Полное меню — клавиатура у поля ввода: свёрнута в квадратик (не persistent), ставится один раз на версию."""
+        kbs = [kw["reply_markup"] for k, kw in self.sent if k == "sendMessage" and "keyboard" in (kw.get("reply_markup") or {})]
+        self.assertEqual(len(kbs), 1)  # первый /start поставил
+        kb = kbs[0]
+        self.assertFalse(kb["is_persistent"])
+        self.assertTrue(kb["one_time_keyboard"])
+        self.assertTrue(all(len(r) <= 3 and all(len(x["text"]) <= 24 for x in r) for r in kb["keyboard"]))
+        hub.on_message(self.msg("/start"))
+        self.assertEqual(len([1 for k, kw in self.sent if "keyboard" in (kw.get("reply_markup") or {})]), 1)  # не повторяется
+        self.assertNotIn("1", [c for c, _ in hub.COMMANDS])
+        hub.on_message(self.msg("🤖 Боты"))
+        self.assertIn("работает 3 из 3", self.last()[0])
+        hub.on_message(self.msg("🧪 Проверка"))
+        self.assertIn("chk|run", self.last()[1])
+        hub.on_message(self.msg("✏️ Доработать"))
+        self.assertIn("fix|coach-bot", self.last()[1])
+        hub.on_message(self.msg("⋯ Ещё"))
+        self.assertIn("Ещё", self.last()[0])
+        hub.setting("wait", "make")
+        hub.on_message(self.msg("🖥 Сервер"))  # кнопка меню снимает ожидание ТЗ
+        self.assertIsNone(hub.setting("wait"))
+        for t in hub.KB_TEXTS - {"⬆️ Обновить всех", "👤 Аккаунт", "📬 Что я пропустил", "🗂 Навести порядок", "📂 Все боты"}:
+            n = len(self.sent)
+            hub.on_message(self.msg(t))
+            self.assertGreater(len(self.sent), n, t)
 
     def test_bot_card_fix(self):
         """Боты → бот → «✏️ Доработать»: ждём, что поменять, и отдаём Claude именно этот бот; «Отмена» — назад к боту."""
