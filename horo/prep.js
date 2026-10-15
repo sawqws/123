@@ -42,6 +42,7 @@ async function topics(page, disc) {
             // для сайта: уровень задания, обязательное ли, баллы и попытки
             lvl: t.levelId, req: t.requirementType === 'mandatory',
             score: g.resultScoreValue ?? null, max: g.maximumValue ?? t.maximumScoreValue ?? null,
+            pct: g.currentValue ?? null, pass: t.percentageToPass ?? null,  // результат в % и сколько нужно для зачёта
             used: g.usedAttemptsCount || 0, left: g.remainingAttemptsCount ?? null,
           };
         }),
