@@ -1,0 +1,47 @@
+/* activity: экран тренировки, тренды 1Н/1М/6М в разборах, подсказки тренеру */
+
+/* плитки тренировки — как «Моя панель», но не кнопки */
+.actv-tiles { margin-bottom: 14px; }
+.actv-tile { cursor: default; }
+.actv-tile:active { transform: none; }
+/* нечётная последняя плитка — во всю ширину (на телефоне две колонки) */
+@media (max-width: 699px) { .actv-tiles .tile:last-child:nth-child(odd) { grid-column: 1 / -1; } }
+.actv-sub { font: 600 11.5px/1.3 var(--head); color: var(--hint); }
+.actv-foot { margin: -4px 4px 14px; }
+
+/* пульсовые зоны: строка — метка, полоса, минуты и % */
+.actv-z { display: grid; grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--sep); }
+.card .cap + .actv-z { border-top: 0; padding-top: 2px; }
+.actv-zk { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.actv-zk b { font: 800 14px/1 var(--head); letter-spacing: .08em; color: var(--c); }
+.actv-zk small { font-size: 11px; color: var(--hint); white-space: nowrap; }
+.actv-zbar { height: 10px; border-radius: 999px; background: var(--trk); overflow: hidden; }
+.actv-zbar i { display: block; height: 100%; border-radius: 999px; transition: width .7s var(--ease); }
+.actv-zv { min-width: 58px; white-space: nowrap; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; color: var(--hint); }
+.actv-zv b { font: 700 17px/1 var(--num); color: var(--ink); }
+.actv-zv small { font-size: 11.5px; }
+
+/* тренд: крупное среднее, сравнение с прошлым периодом, график */
+.actv-seg { margin: 0 0 14px; }
+.actv-big { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 6px; }
+.actv-big .v { font: 700 34px/1 var(--num); }
+.actv-big .u { color: var(--hint); font-size: 13.5px; }
+.actv-cmp { display: inline-flex; align-items: baseline; gap: 4px; font: 700 12.5px/1.3 var(--head); }
+.actv-cmp i { font-style: normal; font-size: 8px; vertical-align: 1px; }
+.actv-cmp.up { color: var(--teal); }
+.actv-cmp.down { color: #ff4d5e; }
+.actv-cmp.flat { color: var(--hint); font-weight: 600; }
+.actv-mini { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12.5px; color: var(--hint); }
+.actv-mini b { color: var(--ink); font-weight: 700; }
+.actv-mini .dot { margin-left: 0; }
+.actv-sub2 { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--sep); }
+.actv-sub2 .cap { margin-bottom: 4px; }
+
+/* подсказки-вопросы тренеру (WHOOP Coach) */
+.actv-coach .cap h3 { display: inline-flex; align-items: center; gap: 8px; }
+.actv-spark .ico { width: 18px; height: 18px; color: var(--teal); display: block; }
+.actv-q { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; margin-top: 8px; padding: 12px 14px;
+  border: 0; border-radius: var(--r-md); background: var(--card-2); color: var(--ink); font: 600 14px/1.35 var(--head); text-align: left; cursor: pointer; }
+.actv-q .ico { flex: none; width: 16px; height: 16px; color: var(--teal); }
+.actv-q:active { transform: scale(.985); opacity: .8; }
+.actv-coach .cap + .actv-q { margin-top: 0; }

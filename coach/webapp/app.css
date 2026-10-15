@@ -33,15 +33,15 @@
   --ok: #00f19f; --warn: #ffde00; --err: #ff4d5e;
   --link: var(--teal);
   --gold: var(--teal); --gold-ink: var(--teal);
-  --head: "Proxima Nova", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --num: "DIN Alternate", "DINPro", "DIN Pro", "D-DIN", "Barlow", "Helvetica Neue", Arial, sans-serif;
+  --head: "Mulish", "Proxima Nova", "Helvetica Neue", Helvetica, Arial, sans-serif;   /* вместо Proxima Nova — fonts.css */
+  --num: "DIN Alternate", "DINPro", "DIN Pro", "Barlow", "Helvetica Neue", Arial, sans-serif;  /* DIN: на iPhone встроен */
   --round: var(--head); --font: var(--head); --font-d: var(--head); --serif: var(--head);
   --r-xl: 16px; --r-lg: 14px; --r-md: 12px; --r-sm: 10px;
   --shadow: none; --shadow-lg: 0 18px 40px -18px rgba(0, 0, 0, .8); --hl: none;
   --accent-soft: rgba(0, 241, 159, .12); --accent-line: rgba(0, 241, 159, .35); --accent-deep: #00f19f; --accent-pastel: rgba(0, 241, 159, .3);
 }
 /* фон — фирменный градиент WHOOP; никакого стекла и золотых пятен */
-html { background: var(--bg-2) linear-gradient(180deg, #283339 0, #161d21 420px, #101518 900px) no-repeat; background-attachment: fixed; }
+html { background: var(--bg-2) linear-gradient(180deg, #283339 0, #161d21 420px, #101518 900px) no-repeat; }
 body::before, body::after { content: none !important; }
 body { font-family: var(--head); color: var(--ink); -webkit-font-smoothing: antialiased; }
 .card, .list, .stat, .chip, .seg, .tabbar, .toast, .sup-fab, .sheet, .btn, input, textarea, select, details.about, .msg.them, .avatar {
@@ -529,3 +529,129 @@ body.has-tabbar .sup-fab { bottom: calc(78px + var(--bottom)); }
 .dial-k { font-size: 10.5px; letter-spacing: .05em; overflow: visible; text-overflow: clip; }
 .ticks { font-size: 9.5px; letter-spacing: .02em; }
 .send.alt .ico { width: 22px; height: 22px; margin: auto; }
+
+/* ===== мелочи по скриншотам WHOOP (App Store, 2025) ===== */
+:root, html[data-scheme] { --card: #1c2327; --card-2: #262e33; --periw: #7b8cff; --orange: #ff9a1f; }
+.card, .tile, .mon, .wcon { background: linear-gradient(180deg, #232b30 0, #1a2125 100%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
+/* подписи — Proxima-подобный Mulish: ЗАГЛАВНЫЕ полужирные с широкой разрядкой, белые */
+.cap h3, .tile-k, .tk, .mon-k, .ck, .dial-k, .acts-h b { font-family: var(--head); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+/* заголовки разделов главной — как «My Day»: обычными буквами, крупно */
+.sec > .cap { margin: 0 2px 12px; }
+.sec > .cap h3 { font: 700 22px/1.2 var(--head); letter-spacing: 0; text-transform: none; color: var(--ink); }
+.addsq { width: 34px; height: 34px; border: 0; border-radius: 9px; background: #fff; color: #101518; display: grid; place-items: center; cursor: pointer; }
+.addsq .ico { width: 20px; height: 20px; stroke-width: 2.4; }
+
+/* шапка: аватар с серией · дата в капсуле · время данных */
+.wbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0 4px; }
+.mepill { display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border: 0; border-radius: 999px; background: #1c2327; color: var(--ink); cursor: pointer; }
+.mepill .avatar { width: 34px; height: 34px; font-size: 14px; background: #2e373d; }
+.mepill .fl { display: flex; align-items: center; gap: 3px; }
+.mepill .fl .ico { width: 15px; height: 15px; color: var(--orange); fill: var(--orange); stroke: none; }
+.mepill .fl b { font: 700 15px var(--num); }
+.datecap { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; background: #1c2327; }
+.datecap .pg { width: 30px; height: 32px; color: #fff; }
+.datecap .pg .ico { width: 17px; height: 17px; }
+.dc-t { min-width: 92px; padding: 7px 12px; border-radius: 999px; background: #2e373d; text-align: center; font: 700 12px/1 var(--head); letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+.syncpill { display: flex; align-items: center; gap: 5px; padding: 8px 6px; border: 0; background: none; color: var(--hint); font: 600 13px var(--num); cursor: pointer; }
+.syncpill .ico { width: 15px; height: 15px; }
+.wordmark { margin: 14px 0 10px; text-align: center; font: 300 19px/1 var(--head); letter-spacing: .32em; color: rgba(255, 255, 255, .85); }
+
+/* кольца главной: тонкие, подпись «СОН ›» */
+.dials { gap: 14px; margin: 6px 0 20px; }
+.dial-ring { max-width: 104px; }
+.dial .trk { stroke: #2e373d; }
+.dial-v b { font: 700 clamp(24px, 7vw, 30px)/1 var(--num); }
+.dial-v small { font-size: .55em; }
+.dial-k { display: inline-flex; align-items: center; gap: 2px; margin-top: 10px; font-size: 11px; letter-spacing: .1em; }
+.chev-s .ico { width: 11px; height: 11px; stroke-width: 2.4; }
+@media (max-width: 380px) { .dial-k { font-size: 9.5px; letter-spacing: .04em; } }
+
+/* «Optimal Health» */
+.card.outlook .ot { margin: 0 0 4px; display: flex; align-items: center; gap: 8px; font: 700 16px/1.3 var(--head); color: var(--ink); }
+.card.outlook .advice p { font-size: 15px; color: rgba(255, 255, 255, .78); }
+.card.outlook .advice p:first-child b { font: 600 15px/1.4 var(--head); color: rgba(255, 255, 255, .78); }
+
+/* «Health Monitor · Stress Monitor» */
+.mons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 14px; }
+.mon { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; border: 0; border-radius: var(--r-xl); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.mon-k { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ink); white-space: nowrap; overflow: hidden; }
+.mon-k .ico { width: 13px; height: 13px; flex: none; stroke-width: 2.2; }
+.mon-s { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.mon-b { flex: none; min-width: 26px; height: 26px; padding: 0 4px; border-radius: 6px; display: grid; place-items: center; font: 700 13px var(--num); font-style: normal;
+  color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
+.mon-b .ico { width: 15px; height: 15px; stroke-width: 2.6; }
+.mon-s > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; color: var(--hint); }
+.mon-s b { font: 800 11px var(--head); letter-spacing: .1em; text-transform: uppercase; }
+
+/* «Мой день» */
+.outrow { display: flex; align-items: center; justify-content: space-between; width: 100%; margin: 0 0 10px; padding: 16px 16px; border: 0; border-radius: var(--r-xl); cursor: pointer;
+  background: linear-gradient(90deg, #232b30 0, #3a4a57 100%); color: var(--ink); font: 600 16px var(--head); }
+.outrow .ico { width: 18px; height: 18px; }
+.acts-h { display: flex; justify-content: space-between; align-items: center; padding: 10px 0 6px; }
+.acts-h b { font-size: 12px; }
+.acts-h span { color: var(--hint); font-size: 13px; }
+
+/* разборы: дата по центру, «i», большое кольцо */
+.wtop { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; padding: 6px 0 4px; }
+.wbtn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; background: none; color: #fff; cursor: pointer; padding: 0; }
+.wbtn .ico { width: 24px; height: 24px; }
+.wbtn.info { justify-self: end; width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px rgba(255, 255, 255, .75); font: 700 15px Georgia, serif; }
+.wtop-t { text-align: center; font: 700 14px var(--head); letter-spacing: .12em; text-transform: uppercase; }
+.wring { display: flex; justify-content: center; padding: 18px 0 16px; }
+.wring-c { position: relative; width: min(72vw, 300px); aspect-ratio: 1; }
+.wring svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; overflow: visible; }
+.wtrk { fill: none; stroke: #2e373d; }
+.wband { fill: none; stroke: #59646b; }
+.wtick { stroke: #fff; stroke-width: 1.2; }
+.wring .arc { stroke-linecap: butt; }
+.wring-in { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.wring-in b { display: flex; align-items: baseline; font: 700 clamp(64px, 19vw, 84px)/1 var(--num); letter-spacing: -.01em; }
+.wring-in b small { margin-left: 3px; font-size: .5em; }
+.wring-in > span { margin-top: 10px; font: 700 13px/1.35 var(--head); letter-spacing: .14em; text-transform: uppercase; }
+
+/* «что влияет»: карточка с уголком к кольцу */
+.wcon { position: relative; margin: 6px 0 14px; padding: 4px 16px 14px; border-radius: var(--r-xl); }
+.wcon::before { content: ""; position: absolute; top: -8px; left: 50%; width: 16px; height: 16px; transform: translateX(-50%) rotate(45deg); background: #232b30; border-radius: 2px; }
+.crow { display: flex; align-items: center; gap: 12px; width: 100%; padding: 15px 0; border: 0; border-bottom: 1px solid rgba(255, 255, 255, .08); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.cic { flex: none; color: rgba(255, 255, 255, .55); }
+.cic .ico { width: 22px; height: 22px; stroke-width: 1.5; }
+.ck { flex: 1; min-width: 0; font-size: 12px; line-height: 1.3; }
+.cv { flex: none; font: 700 21px/1 var(--num); }
+.tri { flex: none; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; margin-left: 2px; }
+.tri.up { border-bottom: 8px solid var(--c, #8a959b); }
+.tri.down { border-top: 8px solid var(--c, #8a959b); }
+.tri.good { --c: var(--teal); } .tri.bad { --c: var(--orange); } .tri.flat { --c: #8a959b; }
+.tri.dot { width: 8px; height: 8px; margin: 0 2px 0 4px; border: 0; border-radius: 50%; background: #8a959b; }
+.seg3 { flex: none; display: flex; gap: 3px; margin-right: 6px; }
+.seg3 i { width: 18px; height: 4px; border-radius: 2px; background: #3a444a; }
+.seg3 i.poor { background: var(--orange); } .seg3 i.ok { background: #a8b0b5; } .seg3 i.best { background: var(--teal); }
+.cfoot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #0d1113; font-size: 13.5px; color: var(--hint); }
+.cfoot b { color: var(--ink); font-weight: 600; }
+.cfoot .tri { margin: 0; }
+.cfoot .lg { width: 14px; height: 4px; border-radius: 2px; margin-left: 6px; }
+.cfoot .lg:first-child { margin-left: 0; }
+.cfoot .lg.poor { background: var(--orange); } .cfoot .lg.ok { background: #a8b0b5; } .cfoot .lg.best { background: var(--teal); }
+
+/* вывод в рамке с переливом (как у WHOOP Coach) */
+.winsight { margin: 0 0 14px; padding: 16px 16px 14px; border-radius: var(--r-xl); border: 1.5px solid transparent;
+  background: linear-gradient(#151b1f, #151b1f) padding-box, linear-gradient(120deg, #6e56cf, #4a6fd8 50%, #2bb3a3) border-box; }
+.winsight p { margin: 0; font: 600 16px/1.42 var(--head); color: var(--ink); }
+.wlink { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: 800 12.5px var(--head); letter-spacing: .14em; text-transform: uppercase; color: var(--periw); }
+.wlink .ico { width: 18px; height: 18px; }
+
+/* нижнее меню: плавающая капсула + круглая кнопка тренера справа (как кнопка Coach у WHOOP) */
+.tabbar { left: 10px; right: 82px; bottom: calc(10px + var(--bottom)); padding: 6px; border-radius: 999px; border: 0;
+  background: rgba(30, 37, 41, .96); box-shadow: 0 10px 30px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .06); }
+.tabbar button { font: 600 10.5px/1.1 var(--head); letter-spacing: 0; text-transform: none; color: rgba(255, 255, 255, .5); border-radius: 999px; }
+.tabbar button.on { color: #fff; background: rgba(255, 255, 255, .08) !important; }
+.tabbar button[data-tab="plus"] .i { width: 40px; height: 40px; }
+.tabbar button[data-tab="coach"] { position: fixed; right: 10px; bottom: calc(10px + var(--bottom)); width: 62px; height: 62px; padding: 0; border-radius: 50%;
+  font-size: 0; gap: 0; justify-content: center; background: radial-gradient(circle at 50% 40%, #2a3340, #141a1f) !important;
+  box-shadow: 0 0 0 2px #5b5bd6, 0 0 18px rgba(110, 86, 207, .65), 0 10px 26px rgba(0, 0, 0, .6) !important; color: #fff; }
+.tabbar button[data-tab="coach"] .ico { width: 26px; height: 26px; }
+.tabbar button[data-tab="coach"].on { box-shadow: 0 0 0 2px var(--teal), 0 0 18px rgba(0, 241, 159, .5), 0 10px 26px rgba(0, 0, 0, .6) !important; }
+body.has-tabbar { padding-bottom: calc(96px + var(--bottom)); }
+body.has-tabbar .sup-fab { bottom: calc(86px + var(--bottom)); }
+@media (min-width: 700px) { .tabbar { left: calc(50% - 300px); right: calc(50% - 220px); padding: 6px; } .tabbar button[data-tab="coach"] { right: calc(50% - 300px); } }
+.dial .chev-s svg { transform: none; width: 11px; height: 11px; }
