@@ -67,7 +67,7 @@ class Table:
     def __init__(self, path, ink=INK, seed=7):
         self.img = Image.open(path).convert('RGB')
         self.xs, self.ys = grid(self.img)
-        self.h = Hand(self.img, ink=ink, width=PEN, seed=seed, mess=1.15, slant=0.04)
+        self.h = Hand(self.img, ink=ink, width=PEN, seed=seed)
         self.rnd = random.Random(seed)
         W, H = self.img.size
         self._probe = Hand(Image.new('RGB', (max(4000, W * 2), 400)), seed=1)
@@ -118,7 +118,7 @@ class Table:
         lh = s * 1.3
         y = y0 + pad + s * 0.95
         for line in lines:
-            self.h.text(line, x0 + pad + self.rnd.uniform(-3, 5), y + self.rnd.uniform(-2, 2), s)
+            self.h.text(line, x0 + pad, y, s)
             y += lh
         return s
 

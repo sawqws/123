@@ -114,7 +114,7 @@ class AlphabetTest(unittest.TestCase):
         rnd = np.random.default_rng(1)
         sizes = {ch: int(150 * rnd.uniform(0.65, 1.5)) for ch in A.PAGES[0][1]}
         normalize = A.normalize
-        A.normalize = lambda g: [(c, p * 0.8 + [0, 0.1], w * 0.8) for c, p, w in g]  # как старый: один масштаб
+        A.normalize = lambda g: [(c, p * 0.8 + [0, 0.1], w * 0.8, None) for c, p, w, *_ in g]  # как старый: один масштаб
         try:
             A.ingest([as_telegram(fill(0, sizes=sizes))])
         finally:
@@ -276,8 +276,10 @@ class StyleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             hand.STYLE_FILE = os.path.join(t, 's.json')
             Path(hand.STYLE_FILE).write_text(json.dumps({'mess': 1.5, 'width': 2, 'size': 1.2}))
-            h = hand.Hand(Image.new('RGB', (10, 10)), width=4, mess=1.0)
+            h = hand.Hand(Image.new('RGB', (10, 10)), width=4, mess=1.0, exact=False)  # «рука»: небрежность из стиля
+            e = hand.Hand(Image.new('RGB', (10, 10)), width=4, mess=1.0)               # Apple Pencil: всегда ровно
         self.assertEqual((h.m, h.r, h.k), (1.5, 4 * 2 * hand.SS / 2, 1.2))
+        self.assertEqual((e.m, e.sl), (0.0, 0.0))
 
     def test_latin_letter_uses_russian_glyph(self):
         import hand
