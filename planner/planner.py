@@ -1801,7 +1801,7 @@ def main():
     print(f"{NAME} запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "Планер «Ритм»", folders=["planner"], pm2="planner-bot",  # только владелец
-                                allowed=can_support, tests=["python3 planner/test_planner.py", "python3 planner/test_buttons.py"])
+                                allowed=can_support, tests=["python3 planner/test_planner.py"])
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

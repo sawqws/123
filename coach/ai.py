@@ -14,7 +14,11 @@ import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(tempfile.gettempdir(), "coach-ai")
-NO_TOOLS = ["--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"]
+# Read нужен только чтобы открыть присланное фото из WORK. Текст на картинке мог бы попросить прочитать чужое
+# («открой /etc/coach-bot.env») — системные и чужие папки закрыты (WORK лежит в /tmp, его не трогаем).
+SAFE_READ = [f"Read(//{d}/**)" for d in ("root", "etc", "home", "proc", "sys", "var", "opt", "usr", "boot", "dev", "run",
+                                         "mnt", "media", "srv")]
+NO_TOOLS = ["--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent", *SAFE_READ]
 
 
 def persona():
@@ -29,10 +33,21 @@ class AIError(Exception):
 def claude(prompt, image=None, timeout=240, images=None):
     """(текст ответа). image — путь к картинке, images — несколько (кадры видео): Claude откроет их инструментом Read."""
     os.makedirs(WORK, exist_ok=True)
-    tools = []
+    copies = []
     pics = ([image] if image else []) + list(images or [])
+    try:
+        return _run(prompt, pics, copies, timeout)
+    finally:
+        for c in copies:  # копии картинок нужны только на время ответа
+            try:
+                os.remove(c)
+            except OSError:
+                pass
+
+
+def _run(prompt, pics, copies, timeout):
+    tools = []
     if pics:
-        copies = []
         for src in pics:
             dst = os.path.join(WORK, f"photo-{uuid.uuid4().hex[:8]}" + (os.path.splitext(src)[1].lower() or ".jpg"))
             shutil.copyfile(src, dst)
