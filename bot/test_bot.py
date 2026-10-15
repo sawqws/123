@@ -1880,5 +1880,41 @@ class ExamsTest(unittest.TestCase):
             self.assertIn("ex:upd:3", sent[-1][1])
 
 
+class WaitTest(BotTest):
+    """⏳ Ожидание: отправки по таймеру (во сколько, ⚡/✖), черновики без таймера, задания в работе."""
+
+    def test_empty(self):
+        text, markup = bot.waiting_card()
+        self.assertIn("Ничего не ждёт", text)
+        self.assertIn("w:upd", markup)
+
+    def test_lists(self):
+        now = 1_800_000_000
+        bot.set_draft({"task": "t1", "url": URL, "title": "Гринёв и Швабрин", "pairs": [], "own_files": False,
+                       "send_at": now + 7 * 60 + 5})
+        bot.set_draft({"task": "t2", "url": URL, "title": "Карта Северной войны", "pairs": [], "own_files": False})
+        with bot.running_lock:
+            bot.running.add(TASK)
+        try:
+            text, markup = bot.waiting_card(now)
+        finally:
+            with bot.running_lock:
+                bot.running.discard(TASK)
+        when = bot.datetime.datetime.fromtimestamp(now + 7 * 60 + 5, bot.MSK)
+        self.assertIn(f"в {when:%H:%M}", text)
+        self.assertIn("через 7 мин", text)
+        self.assertIn("Ждут твоего «Отправить»", text)
+        self.assertIn("Карта Северной войны", text)
+        self.assertIn("Решаю или в очереди", text)
+        self.assertIn("Конспект §5", text)                 # название задания в работе — из task.json
+        for cb in ("now:t1", "hold:t1", "send:t2", "ed:t2"):
+            self.assertIn(cb, markup)
+        self.assertTrue(text.index("Отправлю учителю") < text.index("Ждут твоего"))
+
+    def test_button(self):
+        self.say(bot.BTN_WAIT)
+        self.assertIn("Ожидание", self.last()[0])
+
+
 if __name__ == "__main__":
     unittest.main()
