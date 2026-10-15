@@ -21,7 +21,7 @@ import test_coach as T  # noqa: E402  (ставит окружение и под
 import coach  # noqa: E402
 
 # GET-пути разделов, которые приложение спрашивает без параметров — добавляй сюда свои
-EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar"]
+EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save"]
 
 
 def build(shots=None):
