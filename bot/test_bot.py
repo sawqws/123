@@ -1949,6 +1949,153 @@ class WaitTest(BotTest):
         self.assertIn("Ожидание", self.last()[0])
 
 
+class DeferTest(BotTest):
+    """🧪 Тест: Claude вносит ответы и не сдаёт, бот сдаёт по таймеру; не 100% — вторая попытка (если есть запасная)."""
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(drafts.task_dir(TASK), "task.json"), "w") as f:
+            json.dump({"data": {"type": "test", "title": "Тест: клетка"}}, f)
+        self.result = "РЕЗУЛЬТАТ:\nЗачтено\nБАЛЛЫ: 17/17\nПОПЫТКИ: 1/3"
+        bot.set_human(True)
+
+    def fake_claude(self, prompt, tools, timeout=0, on_tool=None):
+        self.prompts.append(prompt)
+        ans = os.path.join(drafts.task_dir(TASK), "answers.json")
+        pathlib.Path(ans).write_text('{"1": "a"}')
+        pathlib.Path(drafts.task_dir(TASK), "defer.json").write_text(json.dumps(
+            {"url": URL, "answers": ans, "N": 17, "at": time.time() * 1000}))
+        return True, "В1: митоз\nВ2: мейоз"
+
+    def fake_node(self, *args, timeout=0, prog="node"):
+        if args[:1] == ("horo/overview.js",):
+            return True, json.dumps(self.ov)
+        self.nodes.append(args)
+        return (True, self.result) if isinstance(self.result, str) else self.result
+
+    def due(self):
+        t = bot.pending_tests()[TASK]
+        bot.due_tests(now=t["at"] + 1)
+
+    def test_solved_now_submitted_later(self):
+        self.say(URL)
+        self.assertIn("НЕ сдаст", self.prompts[0])          # Claude не сдаёт сам
+        t = bot.pending_tests()[TASK]
+        self.assertTrue(90 <= t["at"] - time.time() <= 361)  # «как человек» — через 1,5–6 мин
+        self.assertEqual(self.nodes, [])                      # пока ничего не сдано
+        text, markup = next((m, k) for m, k in self.msgs if "Тест решён" in m)
+        self.assertIn("Сдам в ", text)
+        self.assertIn("митоз", text)
+        self.assertIn(f"tnow:{TASK}", markup)
+        wait, _ = bot.waiting_card()
+        self.assertIn("Сдам тесты", wait)
+        self.due()
+        self.assertEqual(self.nodes[-1], ("horo/submit.js", URL, t["answers"], "--continue-only"))
+        self.assertNotIn(TASK, bot.pending_tests())
+        self.assertIn("17 / 17", self.last()[0])
+        self.assertIn("попыток 1 из 3", self.last()[0])
+
+    def test_human_off_submits_right_away(self):
+        bot.set_human(False)
+        self.say(URL)
+        self.assertEqual(len(self.nodes), 1)
+        self.assertIn("17 / 17", self.last()[0])
+
+    def test_buttons(self):
+        self.say(URL)
+        cq = lambda data: bot.on_callback({"id": "1", "data": data, "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        cq(f"tnow:{TASK}")
+        self.assertEqual(len(self.nodes), 1)                 # «Сдать сейчас»
+        self.say(URL)
+        cq(f"tdrop:{TASK}")
+        self.assertNotIn(TASK, bot.pending_tests())         # «Не сдавать»
+        self.assertIn("Не сдаю", self.last()[0])
+        self.assertEqual(len(self.nodes), 1)
+
+    def test_not_full_makes_second_attempt(self):
+        self.result = "БАЛЛЫ: 15/17\nПОПЫТКИ: 1/3"
+        self.say(URL)
+        self.due()
+        self.assertTrue(any("делаю вторую попытку" in m for m, _ in self.msgs))
+        retry = self.prompts[-1]
+        self.assertIn("ВТОРАЯ попытка", retry)
+        self.assertIn("15 из 17", retry)
+        self.assertIn("answers_try1.json", retry)
+        self.assertTrue(os.path.exists(os.path.join(drafts.task_dir(TASK), "answers_try1.json")))
+        self.assertEqual(bot.pending_tests()[TASK]["tries"], 1)
+        self.assertTrue(any("Вторая попытка готова" in m for m, _ in self.msgs))
+        self.result = "БАЛЛЫ: 16/17\nПОПЫТКИ: 2/3"         # опять не 100% — сама больше не пересдаёт
+        n = len(self.prompts)
+        self.due()
+        self.assertEqual(len(self.prompts), n)
+        self.assertIn(f"tretry:{TASK}", self.last()[1])
+
+    def test_last_attempt_only_by_button(self):
+        self.result = "БАЛЛЫ: 15/17\nПОПЫТКИ: 2/3"
+        self.say(URL)
+        self.due()
+        self.assertFalse(any("делаю вторую попытку" in m for m, _ in self.msgs))
+        self.assertIn("последняя попытка", self.last()[0])
+        n = len(self.prompts)
+        bot.on_callback({"id": "1", "data": f"tretry:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual(len(self.prompts), n + 1)
+        self.assertIn("ВТОРАЯ попытка", self.prompts[-1])
+
+    def test_already_submitted_and_errors(self):
+        self.say(URL)
+        self.result = (False, "⚠️ Не получилось: Нет начатой попытки: тест уже сдан или попытка закрыта")
+        self.due()
+        self.assertNotIn(TASK, bot.pending_tests())
+        self.assertIn("Тест уже сдан", self.last()[0])
+        self.say(URL)
+        self.result = (False, "⚠️ Сайт долго не отвечает")
+        self.due()
+        t = bot.pending_tests()[TASK]
+        self.assertEqual((t["at"], t.get("finishing")), (None, False))  # ждёт «Сдать сейчас»
+        self.assertIn(f"tnow:{TASK}", self.last()[1])
+
+    def test_restart_mid_submit(self):
+        self.say(URL)
+        t = bot.pending_tests()[TASK]
+        bot.set_test(TASK, {**t, "finishing": True})
+        bot.resume_tests()
+        t = bot.pending_tests()[TASK]
+        self.assertFalse(t["finishing"])
+        self.assertLess(t["at"] - time.time(), 31)
+
+    def test_orphan_claude_killed_on_start(self):
+        """Claude прошлого запуска бота (своя группа процессов) при старте останавливается, чужие pid — нет."""
+        import subprocess
+        groups = os.path.join(self.tmp.name, "groups.json")
+        with mock.patch.object(bot, "GROUPS", groups):
+            old = subprocess.Popen(["bash", "-c", "exec -a claude-old sleep 30"], start_new_session=True)
+            other = subprocess.Popen(["sleep", "30"], start_new_session=True)
+            try:
+                bot.track_group(old.pid, True)
+                bot.track_group(other.pid, True)
+                bot.track_group(12345678, True)
+                bot.track_group(12345678, False)
+                self.assertEqual(json.load(open(groups)), sorted([old.pid, other.pid]))
+                self.assertEqual(bot.kill_orphans(), 1)
+                self.assertEqual(old.wait(5), -9)
+                self.assertIsNone(other.poll())          # не Claude — не трогаем
+                self.assertFalse(os.path.exists(groups))
+                self.assertEqual(bot.kill_orphans(), 0)
+            finally:
+                for p in (old, other):
+                    if p.poll() is None:
+                        p.kill()
+                        p.wait()
+
+    def test_stale_defer_ignored(self):
+        pathlib.Path(drafts.task_dir(TASK), "defer.json").write_text(json.dumps({"url": URL, "answers": "a", "at": 1000}))
+        self.assertIsNone(bot.defer_of(TASK, time.time()))
+
+
+for _name in [n for n in vars(BotTest) if n.startswith("test_") and n not in vars(DeferTest)]:
+    setattr(DeferTest, _name, None)  # тесты BotTest здесь не гоняем: заглушки Claude и node у DeferTest свои
+
+
 class MirrorTest(BotTest):
     """🧩 Зеркало сайта (bot/site/mirror/overlay.js): маршруты /api/site/* поверх тех же функций, что кнопки в чате."""
 

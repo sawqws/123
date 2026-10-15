@@ -25,6 +25,7 @@ import io
 import json
 import os
 import random
+import shutil
 import re
 import signal
 import subprocess
@@ -737,6 +738,56 @@ def child_env(**extra):
     return env
 
 
+GROUPS = os.path.join(REPO, "horo", "tmp", "claude_groups.json")
+groups_lock = threading.Lock()
+
+
+def track_group(pid, alive):
+    """Группы процессов Claude (у каждого своя сессия): pm2 при перезапуске убивает только бота, а Claude с его
+    submit.js/Chromium жили дальше и сдавали тот же тест параллельно с новым запуском (15.10, «кто-то завершил
+    попытку»). Записываем группы, при старте добиваем оставшиеся (kill_orphans)."""
+    with groups_lock:
+        try:
+            with open(GROUPS) as f:
+                ids = set(json.load(f))
+        except (OSError, ValueError, TypeError):
+            ids = set()
+        (ids.add if alive else ids.discard)(pid)
+        try:
+            with open(GROUPS + ".part", "w") as f:
+                json.dump(sorted(ids), f)
+            os.replace(GROUPS + ".part", GROUPS)
+        except OSError:
+            pass
+
+
+def kill_orphans():
+    """При старте бота: Claude прошлого запуска, если ещё жив, — остановить вместе с его node и Chromium."""
+    try:
+        with open(GROUPS) as f:
+            ids = json.load(f)
+    except (OSError, ValueError):
+        return 0
+    n = 0
+    for pgid in ids:
+        try:
+            with open(f"/proc/{pgid}/cmdline", "rb") as f:
+                alive = b"claude" in f.read()
+        except OSError:
+            alive = False
+        if alive:  # pid мог достаться другому процессу — убиваем, только если это всё ещё Claude
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+                n += 1
+            except OSError:
+                pass
+    try:
+        os.remove(GROUPS)
+    except OSError:
+        pass
+    return n
+
+
 def node(*args, timeout=300, prog="node"):
     try:
         res = subprocess.run([prog, *args], cwd=REPO, capture_output=True, text=True, timeout=timeout, env=child_env())
@@ -775,8 +826,9 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
         proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 start_new_session=True,  # своя группа: по таймауту убиваем и node/Chromium, что он запустил
                                 env=child_env(BASH_DEFAULT_TIMEOUT_MS="900000", BASH_MAX_TIMEOUT_MS="900000",
-                                              **({} if human_on() else {"HORO_FAST": "1"})))
-        # submit.js сдаёт тест «как человек» (паузы до 6 мин) — обычные 2 мин на команду его бы оборвали
+                                              HORO_DEFER="1"))
+        # HORO_DEFER: submit.js вносит ответы, но тест не сдаёт — сдаёт бот сам позже (finish_test)
+        track_group(proc.pid, True)
     except FileNotFoundError:
         return False, "⚠️ Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
     late, finished = threading.Event(), threading.Event()
@@ -810,6 +862,7 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
         proc.wait()
     finally:
         finished.set()
+        track_group(proc.pid, False)
         proc.stdout.close()
     if late.is_set():
         return False, f"⚠️ Не успел за {timeout // 60} минут, остановил."
@@ -940,18 +993,33 @@ REWORK = (
 )
 
 
-def prompt_for(url, text, show):
+RETRY = (  # Глеб, 15.10: «если тест сделан не правильно — проверь всё, удостоверься в ошибке и сделай вторую попытку»
+    "Это ВТОРАЯ попытка теста. Прошлая сдана на {got} из {total} баллов (не хватает {miss}). Какие вопросы неверны, "
+    "сайт не показывает — только общий балл. Твои ответы прошлой попытки — {d}/answers_try{k}.json.\n"
+    "1) Прочитай условие заново (node horo/fetch.js) и посмотри все картинки. 2) Реши КАЖДЫЙ вопрос с нуля, не "
+    "заглядывая в прошлые ответы, и только потом сравни. 3) Где ответы разошлись — разберись до конца, какой верный: "
+    "перечитай условие, проверь правила сайта из CLAUDE.md (регистр, точка в конце, форма слова, запятая в дробях, "
+    "лишние слова, порядок), пересчитай. Неверных вопросов столько, чтобы недобрать {miss} балл(ов) (баллы за вопрос — "
+    "в task.json, если есть). 4) Меняй ответ, только если уверен, что прошлый неверный; совпавшие ответы не трогай без "
+    "веской причины. 5) Запиши новый {d}/answers.json и запусти submit.js (он внесёт ответы, сдаст бот).\n"
+    "В ответе — список: какие вопросы изменил, было → стало и почему (одной строкой на вопрос), и что оставил.\n"
+)
+
+
+def prompt_for(url, text, show, retry=None):
     only_show = show or re.search(r"покажи|не отправляй|только ответ", text, re.I)
     how = (
         "Только реши и покажи ответы, на сайт НЕ отправляй (шаг 3 не делать)."
         if only_show
-        else "Реши и отправь (шаг 3). Если ответ неоднозначный, а попытка последняя, не отправляй, а напиши варианты."
+        else "Реши и внеси ответы (шаг 3): submit.js внесёт их, но тест НЕ сдаст — его сдаст бот позже сам, "
+        "строку БАЛЛЫ не пиши. Если ответ неоднозначный, а попытка последняя, submit.js не запускай, а напиши варианты."
     )
     task = drafts.task_id(url)
     d = f"horo/tmp/{task}"
+    again = RETRY.format(d=d, **retry) if retry else ""
     return (
         f"Задание: {url}\n"
-        f"Сделай его по инструкции из CLAUDE.md. {how}\n"
+        f"Сделай его по инструкции из CLAUDE.md. {how}\n" + again +
         f"Если это detailedAnswer, на сайт НЕ отправляй. Сделай черновик: текст для учителя запиши в {d}/draft.txt "
         "(каждая строка — абзац, только то, что пойдёт учителю). " + NO_COMMENT.format(d=d) + "Если нужны картинки (решение от руки на скриншоте, "
         f"заполненный лист), сделай их по CLAUDE.md и положи в {d}/draft_files/. Скрипт рисования клади в {d}/ и запускай "
@@ -988,9 +1056,9 @@ def verify(task, on_tool=None):
     return "Проверка: " + (m[-1].strip() if m else "готово")
 
 
-def solve(url, text="", show=False, on_tool=None):
+def solve(url, text="", show=False, on_tool=None, retry=None):
     """(успех, ответ Claude)."""
-    return claude(prompt_for(url, text, show), SOLVE_TOOLS, on_tool=on_tool)
+    return claude(prompt_for(url, text, show, retry), SOLVE_TOOLS, on_tool=on_tool)
 
 
 SCORE = re.compile(r"^[ \t*]*БАЛЛЫ:\s*(\d+(?:[.,]\d+)?)\s*(?:/\s*(\d+(?:[.,]\d+)?)|%)[^\n]*\n?", re.M | re.I)
@@ -1044,7 +1112,7 @@ def result_card(out, title="", secs=0, show=False):
     return "\n".join(lines), full
 
 
-def run_task(chat, url, text, show=False, mid=None):
+def run_task(chat, url, text, show=False, mid=None, retry=None):
     """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди."""
     task = drafts.task_id(url)
     with running_lock:
@@ -1052,14 +1120,14 @@ def run_task(chat, url, text, show=False, mid=None):
             send(chat, card("Это задание уже решаю", note="Результат придёт сюда", icon="⏳"), raw_html=True)
             return
         running.add(task)
-    mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show)})
+    mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
     try:
         if not lock.acquire(blocking=False):
             react(chat, mid, "🤔")
             send(chat, card("В очереди", note=f"Уже решаю {MAX_PARALLEL} — начну это, как только одно закончу",
                             icon="⏳"), raw_html=True)
             lock.acquire()
-        _run_task(chat, url, text, show, mid, task)
+        _run_task(chat, url, text, show, mid, task, retry)
     finally:
         with running_lock:
             running.discard(task)
@@ -1096,21 +1164,22 @@ def resume_active():
             s = load_settings()
             s.setdefault("active", {})[task] = {**a, "tries": a.get("tries", 0) + 1}
             save_settings(s)
-        threading.Thread(target=run_task, args=(a["chat"], a["url"], a.get("text", ""), a.get("show", False)),
-                         daemon=True).start()
+        threading.Thread(target=run_task, args=(a["chat"], a["url"], a.get("text", ""), a.get("show", False), None,
+                                                a.get("retry")), daemon=True).start()
 
 
-def _run_task(chat, url, text, show, mid, task):
+def _run_task(chat, url, text, show, mid, task, retry=None):
     try:
         t0 = time.time()
         react(chat, mid, "👀")
         drafts.clear(task)
-        live = Live(chat, "Смотрю ответы" if show else "Решаю задание", esc(drafts.task_info(task)[1]),
+        live = Live(chat, "Смотрю ответы" if show else "Вторая попытка: перепроверяю" if retry else "Решаю задание",
+                    esc(drafts.task_info(task)[1]),
                     sub_fn=lambda: esc(drafts.task_info(task)[1]))
         live.task = task
         live.step("Запускаю Claude", 0.05)
         try:
-            ok, out = solve(url, text, show, on_tool=live.tool)
+            ok, out = solve(url, text, show, on_tool=live.tool, **({"retry": retry} if retry else {}))
             if ok and hand_fresh(task, t0):  # решение от руки — перепроверить отдельно, как учитель
                 live.step("Перепроверяю решение", 0.8)
                 checked = verify(task, on_tool=live.tool)
@@ -1130,6 +1199,12 @@ def _run_task(chat, url, text, show, mid, task):
             react(chat, mid, "🤔")
             remember(title or "Задание", False, plain(out), url=url, show=show, secs=time.time() - t0)
             send(chat, err(out, esc(title)), menu=True, raw_html=True)
+            return
+        pend = None if show else defer_of(task, t0)
+        if pend:  # тест: ответы внесены, сдаст бот по таймеру
+            remember(title or "Тест", True, parse_score(out)[1], url=url, secs=time.time() - t0)
+            react(chat, mid, "👌")
+            schedule_test(chat, task, pend, title, out, tries=(retry or {}).get("k", 0))
             return
         result, full = result_card(out, title, time.time() - t0, show)
         has_draft = drafts.fresh(task, t0)
@@ -1515,6 +1590,21 @@ def waiting_card(now=None):
     timed, held, sending, work = waiting(now)
     today = datetime.datetime.fromtimestamp(now, MSK).date()
     parts, rows = ["⏳ <b>Ожидание</b>"], []
+    tests = sorted(pending_tests().values(), key=lambda t: t.get("at") or 0)
+    if tests:
+        lines = []
+        for t in tests:
+            if t.get("finishing"):
+                lines.append(f"🧪 {esc(t.get('title') or 'Тест')} — <b>сдаю сейчас</b>")
+                continue
+            if not t.get("at"):
+                lines.append(f"🧪 {esc(t.get('title') or 'Тест')} — <i>ждёт «Сдать сейчас»</i>")
+            else:
+                left = max(0, int(t["at"] - now))
+                lines.append(f"🧪 {esc(t.get('title') or 'Тест')} — <b>в {datetime.datetime.fromtimestamp(t['at'], MSK):%H:%M}</b>"
+                             f" <i>(через {left // 60} мин {left % 60} с)</i>")
+            rows.append([(f"⚡ {short(t.get('title'))}", f"tnow:{t['task']}"), ("✖ Не сдавать", f"tdrop:{t['task']}")])
+        parts.append("<b>Сдам тесты</b>\n<blockquote>" + "\n".join(lines) + "</blockquote>")
     if timed:
         lines = []
         for d in timed:
@@ -1536,7 +1626,7 @@ def waiting_card(now=None):
         parts.append("<b>Решаю или в очереди</b>\n<blockquote>" + "\n".join(
             f"🧠 {esc(drafts.task_info(t)[1] or 'Задание')}" for t in work) + "</blockquote>")
     if len(parts) == 1:
-        parts.append("<i>Ничего не ждёт: таймеров на отправку нет, черновиков и заданий в работе тоже</i>")
+        parts.append("<i>Ничего не ждёт: тестов и таймеров на отправку нет, черновиков и заданий в работе тоже</i>")
     rows.append([("🔄 Обновить", "w:upd")])
     return "\n".join(parts), kb(*rows)
 
@@ -1549,12 +1639,202 @@ def send_waiting(chat, mid=None):
         send(chat, text, markup=markup, raw_html=True)
 
 
+# ---------- 🧪 Тест: решить сразу, сдать позже, при ошибке — вторая попытка ----------
+# Глеб, 15.10: «бот должен максимально быстро сделать тест и не отправить его, а написать, что он выполнен и будет
+# сдан через какое-то время» и «если тест сделан не правильно — проверь всё и сделай вторую попытку правильно».
+# submit.js под Claude (HORO_DEFER) вносит ответы и не сдаёт → defer.json; бот сдаёт сам по таймеру (--continue-only:
+# новую попытку при этом не начать). Не 100% — Claude перепроверяет каждый вопрос (RETRY) и вносит вторую попытку,
+# если после неё останется запасная; последнюю — только по кнопке Глеба.
+
+def defer_of(task, since):
+    """Ответы теста внесены, но не сдан (этим решением)? -> {url, answers, N, at} или None."""
+    try:
+        with open(os.path.join(drafts.task_dir(task), "defer.json")) as f:
+            d = json.load(f)
+        if float(d.get("at") or 0) / 1000 >= since - 1 and d.get("url") and d.get("answers"):
+            return d
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def test_delay(n):
+    """Через сколько сдать: как человек — 20–45 с на вопрос (1,5–6 мин); «как человек» выключено — сразу."""
+    if not human_on():
+        return 0
+    return max(90.0, min(360.0, sum(random.uniform(20, 45) for _ in range(max(1, int(n or 1))))))
+
+
+def pending_tests():
+    return dict(load_settings().get("tests") or {})
+
+
+def set_test(task, info):
+    with settings_lock:
+        s = load_settings()
+        ts = s.setdefault("tests", {})
+        if info is None:
+            ts.pop(task, None)
+        else:
+            ts[task] = info
+        save_settings(s)
+
+
+def test_kb(task):
+    return kb([("⚡ Сдать сейчас", f"tnow:{task}", "success"), ("✖ Не сдавать", f"tdrop:{task}")])
+
+
+def schedule_test(chat, task, pend, title, out="", tries=0, silent=False):
+    """Тест решён, ответы на сайте — сдать через test_delay (переживает перезапуск: settings → tests).
+    silent — без своей карточки (пачка автотестов пишет одну общую). -> время сдачи (epoch)."""
+    at = time.time() + test_delay(pend.get("N"))
+    set_test(task, {"task": task, "chat": chat, "url": pend["url"], "answers": pend["answers"], "title": title,
+                    "N": pend.get("N"), "at": at, "tries": tries})
+    if at - time.time() < 5:
+        threading.Thread(target=finish_test, args=(task,), daemon=True).start()
+        return at
+    if silent:
+        return at
+    body = md(parse_score(out)[1]) if out else ""
+    when = datetime.datetime.fromtimestamp(at, MSK)
+    note = f"Сдам в {when:%H:%M} (через {max(1, round((at - time.time()) / 60))} мин)" + (f" · {esc(title)}" if title else "")
+    head = "Вторая попытка готова — ответы внесены" if tries else "Тест решён — ответы внесены"
+    send(chat, card(head, body, note, "🧪"), markup=test_kb(task), raw_html=True)
+    return at
+
+
+def due_tests(now=None):
+    """Тесты, которым пора сдаваться (зовётся раз в 20 с)."""
+    now = now or time.time()
+    for t in pending_tests().values():
+        if t.get("finishing") or not t.get("at") or t["at"] > now:
+            continue
+        with settings_lock:  # Глеб мог нажать «Сдать сейчас» / «Не сдавать», пока шёл обход
+            s = load_settings()
+            cur = (s.get("tests") or {}).get(t["task"])
+            if not cur or cur.get("finishing") or not cur.get("at") or cur["at"] > now:
+                continue
+            cur["finishing"] = True
+            save_settings(s)
+        threading.Thread(target=finish_test, args=(t["task"],), daemon=True).start()
+
+
+TRIES = re.compile(r"^ПОПЫТКИ:\s*(\d+)\s*/\s*(\d+)", re.M)
+
+
+def finish_test(task):
+    """Сдать отложенный тест (тот же answers.json, только начатая попытка) и сообщить баллы."""
+    t = pending_tests().get(task)
+    if not t:
+        return
+    chat, title = t["chat"], t.get("title") or drafts.task_info(task)[1] or "Тест"
+    set_test(task, {**t, "finishing": True})
+    lock.acquire()  # браузер — как у задания (до HDP_PARALLEL сразу)
+    try:
+        ok, out = node("horo/submit.js", t["url"], t["answers"], "--continue-only", timeout=900)
+    finally:
+        lock.release()
+    if not ok:
+        if "Нет начатой попытки" in out:  # уже сдан (например, перезапуск после нажатия «Отправить»)
+            set_test(task, None)
+            send(chat, card("Тест уже сдан", note=f"{esc(title)} · баллы — на сайте", icon="✅"), menu=True, raw_html=True)
+            return
+        set_test(task, {**t, "finishing": False, "at": None})
+        send(chat, card("Не сдал тест", esc(plain(out)), esc(title), "⚠️"), markup=test_kb(task), raw_html=True)
+        return
+    set_test(task, None)
+    score, _ = parse_score(out)
+    m = TRIES.search(out)
+    used, avail = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    full = bool(score) and score[2] >= 100
+    if score:
+        got, total, pct = score
+        mark = "🏆" if full else "✅" if pct >= 70 else "📊"
+        head = f"{mark} <b>{num(got)} / {num(total)}</b> · {pct}%" if total else f"{mark} <b>{pct}%</b>"
+    else:
+        head = "✅ <b>Тест сдан</b>"
+    note = " · ".join(x for x in (esc(title), f"попыток {used} из {avail}" if used else "") if x)
+    remember(title, True, f"Сдан{': ' + num(score[0]) + '/' + num(score[1]) if score and score[1] else ''}",
+             score=score, url=t["url"])
+    send(chat, f"{head}\n<i>{note}</i>", menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
+    threading.Thread(target=refresh_overview, daemon=True).start()
+    if not score or full or not score[1] or used is None:
+        return
+    left = avail - used
+    info = {"got": num(score[0]), "total": num(score[1]), "miss": num(score[1] - score[0]), "k": t.get("tries", 0) + 1}
+    keep = os.path.join(drafts.task_dir(task), f"answers_try{info['k']}.json")
+    try:
+        shutil.copyfile(t["answers"], keep)  # Claude сравнит новые ответы с этими
+    except OSError:
+        pass
+    if t.get("tries", 0) == 0 and left >= 2:
+        send(chat, card("Не 100% — делаю вторую попытку", note=f"Перепроверю каждый вопрос и найду ошибку · после неё "
+                        f"останется ещё {left - 1}", icon="🔁"), raw_html=True)
+        threading.Thread(target=run_task, args=(chat, t["url"], "", False, None, info), daemon=True).start()
+    elif left >= 1:
+        set_offer(task, {**info, "url": t["url"], "title": title})
+        why = "осталась последняя попытка" if left == 1 else "вторую уже делал"
+        send(chat, card("Не 100%", note=f"{esc(title)} · {why} — пересдать?", icon="🔁"),
+             markup=kb([("🔁 Перепроверить и пересдать", f"tretry:{task}", "primary")]), raw_html=True)
+
+
+def set_offer(task, info):
+    with settings_lock:
+        s = load_settings()
+        offers = s.setdefault("retry_offers", {})
+        if info is None:
+            offers.pop(task, None)
+        else:
+            offers[task] = info
+        save_settings(s)
+
+
+def on_test_button(chat, cq, data):
+    """tnow:<задание> — сдать сейчас, tdrop: — не сдавать (ответы остаются на сайте), tretry: — пересдать."""
+    kind, _, task = data.partition(":")
+    if kind == "tretry":
+        offer = (load_settings().get("retry_offers") or {}).get(task)
+        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Перепроверяю…" if offer else "Уже не актуально")
+        if offer:
+            set_offer(task, None)
+            info = {k: offer[k] for k in ("got", "total", "miss", "k")}
+            threading.Thread(target=run_task, args=(chat, offer["url"], "", False, None, info), daemon=True).start()
+        return
+    t = pending_tests().get(task)
+    if not t:
+        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Тест уже сдан")
+        return
+    if kind == "tdrop":
+        set_test(task, None)
+        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Не сдаю")
+        send(chat, card("Не сдаю", note=f"{esc(t.get('title') or 'Тест')} — ответы остались на сайте, попытка не "
+                        "закрыта: сдать можно там", icon="👌"), menu=True, raw_html=True)
+        return
+    if t.get("finishing"):
+        quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Уже сдаю")
+        return
+    quiet("answerCallbackQuery", callback_query_id=cq["id"], text="Сдаю…")
+    set_test(task, {**t, "at": time.time()})
+    due_tests()
+
+
+def resume_tests():
+    """После перезапуска: сдача, прерванная на полпути, — ещё раз (--continue-only новую попытку не начнёт)."""
+    for t in pending_tests().values():
+        if t.get("finishing"):
+            set_test(t["task"], {**t, "finishing": False, "at": time.time() + 30})
+
+
 def sender_loop():
     while True:
         try:
             due_sends()
         except Exception as e:
             print("sender:", e)
+        try:
+            due_tests()
+        except Exception as e:
+            print("tests:", e)
         threading.Event().wait(20)
 
 
@@ -1642,6 +1922,9 @@ def on_callback(cq):
         return
     if data.startswith("mode:"):  # 💬 чат / 📱 приложение
         on_mode(chat, mid, cq["id"], data[5:])
+        return
+    if data.startswith(("tnow:", "tdrop:", "tretry:")):  # 🧪 отложенный тест: сдать сейчас / не сдавать / пересдать
+        on_test_button(chat, cq, data)
         return
     if data == "w:upd":  # ⏳ ожидание: обновить на месте
         quiet("answerCallbackQuery", callback_query_id=cq["id"])
@@ -2045,10 +2328,15 @@ def run_all(chat, tests):
                 live.title = f"Сдаю автотесты · {i + 1} из {n}"
                 live.reset(esc(t["title"]), i / n)
                 live.task, live.span = (re.findall(r"task/([0-9a-f-]{36})", t["url"]) or [None])[0], (i / n, (i + 1) / n)
+                t1 = time.time()
                 ok, out = solve(t["url"], on_tool=lambda name, inp: (lambda st: st and live.step(st[0], (i + st[1]) / n))(step_of(name, inp)))
                 score, body = parse_score(out) if ok else (None, out)
                 title = esc(t["title"] or f"Тест {i + 1}")
-                if score:
+                pend = defer_of(live.task, t1) if ok and live.task else None
+                if pend:  # ответы внесены — сдаст по таймеру, баллы придут отдельным сообщением
+                    at = schedule_test(chat, live.task, pend, t["title"] or f"Тест {i + 1}", silent=True)
+                    rows.append(f"🧪 {title} — сдам в {datetime.datetime.fromtimestamp(at, MSK):%H:%M}")
+                elif score:
                     got, total, pct = score
                     rows.append(f"{'🏆' if pct >= 100 else '✅' if pct >= 70 else '📊'} <b>{num(got)}/{num(total)}</b> · {title}"
                                 if total else f"📊 <b>{pct}%</b> · {title}")
@@ -2059,7 +2347,9 @@ def run_all(chat, tests):
             live.done()
         perfect = sum(r.startswith("🏆") for r in rows)
         remember(f"Автотесты · {n}", True, "\n".join(plain(r) for r in rows), secs=time.time() - t0)
-        send(chat, f"⚡ <b>Автотесты сданы: {n}</b>\n<blockquote>" + "\n".join(rows) + "</blockquote>\n"
+        later = sum(r.startswith("🧪") for r in rows)
+        send(chat, (f"⚡ <b>Автотесты решены: {n}</b> · сдам по таймеру, баллы пришлю\n<blockquote>" if later else
+                    f"⚡ <b>Автотесты сданы: {n}</b>\n<blockquote>") + "\n".join(rows) + "</blockquote>\n"
              "<blockquote expandable>" + "\n\n".join(details) + "</blockquote>\n"
              f"<i>Заняло {mmss(time.time() - t0)} · подробности — в свёрнутой цитате</i>",
              menu=True, raw_html=True, effect=EFFECT_CONFETTI if perfect == n else None)
@@ -3516,8 +3806,9 @@ def send_site(chat):
     if not link:
         send(chat, err("Сайт ещё запускается — попробуй через минуту"), menu=True, raw_html=True)
         return
-    send(chat, card("Сайт HDP", "Как платформа, но у каждого задания — «⚡ Сделать» и «👁 Ответы», "
-                    "у каждой темы — «📖 Подготовь меня».",
+    send(chat, card("Сайт HDP — копия платформы", "Всё как на horodigital.ru, один в один. Сверху — кнопки бота: у задания "
+                    "«⚡ Решить и сдать» / «👁 Ответы» / «✍️ Написать», у темы «📖 Подготовь меня» и «⚡ Автотесты», "
+                    "справа вкладка 🤖 — черновики, ожидание, подтверждения, настройки.",
                     "Ссылка входа одноразовая, живёт 15 минут. Браузер запомнит вход на 30 дней", "🌐"),
          markup=kb([("🌐 Открыть сайт", {"url": link}, "primary")]), raw_html=True)
 
@@ -3541,6 +3832,10 @@ def main():
         retry_alphabet()
     threading.Thread(target=alphabet_startup, daemon=True).start()
     threading.Thread(target=clean_inbox, daemon=True).start()
+    killed = kill_orphans()  # до resume_active: иначе старый и новый запуск сдают одно задание вдвоём
+    if killed:
+        print("остановил Claude прошлого запуска:", killed)
+    resume_tests()
     threading.Thread(target=sender_loop, daemon=True).start()
     threading.Thread(target=resume_active, daemon=True).start()  # задания, прерванные перезапуском  # отложенные «как человек» отправки учителю
     with settings_lock:
