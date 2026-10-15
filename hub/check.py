@@ -24,6 +24,8 @@ TEST_TIMEOUT = 420
 CRAWL = dict(depth=3, max=60, wait=6)
 PARALLEL_TESTS = 3  # у сервера 1 ядро: больше — только толкотня
 PARALLEL_CRAWL = 4
+# тяжёлые тесты почерка HDP (~5 мин на одном ядре сервера) — только в «🔬 Полностью»
+SLOW = {"horo/test_alphabet.py", "horo/test_sheet.py", "horo/test_table.py"}
 COMMON = "common"  # общие модули (kit, поддержка, медиа) — проверяются отдельной строкой
 running = threading.Lock()
 TRACE = re.compile(r"^Traceback \(most recent call last\):", re.M)
@@ -266,7 +268,7 @@ def check_all(full=False, live=None, now=time.time):
     for b in bots:
         if b["cwd"] == ui.REPO:
             b["cwd"] = base
-    jobs = [(b["pm2"], b["cwd"], rel, cmd) for b in bots for rel, cmd in tests_of(b)]
+    jobs = [(b["pm2"], b["cwd"], rel, cmd) for b in bots for rel, cmd in tests_of(b) if full or rel not in SLOW]
     common = [(COMMON, base, os.path.relpath(p, base), ["python3", os.path.relpath(p, base)])
               for p in sorted(glob.glob(os.path.join(base, COMMON, "test_*.py")))]
     if common:
@@ -361,8 +363,8 @@ def ask(chat, mid=None):
         foot = (f"<i>Прошлая: {time.strftime('%d.%m %H:%M', time.localtime(last['at']))} · "
                 + (f"проблемы у {bad}" if bad else "всё в порядке") + "</i>")
     lines = ["Проверю всех ботов, и себя тоже, — всё параллельно:",
-             "• ⚡ <b>Быстро</b> (1–3 мин): работают ли, новые ошибки в логах, все тесты и обход всех кнопок без сети",
-             "• 🔬 <b>Полностью</b> (5–10 мин): то же + нажму все кнопки вживую в Telegram с твоего аккаунта "
+             "• ⚡ <b>Быстро</b> (~3 мин): работают ли, новые ошибки в логах, все тесты и обход всех кнопок без сети",
+             "• 🔬 <b>Полностью</b> (~10 мин): то же + тесты почерка и все кнопки вживую в Telegram с твоего аккаунта "
              "(опасные — отправить, заказать, создать — не жму)"]
     btns = [[ui.b("⚡ Быстро", "chk|run", "primary"), ui.b("🔬 Полностью", "chk|full")]]
     if last:

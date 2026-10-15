@@ -1336,6 +1336,8 @@ class AgentTest(BotTest):
         getme = json.dumps({"ok": True, "result": {"username": "secretary_bot"}}).encode()
         patches = [
             mock.patch.object(bot, "AGENT_ENV", self.env),
+            # на сервере Главный стоит (/etc/hub-bot.env) — тест не должен от этого зависеть
+            mock.patch.object(bot, "HUB_ENV", os.path.join(self.tmp.name, "нет-главного.env")),
             mock.patch.object(bot.urllib.request, "urlopen", lambda *a, **k: __import__("io").BytesIO(getme)),
             mock.patch.object(bot, "forget", lambda chat, mid: self.deleted.append(mid)),
             mock.patch.object(bot.subprocess, "run", lambda cmd, **k: self.runs.append(cmd) or mock.Mock(
