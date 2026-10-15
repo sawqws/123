@@ -111,7 +111,7 @@
   }
 
   // ---------- графики (SVG без библиотек) ----------
-  const chartW = () => Math.max(200, Math.min(($('#app') || view).clientWidth || 358, 720) - 36);
+  const chartW = () => Math.max(200, Math.min(($('#app') || view).clientWidth || 358, 800) - 40);  // карточка: padding 20 + 20
   const CH = 112, LAB = 22;
   function xLabels(days, W, slot) {
     const n = days.length, fits = Math.max(2, Math.floor(W / (n <= 7 ? 30 : 58)));
@@ -588,7 +588,7 @@
     if (per !== 'day' && x.days) {
       const zb = (n, c) => n ? `<span style="flex:${n};background:${c}"></span>` : '';
       h += `<div class="zones">${zb(x.green, C.green)}${zb(x.yellow, C.yellow)}${zb(x.red, C.red)}</div>
-        <p class="small muted num">🟢 ${x.green} · 🟡 ${x.yellow} · 🔴 ${x.red} ${plural(x.days, 'день', 'дня', 'дней')} · отбой в среднем ${x.bed != null ? esc(clockH(x.bed)) : '—'}${x.bed_spread != null ? ` ±${num(x.bed_spread * 60)} мин` : ''}</p>`;
+        <p class="small muted num">🟢 ${x.green} · 🟡 ${x.yellow} · 🔴 ${x.red} из ${x.days} дн. · отбой в среднем ${x.bed != null ? esc(clockH(x.bed)) : '—'}${x.bed_spread != null ? ` ±${num(x.bed_spread * 60)} мин` : ''}</p>`;
     }
     h += `<div class="label">Итог и советы</div>`;
     if (z.text) h += `<div class="card prose">${md(z.text)}</div><button class="btn sm ghost" data-a="sum-make" data-v="${per}">Обновить советы</button>`;

@@ -1243,6 +1243,51 @@ class ErrCheckTest(unittest.TestCase):
                     self.assertLessEqual(len(x["text"]), 24, x["text"])
 
 
+class ClaudeSandboxTest(unittest.TestCase):
+    """Claude, которому показывают фото, не должен читать системные папки (текст на картинке бывает «приказом»)."""
+
+    def test_read_closed_outside_work_and_copies_removed(self):
+        src = os.path.join(tempfile.mkdtemp(), "pic.jpg")
+        open(src, "wb").write(b"jpg")
+        seen = {}
+
+        def run(cmd, **kw):
+            seen["cmd"] = cmd
+            seen["copies"] = [c for c in os.listdir(ai.WORK) if c.startswith("photo-")]
+            return mock.Mock(returncode=0, stdout=json.dumps({"result": "ок"}), stderr="")
+        before = set(os.listdir(ai.WORK)) if os.path.isdir(ai.WORK) else set()
+        with mock.patch.object(ai.subprocess, "run", run):
+            self.assertEqual(ai.claude("вопрос", image=src), "ок")
+        cmd = seen["cmd"]
+        for d in ("etc", "root", "home", "var"):
+            self.assertIn(f"Read(//{d}/**)", cmd)
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "Read")
+        self.assertNotIn("Bash", cmd[cmd.index("--allowedTools"):cmd.index("--disallowedTools")])
+        self.assertTrue(seen["copies"])  # копия была на время ответа…
+        self.assertEqual(set(os.listdir(ai.WORK)) - before, set())  # …и не осталась на диске
+
+
+class CleanupTest(unittest.TestCase):
+    def test_old_photos_removed_new_kept(self):
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "photos", "1"))
+        old, new = (os.path.join(root, "photos", "1", n) for n in ("old.jpg", "new.jpg"))
+        for f in (old, new):
+            open(f, "wb").write(b"x")
+        long_ago = time.time() - 5 * 86400
+        os.utime(old, (long_ago, long_ago))
+        with mock.patch.object(coach, "DATA", root):
+            coach.clean_photos()
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(new))
+
+    def test_take_is_atomic(self):
+        with mock.patch.object(coach, "busy", set()):
+            self.assertTrue(coach.take(7))
+            self.assertFalse(coach.take(7))
+            self.assertTrue(coach.take(7, force=True))
+
+
 class WhoopHttpTest(unittest.TestCase):
     """WHOOP за Cloudflare: «Python-urllib» режется (403, error 1010) — шлём нормальные заголовки, отказ — через curl."""
 
