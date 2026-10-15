@@ -336,6 +336,7 @@ def apps():
         res.append({
             "name": r.get("name"), "label": label(r.get("name")),
             "status": env.get("status") or "?", "restarts": env.get("restart_time") or 0,
+            "exit": env.get("exit_code"),
             "uptime": max(0, time.time() - up / 1000) if up and env.get("status") == "online" else 0,
             "mem": round((mon.get("memory") or 0) / 1048576), "cpu": mon.get("cpu") or 0,
         })
@@ -1023,8 +1024,13 @@ def watch_once(now=None):
                     if s["alerted"]:
                         out.append((f"🟢 <b>{esc(short(a['label']))} снова работает</b>", None))
                     s["bad"], s["alerted"] = 0, False
-                # перезапуски по кругу: +3 за 10 минут
-                s["hist"] = [h for h in s["hist"] if now - h[0] < 600] + [[now, a["restarts"]]]
+                # перезапуски по кругу: +3 падения за 10 минут. Плановый перезапуск (обновление, кнопка,
+                # pm2 restart) выходит с кодом 0 — он не падение, иначе 3 обновления подряд = ложная тревога у всех
+                last = s.get("last_r", a["restarts"])
+                if a["restarts"] > last and a.get("exit") != 0:
+                    s["crashes"] = s.get("crashes", 0) + a["restarts"] - last
+                s["last_r"] = a["restarts"]
+                s["hist"] = [h for h in s["hist"] if now - h[0] < 600] + [[now, s.get("crashes", 0)]]
                 if s["hist"][-1][1] - s["hist"][0][1] >= 3 and now - s.get("loop_at", 0) > 3600:
                     s["loop_at"] = now
                     out.append((card(f"🟠 <b>{esc(short(a['label']))} падает и перезапускается</b>",

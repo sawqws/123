@@ -28,9 +28,11 @@ U = 7
 
 
 def jlist(**status):
-    return json.dumps([{"name": n, "pm2_env": {"status": s, "pm_uptime": (time.time() - 7200) * 1000,
-                                               "restart_time": r}, "monit": {"memory": 50 * 1048576, "cpu": 1}}
-                       for n, (s, r) in status.items()])
+    """status: имя → (статус, перезапусков[, код последнего выхода — по умолчанию 1, падение])."""
+    return json.dumps([{"name": n, "pm2_env": {"status": v[0], "pm_uptime": (time.time() - 7200) * 1000,
+                                               "restart_time": v[1], "exit_code": v[2] if len(v) > 2 else 1},
+                        "monit": {"memory": 50 * 1048576, "cpu": 1}}
+                       for n, v in status.items()])
 
 
 class Base(unittest.TestCase):
@@ -190,6 +192,16 @@ class HubTest(Base):
         self.assertIn("перезапускается", out[0][0])
         self.pm2["horo-bot"] = ("online", 9)
         self.assertEqual(hub.watch_once(now + 240), [])  # не чаще раза в час
+
+    def test_planned_restarts_are_not_a_loop(self):
+        """3 обновления подряд (pm2 restart, код выхода 0) — не «падает и перезапускается»."""
+        now = time.time()
+        hub.watch_once(now)
+        for i in range(1, 6):
+            self.pm2["horo-bot"] = ("online", 1 + i, 0)
+            self.assertEqual(hub.watch_once(now + 60 * i), [])
+        self.pm2["horo-bot"] = ("online", 9, 1)  # а настоящие падения после них — тревога
+        self.assertIn("перезапускается", hub.watch_once(now + 400)[0][0])
 
     def test_install_by_token(self):
         tok = "8730000000:AAH" + "z" * 32
