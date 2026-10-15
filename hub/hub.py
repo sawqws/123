@@ -914,10 +914,11 @@ HDP_WAIT = 15 * 60  # дольше не ждём: задание, видимо, 
 
 
 def hdp_busy():
-    """Сколько заданий HDP-бот решает прямо сейчас (его bot_settings.json → active)."""
+    """Сколько заданий HDP-бот решает или сдаёт прямо сейчас (его bot_settings.json: active и тесты в сдаче)."""
     try:
         with open(HDP_SETTINGS) as f:
-            return len(json.load(f).get("active") or {})
+            s = json.load(f)
+        return len(s.get("active") or {}) + sum(bool(t.get("finishing")) for t in (s.get("tests") or {}).values())
     except (OSError, ValueError, AttributeError):
         return 0
 
