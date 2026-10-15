@@ -157,6 +157,41 @@ for _bp in (os.path.join(_here, 'fonts', 'gleb.npz'), os.path.join(_here, 'tmp',
                     _bw = (_cols.max() + 1) * _px if len(_cols) else _a.shape[1] * _px
                     STAMPS.setdefault(chr(int(_k.split('_')[0])), []).append((_a, _l, _t, _px, _bw))
 
+# gleb_live.npz — буквы, вырезанные из его настоящих записей на скриншотах заданий (Глеб, 15.10: «посмотри, как я пишу,
+# и сделай такой же почерк, без выдумок»): ставятся картинкой, как есть, раньше букв с листа алфавита.
+LIVE = {}
+LIVE_GAP = 0.12   # промежуток между буквами у него в записях, в высотах строчной
+LIVE_SPACE = 0.85  # пробел между словами
+_lp = os.path.join(_here, 'fonts', 'gleb_live.npz')
+if os.path.exists(_lp):
+    _z = np.load(_lp)
+    for _k in sorted({k[:-1] for k in _z.files}, key=lambda k: (int(k.split('_')[0]), int(k.split('_')[1]))):
+        _a = _z[_k + 's'].astype(np.float32) / 255
+        _l, _t, _px = map(float, _z[_k + 'm'])
+        _rows = (_t - np.arange(_a.shape[0]) * _px)
+        _body = _a[(_rows > 0.05) & (_rows < 1.0)]
+        _cols = np.nonzero((_body if len(_body) else _a).max(0) > 0.3)[0]
+        _bw = (_cols.max() + 1) * _px if len(_cols) else _a.shape[1] * _px
+        LIVE.setdefault(chr(int(_k.split('_')[0])), []).append((_a, _l, _t, _px, _bw))
+
+BOLD = 0.2   # толщина его пера в записях — в высотах строчной (на листе алфавита он писал тоньше, ~0.11)
+_bolded = {}
+
+
+def _bold(st):
+    """Буква с листа алфавита пером его записей: штрих утолщается до BOLD, форма та же."""
+    a, left, top, px, bw = st
+    if id(a) not in _bolded:
+        m = a > 0.5
+        dt = ndimage.distance_transform_edt(m)
+        cur = 2 * np.percentile(dt[m], 90) if m.any() else 1
+        add = max(0.0, (BOLD / px - cur) / 2)
+        pad = int(add) + 2
+        out = ndimage.distance_transform_edt(~np.pad(m, pad))
+        b = np.maximum(np.clip(add + 0.7 - out, 0, 1), np.pad(a, pad)).astype(np.float32)
+        _bolded[id(a)] = (b, left - pad * px, top + pad * px, px, bw)
+    return _bolded[id(a)]
+
 # латинские буквы, которые пишутся как русские (их нет в алфавите отдельно), и наоборот
 ALIAS = dict(zip('aceopxyACEHKMOPTXB', 'асеорхуАСЕНКМОРТХВ'))
 ALIAS.update({v: k for k, v in ALIAS.items()})
@@ -253,6 +288,7 @@ class Hand:
         self.exact = exact   # его буквы из алфавита — как на листе, без случайного размера и промежутков
         self.stamps = None
         self.last = {}
+        self.turn = {}
 
     # ---------- перо ----------
     def _dots(self, pts):
@@ -269,9 +305,18 @@ class Hand:
         """Раскладка строки: (символ, x, подъём, масштаб, искажение) и ширина в px."""
         xh, m = size * XH, self.m
         out, x = [], 0.0
+        live = self.exact and any(ch in LIVE or ALIAS.get(ch) in LIVE for ch in s)
         for ch in s:
             if ch == ' ':
-                x += xh * (0.7 if self.exact else random.uniform(0.55, 0.85)); continue
+                x += xh * ((LIVE_SPACE if live else 0.7) if self.exact else random.uniform(0.55, 0.85)); continue
+            lv = (LIVE.get(ch) or (LIVE.get(ALIAS.get(ch)) if ch in 'аеосу' else None)) if self.exact else None
+            if lv:  # его буква из настоящей записи: варианты по очереди — одинаковые буквы разные, как у него
+                i = self.turn.get(ch, 0) % len(lv)
+                self.turn[ch] = self.turn.get(ch, 0) + 1
+                a, left, top, px, bw = lv[i]
+                out.append((ch, x, 0.0, xh, dict(stamp=(a, left, top, px))))
+                x += (left + bw) * xh + xh * LIVE_GAP
+                continue
             sup = ch in '²³⁴⁵'
             dot = ch == '·' and '·' not in BANK and '.' in BANK  # точка умножения — его точка, поднятая к середине
             c = {'²': '2', '³': '3', '⁴': '4', '⁵': '5', '−': '-', '–': '-', '·': '.' if dot else '·'}.get(ch, ch)
@@ -279,7 +324,7 @@ class Hand:
                 c = ALIAS[c]
             st = (STAMPS.get(ch) or STAMPS.get(c)) if self.exact else None
             if st:  # его буква как на листе: тот же размер, ровно на строке, одинаковый промежуток
-                a, left, top, px, bw = st[0]
+                a, left, top, px, bw = _bold(st[0]) if live or LIVE else st[0]
                 kk = xh * (0.68 if sup else 1.0) * _even(c, a, top, px)   # ² ³ — та же его цифра, поменьше и выше строки
                 up = xh * 0.8 if sup else 0.0
                 if sup:
