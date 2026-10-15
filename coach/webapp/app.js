@@ -1,6 +1,36 @@
 /* Форма — приложение тренера внутри Telegram. Общий вид — kit.css/kit.js, здесь только своё. Без сборки. */
 (() => {
-  const { tg, esc, api, toast, haptic, sheet, busy } = Kit;
+  const { tg, esc, api, toast, haptic, busy } = Kit;
+  // лист снизу, как в iOS: тянется пальцем вниз и закрывается, если отпустить ниже трети или смахнуть
+  function sheet(html, onClose) {
+    const el = Kit.sheet(html, onClose), back = el.previousElementSibling;
+    let y0 = null, t0 = 0, dy = 0, drag = false;
+    el.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1 || e.target.closest('input, textarea, select, .seg, .chips')) return;
+      y0 = e.touches[0].clientY; t0 = performance.now(); dy = 0; drag = false;
+    }, { passive: true });
+    el.addEventListener('touchmove', e => {
+      if (y0 == null) return;
+      const d = e.touches[0].clientY - y0;
+      if (!drag) { if (d > 6 && el.scrollTop <= 0) { drag = true; el.classList.add('dragging'); if (back) back.style.transition = 'none'; } else if (Math.abs(d) > 6) { y0 = null; return; } else return; }
+      e.preventDefault();
+      dy = Math.max(0, d) + Math.min(0, d) * .15;  // вверх — с сопротивлением, как резинка
+      el.style.transform = `translateY(${dy}px)`;
+      if (back) back.style.opacity = String(Math.max(0, 1 - dy / (el.offsetHeight || 600)));
+    }, { passive: false });
+    const end = () => {
+      if (y0 == null) return;
+      y0 = null;
+      if (!drag) return;
+      const v = dy / Math.max(1, performance.now() - t0);
+      el.classList.remove('dragging');
+      if (back) { back.style.transition = ''; back.style.opacity = ''; }
+      el.style.transform = '';
+      if (dy > el.offsetHeight / 3 || v > .5) { haptic('select'); el.close(); }
+    };
+    el.addEventListener('touchend', end); el.addEventListener('touchcancel', end);
+    return el;
+  }
   const $ = (s, el = document) => el.querySelector(s);
   // Плавающая «🛠» создаётся из body[data-support], но пока атрибут стоит на body, kit.js считает «поддержкой» любой тап по странице
   // (closest('[data-support]') находит body) — создаём кнопку сами и снимаем атрибут.
@@ -153,9 +183,10 @@
     });
   }
   // переходы между экранами как в iOS: View Transitions (iOS 18+, Chrome), иначе — въезд нового экрана
-  function nav(kind, fn) {
+  function nav(kind, fn, plain) {
     const root = document.documentElement;
     if (REDUCED.matches) { fn(); return; }
+    if (plain) { S.navKind = kind; try { fn(); } finally { S.navKind = null; } return; }
     // переход ещё идёт (двойной тап): ждём, пока он применит своё состояние, и только потом наше — иначе старое перезапишет новое
     if (S.vt) { S.vt.updateCallbackDone.catch(() => {}).finally(() => { S.navKind = kind; try { fn(); } finally { S.navKind = null; } }); return; }
     if (document.startViewTransition) {
@@ -264,6 +295,8 @@
     if (!S.data) return;
     const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: foodView, coach: coachView }[S.tab])();
     view.removeAttribute('aria-busy');
+    const rz = (S.dayData || S.data.today || {}).recovery;  // цвет восстановления — в живой фон
+    document.documentElement.style.setProperty('--zc', rz ? C[rz.zone] : 'var(--rec-blue)');
     if (revealer) revealer.disconnect();
     // «назад» возвращает прежний экран как был — без повторного набегания цифр и колец
     const moving = (anim || S.navKind || S.inVT) && !S.popping;
@@ -547,10 +580,10 @@
     S.screen = kind; S.screenArg = arg;
     nav('push', () => { render(true); window.scrollTo(0, 0); });
   }
-  function closeScreen() {
+  function closeScreen(swiped) {  // swiped — экран уже уехал пальцем: прежний просто въезжает, без второго перехода
     haptic('select');
     S.screen = null;
-    nav('pop', () => { S.popping = true; try { render(false); } finally { S.popping = false; } window.scrollTo(0, S.scrollY || 0); });
+    nav('pop', () => { S.popping = true; try { render(false); } finally { S.popping = false; } window.scrollTo(0, S.scrollY || 0); }, swiped === true);
   }
   const dHead = (title, sub, color) => `<header class="dhead"><button class="avatar ghost" data-a="back" aria-label="Назад">${I.back}</button>
     <div class="titles"><h1 style="--c:${color}">${title}</h1><div class="sub">${sub}</div></div></header>`;
@@ -1134,6 +1167,40 @@
       else eat();
     }
   });
+  // шапка становится стеклянной, когда под ней поехало содержимое (как навигация iOS)
+  let scTick = false;
+  addEventListener('scroll', () => {
+    if (scTick) return; scTick = true;
+    requestAnimationFrame(() => { scTick = false; document.body.classList.toggle('scrolled', window.scrollY > 6); });
+  }, { passive: true });
+  // свайп от левого края — «назад», как в iOS: экран едет за пальцем, отпустил дальше трети или смахнул — закрылся
+  (() => {
+    let x0 = null, y0 = 0, t0 = 0, dx = 0, on = false;
+    addEventListener('touchstart', e => {
+      if (!S.screen || e.touches.length !== 1 || document.querySelector('.sheet') || e.touches[0].clientX > 26) return;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = performance.now(); dx = 0; on = false;
+    }, { passive: true });
+    addEventListener('touchmove', e => {
+      if (x0 == null) return;
+      const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+      if (!on) { if (mx > 8 && Math.abs(mx) > Math.abs(my) * 1.4) { on = true; view.classList.add('swiping'); } else if (Math.abs(my) > 10) { x0 = null; return; } else return; }
+      e.preventDefault();
+      dx = Math.max(0, mx);
+      view.style.transform = `translate3d(${dx}px,0,0)`;
+      view.style.boxShadow = '-20px 0 40px rgba(0,0,0,.45)';
+    }, { passive: false });
+    const end = () => {
+      if (x0 == null) return;
+      x0 = null;
+      if (!on) return;
+      const v = dx / Math.max(1, performance.now() - t0), w = view.offsetWidth || innerWidth;
+      const reset = () => { view.classList.remove('swipe-end'); view.style.transform = ''; view.style.boxShadow = ''; };
+      view.classList.remove('swiping'); view.classList.add('swipe-end');
+      if (dx > w / 3 || v > .45) { view.style.transform = `translate3d(${w}px,0,0)`; setTimeout(() => { reset(); closeScreen(true); }, 300); }
+      else { view.style.transform = 'translate3d(0,0,0)'; setTimeout(reset, 380); }
+    };
+    addEventListener('touchend', end); addEventListener('touchcancel', end);
+  })();
   let rw = window.innerWidth;
   window.addEventListener('resize', () => { if (Math.abs(window.innerWidth - rw) > 20 && S.tab === 'trends') { rw = window.innerWidth; render(false); } });
 
