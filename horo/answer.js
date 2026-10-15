@@ -3,7 +3,7 @@
 // Файлы (фото, pdf) прикрепляются к ответу.
 // Каждая строка файла становится отдельным абзацем.
 const fs = require('fs');
-const { open, close, api, parseUrl, loadTask, htmlToText, EDU } = require('./lib');
+const { open, close, api, parseUrl, loadTask, htmlToText, EDU, getDraft, clearDraft, draftEmpty } = require('./lib');
 
 const args = process.argv.slice(2);
 const replace = args.includes('--replace');  // удалить свой непроверенный ответ и отправить заново
@@ -77,6 +77,15 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     console.log(`Статус: ${p.status.type}`);
     console.log('Отправлено:\n' + (last ? htmlToText(last.answer.text) : '(ответ не найден)'));
     if (last) console.log('Прикреплено файлов: ' + last.answer.attachments.length + (last.answer.attachments.length ? ' (' + last.answer.attachments.map(a => a.fileName).join(', ') + ')' : ''));
+    // поле ответа на сайте — пустое: сайт сам сохраняет черновик, пока в поле что-то есть, и после отправки
+    // в нём оставались те же текст и файлы. Ждём, пока он допишет своё, и чистим (ещё раз, если успел вернуть)
+    for (let k = 0; k < 3; k++) {
+      await page.waitForTimeout(3000);
+      await clearDraft(page, p.uuid).catch(e => console.log('  черновик сайта: ' + e.message.split('\n')[0]));
+      await page.waitForTimeout(2000);
+      if (draftEmpty(await getDraft(page, p.uuid))) break;
+    }
+    console.log('Поле ответа на сайте: ' + (draftEmpty(await getDraft(page, p.uuid)) ? 'пустое' : 'НЕ пустое'));
     if (attach.length && (!last || last.answer.attachments.length < attach.length)) {
       // дошли не все картинки — это ошибка, а не «успех»: учитель получит неполный ответ
       throw new Error(`Прикрепилось файлов ${last ? last.answer.attachments.length : 0} из ${attach.length} — ответ неполный, отправь заново с --replace`);
