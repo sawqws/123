@@ -16,7 +16,8 @@
 
 .hero .btn.icon { background: rgba(255, 255, 255, .08); border: 0; color: var(--ink); font-size: 19px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 0 0 1px rgba(255, 255, 255, .08), 0 10px 24px -14px rgba(0, 0, 0, .9); }
-.hero .btn.icon.loading span { display: inline-block; line-height: 1; animation: kit-spin .9s linear infinite; }
+.hero .btn.icon span { display: inline-grid; place-items: center; width: 1em; height: 1em; line-height: 1; }  /* квадрат — крутится вокруг центра, кнопка не «пляшет» */
+.hero .btn.icon.loading span { transform-origin: 50% 50%; animation: kit-spin .9s linear infinite; }
 
 /* ---------- главное действие: ссылка на задание ---------- */
 .solve { padding: 20px; }
@@ -193,3 +194,12 @@
 /* второстепенные кнопки — прозрачные стеклянные капсулы (главная — золотое стекло из kit) */
 .btn.tonal { background: rgba(255, 255, 255, .08); color: var(--ink);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), inset 0 0 0 1px rgba(255, 255, 255, .08); }
+
+/* iPad и широкие окна: колонка шире, чем на телефоне (560 px там выглядит узкой полосой), но не растягивается на весь экран */
+@media (min-width: 760px) {
+  #app { max-width: 720px; }
+  .tabbar { width: min(calc(100% - 32px), 640px); }
+  .sheet { max-width: 680px; }
+  .hero h1 { font-size: 34px; }
+  .stat .v { font-size: 34px; }
+}

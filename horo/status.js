@@ -55,7 +55,7 @@ function render(rows, onlyLate, html) {
 async function collect(page, disc) {
   const q = `${EDU}/topics?tasksLevelId[0]=1&tasksLevelId[1]=2&tasksLevelId[2]=3`
     + '&tasksProgressStatus[0]=reworking&tasksProgressStatus[1]=failed&tasksProgressStatus[2]=appointed&onlyDebts=false';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });  // YYYY-MM-DD по Москве, а не по UTC сервера
   const rows = [];
   for (const tp of await api(page, q)) for (const t of tp.tasks) {
     const st = t.progress.status.type;

@@ -63,6 +63,7 @@ REPO = os.path.dirname(HERE)
 NAME = "Форма"
 SYNC_EVERY = 15 * 60
 SYNC_MORNING = 5 * 60  # утром, пока ждём сон для разбора
+SYNC_RETRY = 10 * 60  # после неудачной загрузки WHOOP — не раньше чем через 10 минут
 
 db = store.Store(os.environ.get("COACH_DB") or os.path.join(DATA, "coach.db"))
 public_url = os.environ.get("COACH_URL", "").rstrip("/")
@@ -70,6 +71,16 @@ SUP = None  # 🛠 поддержка (common/support.py) — ставит main(
 offset = 0
 https_note = "запускается"
 busy = set()  # пользователи, для которых сейчас думает Claude
+_busy_lock = threading.Lock()
+
+
+def take(uid, force=False):
+    """Занять «думаю» для пользователя разом: проверка и пометка под замком (два потока не пройдут оба)."""
+    with _busy_lock:
+        if uid in busy and not force:
+            return False
+        busy.add(uid)
+        return True
 
 
 def esc(x):
@@ -411,7 +422,7 @@ def setup_text():
                note="Это ключ доступа, а не новое приложение. Секрет храню на сервере, сообщение с ним удалю.")
 
 
-def connect(chat, uid):
+def connect(chat, uid, again=False):
     cid, sec = creds()
     if not (cid and sec):
         send(chat, setup_text(), [[{"text": "🌐 WHOOP Developer", "url": DEV_DASHBOARD}]])
@@ -421,7 +432,7 @@ def connect(chat, uid):
         send(chat, err("Адрес приложения ещё не готов — повтори /connect через минуту (/status)."))
         return
     send(chat, box("🔗", "Подключение WHOOP", "Нажми кнопку, войди в WHOOP и разреши доступ — потом вернись сюда."),
-         [[{"text": "Подключить WHOOP", "url": link, "style": "success"}]])
+         [[{"text": "🔄 Подключить снова" if again else "Подключить WHOOP", "url": link, "style": "success"}]])
 
 
 def finish_connect(state, code):
@@ -439,9 +450,12 @@ def finish_connect(state, code):
         db.mark_synced(uid)  # первую загрузку делает first_sync, расписание пусть не дублирует
     except Exception as e:
         print("whoop exchange:", e)
+        why = ("WHOOP не пустил сервер (защита Cloudflare)" if whoop.blocked(403, str(e))
+               else "Код входа устарел — WHOOP его не принял" if any(c in str(e) for c in ("400", "401"))
+               else "WHOOP сейчас не отвечает")
         try:  # новая кнопка сразу в чат — писать /connect не нужно
-            send(uid, err("WHOOP не принял вход — вот новая кнопка, попробуй ещё раз."))
-            connect(uid, uid)
+            send(uid, err(f"Вход в WHOOP не получился: {why}. Нажми «Подключить снова» — займёт минуту."))
+            connect(uid, uid, again=True)
         except Exception as e2:
             print("reconnect:", e2)
         return False, "WHOOP не принял вход. Новая кнопка уже в Telegram."
@@ -585,10 +599,9 @@ def short(md, lines=5, chars=600):
 def progress_report(uid, chat=None, week=False):
     """Разбор прогресса за 60 дней (или итог недели — week=True). В чат — только итог, весь разбор — в приложении."""
     chat = chat or uid
-    if uid in busy:
+    if not take(uid):
         send(chat, BUSY)
         return
-    busy.add(uid)
     try:
         typing(chat)
         day = today_of(uid)
@@ -615,9 +628,8 @@ def progress_report(uid, chat=None, week=False):
 def morning_brief(uid, chat=None, force=False):
     """Разбор дня. True — отправлено (или сказано, что данных нет), False — занят другим ответом."""
     chat = chat or uid
-    if uid in busy and not force:
+    if not take(uid, force):
         return False
-    busy.add(uid)
     try:
         typing(chat)
         text, t = context(uid)
@@ -644,9 +656,8 @@ def morning_brief(uid, chat=None, force=False):
 
 def morning_early(uid):
     """Утро, а сна за ночь нет (WHOOP не посчитал или браслет не надет): план по вчерашнему дню."""
-    if uid in busy:
+    if not take(uid):
         return False
-    busy.add(uid)
     try:
         text, t = context(uid)
         try:
@@ -894,10 +905,9 @@ def summary_report(chat, uid, period="week"):
     """«📊 Сводка и советы» в чате: цифры за период против прошлого и советы Claude (кэш на день, как в приложении)."""
     if period not in dict(PERIODS):
         period = "week"
-    if uid in busy:
+    if not take(uid):
         send(chat, BUSY)
         return
-    busy.add(uid)
     try:
         typing(chat)
         today = today_of(uid)
@@ -1068,10 +1078,9 @@ def save_meal_and_reply(chat, uid, est):
 
 
 def log_meal(chat, uid, text="", photo=None):
-    if uid in busy:
+    if not take(uid):
         send(chat, BUSY)
         return
-    busy.add(uid)
     try:
         typing(chat)
         ctx, _ = context(uid)
@@ -1096,10 +1105,9 @@ def log_meal(chat, uid, text="", photo=None):
 
 def answer(chat, uid, question, photo=None):
     """Вопрос тренеру. В чат — коротко (до 5 строк); целиком ответ остаётся в приложении, во вкладке «Тренер»."""
-    if uid in busy:
+    if not take(uid):
         send(chat, BUSY)
         return
-    busy.add(uid)
     try:
         typing(chat)
         ctx, _ = context(uid)
@@ -1357,10 +1365,9 @@ def on_video(chat, uid, msg, wait=None):
             send(chat, f"🎙 «{esc(speech)}»")
             on_text(chat, uid, speech)
             return
-        if uid in busy:
+        if not take(uid):
             send(chat, BUSY)
             return
-        busy.add(uid)
         try:
             ctx, _ = context(uid)
             try:
@@ -1558,10 +1565,14 @@ def tick():
             age = time.time() - datetime.datetime.fromisoformat(last).timestamp() if last else 1e9
             every = SYNC_MORNING if morning_waiting(u, now) and night_ready(uid, now.date().isoformat()) != "full" \
                 else SYNC_EVERY
-            if age >= every:
+            failed = float(db.meta(f"sync_fail:{uid}") or 0)
+            if age >= every and time.time() - failed > SYNC_RETRY:  # после ошибки не долбим WHOOP каждую минуту
                 try:
                     sync_user(uid, days=3 if db.record_count(uid) else 60, quiet=not db.record_count(uid))
+                    if failed:
+                        db.meta(f"sync_fail:{uid}", 0)
                 except Exception as e:
+                    db.meta(f"sync_fail:{uid}", time.time())
                     print("sync:", uid, e)
             try:
                 maybe_morning(db.user(uid), now)
@@ -1574,11 +1585,32 @@ def tick():
                 print("evening:", e)
         # итог недели — воскресенье, 19:00
         if tok and now.weekday() == 6 and now.hour == 19 and db.once(f"week:{uid}:{now.date()}"):
-            threading.Thread(target=progress_report, args=(uid, uid, True), daemon=True).start()
+            bg(progress_report, uid, uid, True, chat=uid)
+
+
+def clean_photos(days=3):
+    """Присланные фото нужны Claude только на время ответа — старше days дней удаляем (иначе диск растёт без конца)."""
+    root = os.path.join(DATA, "photos")
+    cut = time.time() - days * 86400
+    for dirpath, _, files in os.walk(root):
+        for f in files:
+            fp = os.path.join(dirpath, f)
+            try:
+                if os.path.getmtime(fp) < cut:
+                    os.remove(fp)
+            except OSError:
+                pass
 
 
 def scheduler():
+    last_clean = 0
     while True:
+        if time.time() - last_clean > 6 * 3600:
+            last_clean = time.time()
+            try:
+                clean_photos()
+            except Exception as e:
+                print("clean:", e)
         try:
             tick()
         except Exception as e:
@@ -1615,6 +1647,7 @@ box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 0 0 0 1px rgba(240,210,150,.
 
 class Web(BaseHTTPRequestHandler):
     server_version = "Forma/1"
+    timeout = 60  # медленный или оборванный клиент не держит поток вечно
 
     def log_message(self, fmt, *args):
         pass
@@ -1665,7 +1698,7 @@ class Web(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         try:
-            n = int(self.headers.get("Content-Length") or 0)
+            n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
             limit = MAX_PHOTO * 4 // 3 + 4096 if path == "/api/photo" else 1_000_000  # фото — base64
             if n > limit:
                 return self.reply(413, {"error": "слишком большой файл"})

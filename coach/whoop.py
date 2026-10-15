@@ -8,6 +8,8 @@
 """
 import datetime
 import json
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -25,8 +27,60 @@ PATHS = {
     "workout": "/v2/activity/workout",
 }
 _locks = {}
-# WHOOP за Cloudflare: заголовок «Python-urllib/3.x» он режет (403, error 1010), со своим — пускает
-UA = "Forma/1.0 (+https://sawqws.github.io/123/privacy.html)"
+# WHOOP за Cloudflare: «Python-urllib/3.x» он режет (403, error 1010 «browser's signature»). Шлём обычные заголовки
+# браузера; если Cloudflare всё равно отказал — тот же запрос через curl (у него другой «отпечаток»).
+UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+      "Version/18.0 Mobile/15E148 Safari/604.1 FormaCoach/1.0")
+HEADERS = {"User-Agent": UA, "Accept": "application/json", "Accept-Language": "ru,en;q=0.8"}
+
+
+class HTTPFail(Exception):
+    """Ответ WHOOP с ошибкой: code — HTTP-код, body — начало тела, headers — заголовки (Retry-After)."""
+    def __init__(self, code, body="", headers=None):
+        super().__init__(f"WHOOP {code}: {body[:200]}")
+        self.code, self.body, self.headers = code, body, headers or {}
+
+
+def blocked(code, body):
+    """Отказ Cloudflare по «отпечатку» клиента, а не ответ самого WHOOP."""
+    b = (body or "").lower()
+    return code in (403, 1010) and ("1010" in b or "cloudflare" in b or "browser's signature" in b)
+
+
+def _curl(method, url, headers, data, timeout):
+    if not shutil.which("curl"):
+        raise HTTPFail(403, "Cloudflare: нет curl для обхода")
+    cmd = ["curl", "-sS", "-X", method, "--max-time", str(timeout), "-w", "\n%{http_code}", url]
+    for k, v in headers.items():
+        cmd += ["-H", f"{k}: {v}"]
+    if data is not None:
+        cmd += ["--data-binary", "@-"]
+    try:
+        r = subprocess.run(cmd, input=data or b"", capture_output=True, timeout=timeout + 5)
+    except subprocess.TimeoutExpired:
+        raise HTTPFail(504, "WHOOP не ответил вовремя") from None
+    out = r.stdout.decode(errors="replace")
+    body, _, code = out.rpartition("\n")
+    if r.returncode or not code.isdigit():
+        raise HTTPFail(502, (r.stderr.decode(errors="replace") or out)[:200])
+    if int(code) >= 400:
+        raise HTTPFail(int(code), body)
+    return json.loads(body or "null")
+
+
+def request(method, url, headers=None, data=None, timeout=30):
+    """HTTP к WHOOP с нормальными заголовками; ответ — JSON. Ошибка — HTTPFail; отказ Cloudflare — повтор через curl."""
+    h = {**HEADERS, **(headers or {})}
+    req = urllib.request.Request(url, data=data, headers=h, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        if not blocked(e.code, body):
+            raise HTTPFail(e.code, body, e.headers) from None
+        print("whoop: Cloudflare отказал urllib, повторяю через curl")
+    return _curl(method, url, h, data, timeout)
 
 
 class NotConnected(Exception):
@@ -41,15 +95,11 @@ def auth_link(client_id, redirect, state):
 
 
 def _post_form(url, form):
-    req = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode(),
-                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
-                                          "User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:300]
-        raise RuntimeError(f"WHOOP {e.code}: {detail}") from None
+        return request("POST", url, {"Content-Type": "application/x-www-form-urlencoded"},
+                       urllib.parse.urlencode(form).encode())
+    except HTTPFail as e:
+        raise RuntimeError(f"WHOOP {e.code}: {e.body[:300]}") from None
 
 
 def exchange(db, uid, code, client_id, secret, redirect):
@@ -92,21 +142,21 @@ class Client:
     def get(self, path, params=None):
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
         for attempt in range(3):
-            req = urllib.request.Request(url, headers={"Authorization": "Bearer " + self._access(force=attempt == 1),
-                                                       "User-Agent": UA,
-                                                       "Accept": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=30) as r:
-                    return json.load(r)
-            except urllib.error.HTTPError as e:
+                return request("GET", url, {"Authorization": "Bearer " + self._access(force=attempt == 1)})
+            except HTTPFail as e:
                 if e.code == 401 and attempt == 0:
                     continue  # токен протух раньше срока — обновим и повторим
                 if e.code == 429 and attempt < 2:
-                    time.sleep(int(e.headers.get("Retry-After") or 5))
+                    try:
+                        wait = int((e.headers or {}).get("Retry-After") or 5)
+                    except (TypeError, ValueError):
+                        wait = 5
+                    time.sleep(min(wait, 60))
                     continue
                 if e.code == 404:
                     return None
-                raise RuntimeError(f"WHOOP {e.code}: {e.read().decode(errors='replace')[:200]}") from None
+                raise RuntimeError(f"WHOOP {e.code}: {e.body[:200]}") from None
         raise NotConnected("WHOOP не принимает токен")
 
     def collection(self, kind, start, limit_pages=40):

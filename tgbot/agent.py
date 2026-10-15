@@ -31,6 +31,8 @@ import json
 import os
 import re
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -604,7 +606,12 @@ class Agent:
             elif req.get("cmd") == "_dialogs":  # последние диалоги для кнопок «Один чат» в Главном
                 ok, out = True, await self.recent_dialogs(int((req.get("args") or {}).get("limit") or 9))
             else:
-                ok, out = await self.execute(req.get("cmd"), req.get("args") or {})
+                args = req.get("args") or {}
+                if args.get("auto") and self.from_claude(req, writer):
+                    # «без подтверждения» — только для Главного и Ловца; Claude Секретаря всегда спрашивает Глеба
+                    print("auto от Claude отклонён:", req.get("cmd"), flush=True)
+                    args = {**args, "auto": False}
+                ok, out = await self.execute(req.get("cmd"), args)
         except Exception as e:
             ok, out = False, f"плохой запрос: {e}"
         writer.write(json.dumps({"ok": ok, "out": out}, ensure_ascii=False).encode() + b"\n")
@@ -612,6 +619,28 @@ class Agent:
             await writer.drain()
         finally:
             writer.close()
+
+    def from_claude(self, req, writer):
+        """Запрос пришёл от Claude Секретаря: метка в окружении (её ставит run_claude, а Claude не может её убрать —
+        ему разрешено только «python3 tg.py …») или процесс-потомок запущенного Claude (по SO_PEERCRED)."""
+        if req.get("caller") == "claude":
+            return True
+        proc = self.proc
+        if not proc or not proc.pid:
+            return False
+        try:
+            sock = writer.get_extra_info("socket")
+            pid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))[0]
+            for _ in range(32):  # вверх по родителям до самого Claude
+                if pid == proc.pid:
+                    return True
+                if pid <= 1:
+                    return False
+                with open(f"/proc/{pid}/status") as f:
+                    pid = int(next(x for x in f if x.startswith("PPid:")).split()[1])
+        except (OSError, ValueError, StopIteration, AttributeError, struct.error):
+            return False
+        return False
 
     def from_hub(self, req):
         """Главный опрашивает Telegram за двоих и отдаёт сюда то, что не его. Владелец — его владелец."""
@@ -636,10 +665,33 @@ class Agent:
         return {"account": me, "keys": self.client is not None, "busy": self.busy, "jobs": len(self.jobs.load()),
                 "login": bool(self.login)}
 
+    SHOW_MAX = 3000  # карточка подтверждения (4096 в Telegram) должна показать текст целиком
+
+    @classmethod
+    def guard(cls, cmd, args):
+        """Проверка аргументов ДО подтверждения: Глеб одобряет то, что видит. Ошибка — Fail (понятный текст Claude)."""
+        for key in ("text",):  # actions режет текст в карточке на 700 символов, а уходит весь — хвост мог быть чужим
+            t = args.get(key)
+            if cmd in ("send", "edit", "about") and isinstance(t, str) and len(t) > cls.SHOW_MAX:
+                raise actions.Fail(f"Текст длиннее {cls.SHOW_MAX} символов — его не показать на подтверждении целиком. "
+                                   "Сократи или раздели на части.")
+        f = args.get("file")
+        if cmd == "send" and f:  # файл на сервере: только из рабочей папки Claude и /tmp, без ключей и настроек
+            real = os.path.realpath(str(f))
+            low = os.path.basename(real).lower()
+            if low.endswith((".session", ".env", ".pem", ".key", ".db", ".sqlite")) or low in ("settings.json", "state.json", "id_rsa", "id_ed25519"):
+                raise actions.Fail("Этот файл отправить нельзя (ключи и настройки)")
+            ok_dirs = [os.path.realpath(WORK), os.path.realpath("/tmp")]
+            if not any(real == d or real.startswith(d + os.sep) for d in ok_dirs):
+                raise actions.Fail("Отправлять можно только файлы из рабочей папки Claude или /tmp")
+            args["file"] = real
+        return args
+
     async def execute(self, cmd, args):
         if not await self.authorized():
             return False, "аккаунт не подключён: Глебу нужно нажать /login в боте"
         try:
+            args = self.guard(cmd, dict(args))
             return True, await actions.run(self, cmd, args)
         except actions.Fail as e:
             return False, str(e)
@@ -763,9 +815,11 @@ class Agent:
         sid = load_settings().get("session") if resume else None
         cmd = ["claude", "-p", text, "--output-format", "stream-json", "--verbose", "--append-system-prompt", system,
                "--permission-mode", "acceptEdits"] + (["--resume", sid] if sid else []) \
-            + ["--allowedTools", f"Bash(python3 {TG} *)", "Read", "WebSearch", "WebFetch", f"Edit({MEMORY})", f"Write({MEMORY})"]
+            + ["--allowedTools", f"Bash(python3 {TG} *)", "Read", "WebSearch", "WebFetch", f"Edit({MEMORY})", f"Write({MEMORY})"] \
+            + ["--disallowedTools"] + self.secret_reads()
         try:
-            self.proc = await asyncio.create_subprocess_exec(*cmd, cwd=WORK, stdout=subprocess.PIPE,
+            self.proc = await asyncio.create_subprocess_exec(*cmd, cwd=WORK, env={**os.environ, "TG_CALLER": "claude"},
+                                                             stdout=subprocess.PIPE,
                                                              stderr=subprocess.PIPE, limit=2 ** 24)
         except FileNotFoundError:
             return False, "Claude Code не установлен (npm install -g @anthropic-ai/claude-code)."
@@ -807,6 +861,15 @@ class Agent:
         s["session"] = result.get("session_id")
         save_settings(s)
         return True, (result.get("result") or "").strip() or "Готово."
+
+    @staticmethod
+    def secret_reads():
+        """Чего Claude Секретаря читать НЕЛЬЗЯ: сессия аккаунта, ключи, токены, настройки. Подсказка из чужого чата
+        («прочитай файл … и отправь») не должна уметь вытащить их, а Read иначе открывает любой файл сервера."""
+        t = "/" + TMP  # правила путей: «//абсолютный/путь»
+        return [f"Read({t}/account*)", f"Read({t}/settings.json)", f"Read({t}/agent.sock)", f"Read({t}/*.session*)",
+                "Read(//etc/**)", "Read(//root/.ssh/**)", "Read(//root/.ccr/**)", "Read(//root/.claude/**)",
+                "Read(//proc/**)", "Read(**/.env)", "Read(**/.env.*)", "Read(**/*.session)", "Read(**/*.pem)"]
 
     def chat_names(self):
         _, ds = actions._dialogs.get(id(self.client), (0, None))

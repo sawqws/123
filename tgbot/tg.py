@@ -185,7 +185,10 @@ def call(cmd, args, timeout=20 * 60):
         s.close()
         return False, "агент не запущен (pm2 status tg-agent)"
     with s:
-        s.sendall(json.dumps({"cmd": cmd, "args": args}, ensure_ascii=False).encode() + b"\n")
+        # caller: «claude», если зовёт Claude Секретаря (агент ставит TG_CALLER в его окружение) — тогда --auto
+        # не действует и всё, что меняет Telegram, Глеб подтверждает кнопкой (защита от подсказок из чужих чатов)
+        req = {"cmd": cmd, "args": args, "caller": os.environ.get("TG_CALLER", "")}
+        s.sendall(json.dumps(req, ensure_ascii=False).encode() + b"\n")
         buf = b""
         while not buf.endswith(b"\n"):
             chunk = s.recv(65536)

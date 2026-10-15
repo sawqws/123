@@ -567,7 +567,8 @@ class RoutesTest(unittest.TestCase):
                     else:
                         st, raw = self.req("POST", path, json.dumps(body), {"Content-Type": "application/json"})
                     n += 1
-                    if st not in (200, 400, 403):
+                    ok_codes = (200, 400, 403) + ((405,) if body is None and path in web.WRITE else ())  # GET на действие — 405
+                    if st not in ok_codes:
                         problems.append(f"{path} {body}: {st} {raw[:200]!r}")
                     try:
                         json.loads(raw)

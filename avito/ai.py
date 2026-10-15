@@ -13,7 +13,10 @@ import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(tempfile.gettempdir(), "avito-ai")
-NO_TOOLS = ["--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"]
+# Claude получает текст покупателей и фото — лишнего не даём: ни оболочки, ни записи, ни поиска по диску;
+# Read (чтение чужих файлов) — только когда в запросе есть фото вещи
+NO_TOOLS = ["--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent",
+            "Glob", "Grep", "LS", "MultiEdit"]
 
 
 class AIError(Exception):
@@ -39,6 +42,8 @@ def claude(prompt, images=(), system="", timeout=240, web=False):
     if web:
         tools = ["--allowedTools", "WebSearch", "WebFetch", "--max-turns", "15"]
     no = [t for t in NO_TOOLS if not (web and t in ("WebSearch", "WebFetch"))]
+    if not images:
+        no.append("Read")
     cmd = ["claude", "-p", prompt, "--output-format", "json", *tools, *no]
     if system:
         cmd += ["--append-system-prompt", system]

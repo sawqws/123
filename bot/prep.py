@@ -9,6 +9,7 @@ import html
 import json
 import os
 import re
+from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROMPT = os.path.join(HERE, "prep_prompt.md")
@@ -46,8 +47,13 @@ def esc(x):
     return html.escape(str(x), quote=False)
 
 
+def msk_today():
+    """Сегодня по Москве (сервер живёт по UTC — ночью дата была бы вчерашней)."""
+    return datetime.datetime.now(ZoneInfo("Europe/Moscow")).date()
+
+
 def today_iso(today=None):
-    return (today or datetime.date.today()).isoformat()
+    return (today or msk_today()).isoformat()
 
 
 def _date(s):
@@ -101,7 +107,7 @@ def short(name):
 def recent(topics, subj, today=None):
     """Что прошли недавно: темы предмета, начатые и закончившиеся не раньше WINDOW дней назад (текущая — первой),
     не больше MAX_TOPICS. Ничего недавнего — последняя начатая тема."""
-    day = today or datetime.date.today()
+    day = today or msk_today()
     mine = [t for t in started(topics, day) if subject_of(t) == subj]
     mine.sort(key=lambda t: t["start"], reverse=True)
     edge = (day - datetime.timedelta(days=WINDOW)).isoformat()

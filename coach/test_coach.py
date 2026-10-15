@@ -13,7 +13,9 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.parse
+import urllib.request
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1239,6 +1241,133 @@ class ErrCheckTest(unittest.TestCase):
                 self.assertLessEqual(len(row), 3, row)
                 for x in row:
                     self.assertLessEqual(len(x["text"]), 24, x["text"])
+
+
+class ClaudeSandboxTest(unittest.TestCase):
+    """Claude, которому показывают фото, не должен читать системные папки (текст на картинке бывает «приказом»)."""
+
+    def test_read_closed_outside_work_and_copies_removed(self):
+        src = os.path.join(tempfile.mkdtemp(), "pic.jpg")
+        open(src, "wb").write(b"jpg")
+        seen = {}
+
+        def run(cmd, **kw):
+            seen["cmd"] = cmd
+            seen["copies"] = [c for c in os.listdir(ai.WORK) if c.startswith("photo-")]
+            return mock.Mock(returncode=0, stdout=json.dumps({"result": "ок"}), stderr="")
+        before = set(os.listdir(ai.WORK)) if os.path.isdir(ai.WORK) else set()
+        with mock.patch.object(ai.subprocess, "run", run):
+            self.assertEqual(ai.claude("вопрос", image=src), "ок")
+        cmd = seen["cmd"]
+        for d in ("etc", "root", "home", "var"):
+            self.assertIn(f"Read(//{d}/**)", cmd)
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "Read")
+        self.assertNotIn("Bash", cmd[cmd.index("--allowedTools"):cmd.index("--disallowedTools")])
+        self.assertTrue(seen["copies"])  # копия была на время ответа…
+        self.assertEqual(set(os.listdir(ai.WORK)) - before, set())  # …и не осталась на диске
+
+
+class CleanupTest(unittest.TestCase):
+    def test_old_photos_removed_new_kept(self):
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "photos", "1"))
+        old, new = (os.path.join(root, "photos", "1", n) for n in ("old.jpg", "new.jpg"))
+        for f in (old, new):
+            open(f, "wb").write(b"x")
+        long_ago = time.time() - 5 * 86400
+        os.utime(old, (long_ago, long_ago))
+        with mock.patch.object(coach, "DATA", root):
+            coach.clean_photos()
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(new))
+
+    def test_take_is_atomic(self):
+        with mock.patch.object(coach, "busy", set()):
+            self.assertTrue(coach.take(7))
+            self.assertFalse(coach.take(7))
+            self.assertTrue(coach.take(7, force=True))
+
+
+class WhoopHttpTest(unittest.TestCase):
+    """WHOOP за Cloudflare: «Python-urllib» режется (403, error 1010) — шлём нормальные заголовки, отказ — через curl."""
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def capture(self, body=b'{"access_token": "a", "refresh_token": "r", "expires_in": 3600}'):
+        seen = []
+
+        def fake(req, timeout=None):
+            seen.append(req)
+            return self.Resp(body)
+        return seen, mock.patch.object(urllib.request, "urlopen", fake)
+
+    def check_headers(self, req):
+        h = {k.lower(): v for k, v in req.header_items()}
+        self.assertNotIn("python-urllib", h.get("user-agent", "").lower())
+        self.assertIn("Mozilla/5.0", h["user-agent"])
+        self.assertEqual(h["accept"], "application/json")
+
+    def test_token_refresh_and_data_send_browser_headers(self):
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "c.db"))
+        seen, p = self.capture()
+        with p:
+            whoop.exchange(db, U, "code", "cid", "sec", "https://x/whoop/callback")
+            db.save_token(U, "old", "r1", time.time() - 10)
+            whoop.Client(db, U, "cid", "sec")._access()  # refresh
+        seen2, p2 = self.capture(b'{"records": []}')
+        with p2:
+            self.assertEqual(whoop.Client(db, U, "cid", "sec").get("/v2/cycle", {"limit": 25}), {"records": []})
+        self.assertEqual([r.get_method() for r in seen + seen2], ["POST", "POST", "GET"])
+        for r in seen + seen2:
+            self.check_headers(r)
+        self.assertTrue(seen2[0].get_header("Authorization").startswith("Bearer "))
+
+    def test_cloudflare_block_retries_with_curl(self):
+        page = b"<html>Cloudflare Error 1010: Access denied. The owner of this website has banned your access based on your browser's signature</html>"
+
+        def blocked(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, io.BytesIO(page))
+        done = mock.Mock(returncode=0, stdout=b'{"access_token": "a", "expires_in": 3600}\n200', stderr=b"")
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "c.db"))
+        with mock.patch.object(urllib.request, "urlopen", blocked), mock.patch.object(whoop.shutil, "which", return_value="/usr/bin/curl"), \
+                mock.patch.object(whoop.subprocess, "run", return_value=done) as run:
+            whoop.exchange(db, U, "code", "cid", "sec", "https://x/whoop/callback")
+        self.assertEqual(db.token(U)["access"], "a")
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], "curl")
+        self.assertIn(f"User-Agent: {whoop.UA}", cmd)
+        self.assertIn(b"grant_type=authorization_code", run.call_args.kwargs["input"])
+        # curl тоже получил отказ — понятная ошибка, а не падение на разборе
+        bad = mock.Mock(returncode=0, stdout=page + b"\n403", stderr=b"")
+        with mock.patch.object(urllib.request, "urlopen", blocked), mock.patch.object(whoop.shutil, "which", return_value="/usr/bin/curl"), \
+                mock.patch.object(whoop.subprocess, "run", return_value=bad), self.assertRaises(RuntimeError) as e:
+            whoop.exchange(db, U, "code", "cid", "sec", "https://x/whoop/callback")
+        self.assertIn("403", str(e.exception))
+
+    def test_login_failure_tells_what_to_do(self):
+        BotTest.setUp(self)
+        try:
+            self.db.meta("state:abc12345", f"{U}:{int(time.time())}")
+            with mock.patch.object(whoop, "exchange", side_effect=RuntimeError("WHOOP 403: Cloudflare Error 1010")), \
+                    mock.patch.object(coach, "creds", return_value=("cid", "sec")), \
+                    mock.patch.object(coach, "public_url", "https://coach.example"):
+                ok, text = coach.finish_connect("abc12345", "code")
+            self.assertFalse(ok)
+            self.assertIn("Новая кнопка", text)
+            msgs = [kw for m, kw in self.sent if m == "sendMessage"]
+            self.assertIn("Cloudflare", msgs[-2]["text"])
+            btn = msgs[-1]["reply_markup"]["inline_keyboard"][0][0]
+            self.assertEqual(btn["text"], "🔄 Подключить снова")
+            self.assertIn("api.prod.whoop.com", btn["url"])
+        finally:
+            BotTest.tearDown(self)
+
+    fake_tg = BotTest.fake_tg
 
 
 if __name__ == "__main__":

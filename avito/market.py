@@ -81,6 +81,15 @@ def _attr(chunk, *patterns):
     return ""
 
 
+def safe_url(href):
+    """Ссылка на объявление — только https на avito.ru (из разобранной страницы в приложение попадает как есть)."""
+    if not href:
+        return ""
+    url = urllib.parse.urljoin("https://www.avito.ru", href)
+    host = urllib.parse.urlparse(url).hostname or ""
+    return url if url.startswith("https://") and (host == "avito.ru" or host.endswith(".avito.ru")) else ""
+
+
 def parse(page):
     """HTML поиска → [{id, title, price, url}]. Карточки — блоки data-marker="item"."""
     items = []
@@ -98,7 +107,7 @@ def parse(page):
         if not price or not title:
             continue
         items.append({"id": iid or href, "title": title, "price": int(price),
-                      "url": urllib.parse.urljoin("https://www.avito.ru", href) if href else ""})
+                      "url": safe_url(href)})
     return items
 
 

@@ -77,11 +77,24 @@ def esc(x):
 # ---------- состояние (токены — только здесь, файл 600, вне git) ----------
 
 def load():
-    try:
-        with open(STATE) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    """Состояние с диска. Файл испорчен — берём прошлую копию (.bak) и откладываем испорченный в .corrupt:
+    пустое состояние означало бы «владельца нет» и потерю токенов Домиленда."""
+    for path in (STATE, STATE + ".bak"):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as e:
+            print(f"состояние {os.path.basename(path)} не читается: {e}")
+            if path == STATE:
+                try:
+                    os.replace(STATE, STATE + ".corrupt")
+                except OSError:
+                    pass
+    return {}
 
 
 def scrub(st):
@@ -102,6 +115,14 @@ def save(st):
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(st, f, ensure_ascii=False, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    try:  # прошлая целая копия — на случай порчи основного файла
+        if os.path.exists(STATE):
+            shutil.copy2(STATE, STATE + ".bak")
+            os.chmod(STATE + ".bak", 0o600)
+    except OSError as e:
+        print("копия состояния:", e)
     os.replace(tmp, STATE)
 
 
@@ -597,7 +618,9 @@ def order(chat, plate, force=False):
         save(st)
         return
     except dl.Error as e:
-        edit(chat, msg, fail(f"Не получилось заказать {plate_tag(plate)}: {esc(str(e)[:200])}"),
+        maybe = "\nВозможно, пропуск всё же заказан — загляни в /passes, прежде чем повторять." \
+            if isinstance(e, dl.NetError) else ""
+        edit(chat, msg, fail(f"Не получилось заказать {plate_tag(plate)}: {esc(str(e)[:200])}{maybe}"),
              [[btn("🔁 Повторить", f"again|{plate}")]])
         return
     edit(chat, msg, card_ok(plate, now), cancel_buttons(pid))
@@ -1057,9 +1080,13 @@ def oops(u):
 
 
 def update(chat):
-    def git(*a):
-        return subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True)
-    res = git("pull", "--ff-only", "origin", "main")
+    def git(*a, timeout=60):
+        return subprocess.run(["git", *a], cwd=REPO, capture_output=True, text=True, timeout=timeout)
+    try:
+        res = git("pull", "--ff-only", "origin", "main", timeout=120)
+    except subprocess.TimeoutExpired:
+        send(chat, fail("Обновление не успело за 2 минуты — попробуй ещё раз /update"))
+        return
     send(chat, fmt("🔄 Обновление", esc((res.stdout + res.stderr).strip()[-1500:] or "ok")))
     if res.returncode == 0:
         send(chat, "♻️ <b>Перезапускаюсь…</b>")
@@ -1082,7 +1109,7 @@ def check_init_data(init_data, max_age=86400):
         check = "\n".join(f"{k}={v}" for k, v in sorted(d.items()))
         return hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     variants = [pairs] + ([{k: v for k, v in pairs.items() if k != "signature"}] if "signature" in pairs else [])
-    if not got or not any(hmac.compare_digest(sign(d), got) for d in variants):
+    if not got or not any(hmac.compare_digest(sign(d).encode(), got.encode()) for d in variants):
         return None
     try:
         if time.time() - int(pairs.get("auth_date", 0)) > max_age:
@@ -1244,8 +1271,17 @@ def asset_version():
 VERSION = asset_version() if os.path.isdir(WEB) else "0"
 
 
+def content_length(headers):
+    """Content-Length как число (мусор и минус — 0), чтобы кривой запрос не ронял обработчик."""
+    try:
+        return max(0, int(headers.get("Content-Length") or 0))
+    except ValueError:
+        return 0
+
+
 class Web(BaseHTTPRequestHandler):
     server_version = "KPP/1"
+    timeout = 60  # медленный клиент не держит поток вечно
 
     def log_message(self, fmt, *args):
         pass
@@ -1294,7 +1330,7 @@ class Web(BaseHTTPRequestHandler):
         user = web_user(self.headers)
         if not user:
             return self.reply(401, {"error": "Открой приложение из Telegram"})
-        n = int(self.headers.get("Content-Length") or 0)
+        n = content_length(self.headers)
         if path == "/api/photo":  # картинка целиком в теле; читаем без LOCK — Claude думает долго
             if n > PHOTO_MAX:
                 return self.reply(413, {"error": "Картинка больше 12 МБ"})

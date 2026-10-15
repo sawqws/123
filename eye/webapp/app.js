@@ -425,7 +425,7 @@ function renderFeed(list) {
   feed.innerHTML = photos.map((p, i) => {
     const wait = !p.text && !p.title;
     return `<button class="row tap" data-i="${i}">` +
-      `<span class="thumb"><img alt="" data-id="${esc(p.id)}">${p.video ? '<span class="vid">▶</span>' : ''}</span>` +
+      `<span class="thumb"><img alt="" data-id="${esc(p.id)}"${thumbs[p.id] ? ` src="${esc(thumbs[p.id])}"` : ''}>${p.video ? '<span class="vid">▶</span>' : ''}</span>` +
       '<span class="main">' +
       (wait ? '<span class="title"><span class="pill accent dot live">Смотрю…</span></span>'
         : `<span class="title">${esc(p.title || (p.video ? 'Видео' : 'Фото'))}</span>` +

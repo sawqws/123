@@ -455,6 +455,13 @@ class StudioFlow(unittest.TestCase):
         self.assertNotIn("half", studio.registry())
         self.assertEqual(self.t.api("answer", {"i": "x"})[0], 400)  # кривой номер вопроса — понятная ошибка
 
+    def test_token_in_chat_is_not_an_idea(self):
+        """Токен, присланный без просьбы, не должен стать «идеей» (уйдёт в Claude, базу и приложение)."""
+        self.t.send("123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw")
+        self.assertIn("не нужен", self.t.last)
+        self.assertIn("deleteMessage", [m for m, _ in self.t.calls])
+        self.assertFalse(studio.draft().get("idea"))
+
     def test_stranger(self):
         self.t.send("/start", uid=7)
         self.assertIn("личный", self.t.last)
@@ -545,6 +552,58 @@ class Sites(StudioFlow):
         # закрыть снова — ключ новый, старая ссылка не работает
         studio.set_access("coffee", "private")
         self.assertEqual(get(root + f"?k={key}").code, 403)
+
+    def test_site_headers_are_latin1_and_bad_paths_404(self):
+        """Кириллица в заголовке (realm, Location) раньше роняла ответ: UnicodeEncodeError → 502. Теперь %XX."""
+        r = FakeReq("/s/x/")
+        studio._site_page(r, 401, "Нужен пароль", "текст", {"WWW-Authenticate": 'Basic realm="Сайт «Кофейня»"',
+                                                          "X-Test": "a\r\nSet-Cookie: x=1"})
+        self.assertEqual(r.code, 401)
+        self.assertIn("realm=", r.sent["WWW-Authenticate"])
+        self.assertNotIn("\n", r.sent["X-Test"])  # перевод строки в заголовке — не вставить второй заголовок
+        self.assertIn("Нужен пароль".encode(), r.out.getvalue())  # тело — в UTF-8, как и было
+        info = self.make()
+        studio.set_access("coffee", "public")
+        for bad in ("/s/coffee/%00", "/s/coffee/%00.html", "/s/coffee/..%2f..%2fetc/passwd", "/s/coffee/%2e%2e/%2e%2e/x"):
+            r = FakeReq(bad)
+            self.assertTrue(studio.serve_site(r, "GET"))
+            self.assertEqual(r.code, 404, bad)
+        r = FakeReq("/s/coffee/\u0434\u0430")  # русские символы в пути запроса
+        self.assertTrue(studio.serve_site(r, "GET"))
+        self.assertEqual(r.code, 404)
+
+    def test_password_brute_force_is_throttled(self):
+        import base64
+        self.make()
+        pw = studio.set_access("coffee", "password")["password"]
+        studio._pw_fails.clear()
+        bad = base64.b64encode(b"x:wrong").decode()
+        ok = base64.b64encode(f"x:{pw}".encode()).decode()
+        codes = []
+        for _ in range(studio.PW_TRIES + 3):
+            r = FakeReq("/s/coffee/", {"Authorization": f"Basic {bad}"})
+            studio.serve_site(r, "GET")
+            codes.append(r.code)
+        self.assertEqual(codes[:studio.PW_TRIES], [401] * studio.PW_TRIES)
+        self.assertEqual(set(codes[studio.PW_TRIES:]), {429})
+        r = FakeReq("/s/coffee/", {"Authorization": f"Basic {ok}"})  # пока блок — и верный пароль ждёт минуту
+        studio.serve_site(r, "GET")
+        self.assertEqual(r.code, 429)
+        studio._pw_fails.clear()
+        r = FakeReq("/s/coffee/", {"Authorization": f"Basic {ok}"})
+        studio.serve_site(r, "GET")
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.sent["X-Content-Type-Options"], "nosniff")
+
+    def test_proxy_rejects_huge_or_bad_content_length(self):
+        studio.reg_set("demo", {"name": "Демо", "slug": "demo", "port": 1})
+        try:
+            for cl in ("999999999", "-5", "abc"):
+                r = FakeReq("/b/demo/api/x", {"Content-Length": cl})
+                self.assertTrue(studio.proxy(r, "POST"))
+                self.assertEqual(r.code, 413, cl)
+        finally:
+            studio.reg_set("demo", None)
 
     def test_fix_site_and_delete(self):
         info = self.make()
@@ -667,6 +726,67 @@ class Kit(unittest.TestCase):
         self.assertIn("Что-то пошло не так", t.last)
         self.assertEqual(b.call_api("mode", {"id": 5}, ["не", "dict"])[0], 400)  # тело не объект — понятный отказ, не 500
 
+    def test_profile_not_reset_on_every_start(self):
+        """setMyName у Telegram — пара раз в сутки, иначе 429 на ~20 ч: при каждом старте бот спрашивал и ставил имя
+        заново (десятки 429 в логах). Теперь — только если отличается, и после 429 ждём retry_after."""
+        d = tempfile.mkdtemp()
+        calls, state = [], {"name": "Старое", "flood": True}
+
+        def make():
+            b = kit.Bot("T", token="1:x", data=d, tg_name="Catcher", about="О боте", short="Кратко",
+                        commands=[("start", "Главное")], support=False)
+
+            def fake(method, params, files=None):
+                calls.append(method)
+                if method == "getMyName":
+                    return {"ok": True, "result": {"name": state["name"]}}
+                if method == "getMyDescription":
+                    return {"ok": True, "result": {"description": "О боте"}}
+                if method == "getMyShortDescription":
+                    return {"ok": True, "result": {"short_description": "Кратко"}}
+                if method == "getMyCommands":
+                    return {"ok": True, "result": [{"command": "start", "description": "Главное"},
+                                                   {"command": "mode", "description": "Чат или приложение"}]}
+                if method == "setMyName":
+                    if state["flood"]:
+                        e = urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)
+                        e.detail = '{"ok":false,"error_code":429,"parameters":{"retry_after":72000}}'
+                        raise e
+                    state["name"] = params["name"]
+                return {"ok": True, "result": {"username": "t_bot"}}
+            b._call = fake
+            return b
+
+        make().setup()
+        self.assertEqual(calls.count("setMyName"), 1)       # попробовал, получил 429
+        self.assertNotIn("setMyDescription", calls)         # описание уже такое — не трогаем
+        make().setup()
+        make().setup()
+        self.assertEqual(calls.count("setMyName"), 1)       # дальше — тишина до retry_after, а не 429 на каждом старте
+        self.assertEqual(calls.count("getMyName"), 1)
+        # срок вышел и 429 больше нет — ставим один раз, потом не повторяем
+        db = kit.Store(os.path.join(d, "db.json"))
+        db.set("_tg_wait", {"setMyName": time.time() - 1})
+        state["flood"] = False
+        make().setup()
+        self.assertEqual(calls.count("setMyName"), 2)
+        make().setup()
+        self.assertEqual(calls.count("setMyName"), 2)
+
+    def test_server_errors_are_500_not_dropped(self):
+        """Обработчик упал — клиент получает 500 с понятным текстом, а не обрыв соединения."""
+        import http.client
+        port = free_port()
+        b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp(), port=port, support=False)
+        b.http_hook = lambda h, m: 1 / 0
+        threading.Thread(target=b.serve, daemon=True).start()
+        time.sleep(0.4)
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("GET", "/x")
+        r = c.getresponse()
+        self.assertEqual(r.status, 500)
+        self.assertIn("Ошибка", r.read().decode())
+
     def test_style_fallback(self):
         b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp())
         calls = []
@@ -782,20 +902,23 @@ class SitesOnlyMode(unittest.TestCase):
 import json, os, subprocess, sys
 sys.path.insert(0, os.environ["HERE"])
 import studio
-seen = []
+seen = []; envs = []; cwds = []
 class P:
     def __init__(self, cmd, **kw):
-        seen.append(cmd); self.stdout = iter([json.dumps({"type": "result", "result": "{}"}) + "\n"]); self.returncode = 0
+        seen.append(cmd); envs.append(kw.get("env")); cwds.append(kw.get("cwd")); self.stdout = iter([json.dumps({"type": "result", "result": "{}"}) + "\n"]); self.returncode = 0
     def wait(self): return 0
     def kill(self): pass
 orig, studio.subprocess.Popen = studio.subprocess.Popen, P
 studio.claude("сделай сайт для Глеба", os.environ["STUDIO_BOTS_DIR"])
 studio.claude("вопросы", os.environ["STUDIO_BOTS_DIR"], tools=False)
+studio.talk("вопросы")
 studio.subprocess.Popen = orig
 st = studio.api_state(None)
 print(json.dumps({"support": studio.bot.support is None and studio.bot.support_cfg is False,
                   "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
-                  "sites_only": st["sites_only"], "examples": st["examples"], "secretary": st["secretary"]}))
+                  "sites_only": st["sites_only"], "examples": st["examples"], "secretary": st["secretary"],
+                  "leak": [k for e in envs for k in (e or {}) if k == "STUDIO_TOKEN" or k.startswith(("HORO_", "HUB_"))], "no_env": any(e is None for e in envs),
+                  "talk_cwd": cwds[-1]}))
 """
         env = {**os.environ, "HERE": HERE, "STUDIO_MODE": "sites", "STUDIO_TG_NAME": "Site Studio",
                "STUDIO_BOTS_DIR": os.path.join(tmp, "work"), "STUDIO_SITES_DIR": os.path.join(tmp, "work", "sites"),
@@ -807,6 +930,11 @@ print(json.dumps({"support": studio.bot.support is None and studio.bot.support_c
         self.assertTrue(r["support"])  # /fix выключен: правка кода сервера недоступна
         self.assertTrue(r["sites_only"])
         self.assertFalse(r["secretary"])
+        self.assertEqual(r["leak"], [])  # токен бота из /etc/studio-sites.env Claude не передаётся
+        self.assertFalse(r["no_env"])
+        self.assertTrue(r["talk_cwd"].endswith("/talk"))  # не папка с реестром сайтов (пароли) и базой
+        deny = " ".join(r["build"])
+        self.assertIn("Read(//srv/studio-sites/sites.json)", deny)
         self.assertEqual(r["tg_name"], "Site Studio")
         self.assertFalse([x for x in r["examples"] if any(w.startswith("бот") for w in x.split())])
         build, talk = r["build"], r["talk"]

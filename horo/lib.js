@@ -56,15 +56,21 @@ async function login(page) {
 async function close({ browser, ctx }) {
   // несколько заданий решаются параллельно — пишем сессию атомарно, чтобы соседний процесс не прочитал полфайла
   const tmp = `${STATE}.${process.pid}`;
-  await ctx.storageState({ path: tmp });
-  fs.renameSync(tmp, STATE);
-  await browser.close();
+  try {
+    await ctx.storageState({ path: tmp });
+    fs.renameSync(tmp, STATE);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (x) { /* файла нет */ }
+    console.error('сессию не сохранил:', e.message || e);  // вход при следующем запуске пройдёт заново
+  } finally {
+    await browser.close();  // Chromium не должен оставаться висеть, даже если сессию не записали
+  }
 }
 
 // GET к API из контекста страницы (с куками сессии).
 async function api(page, url) {
   const res = await page.evaluate(async u => {
-    const r = await fetch(u, { credentials: 'include' });
+    const r = await fetch(u, { credentials: 'include', signal: AbortSignal.timeout(60000) });  // зависший запрос — ошибка, не вечное ожидание
     return { s: r.status, t: await r.text() };
   }, url.startsWith('http') ? url : BASE + url);
   if (res.s !== 200) throw new Error(`API ${res.s}: ${url}\n${res.t.slice(0, 300)}`);
@@ -73,7 +79,8 @@ async function api(page, url) {
 
 async function download(page, src, file) {
   const b64 = await page.evaluate(async u => {
-    const r = await fetch(u, { credentials: 'include' });
+    const r = await fetch(u, { credentials: 'include', signal: AbortSignal.timeout(60000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const b = new Uint8Array(await r.arrayBuffer());
     let s = '';
     for (const x of b) s += String.fromCharCode(x);

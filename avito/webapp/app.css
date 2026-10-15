@@ -1,4 +1,4 @@
-/* Авито: общий вид — kit.css («Оникс-стекло»: чёрный, золото, SF Rounded), здесь акцент (мята) и своё:
+/* Авито: общий вид — kit.css («Оникс-стекло»: чёрный, золото, SF Pro), здесь акцент (мята) и своё:
    шаги, фото, гистограмма цен. Фото товара — на белом, как есть; вокруг — тёмное стекло.
    Мята — в мелочах (галочки, точки, столбики в зоне цены), золото — медиана и выбранная цена. */
 :root, html[data-scheme] { --accent: #4cc9a0; --accent-ink: var(--ink); --mint: #7fe0bd; }
@@ -6,7 +6,7 @@
 .center { text-align: center; }
 .lead { margin: 6px 0 16px; font-size: 14.5px; }
 .sep { height: 1px; background: var(--sep); margin: 16px -20px; }
-.k-title { font: 750 17px/1.25 var(--round); letter-spacing: -.2px; color: var(--ink); }
+.k-title { font: 650 17px/1.25 var(--round); letter-spacing: -.2px; color: var(--ink); }
 .card-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .card-row.top { align-items: flex-start; }
 .card-row > .main, .card-row > div:first-child { flex: 1; min-width: 0; }
@@ -33,7 +33,7 @@
 .step.now { color: var(--text); }
 .step.now .n { background: var(--accent-soft); color: var(--mint); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
 .step.done { color: var(--ink); }
-.step.done .n { background: var(--accent-pastel); color: var(--mint); font-weight: 800;
+.step.done .n { background: var(--accent-pastel); color: var(--mint); font-weight: 700;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16); }
 .step.skip { opacity: .5; }
 
@@ -74,7 +74,7 @@
   color: var(--mint); box-shadow: none; font-size: 26px; font-weight: 300; font-family: inherit; padding: 0; cursor: pointer; }
 
 /* ---------- описание ---------- */
-.ad-title { margin: 0; flex: 1; min-width: 0; font: 800 22px/1.2 var(--round); letter-spacing: -.3px; color: var(--ink);
+.ad-title { margin: 0; flex: 1; min-width: 0; font: 700 22px/1.2 var(--round); letter-spacing: -.4px; color: var(--ink);
   overflow-wrap: anywhere; }
 .desc-card .btn.icon { width: 36px; height: 36px; min-height: 36px; font-size: 17px; background: rgba(255, 255, 255, .08);
   color: var(--ink); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), inset 0 0 0 1px rgba(255, 255, 255, .07); margin: -2px -4px 0 0; }
@@ -94,12 +94,12 @@
 .note { margin-top: 12px; }
 
 /* ---------- цена ---------- */
-.price-now { font: 800 28px/1.15 var(--round); letter-spacing: -.6px; margin-top: 4px; color: var(--ink); }
+.price-now { font: 700 28px/1.15 var(--round); letter-spacing: -.6px; margin-top: 4px; color: var(--ink); }
 .price-now.none { font: 550 15px/1.4 var(--round); color: var(--hint); letter-spacing: 0; }
 .mk-head { display: flex; align-items: flex-start; gap: 12px; }
 .mk-head .main { flex: 1; min-width: 0; }
 .mk-head .k { color: var(--hint); font-size: 13px; font-weight: 600; }
-.mk-head .big-num { margin-top: 6px; white-space: nowrap; color: var(--ink); font: 800 44px/1 var(--round); letter-spacing: -1.2px; }
+.mk-head .big-num { margin-top: 6px; white-space: nowrap; color: var(--ink); font: 700 44px/1 var(--round); letter-spacing: -1.4px; }
 .mk-head .pill { flex: none; margin-top: 2px; }
 
 .hist { position: relative; height: 92px; margin-top: 20px; }
@@ -130,7 +130,7 @@
 .pick .k i { font-style: normal; }
 .pick .k { color: var(--hint); font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; max-width: 100%; }
-.pick b { font: 800 16.5px/1.1 var(--round); letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pick b { font: 700 16.5px/1.1 var(--round); letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .pick.mid { background: var(--accent-soft); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), inset 0 0 0 1px var(--accent-line); }
 .pick.mid .k { color: var(--accent-deep); }
 /* выбранная цена — золотое стекло, как главная кнопка */

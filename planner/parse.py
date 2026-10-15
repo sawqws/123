@@ -85,7 +85,12 @@ def parse(text, today=None):
         cut(B + r"(?:во?\s+)?(" + DAY_WORD + r")" + E, weekday)
 
     def fix_year(d):  # «5.10», сказанное 9 октября, — это 5 октября; давно прошедшая дата — следующий год
-        return d.replace(year=d.year + 1) if d < today - datetime.timedelta(days=30) else d
+        if d < today - datetime.timedelta(days=30):
+            try:
+                return d.replace(year=d.year + 1)
+            except ValueError:  # 29 февраля в невисокосный год
+                return d + datetime.timedelta(days=365)
+        return d
 
     def dotted(m):
         dd, mm, yy = int(m.group(1)), int(m.group(2)), m.group(3)

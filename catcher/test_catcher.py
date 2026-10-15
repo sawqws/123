@@ -272,6 +272,57 @@ class Wish(Base):
         self.assertEqual(self.t.toasts[-1], "Проверяю…")
         self.assertIn("слежу", self.t.last)
 
+    def test_double_grab_keeps_caught(self):
+        """Второе нажатие «Занять» (или фоновая проверка) видело «занято» — имя уже наше — и затирало «поймал» на «слежу»."""
+        self.t.press("grab|freebie")
+        self.assertEqual(app.find("freebie")["status"], "caught")
+        n = len([c for c in self.agent.calls if c[0] == "grab"])
+        self.t.press("grab|freebie")
+        self.assertEqual(app.find("freebie")["status"], "caught")
+        self.assertEqual(len([c for c in self.agent.calls if c[0] == "grab"]), n)  # лишнего запроса к Telegram нет
+
+    def test_parallel_grab_of_same_name_is_refused(self):
+        app._grabbing.add("freebie")
+        try:
+            self.assertEqual(app.grab("freebie", say=False), "busy")
+            self.t.press("grab|freebie")
+            self.assertIn("уже занимаю", self.t.last)
+            code, res = self.t.api("grab", {"name": "freebie"})
+            self.assertEqual(res["result"], "busy")
+            st, line = app.add("freebie", say=False)
+            self.assertEqual(st, "busy")
+        finally:
+            app._grabbing.discard("freebie")
+
+    def test_removed_name_is_not_resurrected_by_watcher(self):
+        app.put({"name": "busyname", "status": "watch", "added": "x", "checks": 0})
+
+        def check_and_remove(name):
+            app.drop(name)  # Глеб нажал «Убрать», пока шла проверка
+            return True, {"status": "taken"}
+        with mock.patch.object(app, "check", side_effect=check_and_remove):
+            app.watcher.tick(1000)
+        self.assertIsNone(app.find("busyname"))
+
+    def test_stop_during_grab_stays_stopped(self):
+        self.t.press("wl|5")
+        self.t.press("wc|3")  # ловим три: после одного поимки ловля должна продолжаться — если не нажали «Стоп»
+        self.t.press("hunt|on")
+        w = app.watcher
+        w.tick(1000)
+        u = app.hunt()["queue"][0]
+        self.agent.names[u] = "free"
+        orig = app._grab
+
+        def grab_and_stop(*a, **k):
+            app.set_hunt(on=False)  # «Стоп» в середине захвата (он идёт до полутора минут)
+            return orig(*a, **k)
+        with mock.patch.object(app, "_grab", side_effect=grab_and_stop):
+            w.tick(1010)
+            w.tick(1020)
+        self.assertFalse(app.hunt()["on"])
+        self.assertIn(u, app.hunt()["caught"])
+
     def test_hunt_catches_until_count(self):
         self.t.press("wl|5")
         self.t.press("ws|word")

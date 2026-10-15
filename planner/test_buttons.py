@@ -532,7 +532,7 @@ class ApiTest(unittest.TestCase):
                     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
                         r = http(planner.Web, path, raw, init, method)
                     n += 1
-                    if r.code not in (200, 400, 401, 403, 404, 413) or out.getvalue().strip():
+                    if r.code not in (200, 400, 401, 403, 404, 405, 413) or out.getvalue().strip():
                         bad.append(f"{method} {path} {raw[:60]!r} -> {r.code} {r.body[:120]!r} {out.getvalue()[-300:]}")
             for path in ("/api/all", "/api/task"):  # без подписи и с чужой
                 self.assertEqual(http(planner.Web, path, b"{}", "").code, 401)

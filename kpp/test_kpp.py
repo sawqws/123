@@ -15,6 +15,8 @@ os.environ["KPP_DATA"] = tempfile.mkdtemp()
 import domyland as dl  # noqa: E402
 import kpp  # noqa: E402
 
+REAL_SAVE = kpp.save  # в BotBase save подменён — для проверки записи на диск нужен настоящий
+
 
 class Plates(unittest.TestCase):
     def test_plain(self):
@@ -824,6 +826,49 @@ class Errors(BotBase):
                 self.assertLessEqual(len(row), 3)
                 for b in row:
                     self.assertLessEqual(len(b["text"]), 24, b["text"])
+
+
+class Audit(BotBase):
+    """Проверка «от А до Я»: порча состояния, кривые заголовки, подсказка при таймауте заказа."""
+
+    def test_state_recovers_from_backup(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "state.json")
+        with mock.patch.object(kpp, "DATA", d), mock.patch.object(kpp, "STATE", path):
+            REAL_SAVE({"owner": 1, "jwt": "a"})
+            REAL_SAVE({"owner": 1, "jwt": "b"})  # на диске b, в .bak — a
+            self.assertEqual(oct(os.stat(path + ".bak").st_mode)[-3:], "600")
+            with open(path, "w") as f:
+                f.write("{обрыв")
+            with mock.patch("builtins.print"):
+                got = kpp.load()
+            self.assertEqual(got["owner"], 1)  # владелец не потерян
+            self.assertTrue(os.path.exists(path + ".corrupt"))
+            self.assertEqual(kpp.load()["owner"], 1)  # и после — читается
+
+    def test_state_missing_is_empty(self):
+        d = tempfile.mkdtemp()
+        with mock.patch.object(kpp, "STATE", os.path.join(d, "none.json")):
+            self.assertEqual(kpp.load(), {})
+
+    def test_init_data_non_ascii_hash_is_rejected_not_crash(self):
+        pairs = "auth_date=%d&user=%%7B%%22id%%22%%3A1%%7D&hash=%%D0%%B6" % int(time.time())
+        self.assertIsNone(kpp.check_init_data(pairs))
+
+    def test_content_length_garbage(self):
+        self.assertEqual(kpp.content_length({"Content-Length": "abc"}), 0)
+        self.assertEqual(kpp.content_length({"Content-Length": "-5"}), 0)
+        self.assertEqual(kpp.content_length({}), 0)
+        self.assertEqual(kpp.content_length({"Content-Length": "12"}), 12)
+
+    def test_order_timeout_warns_about_duplicate(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.NetError("Сеть: timed out")):
+            self.msg("А123ВС777")
+        self.assertIn("/passes", self.texts()[-1])
+        self.sent.clear()
+        with mock.patch.object(dl.Client, "create_taxi_pass", side_effect=dl.Error("HTTP 400: плохой номер")):
+            self.msg("М456ОР50")
+        self.assertNotIn("/passes", self.texts()[-1])  # отказ Домиленда — пропуска точно нет
 
 
 class Style(unittest.TestCase):

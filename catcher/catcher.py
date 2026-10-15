@@ -194,8 +194,29 @@ def caught_card(name, link, title, how=""):
         [[kit.url("▶️ Открыть канал", link, "success")], [kit.b("📋 Список", "list"), kit.b("‹ Главное", "home")]]
 
 
+_grabbing = set()
+_grabbing_lock = threading.Lock()
+
+
 def grab(name, say=True, how=""):
-    """Занять имя прямо сейчас. Возвращает статус (ok|taken|too_many|fragment|invalid|error); пишет Глебу, что вышло."""
+    """Занять имя прямо сейчас. Возвращает статус (ok|busy|taken|too_many|fragment|invalid|error); пишет Глебу, что вышло.
+    Одно имя — одна попытка за раз (кнопка + фоновый цикл или двойное нажатие): иначе второй запрос получал «занято»
+    (имя уже наше) и затирал статус «поймал» на «слежу»."""
+    cur = find(name)
+    if cur and cur["status"] == "caught":
+        return "ok"
+    with _grabbing_lock:
+        if name in _grabbing:
+            return "busy"
+        _grabbing.add(name)
+    try:
+        return _grab(name, say, how)
+    finally:
+        with _grabbing_lock:
+            _grabbing.discard(name)
+
+
+def _grab(name, say=True, how=""):
     entry = find(name) or {"name": name, "status": "watch", "added": stamp(), "checks": 0}
     args = {"username": name, "title": name, "auto": True}
     ch = target_channel()
@@ -256,6 +277,8 @@ def add(name, say=True):
     st = out.get("status")
     if st == "free":
         r = grab(name, say=say)
+        if r == "busy":
+            return r, f"⏳ @{name} уже занимаю — подожди минуту"
         return r, f"🎯 @{name} был свободен — занял!" if r == "ok" else f"⚠️ @{name} свободен, но занять не вышло"
     if st in ("fragment", "invalid"):
         put({"name": name, "status": st, "added": stamp(), "checks": 1, "note": STATUS[st][1]})
@@ -436,7 +459,9 @@ class Watcher:
             return self.agent_down(out, now)
         self.agent_down_said = -1e9
         st = out.get("status")
-        entry = find(n["name"]) or n
+        entry = find(n["name"])
+        if not entry:  # пока проверяли, имя убрали из списка — не воскрешать
+            return 1
         entry.update(checked=now, checks=entry.get("checks", 0) + 1)
         if st == "free":
             put(entry)
@@ -482,9 +507,10 @@ class Watcher:
             r = grab(u, how="по пожеланиям")
             self.last = f"@{u}: " + ("поймал" if r == "ok" else r)
             if r == "ok":
-                caught = h["caught"] + [u]
+                cur = hunt()  # свежее: за время захвата Глеб мог нажать «Стоп» — не включать ловлю обратно
+                caught = cur["caught"] + [u]
                 done = len(caught) >= int(w.get("count") or 1)
-                set_hunt(caught=caught, on=not done)
+                set_hunt(caught=caught, on=cur["on"] and not done)
                 if done:
                     bot.notify(kit.card("🏁 <b>Ловля по пожеланиям закончена</b>",
                                         ["Поймал: " + ", ".join("@" + x for x in caught)]),
@@ -644,6 +670,8 @@ def grab_btn(c):
     if r == "ok":
         n = find(u)
         c.say(*caught_card(u, n["link"], n.get("title")))
+    elif r == "busy":
+        c.say(f"⏳ @{kit.esc(u)} уже занимаю — подожди минуту, напишу.")
     elif r == "taken":
         c.say(f"👀 @{kit.esc(u)} только что заняли — буду следить.")
     else:
