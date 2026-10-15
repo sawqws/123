@@ -842,6 +842,26 @@ def fmt_date(iso):
 
 # ---------- обновление и установка ----------
 
+HDP_SETTINGS = os.path.join(REPO, "horo", "tmp", "bot_settings.json")  # как SETTINGS в bot/bot.py
+HDP_WAIT = 15 * 60  # дольше не ждём: задание, видимо, зависло — бот после перезапуска начнёт его заново
+
+
+def hdp_busy():
+    """Сколько заданий HDP-бот решает прямо сейчас (его bot_settings.json → active)."""
+    try:
+        with open(HDP_SETTINGS) as f:
+            return len(json.load(f).get("active") or {})
+    except (OSError, ValueError, AttributeError):
+        return 0
+
+
+def wait_hdp(limit=HDP_WAIT, pause=10):
+    """Перезапуск посреди сдачи теста обрывает попытку на сайте — сначала ждём, пока HDP досдаст."""
+    end = time.time() + limit
+    while hdp_busy() and time.time() < end:
+        progress(f"Жду, пока HDP досдаст задание ({hdp_busy()})…")
+        time.sleep(pause)
+
 def update_all(chat, reset=False):
     """Обновить всех из main. Упало посередине — живой статус закрываем, иначе «Обновляю…» висит полчаса."""
     try:
@@ -879,8 +899,11 @@ def _update_all(chat, reset=False):
         if code != 0:
             send(chat, f"⚠️ <b>Голосовые не поставились</b>\n<pre>{esc(out[-600:])}</pre>")
     names = [a["name"] for a in apps() or [] if a["name"] in APPS and a["name"] != SELF]
+    names.sort(key=lambda n: n == "horo-bot")  # HDP — последним: остальные обновятся, пока он досдаёт задание
     res = []
     for n in names:
+        if n == "horo-bot":
+            wait_hdp()
         progress(f"Перезапускаю {short(APPS[n])}…")
         code, _ = sh("pm2", "restart", n, timeout=60)
         res.append(("✅ " if code == 0 else "⚠️ ") + short(APPS[n]))

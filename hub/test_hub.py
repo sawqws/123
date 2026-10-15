@@ -170,6 +170,30 @@ class HubTest(Base):
         self.assertIn("Уже обновляю", self.answers()[-1])
         hub.live.clear()
 
+    def test_update_waits_for_hdp_task(self):
+        """«Обновить всех» не перезапускает HDP посреди сдачи теста: ждёт, пока active опустеет (не дольше предела)."""
+        f = os.path.join(self.dir, "settings.json")
+        with open(f, "w") as fh:
+            json.dump({"active": {"t1": {"url": "u"}}}, fh)
+        slept = []
+
+        def nap(sec):
+            slept.append(sec)
+            if len(slept) == 2:  # задание досдано
+                with open(f, "w") as fh:
+                    json.dump({"active": {}}, fh)
+        with mock.patch.object(hub, "HDP_SETTINGS", f), mock.patch.object(hub.time, "sleep", nap):
+            hub.wait_hdp(limit=600)
+            self.assertEqual(len(slept), 2)
+            self.assertEqual(hub.hdp_busy(), 0)
+            with open(f, "w") as fh:
+                json.dump({"active": {"t1": {}}}, fh)
+            slept.clear()
+            hub.wait_hdp(limit=0)  # предел вышел — не ждём
+            self.assertEqual(slept, [])
+        with mock.patch.object(hub, "HDP_SETTINGS", os.path.join(self.dir, "нет.json")):
+            self.assertEqual(hub.hdp_busy(), 0)
+
     def test_logs_fit_in_message(self):
         with mock.patch.object(hub, "log_text", return_value="<&>" * 3000):
             hub.logs(U, "coach-bot")

@@ -459,6 +459,7 @@ class Live:
     def __init__(self, chat, title, sub="", progress=True, sub_fn=None):
         self.chat, self.title, self.sub, self.progress, self.sub_fn = chat, title, sub, progress, sub_fn
         self.done_steps, self.current, self.frac = [], "", 0.0
+        self.task, self.span = None, (0.0, 1.0)  # задание (для «вопрос 5 из 12» при сдаче) и его доля общей полоски
         self.t0, self.tick = time.time(), 0
         self.stop = threading.Event()
         self.lock = threading.Lock()  # правка (тикер и шаги Claude) не должна обгонять удаление карточки
@@ -468,11 +469,34 @@ class Live:
         quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
 
+    def submitting(self):
+        """Сдача теста идёт минутами (паузы «как человек» над каждым вопросом), а шаг Claude один — «Сдаю на сайт».
+        submit.js пишет, на каком он вопросе (horo/tmp/<задание>/submit.json): (n, N) или None."""
+        if self.current != SUBMIT_STEP or not self.task:
+            return None
+        try:
+            with open(os.path.join(drafts.TMP, self.task, "submit.json")) as f:
+                p = json.load(f)
+            n, total = int(p.get("n") or 0), int(p.get("N") or 0)
+            if float(p.get("at") or 0) / 1000 < self.t0:
+                return None  # файл от прошлой сдачи этого задания
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+        return (min(n, total), total) if total > 0 else None
+
     def render(self):
         """◐ <b>Решаю задание</b> / цитата: название и шаги (✓ сделано, ▸ сейчас) / полоска, проценты, время."""
         head = f"{SPIN[self.tick % len(SPIN)]} <b>{self.title}</b>"
         clock = mmss(time.time() - self.t0)
-        steps = [f"✓ {s}" for s in self.done_steps[-3:]] + ([f"▸ <b>{self.current}</b>"] if self.current else [])
+        current = self.current
+        sub = self.submitting()
+        if sub:
+            n, total = sub
+            current = (f"{SUBMIT_STEP} · вопрос {min(n + 1, total)} из {total}" if n < total
+                       else f"{SUBMIT_STEP} · отправляю")
+            lo, hi = self.span
+            self.frac = max(self.frac, min(lo + (0.88 + 0.1 * n / total) * (hi - lo), 0.99))
+        steps = [f"✓ {s}" for s in self.done_steps[-3:]] + ([f"▸ <b>{current}</b>"] if current else [])
         foot = f"<code>{bar(self.frac)}</code> <i>{int(self.frac * 100)}% · {clock}</i>" if self.progress else ""
         if not steps and not self.progress:  # просто ожидание: подпись и время одной строкой
             return f"{head}\n<i>{self.sub + ' · ' if self.sub else ''}{clock}</i>"
@@ -532,7 +556,9 @@ class Live:
 
     def state(self):
         """Для приложения: то же, что на карточке, без HTML."""
-        return {"title": plain(self.title), "sub": plain(self.sub), "step": plain(self.current),
+        sub = self.submitting()
+        step = f"{SUBMIT_STEP} · вопрос {min(sub[0] + 1, sub[1])} из {sub[1]}" if sub and sub[0] < sub[1] else self.current
+        return {"title": plain(self.title), "sub": plain(self.sub), "step": plain(step),
                 "done": [plain(x) for x in self.done_steps[-3:]], "frac": self.frac if self.progress else None,
                 "secs": int(self.seconds())}
 
@@ -799,8 +825,9 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
     return True, result.get("result") or ""
 
 
+SUBMIT_STEP = "Сдаю на сайт"
 STEPS = [  # (что в команде или пути, подпись шага, доля готовности)
-    ("submit.js", "Сдаю на сайт", 0.88),
+    ("submit.js", SUBMIT_STEP, 0.88),
     ("answer.js", "Отправляю учителю", 0.9),
     ("fetch.js", "Читаю условие", 0.2),
     ("pdftoppm", "Листаю рабочий лист", 0.3),
@@ -1080,6 +1107,7 @@ def _run_task(chat, url, text, show, mid, task):
         drafts.clear(task)
         live = Live(chat, "Смотрю ответы" if show else "Решаю задание", esc(drafts.task_info(task)[1]),
                     sub_fn=lambda: esc(drafts.task_info(task)[1]))
+        live.task = task
         live.step("Запускаю Claude", 0.05)
         try:
             ok, out = solve(url, text, show, on_tool=live.tool)
@@ -2016,6 +2044,7 @@ def run_all(chat, tests):
             for i, t in enumerate(tests):
                 live.title = f"Сдаю автотесты · {i + 1} из {n}"
                 live.reset(esc(t["title"]), i / n)
+                live.task, live.span = (re.findall(r"task/([0-9a-f-]{36})", t["url"]) or [None])[0], (i / n, (i + 1) / n)
                 ok, out = solve(t["url"], on_tool=lambda name, inp: (lambda st: st and live.step(st[0], (i + st[1]) / n))(step_of(name, inp)))
                 score, body = parse_score(out) if ok else (None, out)
                 title = esc(t["title"] or f"Тест {i + 1}")
