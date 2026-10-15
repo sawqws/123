@@ -2,6 +2,7 @@
 usage: python3 bot/test_bot.py
 """
 import json
+import shutil
 import os
 import pathlib
 import sys
@@ -1030,6 +1031,36 @@ class BotTest(unittest.TestCase):
             live.step("ещё шаг", 0.5)
         self.assertEqual(len(calls), calls_after)
         self.assertEqual(calls[-1][0], "deleteMessage")
+
+    def test_live_shows_question_while_submitting(self):
+        """Сдача теста «как человек» идёт минутами — карточка показывает вопрос, а не стоит на 88%."""
+        task = "11111111-2222-3333-4444-555555555555"
+        folder = os.path.join(bot.drafts.TMP, task)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "submit.json")
+        calls, patch = self.edit_with()
+        try:
+            with patch:
+                live = bot.Live(CHAT, "Решаю задание", "Тест")
+                live.task = task
+                live.step(bot.SUBMIT_STEP, 0.88)
+                with open(path, "w") as f:  # файл от прошлой сдачи — не считается
+                    json.dump({"n": 9, "N": 10, "at": (live.t0 - 60) * 1000}, f)
+                self.assertNotIn("вопрос", live.render())
+                with open(path, "w") as f:
+                    json.dump({"n": 4, "N": 10, "at": time.time() * 1000}, f)
+                text = live.render()
+                self.assertIn("Сдаю на сайт · вопрос 5 из 10", text)
+                self.assertIn("92%", text)
+                self.assertEqual(live.state()["step"], "Сдаю на сайт · вопрос 5 из 10")
+                with open(path, "w") as f:
+                    json.dump({"n": 10, "N": 10, "at": time.time() * 1000}, f)
+                self.assertIn("отправляю", live.render())
+                live.step("Готово", 0.99)
+                self.assertNotIn("вопрос", live.render())  # другой шаг — файл не читаем
+                live.done()
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     def test_app_shows_progress_while_slots_are_free(self):
         """Приложение показывает живой ход, когда решается хоть одно задание (раньше — только когда заняты все 3 места)."""

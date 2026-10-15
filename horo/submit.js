@@ -10,7 +10,8 @@
 //   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]
 //   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать)
 const fs = require('fs');
-const { open, close, loadTask, BASE } = require('./lib');
+const path = require('path');
+const { open, close, loadTask, BASE, TMP } = require('./lib');
 
 const args = process.argv.slice(2);
 const [url, ansFile] = args.filter(a => !a.startsWith('--'));
@@ -52,7 +53,15 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     await page.goto(`${t.taskUrl}/questions/${qs[0].uuid}`, { waitUntil: 'networkidle', timeout: 60000 });
     await page.waitForTimeout(2000);
 
+    // на каком вопросе — для живой карточки бота («Сдаю на сайт · вопрос 5 из 12»): паузы идут минутами
+    const prog = done => {
+      try {
+        fs.mkdirSync(path.join(TMP, t.task), { recursive: true });
+        fs.writeFileSync(path.join(TMP, t.task, 'submit.json'), JSON.stringify({ n: done, N, at: Date.now() }));
+      } catch (e) { /* без карточки сдача всё равно идёт */ }
+    };
     for (let n = 1; n <= N; n++) {
+      prog(n - 1);
       const q = qs[n - 1];
       const a = ANS[n];
       const title = (await page.locator('[data-testid=questionTitle]').innerText()).trim();
@@ -162,6 +171,7 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       } else if (noSubmit) {
         console.log('--no-submit: ответы введены, тест не отправлен');
       } else {
+        prog(N);
         await page.getByRole('button', { name: 'Отправить на проверку' }).click();
         await page.waitForTimeout(5000);
         await page.waitForLoadState('networkidle').catch(() => {});
