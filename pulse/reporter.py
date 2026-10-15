@@ -401,7 +401,12 @@ def main(argv):
         print(json.dumps({"rid": remote_id(), **s.summary()}, ensure_ascii=False, indent=1))
     elif cmd == "stop":
         try:
-            os.kill(int(open(pidfile(session_id())).read()), signal.SIGTERM)
+            pid = int(open(pidfile(session_id())).read())
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(30):  # дождаться выхода — сразу следом может идти start
+                if not alive(pid):
+                    break
+                time.sleep(0.1)
             print("остановлен")
         except (OSError, ValueError):
             print("не запущен")
