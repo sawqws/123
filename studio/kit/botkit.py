@@ -39,7 +39,8 @@
 
 Окружение: BOT_TOKEN, APP_PORT (порт мини-приложения на 127.0.0.1), APP_URL (его https-адрес), BOT_OWNER (id
 владельца), BOTKIT_COMMON (папка common/ репозитория: голосовые и фото). Данные — data/ рядом с ботом.
-Тесты без сети: t = bot.testing(); t.send("/start"); t.press("add|250"); t.last, t.buttons, t.api("state").
+Тесты без сети: t = bot.testing(); t.send("/start"); t.press("add|250"); t.last, t.buttons, t.api("state"),
+t.kb — кнопки меню-квадратика.
 Режим «💬 Чат / 📱 Приложение» встроен: первый /start (если есть https-адрес) спрашивает «🧭 Как удобнее?» (кнопки
 mode:chat / mode:app), потом /mode, кнопка «⚙️ Режим» и строка «💬 Перейти в чат» в приложении (kit.js → POST
 api/mode {mode}); bot.ui_mode() → "chat" | "app" | "". bot.menu(...) сам собирает главный
@@ -48,6 +49,12 @@ bot.app_button() в режиме «чат» возвращает None (rows() и
 🛠 Поддержка встроена: /fix (и кнопка kit.support_button()) — владелец пишет, что сломалось или что улучшить,
 Claude на сервере правит код бота, гоняет test_bot.py и перезапускает его (common/support.py). В мини-приложении —
 строка «🛠 Поддержка и пожелания» (kit.js, сама внизу) → встроенный api("support") → то же самое.
+☰ Меню-квадратик справа от поля ввода встроено (как у Главного): обычная клавиатура Telegram, свёрнутая в значок
+(one_time_keyboard, не is_persistent). По умолчанию — из главного экрана bot.menu(...): первые 6 кнопок + «⚙️ Режим» и
+«🛠 Поддержка»; нажатие — то же действие, что у inline-кнопки (текст кнопки не уходит в @bot.text). Свои ряды —
+kit.Bot(..., kb=[[kit.b("🎲 Игра", "play"), kit.b("📋 Список", "list")], ...]) (ещё kit.KB_MODE, KB_SUPPORT, KB_APP,
+KB_HOME), без меню — kb=False. Ставится на /start и один раз при запуске владельцу (версия — kb_version и состав
+кнопок, в db «_kb»); kb_boot=False — не писать при запуске (бот для чужого человека).
 """
 import datetime
 import hashlib
@@ -72,6 +79,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MSK = datetime.timezone(datetime.timedelta(hours=3))
 DAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 MODES = {"chat": "💬 чат", "app": "📱 приложение"}
+KB_NOTE = "☰ Меню — квадратик справа от поля ввода"
+KB_MODE = ("⚙️ Режим", "mode")         # готовые кнопки для своего меню-квадратика (kb=)
+KB_SUPPORT = ("🛠 Поддержка", "sup|ask")
+KB_APP = ("📱 Приложение", "_app")
+KB_HOME = ("🏠 Главное", "home")
 
 
 # ---------- стиль сообщений (один на все боты) ----------
@@ -198,14 +210,17 @@ class Ctx:
         self.text, self.args, self.msg, self.cq = text or "", args or [], msg or {}, cq
         self.mid, self.photo, self.data = mid, photo, data
         self._toast = None
+        self.sent = False  # прислали ли что-то в чат (кнопка меню-квадратика: всплывашки нет — тогда тост текстом)
 
     def say(self, text, buttons=None):
         """Новое сообщение. Возвращает его id."""
+        self.sent = True
         return self.bot.send(self.chat, text, buttons)
 
     def show(self, text, buttons=None):
         """Экран: из кнопки — правит то же сообщение, из сообщения — присылает новое."""
         if self.mid:
+            self.sent = True
             self.bot.edit(self.chat, self.mid, text, buttons)
             return self.mid
         self.mid = self.say(text, buttons)
@@ -234,9 +249,11 @@ class Ctx:
         self.bot.call("sendChatAction", chat_id=self.chat, action="typing")
 
     def send_photo(self, path, caption="", buttons=None):
+        self.sent = True
         return self.bot.send_file(self.chat, path, caption, buttons, kind="photo")
 
     def send_file(self, path, caption="", buttons=None):
+        self.sent = True
         return self.bot.send_file(self.chat, path, caption, buttons, kind="document")
 
     def delete(self):
@@ -256,7 +273,8 @@ class Request:
 
 class Bot:
     def __init__(self, name, emoji="✨", about="", short="", commands=None, public=False, app_text=None,
-                 token=None, port=None, app_url=None, data=None, webapp=None, support=None, tg_name=None):
+                 token=None, port=None, app_url=None, data=None, webapp=None, support=None, tg_name=None,
+                 kb=None, kb_version=1, kb_boot=True, kb_placeholder="Напиши или ☰ справа"):
         self.name, self.emoji, self.about, self.short = name, emoji, about, short
         self.tg_name = tg_name  # имя бота в Telegram (setMyName); None — не трогаем, оно задано в BotFather
         self.commands = commands or [("start", "Главное"), ("help", "Что умею")]
@@ -273,7 +291,8 @@ class Bot:
         self.webapp = webapp or os.path.join(self.dir, "webapp")
         self.db = Store(os.path.join(self.data_dir, "db.json"))
         self.handlers = {"command": {"mode": self._mode_cmd, "app": self._app_cmd},
-                         "button": {"mode": self._mode_btn, "mode:chat": self._mode_btn, "mode:app": self._mode_btn},
+                         "button": {"mode": self._mode_btn, "mode:chat": self._mode_btn, "mode:app": self._mode_btn,
+                                    "_app": self._app_cmd},
                          "reply": {}, "api": {"mode": self._mode_api}}  # встроенные; бот может переопределить
         if all(c != "mode" for c, _ in self.commands):
             self.commands = list(self.commands) + [("mode", "Чат или приложение")]
@@ -288,6 +307,10 @@ class Bot:
         self.offset = 0
         self.testing_mode = None
         self.username = None
+        # ☰ меню-квадратик: kb — свои ряды (kit.b(...) или (текст, data)), None — из главного экрана, False — без меню
+        self.kb_cfg, self.kb_version, self.kb_boot, self.kb_placeholder = kb, kb_version, kb_boot, kb_placeholder
+        self._kb_seen = None  # кнопки последнего bot.menu(...) — из них меню по умолчанию
+        self._local = threading.local()  # .dry — «вхолостую»: главный экран без отправки (узнать его кнопки)
         env_owner = re.findall(r"\d+", os.environ.get("BOT_OWNER", ""))
         if env_owner and not self.db.get("_owner"):
             self.db.set("_owner", int(env_owner[0]))
@@ -405,6 +428,8 @@ class Bot:
 
     def call(self, method, files=None, **params):
         """Любой метод Bot API. Цветные кнопки: если Telegram ответит 400 из-за них — те же кнопки без цвета."""
+        if getattr(self._local, "dry", False):  # главный экран вхолостую (узнаём кнопки меню) — в Telegram ни слова
+            return {"ok": True, "result": {}}
         params = {k: v for k, v in params.items() if v is not None}
         mk = params.get("reply_markup")
         if self.plain_buttons and mk:
@@ -521,6 +546,7 @@ class Bot:
         """Главный экран под режим. buttons — ряды кнопок для чата; quick — 1–2 ряда самого нужного для режима
         «приложение» (нет — первый ряд buttons). Кнопка приложения, «⚙️ Режим» и «🛠 Поддержка» добавляются сами."""
         buttons = [row for row in (buttons or []) if row]
+        self._kb_seen = buttons  # из них — меню-квадратик по умолчанию
         tail = [[self.mode_button(), support_button() if self.support_cfg is not False else None]]
         mode = self.ui_mode()
         if mode == "chat" or not self.app_url:
@@ -549,6 +575,8 @@ class Bot:
 
     def later(self, fn, *a):
         """Долгое (ИИ, сеть, распознавание) — в фоне, чтобы бот не замирал. В тестах выполняется сразу."""
+        if getattr(self._local, "dry", False):
+            return None
         if self.testing_mode:
             return fn(*a)
         threading.Thread(target=self._safe, args=(fn, *a), daemon=True).start()
@@ -568,6 +596,9 @@ class Bot:
 
     def handle(self, upd):
         try:
+            data = self._kb_hit(upd.get("message"))
+            if data is not None:  # ☰ кнопка меню-квадратика: раньше поддержки, @bot.reply и @bot.text
+                return self._kb_press(upd["message"], data)
             if self.support and self.support.intercept(upd):  # 🛠 /fix и ответы поддержке
                 return
             if upd.get("managed_bot"):
@@ -608,6 +639,8 @@ class Bot:
             cmd = cmd.split("@")[0].lower()
             self.waits.pop(chat, None)
             fn = self.handlers["command"].get(cmd) or self.home_fn or self._default_home  # неизвестная — главный экран
+            if cmd == "start":
+                self.kb_send(chat, force=True)  # ☰ меню-квадратик — каждый /start (до главного экрана)
             if cmd == "start" and self.app_url and not self.ui_mode():  # первый раз — как удобнее?
                 fn = self.choose_mode
             return fn(Ctx(self, chat, user, text=rest.strip(), args=rest.split(), msg=msg))
@@ -684,6 +717,115 @@ class Bot:
         finally:
             toast, alert = c._toast or ("", False)
             c.ack(toast, alert)
+
+    # --- ☰ меню-квадратик у поля ввода ---
+
+    def kb_rows(self):
+        """Ряды меню-квадратика [[(текст, data), …], …]: свои (kb=) или из главного экрана (первые 6 кнопок
+        bot.menu + «⚙️ Режим», «🛠 Поддержка»). [] — меню нет."""
+        cfg = self.kb_cfg
+        if cfg is False:
+            return []
+        if callable(cfg):
+            cfg = cfg()
+        if cfg:
+            rows = [[_kb_item(x) for x in row if x] for row in cfg if row]
+        else:
+            if self._kb_seen is None:
+                self._kb_probe()
+            flat = [_kb_item(x) for row in self._kb_seen or [] for x in row if isinstance(x, dict) and
+                    x.get("callback_data") and x["callback_data"].split("|")[0] not in ("mode", "sup", "home")]
+            flat = flat[:6]
+            rows = [flat[i:i + 3] for i in range(0, len(flat), 3)]
+            rows.append([x for x in (KB_MODE if self.app_url else None,
+                                     KB_SUPPORT if self.support_cfg is not False else None) if x])
+        seen, out = set(), []
+        for row in rows:
+            uniq = []
+            for t, d in row:
+                if t and d and t not in seen:
+                    seen.add(t)
+                    uniq.append((t, d))
+            if uniq:
+                out.append(uniq)
+        return out
+
+    def _kb_probe(self):
+        """Главный экран вхолостую (в Telegram ничего не уходит) — чтобы узнать кнопки bot.menu до первого /start."""
+        self._kb_seen = []
+        if not self.home_fn:
+            return
+        self._local.dry = True
+        try:
+            self.home_fn(Ctx(self, self.owner or 0, {"id": self.owner}))
+        except Exception as e:
+            print("меню-квадратик:", repr(e), flush=True)
+        finally:
+            self._local.dry = False
+
+    def kb_markup(self, rows=None):
+        rows = self.kb_rows() if rows is None else rows
+        return {"keyboard": [[{"text": t} for t, _ in row] for row in rows], "resize_keyboard": True,
+                "one_time_keyboard": True, "is_persistent": False,
+                "input_field_placeholder": self.kb_placeholder[:64]}
+
+    def kb_send(self, chat, force=False):
+        """Поставить меню-квадратик: один раз на версию (kb_version + состав кнопок) или force (/start). True — поставили."""
+        try:
+            rows = self.kb_rows()
+        except Exception as e:
+            print("меню-квадратик:", repr(e), flush=True)
+            return False
+        if not chat or not rows:
+            return False
+        ver = f"{self.kb_version}:" + hashlib.sha1(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:10]
+        st = self.db.get("_kb") or {}
+        if not force and st.get("ver") == ver:
+            return False
+        try:
+            self.call("sendMessage", chat_id=chat, text=KB_NOTE, reply_markup=self.kb_markup(rows))
+        except Exception as e:
+            print("меню-квадратик:", repr(e), flush=True)
+            return False
+        old = st.get("map") or {}
+        fresh = {t: d for row in rows for t, d in row}
+        keep = {t: d for t, d in old.items() if t not in fresh}  # старые кнопки ещё на руках — тоже работают
+        self.db.set("_kb", {"ver": ver, "map": {**dict(list(keep.items())[-40:]), **fresh}})
+        return True
+
+    def _kb_hit(self, msg):
+        """data кнопки меню-квадратика, если это её нажатие (точный текст кнопки), иначе None."""
+        if not msg or not msg.get("text") or msg.get("photo") or (msg.get("chat") or {}).get("type") != "private":
+            return None
+        text = msg["text"].strip()
+        if not text or text.startswith("/") or self.kb_cfg is False:
+            return None
+        known = (self.db.get("_kb") or {}).get("map") or {}
+        if text in known:
+            return known[text]
+        try:
+            return {t: d for row in self.kb_rows() for t, d in row}.get(text)
+        except Exception:
+            return None
+
+    def _kb_press(self, msg, data):
+        """Нажали кнопку меню-квадратика → то же, что inline-кнопка с этим data (а не разбор текста)."""
+        chat, user = msg["chat"]["id"], msg.get("from") or {}
+        if not self.allowed(user.get("id")):
+            return self.send(chat, f"🔒 <b>{esc(self.name)}</b> — личный бот.")
+        self.waits.pop(chat, None)  # как у inline-кнопки: ожидание ответа текстом снято
+        if self.support and isinstance(getattr(self.support, "waiting", None), dict):
+            self.support.waiting.pop(chat, None)
+        prefix, *args = str(data).split("|")
+        if prefix == "sup":
+            if self.support:
+                return self.support.intercept({"message": {**msg, "text": "/fix"}})
+            return self.send(chat, "🛠 Поддержка сейчас недоступна — попробуй позже: /fix")
+        fn = self.handlers["button"].get(prefix) or self.home_fn or self._default_home
+        c = Ctx(self, chat, user, msg=msg, args=args)
+        fn(c)  # ошибка — handle() пришлёт понятное «⚠️ …» с кнопкой «‹ Главное»
+        if c._toast and not c.sent:  # всплывашки у такой кнопки нет — тот же текст сообщением
+            self.send(chat, esc(c._toast[0]))
 
     def _default_home(self, c):
         self.menu(c, f"{self.emoji} <b>{esc(self.name)}</b>", [esc(self.about)] if self.about else [])
@@ -955,6 +1097,8 @@ class Bot:
             sys.exit("Нет BOT_TOKEN")
         self.setup()
         self._start_support()
+        if self.kb_boot and self.owner:  # ☰ новое меню-квадратик после обновления — один раз (версия в db)
+            self.kb_send(self.owner)
         if self.port:
             threading.Thread(target=self.serve, daemon=True).start()
         if self.jobs:
@@ -1037,11 +1181,27 @@ class Tester:
         return [btn for row in kb for btn in row]
 
     @property
+    def kb(self):
+        """Тексты последнего поставленного меню-квадратика ([] — не ставили)."""
+        for m, p in reversed(self.calls):
+            if m == "sendMessage" and "keyboard" in (p.get("reply_markup") or {}):
+                return [btn["text"] for row in p["reply_markup"]["keyboard"] for btn in row]
+        return []
+
+    @property
     def toasts(self):
         return [p.get("text") for m, p in self.calls if m == "answerCallbackQuery"]
 
 
 # ---------- мелочи ----------
+
+def _kb_item(x):
+    """Кнопка меню-квадратика → (текст ≤ 24, data): из kit.b(...) или (текст, data)."""
+    if isinstance(x, dict):
+        return clip(x.get("text") or ""), x.get("callback_data") or ""
+    t, d = x
+    return clip(t), str(d)
+
 
 def support_button(text="🛠 Поддержка"):
     """Кнопка поддержки (ошибка или доработка) — для главного экрана или /help."""

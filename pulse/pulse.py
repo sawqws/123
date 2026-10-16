@@ -40,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "common"))
 import support  # noqa: E402  🛠 /fix — Claude чинит и дорабатывает этого бота
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода
 
 
 def _load_ui():
@@ -225,10 +226,13 @@ def claim(uid):
 
 # ---------- сводки сессий ----------
 
+KNOWN_WINDOWS = {"claude-opus-5-5": 1_000_000}  # «213.2k of 1M tokens» в Usage приложения Claude (Глеб, 16.10)
+
+
 def window(model, tokens=0):
     """Окно контекста модели: узнаём по первому автосжатию (оно на COMPACT_PCT% окна). До этого — 200 тыс.;
     если чат ушёл за порог сжатия 200 тыс. и не сжался — окно больше (1 млн). -> (окно, точно ли)."""
-    w = st.setdefault("windows", {}).get(model or "?")
+    w = st.setdefault("windows", {}).get(model or "?") or KNOWN_WINDOWS.get(model or "?")
     if w:
         return w, True
     big = st.setdefault("big", {})  # модель, у которой чат уже ушёл за порог сжатия 200 тыс. — окно больше
@@ -273,7 +277,8 @@ def view(s, now=None):
     return {
         "id": s["id"], "title": s.get("title") or "Чат", "url": s.get("url") or "",
         "status": stt, "emoji": STATUS[stt][0], "label": STATUS[stt][1], "model": s.get("model") or "",
-        "ctx": ctx_of(s), "prog": s.get("prog"), "agents": int(s.get("agents") or 0), "tasks": tasks, "done": sum(1 for t in tasks if t.get("status") == "completed"),
+        "ctx": ctx_of(s), "prog": s.get("prog"), "agents": int(s.get("agents") or 0),
+        "agent_list": [a for a in s.get("agent_list") or [] if isinstance(a, dict)], "tasks": tasks, "done": sum(1 for t in tasks if t.get("status") == "completed"),
         "total": len(tasks), "prompt": s.get("prompt"), "nprompts": s.get("nprompts") or 0,
         "prompts": s.get("prompts") or [], "turn": s.get("turn") or {},
         "action": s.get("action") or "", "question": s.get("question") or "", "options": s.get("options") or [],
@@ -299,7 +304,7 @@ def hidden_count(now=None):
 
 
 FIELDS = ("title", "url", "model", "started", "updated", "status", "ctx", "prompt", "prompts", "nprompts", "tasks",
-          "turn", "action", "question", "options", "reply", "repos", "prog", "agents")
+          "turn", "action", "question", "options", "reply", "repos", "prog", "agents", "agent_list")
 
 
 def ingest(body, now=None):
@@ -356,6 +361,99 @@ def prune(now):
         ss.pop(k, None)
     for k in [k for k, s in ss.items() if now - (s.get("seen") or 0) > 3 * KEEP]:
         ss.pop(k, None)
+
+
+# ---------- лимиты аккаунта (как «Usage» в приложении Claude) ----------
+# `claude -p /usage` на сервере — тот же аккаунт Глеба; токенов не тратит. Раз в LIMITS_EVERY, пока есть живая карточка.
+
+LIMITS_EVERY = 5 * 60
+LIMIT_NAMES = {"session": "Лимит 5 ч", "week": "Неделя", "fable": "Fable"}
+USAGE_RE = re.compile(r"Current (session|week \(all models\)|week \(Fable[^)]*\))\s*:\s*(\d+)% used(?:\s*·\s*resets\s*([^\n(]+?)\s*\(UTC\))?", re.I)
+_limits_at = 0
+
+
+def parse_usage(text, now=None):
+    """Вывод /usage → {"session"|"week"|"fable": {"pct", "reset" (epoch или None)}}."""
+    now = now or time.time()
+    out = {}
+    for m in USAGE_RE.finditer(text or ""):
+        kind = "session" if m.group(1).lower() == "session" else "fable" if "fable" in m.group(1).lower() else "week"
+        out[kind] = {"pct": int(m.group(2)), "reset": utc_time(m.group(3), now)}
+    return out
+
+
+def utc_time(text, now):
+    """«Oct 16, 11:10am» / «11pm» (UTC) → epoch; не разобрали — None."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return None
+    year = datetime.fromtimestamp(now, ZoneInfo("UTC")).year
+    for f in ("%b %d, %I:%M%p", "%b %d, %I%p", "%b %d %I:%M%p", "%b %d %I%p", "%I:%M%p", "%I%p"):
+        try:
+            d = datetime.strptime(text.replace(" am", "am").replace(" pm", "pm"), f)
+        except ValueError:
+            continue
+        if "%b" not in f:
+            today = datetime.fromtimestamp(now, ZoneInfo("UTC"))
+            d = d.replace(year=today.year, month=today.month, day=today.day)
+            t = d.replace(tzinfo=ZoneInfo("UTC")).timestamp()
+            return t + 86400 if t < now - 60 else t
+        return d.replace(year=year, tzinfo=ZoneInfo("UTC")).timestamp()
+    return None
+
+
+def fetch_limits():
+    os.makedirs(DATA, exist_ok=True)
+    try:
+        r = subprocess.run(["claude", "-p", "/usage"], capture_output=True, text=True, timeout=90, cwd=DATA,
+                           env={**os.environ, "CLAUDECODE": ""})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("usage:", e)
+        return None
+    got = parse_usage(r.stdout)
+    return got or None
+
+
+def refresh_limits(force=False):
+    global _limits_at
+    if not force and (time.time() - _limits_at < LIMITS_EVERY or not st.get("live")):
+        return
+    _limits_at = time.time()
+    got = fetch_limits()
+    if got:
+        with LOCK:
+            st["limits"] = {**got, "at": time.time()}
+            st["_dirty"] = True
+
+
+DAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+
+
+def when_reset(ts, now=None):
+    """Время сброса по Москве: «в 14:10», «завтра в 02:00», «чт в 02:00»."""
+    if not ts:
+        return ""
+    now = now or time.time()
+    d, today = datetime.fromtimestamp(ts, TZ), datetime.fromtimestamp(now, TZ)
+    days = (d.date() - today.date()).days
+    day = "" if days <= 0 else "завтра " if days == 1 else DAYS[d.weekday()] + " "
+    return f"сброс {day}в {d:%H:%M}"
+
+
+def limits_text(now=None):
+    """Две-три строки лимитов для карточки; старше 30 мин или нет — пусто."""
+    now = now or time.time()
+    lim = st.get("limits") or {}
+    if not lim or now - (lim.get("at") or 0) > 1800:
+        return ""
+    out = []
+    for k in ("session", "week", "fable"):
+        x = lim.get(k)
+        if not x or (k == "fable" and not x.get("pct")):
+            continue
+        r = when_reset(x.get("reset"), now)
+        out.append(f"{LIMIT_NAMES[k]} {bar(x['pct'])} {x['pct']}%" + (f" · <i>{r}</i>" if r else ""))
+    return "\n".join(out)
 
 
 # ---------- вид в чате ----------
@@ -461,6 +559,8 @@ def bars(v):
     p = v.get("prog")
     if p and p.get("total"):
         out.append(f"Сделано {bar(p['pct'])} {p['pct']}%")
+    elif v["status"] == "waiting":  # без плана, но запрос выполнен и чат ждёт тебя
+        out.append(f"Сделано {bar(100)} 100%")
     pct = v["ctx"]["pct"]
     out.append(f"Память {bar(pct)} {pct}%" + (" ⚠️ <i>открой новый чат</i>" if pct >= NEW_CHAT_PCT else ""))
     return out
@@ -468,11 +568,34 @@ def bars(v):
 
 def head(v, now=None, n=32):
     extra = f" · {agents_word(v['agents'])}" if v.get("agents") else ""
-    return f"{v['emoji']} <b>{esc(clip(v['title'], n))}</b> · {state_word(v, now)}{extra}"
+    title = f"<b>{esc(clip(v['title'], n))}</b>"
+    if v.get("url"):  # название — ссылка: одно нажатие, и ты в этом чате Claude
+        title = f'<a href="{esc(v["url"])}">{title}</a>'
+    return f"{v['emoji']} {title} · {state_word(v, now)}{extra}"
+
+
+def steps_word(n):
+    return f"{n} {'шаг' if n % 10 == 1 and n % 100 != 11 else 'шага' if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else 'шагов'}"
+
+
+def agent_lines(v, now=None):
+    """Под чатом — каждый работающий агент (Глеб 16.10: «сколько процентов осталось сделать агенту»):
+    по плану агента — «сделано 40% · осталось 60%», без плана — сколько работает и шагов (процент не выдумываем)."""
+    now = now or time.time()
+    out = []
+    for a in v.get("agent_list") or []:
+        p = a.get("prog") or {}
+        name = esc(clip(a.get("name"), 30))
+        if p.get("total"):
+            out.append(f"🤖 {name} — сделано {p['pct']}% · осталось {100 - p['pct']}%")
+        else:
+            took = f"{ago(now - a['started'])} · " if a.get("started") else ""
+            out.append(f"🤖 {name} — {took}{steps_word(int(a.get('steps') or 0))}")
+    return out
 
 
 def block(v, now=None):
-    return "\n".join([head(v, now)] + bars(v))
+    return "\n".join([head(v, now)] + bars(v) + agent_lines(v, now))
 
 
 def counts(vs):
@@ -491,16 +614,20 @@ def mode_note():
 def home_text(now=None):
     now = now or time.time()
     vs = visible(now)
+    lim = limits_text(now)
+    top = "<b>📡 Пульс</b>" + (f"\n{lim}" if lim else "")
     if not vs:
-        return "<b>📡 Пульс</b>\n\nСейчас чатов нет. Напиши в любом чате Claude — он появится здесь."
+        return top + "\n\nСейчас чатов нет. Напиши в любом чате Claude — он появится здесь."
     hid = hidden_count(now)
     foot = f"\n\n<i>скрыто {hid}</i>" if hid else ""
-    return "<b>📡 Пульс</b>\n\n" + "\n\n".join(block(v, now) for v in vs[:8]) + foot
+    return top + "\n\n" + "\n\n".join(block(v, now) for v in vs[:8]) + foot
 
 
 def home_buttons(vs=None):
     vs = visible() if vs is None else vs
-    chats = [btn(f"{v['emoji']} {clip(v['title'], 12)}", f"s|{v['id']}") for v in vs[:9]]
+    # кнопка чата — сразу в чат Claude (Глеб 16.10: «переход одним нажатием»); подробно — в «⚙️» → «📋 Подробно»
+    chats = [link(f"{v['emoji']} {clip(v['title'], 12)}", v["url"]) if v["url"]
+             else btn(f"{v['emoji']} {clip(v['title'], 12)}", f"s|{v['id']}") for v in vs[:9]]
     rows = [chats[i:i + 3] for i in range(0, len(chats), 3)]
     rows += app_buttons()
     rows.append([btn("🔄 Обновить", "home"), btn("⚙️", "more")])
@@ -526,6 +653,8 @@ def app_buttons(always=False):
 
 def home(chat, mid=None, live=True):
     """Главная карточка; она же живая — правится сама, пока чаты что-то делают."""
+    if time.time() - (st.get("limits") or {}).get("at", 0) > LIMITS_EVERY:
+        threading.Thread(target=lambda: (refresh_limits(force=True), refresh_live(force=True)), daemon=True).start()
     vs = visible()
     r = show(chat, mid, home_text(), home_buttons(vs))
     if live:
@@ -621,7 +750,8 @@ def more_text():
 
 
 def more_buttons():
-    rows = [[btn("🔔 Уведомления", "al"), btn("⚙️ Режим", "mode")], [support.Support.button()]]
+    rows = [[btn("📋 Подробно по чатам", "dl")], [btn("🔔 Уведомления", "al"), btn("⚙️ Режим", "mode")],
+            [support.Support.button()]]
     if hidden_count():
         rows.append([btn("👁 Показать скрытые", "unhide")])
     rows.append([btn("← Назад", "home")])
@@ -717,6 +847,7 @@ def watcher():
                 if st.pop("_dirty", None) or events:
                     save()
             notify(events)
+            refresh_limits()
             refresh_live()
         except Exception as e:
             print("watcher:", e)
@@ -746,6 +877,42 @@ def setup_bot():
             print("setup:", e)
 
 
+KB = menukb.MenuKB([["📡 Чаты", "📋 Подробно"], ["🔔 Уведомления", "🛠 Поддержка"], ["⚙️ Режим", "📱 Приложение"]],
+                   version=1, placeholder="☰ меню — справа")
+
+
+def send_kb(chat, text, markup):
+    return tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def ensure_kb(chat, force=False):
+    KB.ensure(send_kb, chat, done=st.get("kb_ver"), mark=lambda v: (st.__setitem__("kb_ver", v), save()), force=force)
+
+
+def chats_list(chat, mid=None):
+    """«📋 Подробно»: какой чат показать подробно."""
+    vs = visible()
+    chats = [btn(f"{v['emoji']} {clip(v['title'], 20)}", f"s|{v['id']}") for v in vs[:9]]
+    show(chat, mid, "<b>📋 Подробно</b>\nКакой чат?" if vs else "Сейчас чатов нет.",
+         [chats[i:i + 2] for i in range(0, len(chats), 2)] + [[btn("← Назад", "home")]])
+
+
+def on_kb(chat, text):
+    """Кнопка меню-квадратика → тот же экран, что у кнопок в сообщениях."""
+    if text == "📡 Чаты":
+        home(chat)
+    elif text == "📋 Подробно":
+        chats_list(chat)
+    elif text == "🔔 Уведомления":
+        send(chat, alerts_text(), alerts_buttons())
+    elif text == "🛠 Поддержка":
+        SUP.ask(chat) if SUP else send(chat, "⚠️ Поддержка ещё запускается — попробуй через минуту")
+    elif text == "⚙️ Режим":
+        mode_card(chat)
+    elif text == "📱 Приложение":
+        on_message({"chat": {"id": chat, "type": "private"}, "from": {"id": owner_id()}, "text": "/app"})
+
+
 def on_message(msg):
     chat = msg["chat"]["id"]
     uid = (msg.get("from") or {}).get("id")
@@ -759,6 +926,10 @@ def on_message(msg):
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
         return
+    if KB.has(text):
+        return on_kb(chat, text)
+    if cmd == "/start":
+        ensure_kb(chat)
     if cmd == "/mode":
         mode_card(chat)
     elif cmd == "/alerts":
@@ -812,6 +983,8 @@ def on_callback(cq):
             show(chat, mid, alerts_text(), alerts_buttons())
         elif data == "more":
             show(chat, mid, more_text(), more_buttons())
+        elif data == "dl":
+            chats_list(chat, mid)
         elif data == "mode":
             mode_card(chat, mid)
         elif data.startswith("mode:"):
@@ -865,6 +1038,7 @@ def check_init_data(init_data, max_age=86400):
 
 def app_state():
     return {"sessions": visible(), "hidden": hidden_count(), "alerts": alerts(), "mode": ui_mode(),
+            "limits": st.get("limits") or {},
             "now": time.time()}
 
 
@@ -1104,6 +1278,8 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     SUP = sup = support.Support(TOKEN, "Пульс", folders=["pulse"], pm2="pulse-bot", allowed=lambda u: u == owner_id(),
                                 tests=["python3 pulse/test_pulse.py"])
+    with LOCK:
+        ensure_kb(owner_id())  # меню-квадратик — один раз на версию, сам при запуске
     print("Пульс запущен")
     while True:
         try:

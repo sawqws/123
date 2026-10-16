@@ -704,6 +704,157 @@ class Sites(StudioFlow):
         self.assertEqual(studio.sites(), {})
 
 
+def boot(bot):
+    """bot.run() до первого getUpdates — то, что бот делает при запуске (без сети, профиля и поддержки)."""
+    fake = bot._call
+
+    def stop(method, params, files=None):
+        if method == "getUpdates":
+            raise SystemExit
+        return fake(method, params, files)
+    with mock.patch.object(bot, "setup"), mock.patch.object(bot, "_start_support"), \
+            mock.patch.object(bot, "port", 0), mock.patch.object(bot, "jobs", []), mock.patch.object(bot, "_call", stop):
+        try:
+            bot.run()
+        except SystemExit:
+            pass
+
+
+def kb_sent(t):
+    """Сколько раз ставили меню-квадратик (sendMessage с обычной клавиатурой)."""
+    return sum(1 for m, p in t.calls if m == "sendMessage" and "keyboard" in (p.get("reply_markup") or {}))
+
+
+class StudioMenu(unittest.TestCase):
+    """☰ Меню-квадратик Студии: свои кнопки, один раз на версию, /start — снова, нажатие — действие, а не идея."""
+    setUp, tearDown = StudioFlow.setUp, StudioFlow.tearDown  # то же окружение, без повтора тестов StudioFlow
+
+    def test_once_per_version_start_and_buttons(self):
+        boot(studio.bot)
+        self.assertEqual(kb_sent(self.t), 1)
+        for btn in ("🆕 Новый бот", "🧩 Мои боты", "🌐 Мои сайты", "⚙️ Режим", "🛠 Поддержка"):
+            self.assertIn(btn, self.t.kb)
+        boot(studio.bot)
+        self.assertEqual(kb_sent(self.t), 1)  # та же версия — при запуске не пишем
+        self.t.send("/start")
+        self.assertEqual(kb_sent(self.t), 2)
+        self.assertIn("Студия", self.t.last)
+
+    def test_press_runs_action_not_idea(self):
+        self.t.send("🧩 Мои боты")
+        self.assertIn("Мои боты", self.t.last)
+        self.t.send("🆕 Новый бот")
+        self.assertIn("Какой бот или сайт нужен", self.t.last)
+        self.assertFalse(studio.draft().get("stage"))  # текст кнопки не стал идеей
+        self.assertEqual(self.f.prompts, [])  # и в Claude не ушёл
+        self.t.send("бот, который напоминает пить воду")  # ответ на вопрос — идея
+        self.assertEqual(studio.draft()["stage"], "ask")
+        self.t.send("🆕 Новый бот")  # черновик в работе — показать, где остановились
+        self.assertIn("Вопрос 1 из 2", self.t.last)
+        self.assertEqual(studio.draft()["stage"], "ask")
+
+    def test_press_drops_text_wait(self):
+        self.t.send("бот, который напоминает пить воду")
+        d = studio.draft()
+        self.t.press(f"ans|{d['id']}|0|1")
+        self.t.press(f"ans|{d['id']}|1|0")
+        self.assertEqual(studio.draft()["stage"], "name")
+        self.t.send("🌐 Мои сайты")  # кнопка меню — не имя бота
+        self.assertNotEqual(studio.draft().get("name"), "🌐 Мои сайты")
+        self.assertIn("Мои сайты", self.t.last)
+
+
+class KitMenu(unittest.TestCase):
+    """☰ Меню-квадратик в botkit — у всех ботов Студии: из главного экрана, свои ряды, без меню."""
+
+    def make(self, **kw):
+        b = kit.Bot("T", token="1:x", data=tempfile.mkdtemp(), support={}, app_url="https://apps.x/b/t/", **kw)
+        t = b.testing(owner=5)
+        b.db.data["_mode"] = "chat"
+        self.got = []
+
+        @b.home
+        def home(c):
+            b.menu(c, "🧪 <b>T</b>", ["главный"],
+                   buttons=[[kit.b("➕ Добавить", "add", "primary"), kit.url("🔗 Сайт", "https://x.ru")],
+                            [kit.b("📊 Неделя", "week"), kit.b("📅 Месяц", "month"), kit.b("🏆 Цели", "goals")],
+                            [kit.b("🔔 Напоминания", "rem"), kit.b("📤 Экспорт", "exp"), kit.b("🗑 Очистить", "clr")]])
+        for name in ("add", "week", "month", "goals", "rem", "exp", "clr"):
+            b.button(name)(lambda c, n=name: (self.got.append(n), c.say(f"экран {n}")))
+        b.button("quiet")(lambda c: c.toast("Сделал"))
+        b.reply("name")(lambda c: self.got.append("reply:" + c.text))
+        b.text(lambda c: self.got.append("text:" + c.text))
+        return b, t
+
+    def test_default_from_main_menu(self):
+        b, t = self.make()
+        boot(b)
+        self.assertEqual(kb_sent(t), 1)
+        self.assertEqual(t.kb, ["➕ Добавить", "📊 Неделя", "📅 Месяц", "🏆 Цели", "🔔 Напоминания", "📤 Экспорт",
+                                "⚙️ Режим", "🛠 Поддержка"])  # первые 6 (без url) + режим и поддержка
+        self.assertFalse([p for m, p in t.calls if m == "sendMessage" and "inline_keyboard" in
+                          (p.get("reply_markup") or {})])  # главный экран при запуске — вхолостую, в чат не ушёл
+        mk = [p for m, p in t.calls if m == "sendMessage"][-1]["reply_markup"]
+        self.assertEqual([len(r) for r in mk["keyboard"]], [3, 3, 2])
+        self.assertTrue(mk["one_time_keyboard"] and mk["resize_keyboard"] and not mk["is_persistent"])
+        boot(b)
+        self.assertEqual(kb_sent(t), 1)  # та же версия — второй раз не ставим
+        t.send("/start")
+        self.assertEqual(kb_sent(t), 2)  # /start — всегда
+        self.assertIn("главный", t.last)
+        t.send("📊 Неделя")
+        self.assertEqual(self.got, ["week"])  # то же, что inline-кнопка; не в @bot.text
+        self.assertEqual(t.last, "экран week")
+        t.send("⚙️ Режим")
+        self.assertIn("Как удобнее", t.last)
+
+    def test_new_version_once_and_old_texts_still_work(self):
+        b, t = self.make(kb_version=1)
+        boot(b)
+        b.kb_version = 2
+        boot(b)
+        boot(b)
+        self.assertEqual(kb_sent(t), 2)
+        b.kb_cfg = [[kit.b("🏆 Цели", "goals")]]  # меню поменялось — старая кнопка на руках ещё работает
+        t.send("📊 Неделя")
+        self.assertEqual(self.got, ["week"])
+
+    def test_press_drops_wait_and_toast_becomes_message(self):
+        b, t = self.make(kb=[[kit.b("🤫 Тихо", "quiet"), kit.b("➕ Добавить", "add")], [kit.KB_SUPPORT]])
+        c = kit.Ctx(b, 5, {"id": 5})
+        c.ask("name", "Как назвать?")
+        t.send("➕ Добавить")
+        t.send("просто текст")
+        self.assertEqual(self.got, ["add", "text:просто текст"])  # ожидание ответа снято нажатием
+        t.send("🤫 Тихо")
+        self.assertEqual(t.last, "Сделал")  # всплывашки нет — тот же текст сообщением
+        t.send("🛠 Поддержка")
+        self.assertIn("Поддержка", t.last)
+        self.assertNotIn("text:🛠 Поддержка", self.got)
+
+    def test_support_button_opens_fix(self):
+        b, t = self.make(kb=[[kit.KB_SUPPORT]])
+        seen = []
+        b.support = mock.Mock(waiting={5: {"at": time.time()}})
+        b.support.intercept.side_effect = lambda upd: seen.append(upd["message"]["text"]) or True
+        t.send("🛠 Поддержка")
+        self.assertEqual(seen, ["/fix"])
+        self.assertNotIn(5, b.support.waiting)
+
+    def test_no_menu_and_no_boot(self):
+        b, t = self.make(kb=False)
+        boot(b)
+        t.send("/start")
+        self.assertEqual(kb_sent(t), 0)
+        t.send("📊 Неделя")
+        self.assertEqual(self.got, ["text:📊 Неделя"])  # без меню — обычный текст
+        b2, t2 = self.make(kb_boot=False)
+        boot(b2)
+        self.assertEqual(kb_sent(t2), 0)  # при запуске не пишет
+        t2.send("/start")
+        self.assertEqual(kb_sent(t2), 1)  # а на /start — ставит
+
+
 class KitSync(unittest.TestCase):
     """Новый общий вид доходит до уже сделанных ботов: только kit.css/kit.js, только внутри папки ботов."""
     def setUp(self):
@@ -736,6 +887,22 @@ class KitSync(unittest.TestCase):
         self.assertIn("bot.py", studio.git(path, "status", "--porcelain")[1])
         self.assertEqual(studio.sync_kits(), [])  # второй раз — уже одинаковые, без коммита
         self.assertEqual(studio.git(path, "rev-list", "--count", "HEAD")[1].strip(), "2")
+
+    def test_botkit_updated_only_if_present_and_bot_restarted(self):
+        path = self.make("water", pm2="bot-water")
+        with open(os.path.join(path, "botkit.py"), "w") as f:
+            f.write("# старый botkit")
+        studio.git(path, "add", "botkit.py")
+        studio.commit(path, "botkit")
+        nokit = self.make("nokit", pm2="bot-nokit")
+        calls = []
+        fake = lambda *a, **k: (calls.append(a), (0, ""))[1] if a[0] == "pm2" else REAL_SH(*a, **k)  # noqa: E731
+        with mock.patch.object(studio, "sh", fake):
+            self.assertEqual(sorted(studio.sync_kits()), ["nokit", "water"])
+        self.assertEqual(read(os.path.join(path, "botkit.py")), read(os.path.join(HERE, "kit", "botkit.py")))
+        self.assertFalse(os.path.exists(os.path.join(nokit, "botkit.py")))  # чего не было — не создаём
+        self.assertIn("botkit.py", studio.git(path, "show", "--name-only", "--format=", "HEAD")[1].split())
+        self.assertEqual(calls, [("pm2", "restart", "bot-water")])  # новый botkit — перезапуск, только у него
 
     def test_skips_outside_sites_and_links(self):
         outside = os.path.join(TMP, "outside")
@@ -1004,7 +1171,26 @@ studio.claude("вопросы", os.environ["STUDIO_BOTS_DIR"], tools=False)
 studio.talk("вопросы")
 studio.subprocess.Popen = orig
 st = studio.api_state(None)
+from unittest import mock
+t = studio.bot.testing(owner=77)
+fake = studio.bot._call
+def stop(method, params, files=None):
+    if method == "getUpdates":
+        raise SystemExit
+    return fake(method, params, files)
+with mock.patch.object(studio.bot, "setup"), mock.patch.object(studio.bot, "port", 0), mock.patch.object(studio.bot, "_call", stop):
+    try:
+        studio.bot.run()
+    except SystemExit:
+        pass
+kbs = lambda: [p for m, p in t.calls if m == "sendMessage" and "keyboard" in (p.get("reply_markup") or {})]
+boot_kb = len(kbs())
+t.send("/start")
+start_kb = [b["text"] for r in kbs()[-1]["reply_markup"]["keyboard"] for b in r] if kbs() else []
+t.send("🆕 Новый сайт")
+ask = t.last
 print(json.dumps({"support": studio.bot.support is None and studio.bot.support_cfg is False,
+                  "boot_kb": boot_kb, "start_kb": start_kb, "ask": ask,
                   "build": seen[0], "talk": seen[1], "tg_name": studio.bot.tg_name,
                   "sites_only": st["sites_only"], "examples": st["examples"], "secretary": st["secretary"],
                   "leak": [k for e in envs for k in (e or {}) if k == "STUDIO_TOKEN" or k.startswith(("HORO_", "HUB_"))], "no_env": any(e is None for e in envs),
@@ -1023,6 +1209,9 @@ print(json.dumps({"support": studio.bot.support is None and studio.bot.support_c
         self.assertEqual(r["leak"], [])  # токен бота из /etc/studio-sites.env Claude не передаётся
         self.assertFalse(r["no_env"])
         self.assertTrue(r["talk_cwd"].endswith("/talk"))  # не папка с реестром сайтов (пароли) и базой
+        self.assertEqual(r["boot_kb"], 0)  # ☰ меню при запуске сестре не пишем — только на её /start
+        self.assertEqual(r["start_kb"], ["🆕 Новый сайт", "🌐 Мои сайты", "🏠 Главное"])
+        self.assertIn("Какой сайт нужен", r["ask"])
         deny = " ".join(r["build"])
         self.assertIn("Read(//srv/studio-sites/sites.json)", deny)
         self.assertEqual(r["tg_name"], "Site Studio")

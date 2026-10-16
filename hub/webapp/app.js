@@ -558,6 +558,7 @@
         <div class="state-t">${esc(head.t)}</div><div class="hint">${esc(head.s)}</div></div></div>
         ${liveText ? `<div class="note live-note"><span class="spin"></span><span>${esc(liveText)}</span></div>` : ''}
         <button class="btn primary" data-act="update" ${upd ? 'disabled' : ''}>${upd ? 'Обновляю…' : '⬆️ Обновить всех'}</button></section>
+      ${guardCard(d.guard)}
       ${checkCard(d.check)}
       <div class="label">Боты<span class="more tnum">${run.length} из ${bots.length}</span></div>
       <div class="list">${bots.map(botRow).join('')}</div>
@@ -589,6 +590,28 @@
           ${bad.filter((b) => b.fix).length > 1 ? '<button class="btn primary" data-act="chkfix" data-arg="">🛠 Починить всё</button>' : ''}`;
     }
     return `<div class="label">Проверка</div><section class="card chk-card">${body}${go('')}</section>`;
+  }
+  // 🛡 Страж HDP: следит за HDP каждую минуту, баги чинит сам; здесь — что открыто и кнопки
+  function guardCard(g) {
+    if (!g) return '';
+    const dp = g.deep, mark = (k) => (dp && dp[k] && dp[k][0] ? '✅' : '❌');
+    const when = dp ? new Date(dp.at * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+    const head = g.issues.length ? `<div class="state-t">Проблем: ${g.issues.length}</div>` : '<div class="state-t">✅ HDP в порядке</div>';
+    const rows = g.issues.map((x) => `<div class="chk-row"><span>⚠️</span><div class="main"><div class="hint">${esc(x.text)}${x.count > 1 ? ` ×${x.count}` : ''}</div></div></div>`).join('');
+    return `<div class="label">Страж HDP</div><section class="card chk-card">${head}
+      <div class="hint tnum">${dp ? `${when}: сайт ${mark('site')} · Claude ${mark('claude')} · тесты ${mark('tests')} · ` : ''}${g.auto ? 'баги чиню сам' : 'баги только показываю'}</div>
+      ${rows ? `<div class="chk-list">${rows}</div>` : ''}
+      ${g.issues.length ? '<button class="btn primary" data-act="grd" data-arg="fixall">🛠 Починить</button>' : ''}
+      <div class="btns"><button class="btn tonal" data-act="grd" data-arg="deep">🔍 Проверить</button>
+      <button class="btn tonal" data-act="grd" data-arg="auto">${g.auto ? '🤖 Сам: вкл' : '🤖 Сам: выкл'}</button></div></section>`;
+  }
+  async function runGuard(a) {
+    try {
+      const r = await busy(a, () => api('action', { action: 'guard', arg: a.dataset.arg }));
+      haptic('success');
+      toast(r.text, 'ok');
+      loadHub();
+    } catch (er) { haptic('error'); toast(er.message, 'err'); }
   }
   async function runCheck(a) {
     const act = a.dataset.act, arg = a.dataset.arg;
@@ -863,6 +886,7 @@
     if (act === 'unqueue') { S.queued = null; haptic('select'); return paintLive(); }
     if (act === 'update') return updateAll(a);
     if (act === 'chk' || act === 'chkfix') return runCheck(a);
+    if (act === 'grd') return runGuard(a);
     if (act === 'support') return support();
     if (act === 'memory') return memorySheet();
     if (act === 'jobexample') {

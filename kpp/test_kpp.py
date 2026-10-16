@@ -338,7 +338,7 @@ class Mode(BotBase):
     def test_first_start_asks(self):
         kpp.st.pop("mode")
         self.msg("/start")
-        self.assertIn("Как удобнее?", self.texts()[0])
+        self.assertIn("Как удобнее?", self.texts()[-1])
         self.assertEqual([b["callback_data"] for b in self.buttons()], ["mode:chat", "mode:app"])
         self.assertEqual(self.web_apps(), [])
         self.cb("mode:app")  # выбрал приложение: карточка → «✅ Режим», следом главный экран с кнопкой приложения
@@ -399,7 +399,7 @@ class Mode(BotBase):
     def test_not_logged_in_after_choice(self):
         kpp.st = {"owner": 1}
         self.msg("/start")
-        self.assertIn("Как удобнее?", self.texts()[0])
+        self.assertIn("Как удобнее?", self.texts()[-1])
         self.cb("mode:chat")
         self.assertIn("Вход через Яндекс", self.sent[-2][1]["text"])
 
@@ -428,6 +428,71 @@ def init_data(token, uid=1, age=0, **extra):
     pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return urllib.parse.urlencode(pairs)
 
+
+
+class Menu(BotBase):
+    """☰ Меню-квадратик у поля ввода: один раз на версию, снова на /start; кнопка — экран, а не заказ пропуска."""
+
+    def kbs(self):
+        return [p for m, p in self.sent if "keyboard" in (p.get("reply_markup") or {})]
+
+    def test_once_per_version_and_on_start(self):
+        self.assertTrue(kpp.ensure_menu())
+        self.assertFalse(kpp.ensure_menu())  # та же версия — второй раз не шлём
+        self.assertEqual(kpp.st["kb_ver"], kpp.KB.version)
+        mk = self.kbs()[0]["reply_markup"]
+        self.assertTrue(mk["one_time_keyboard"] and not mk["is_persistent"])
+        rows = [[b["text"] for b in r] for r in mk["keyboard"]]
+        flat = [t for r in rows for t in r]
+        for need in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение"):
+            self.assertIn(need, flat)
+        self.assertTrue(all(len(r) <= 3 for r in rows) and all(len(t) <= 24 for t in flat))
+        self.msg("/start")
+        self.assertEqual(len(self.kbs()), 2)  # /start ставит снова
+        kpp.st["mode"] = "app"
+        self.msg("/start")
+        self.assertEqual(len(self.kbs()), 3)  # и в режиме приложения
+        kpp.st = {}
+        self.assertFalse(kpp.ensure_menu())  # владельца нет — не шлём
+
+    def test_buttons_open_screens_not_order(self):
+        with mock.patch.object(dl.Client, "create_taxi_pass") as cr, \
+                mock.patch.object(kpp, "passes_view", return_value=("🗂 Пропуска", [])) as pv, \
+                mock.patch.object(kpp, "autopass_view", return_value=("🤖 Авто", [])) as av, \
+                mock.patch.object(kpp, "choose_place") as cp:
+            for t in sorted(kpp.KB.texts):
+                self.msg(t)
+            self.assertEqual(cr.call_count, 0)  # ни одна кнопка не заказала пропуск
+            self.assertEqual((pv.call_count, av.call_count, cp.call_count), (1, 1, 1))
+        texts = "\n".join(self.texts())
+        self.assertNotIn("Не вижу номера", texts)
+        self.assertNotIn("Такой команды нет", texts)
+        self.assertIn("Как удобнее?", texts)  # ⚙️ Режим
+        self.assertIn("Повторять пока нечего", texts)
+        self.assertIn("Дать доступ", texts)
+
+    def test_repeat_and_support(self):
+        kpp.st["last"] = "А123ВС777"
+        with mock.patch.object(kpp, "order") as order:
+            self.msg("🔁 Повторить")
+        order.assert_called_once_with(1, "А123ВС777")
+        sup = mock.Mock()
+        with mock.patch.object(kpp, "SUP", sup):
+            self.msg("🛠 Поддержка")
+        sup.ask.assert_called_once_with(1)
+
+    def test_guest_menu_only_on_start(self):
+        kpp.st["guests"] = {"42": {"name": "Аня"}}
+        kpp.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
+        mk = self.kbs()[-1]["reply_markup"]
+        flat = [b["text"] for r in mk["keyboard"] for b in r]
+        self.assertNotIn("🛠 Поддержка", flat)
+        self.assertNotIn("kb_ver", kpp.st)  # версию отмечает только меню владельца
+        sup = mock.Mock()
+        with mock.patch.object(kpp, "SUP", sup):
+            kpp.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "🛠 Поддержка"})
+        sup.ask.assert_not_called()
+        self.assertIn("только у владельца", self.texts()[-1])
 
 
 class Guests(BotBase):

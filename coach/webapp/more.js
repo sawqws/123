@@ -70,6 +70,7 @@
     const morning = d.morning === 'off' ? 'выкл' : esc(d.morning || '07:00');
     h += group('Тренер',
       row({ a: 'more-edit', ic: I.sun, col: 'var(--rec-yellow)', title: 'Утренний разбор', meta: d.morning === 'off' ? 'выключен — включи в профиле' : 'план на день после сна', end: `<b class="num">${morning}</b>` })
+      + row({ a: 'skin', ic: I.spark, title: 'Вид', meta: 'как приложение WHOOP или стекло iOS', end: `<span>${document.documentElement.classList.contains('wh') ? 'WHOOP' : 'iOS'}</span>` })
       + row({ a: 'tochat', ic: I.chat, title: 'Режим', meta: d.mode === 'chat' ? 'режим чата уже включён' : 'всё кнопками в чате', end: `<span>${d.mode === 'chat' ? 'чат' : 'приложение'}</span>` }));
     const synced = d.synced ? new Date(d.synced).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     h += group('WHOOP',
@@ -87,6 +88,11 @@
   F.screens.more = moreScreen;
   // аватар в шапке — экран «Ещё»; «Заполнить профиль» в Питании и др. — сразу лист профиля
   F.actions.profile = el => el.classList.contains('avatar') || el.classList.contains('mepill') ? F.openScreen('more') : F.profileSheet();
+  F.actions.skin = () => {  // вид: WHOOP 5.0 (по умолчанию) ⇄ «жидкое стекло» iOS
+    const wh = !document.documentElement.classList.toggle('wh') ? 'ios' : 'whoop';
+    try { localStorage.setItem('forma-skin', wh); } catch (e) { /* без хранилища — до перезапуска */ }
+    F.haptic('select'); F.render(false);
+  };
   F.actions['more-edit'] = () => {
     F.profileSheet();
     // лист закрылся (сохранили или нет) — обновить цифры на экране: цели меняются без «Сохранить»
@@ -175,15 +181,17 @@
     const S = F.S, t = S.data.today, hist = S.history;
     const name = ((S.data.user && S.data.user.name) || '').trim().split(/\s+/)[0];
     let h = F.hero('Тренер', 'на данных твоего WHOOP', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
+    // вид WHOOP: вместо большого заголовка — строка «Ф Тренер · бета» и «новый разговор» справа (как WHOOP Coach)
+    h += `<div class="co-top"><span class="co-beta"><i>Ф</i>Тренер · бета</span>${hist && hist.length ? `<button class="co-new" data-a="clear" aria-label="Новый разговор">${I.edit}</button>` : ''}</div>`;
     h += F.slots.coachTop.map(fn => { try { return fn(t) || ''; } catch (e) { console.error('coachTop', e); return ''; } }).join('');
     if (!hist && S.historyErr) return h + F.retryCard('Разговор не загрузился', 'history-retry');
     if (!hist) return h + '<div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div>';
     const ps = prompts(t), empty = !hist.length && !S.asking;
     if (empty) {
-      h += `<section class="co-hello rise"><span class="co-badge">${I.spark}</span><h2>${name ? `Привет, ${esc(name)}` : 'Привет'}</h2>
-        <p>Я вижу твой сон, восстановление, нагрузку и еду. Спроси что угодно про тренировки, сон и питание — или выбери вопрос ниже.</p>${context(t)}</section>
-        <div class="co-grid rise">${ps.map(p => `<button class="co-card" data-a="suggest" data-v="${esc(p.text)}" style="--c:${p.col}">
-          <span class="co-ic">${p.ic}</span><b>${esc(p.text)}</b><small>${esc(p.sub)}</small></button>`).join('')}</div>`;
+      // как WHOOP Coach: значок «бета», первое сообщение тренера текстом; готовые вопросы — капсулами над полем
+      h += `<div class="chat co-chat rise"><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>
+        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Чем помочь? Я вижу твой сон, восстановление, нагрузку и еду.${context(t)}</div>
+        <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
       hist.forEach(m => {
@@ -193,9 +201,10 @@
       if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them"><span class="dots"><i></i><i></i><i></i></span></div>`;
       h += '</div>';
     }
-    h += `<div class="composer">${empty ? '' : `<div class="chips">${ps.map(p => `<button class="chip" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div>`}
+    const wh = document.documentElement.classList.contains('wh');  // в виде WHOOP подсказки всегда капсулами над полем
+    h += `<div class="composer">${empty && !wh ? '' : `<div class="chips">${ps.map(p => `<button class="chip" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div>`}
       <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${F.I.cam}</button>
-      <textarea id="q" rows="1" placeholder="Спроси тренера…">${esc(S.qDraft || '')}</textarea>
+      <textarea id="q" rows="1" placeholder="Спроси о чём угодно">${esc(S.qDraft || '')}</textarea>
       <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div>
       <p class="co-note">Тренер не врач: при боли, травме или плохом самочувствии — к врачу.</p></div>`;
     return h;

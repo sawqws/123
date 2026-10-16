@@ -47,6 +47,7 @@ import domyland as dl  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые и фото (common/media.py)
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода (common/menukb.py)
 import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 TOKEN = os.environ.get("KPP_TOKEN", "")
@@ -495,6 +496,57 @@ def app_buttons(always=False):
     return [[{"text": "📱 Открыть приложение", "web_app": {"url": public_url + "/"}}]]
 
 
+# ---------- ☰ Меню-квадратик у поля ввода (как у Главного, common/menukb.py) ----------
+# Обычная клавиатура Telegram, свёрнутая в значок справа от поля ввода. Нажатие приходит текстом — on_message
+# разбирает его ДО поиска номера: текст кнопки не должен заказать пропуск. Владельцу — один раз при запуске
+# (версия — st["kb_ver"]) и на каждый /start; гостю — только на его /start, и меню у него короче.
+
+KB = menukb.MenuKB([["🔁 Повторить", "🗂 Пропуска", "📍 Адрес"],
+                    ["🤖 Автопропуск", "📱 Приложение", "⚙️ Режим"],
+                    ["👥 Дать доступ", "🛠 Поддержка"]], version=1, placeholder="Номер такси или ☰ справа")
+KB_GUEST = menukb.MenuKB([["🔁 Повторить", "🗂 Пропуска"], ["📱 Приложение", "⚙️ Режим"]],
+                         version=1, placeholder="Номер такси или ☰ справа")
+# кнопка → команда (дальше — те же проверки и экраны, что у команды); kb:… — действия без своей команды
+KB_CMD = {"🔁 Повторить": "kb:repeat", "🗂 Пропуска": "/passes", "📍 Адрес": "/place", "🤖 Автопропуск": "/auto",
+          "📱 Приложение": "/app", "⚙️ Режим": "/mode", "👥 Дать доступ": "/invite", "🛠 Поддержка": "kb:support"}
+
+
+def kb_send(chat, text, markup):
+    tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def kb_mark(v):
+    st["kb_ver"] = v
+    save(st)
+
+
+def kb_press(text):
+    """Текст — кнопка меню-квадратика (у владельца или гостя)."""
+    return KB.has(text) or KB_GUEST.has(text)
+
+
+def show_kb(chat, uid, force=True):
+    """Меню у поля ввода: гостю — своё, короткое; отметку версии ставит только владелец."""
+    if guest(uid):
+        return KB_GUEST.ensure(kb_send, chat, force=force)
+    return KB.ensure(kb_send, chat, done=st.get("kb_ver"), mark=kb_mark, force=force)
+
+
+def ensure_menu():
+    """При запуске: владельцу один раз на версию меню. Владельца ещё нет — некому."""
+    return KB.ensure(kb_send, owner_id(), done=st.get("kb_ver"), mark=kb_mark)
+
+
+def repeat_last(chat):
+    """«🔁 Повторить» в меню — как кнопка «🔁 <номер>»: тот же номер недавно — «уже заказан», не дубль."""
+    last = me().get("last")
+    if not acc().get("jwt"):
+        return need_login(chat)
+    if not last:
+        return send(chat, fmt("🔁 Повторять пока нечего", note="Пришли номер такси — сразу закажу пропуск."))
+    order(chat, last)
+
+
 def welcome(chat, name, mid=None):
     hi = f"Привет, {esc(name)}! " if name else ""
     if acc().get("jwt"):
@@ -871,6 +923,7 @@ def on_message(msg):
     text = (msg.get("text") or msg.get("caption") or "").strip()
     if text.startswith("/start inv_") and not allowed(uid):  # гость по ссылке-приглашению
         if accept_invite(uid, text.split("inv_", 1)[1].strip(), frm):
+            show_kb(chat, uid)
             send(chat, home_text(f"Привет, {esc(frm.get('first_name') or '')}! ") if acc().get("jwt") else
                  fmt("👋 Доступ есть", "Вход в Домиленд пока не настроен — владелец скоро войдёт.",
                      "Или войди своим Яндекс ID: /login"), menu_buttons())
@@ -883,6 +936,8 @@ def on_message(msg):
         send(chat, "🔒 Это личный бот.")
         return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+    if msg.get("text") and kb_press(text):  # ☰ меню у поля ввода: до разбора номера — пропуск не заказываем
+        cmd = KB_CMD[text]
     if cmd in OWNER_ONLY and not is_owner(uid):
         send(chat, fail("Это может только владелец бота. Пропуск — просто пришли номер машины."))
         return
@@ -898,7 +953,18 @@ def on_message(msg):
     if cmd == "/guests":
         send(chat, *guests_view())
         return
-    if cmd == "/start" and not ui_mode():
+    if cmd == "/start":
+        show_kb(chat, uid)  # ☰ меню у поля ввода — на каждый /start
+    if cmd == "kb:repeat":
+        repeat_last(chat)
+    elif cmd == "kb:support":
+        if not is_owner(uid):
+            send(chat, fail("Поддержка — только у владельца бота."))
+        elif SUP:
+            SUP.ask(chat)
+        else:
+            send(chat, fmt("🛠 Поддержка", note="Напиши /fix и что сломалось или чего не хватает."))
+    elif cmd == "/start" and not ui_mode():
         ask_mode(chat)  # первый раз: сначала выбор, чат или приложение
     elif cmd == "/start":
         welcome(chat, frm.get("first_name"))
@@ -1453,6 +1519,7 @@ def main():
         set_menu()
     else:
         threading.Thread(target=https, daemon=True).start()
+    ensure_menu()
     print("КПП запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "КПП", folders=["kpp"], pm2="kpp-bot", allowed=is_owner,
@@ -1466,6 +1533,9 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            m = u.get("message") or {}
+            if kb_press(m.get("text")):  # кнопка меню — не ответ поддержке, которая ждёт текст
+                sup.waiting.pop((m.get("chat") or {}).get("id"), None)
             if sup.intercept(u):  # 🛠 /fix и ответы поддержке
                 continue
             try:

@@ -45,6 +45,7 @@ import store  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые и фото (common/media.py)
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода (common/menukb.py)
 import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 TOKEN = os.environ.get("PLANNER_TOKEN", "")
@@ -362,6 +363,66 @@ def menu_rows(uid, today):
             [btn("🎯 Цели", "v|goals"), btn("📝 Заметки", "v|notes")],
             [btn("⚙️ Настройки", "v|settings"), btn("⚙️ Режим", "mode|ask")]]
     return rows + [r for r in [sup_row(uid)] if r]
+
+
+# ☰ Меню-квадратик справа от поля ввода (как у Главного): обычная клавиатура Telegram, свёрнута в значок.
+# Нажатие приходит текстом — on_kb() открывает тот же экран, что кнопка главного меню; в разбор задач не идёт.
+# Ставится по /start и один раз на версию владельцу при запуске (db.meta «kb_ver»); в обоих режимах.
+KB = menukb.MenuKB([["📅 Сегодня", "📆 Завтра", "🗓 Неделя"],
+                    ["📅 Месяц", "🎯 Цели", "📝 Заметки"],
+                    ["⚙️ Настройки", "⚙️ Режим"],
+                    ["🛠 Поддержка", "📱 Приложение"]],
+                   version=1, placeholder="Задача, заметка или ☰ справа")
+KB_VIEWS = {"🗓 Неделя": "week", "📅 Месяц": "month", "🎯 Цели": "goals", "📝 Заметки": "notes",
+            "⚙️ Настройки": "settings"}
+
+
+def send_kb(chat, text, markup):
+    return tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def ensure_kb(chat, force=False):
+    """Поставить меню-квадратик: по /start (force) — всегда, иначе — один раз на версию."""
+    v = db.meta("kb_ver")
+    KB.ensure(send_kb, chat, done=int(v) if v and str(v).isdigit() else None,
+              mark=lambda ver: db.meta("kb_ver", ver), force=force)
+
+
+def kb_on_start():
+    """При запуске: ☰ меню владельцу — один раз на версию. Владельца ещё нет — некому, не шлём."""
+    first = owner() or min(ALLOWED or {0})
+    if first:
+        ensure_kb(first)
+
+
+def on_kb(chat, uid, text, today):
+    """Кнопка меню-квадратика → тот же экран, что у кнопок главного меню и команд."""
+    if text == "📅 Сегодня":
+        send(chat, *day_view(uid, today))
+    elif text == "📆 Завтра":
+        send(chat, *day_view(uid, today + datetime.timedelta(days=1)))
+    elif text in KB_VIEWS:
+        send(chat, *view_for(uid, KB_VIEWS[text], today))
+    elif text == "⚙️ Режим":
+        send(chat, *mode_card())
+    elif text == "🛠 Поддержка":
+        if not can_support(uid):
+            send(chat, card("🔒", "Поддержка — только для владельца"))
+        elif SUP:
+            SUP.ask(chat)
+        else:
+            send(chat, "⚠️ Поддержка ещё запускается — попробуй через минуту")
+    elif text == "📱 Приложение":
+        open_app(chat)
+
+
+def open_app(chat):
+    """/app и «📱 Приложение»: кнопка открыть планер (в любом режиме)."""
+    if public_url:
+        send(chat, card("🗓", "Твой планер", note="Он же — кнопка «Планер» слева от поля ввода"),
+             with_app([], "🗓 Открыть планер", style="primary", always=True))
+    else:
+        send(chat, card("⏳", "Приложение запускается", note="Пришлю кнопку, как только будет готово"))
 
 
 def view_for(uid, name, today):
@@ -972,7 +1033,10 @@ def on_message(msg):
     db.user(uid, frm.get("first_name"))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     today = today_of(uid)
+    if KB.has(text):  # кнопка меню-квадратика — экран, не задача
+        return on_kb(chat, uid, text.strip(), today)
     if cmd == "/start":
+        ensure_kb(chat, force=True)  # ☰ меню у поля ввода — до главного экрана
         if not ui_mode():  # первый раз: сначала выбор, чат или приложение
             send(chat, *mode_card())
         else:
@@ -1008,11 +1072,7 @@ def on_message(msg):
             db.update_settings(uid, {cmd[1:]: value})
             send(chat, *settings_view(uid))
     elif cmd == "/app":
-        if public_url:
-            send(chat, card("🗓", "Твой планер", note="Он же — кнопка «Планер» слева от поля ввода"),
-                 with_app([], "🗓 Открыть планер", style="primary", always=True))
-        else:
-            send(chat, card("⏳", "Приложение запускается", note="Пришлю кнопку, как только будет готово"))
+        open_app(chat)
     elif cmd == "/status":
         send(chat, card("🩺", "Состояние", [f"Адрес: {esc(public_url or 'нет адреса')}", f"https: {esc(https_note)}"]))
     elif cmd == "/export":
@@ -1166,6 +1226,9 @@ def refresh_after_gone(chat, mid, uid, kind, data, today):
 def handle_update(u, sup=None):
     """Одно обновление Telegram. Ошибка не роняет бота: нажатие гаснет, в чат — понятное «⚠️»."""
     try:
+        m = u.get("message") or {}
+        if sup and KB.has(m.get("text")):  # кнопка меню — выход из ожидания поддержки, а не текст просьбы
+            sup.waiting.pop((m.get("chat") or {}).get("id"), None)
         if sup and sup.intercept(u):  # 🛠 /fix и ответы поддержке
             return
         if u.get("callback_query"):
@@ -1807,6 +1870,7 @@ def main():
     global SUP
     SUP = sup = support.Support(TOKEN, "Планер «Ритм»", folders=["planner"], pm2="planner-bot",  # только владелец
                                 allowed=can_support, tests=["python3 planner/test_planner.py"])
+    kb_on_start()
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])

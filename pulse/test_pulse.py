@@ -26,7 +26,7 @@ def line(**d):
 
 
 def assistant(content, stop="tool_use", tokens=1000, **kw):
-    return line(type="assistant", message={"model": "claude-opus-5-5", "content": content, "stop_reason": stop,
+    return line(type="assistant", message={"model": "claude-x", "content": content, "stop_reason": stop,
                                            "usage": {"input_tokens": 2, "cache_read_input_tokens": tokens,
                                                      "cache_creation_input_tokens": 0, "output_tokens": 10}}, **kw)
 
@@ -125,6 +125,31 @@ class Reporter(unittest.TestCase):
             "type": "queued_command", "prompt": "<task-notification><task-id>ag1</task-id><status>completed</status>"})])
         self.assertEqual(r["agents"], 0)
 
+    def test_running_agents_from_their_journals(self):
+        d = tempfile.mkdtemp()
+        main = os.path.join(d, "sess.jsonl")
+        os.makedirs(os.path.join(d, "sess", "subagents"))
+        with open(os.path.join(d, "sess", "subagents", "agent-ag1.meta.json"), "w") as f:
+            json.dump({"description": "Меню КПП", "toolUseId": "a1"}, f)
+        with open(os.path.join(d, "sess", "subagents", "agent-ag1.jsonl"), "w") as f:
+            for x in [line(type="user", isSidechain=True, message={"content": "Сделай меню"}),
+                      assistant([use("t1", "TaskCreate", {})], isSidechain=True),
+                      result("t1", "ok", {"task": {"id": "1", "subject": "A"}}).replace('"type": "user"', '"type": "user", "isSidechain": true'),
+                      assistant([use("t2", "TaskCreate", {})], isSidechain=True),
+                      result("t2", "ok", {"task": {"id": "2", "subject": "B"}}).replace('"type": "user"', '"type": "user", "isSidechain": true'),
+                      assistant([use("t3", "TaskUpdate", {})], isSidechain=True),
+                      result("t3", "ok", {"taskId": "1", "statusChange": {"to": "completed"}}).replace('"type": "user"', '"type": "user", "isSidechain": true')]:
+                f.write(x + "\n")
+        s = reporter.Session()
+        for x in [line(type="user", message={"content": "go"}),
+                  assistant([use("a1", "Agent", {"description": "Меню КПП", "run_in_background": True})]),
+                  result("a1", "Async agent launched", {"isAsync": True, "agentId": "ag1", "description": "Меню КПП"})]:
+            s.feed(x)
+        got = reporter.Agents().running(main, s)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["name"], "Меню КПП")
+        self.assertEqual(got[0]["prog"], {"done": 1, "total": 2, "pct": 50})
+
     def test_remote_id(self):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_018Abc"}):
             self.assertEqual(reporter.remote_id(), "session_018Abc")
@@ -192,6 +217,59 @@ class Bot(unittest.TestCase):
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
         self.assertIn("Память █░░░░░░░░░░░ 5%", self.sent[-1][1]["text"])
 
+    def test_limits(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 10, 16, 8, 15, tzinfo=ZoneInfo("UTC")).timestamp()
+        out = ("Current session: 23% used · resets Oct 16, 11:10am (UTC)\n"
+               "Current week (all models): 20% used · resets Oct 21, 11pm (UTC)\n"
+               "Current week (Fable): 0% used · resets Oct 21, 11pm (UTC)")
+        got = pulse.parse_usage(out, now)
+        self.assertEqual(got["session"], {"pct": 23, "reset": 1792149000.0})
+        self.assertEqual(got["week"]["reset"], 1792623600.0)
+        pulse.st["limits"] = {**got, "at": now}
+        text = pulse.limits_text(now)
+        self.assertIn("Лимит 5 ч ███░░░░░░░░░ 23% · <i>сброс в 14:10</i>", text)
+        self.assertIn("Неделя ██░░░░░░░░░░ 20% · <i>сброс чт в 02:00</i>", text)
+        self.assertNotIn("Fable", text)  # 0% — не показываем
+        self.assertEqual(pulse.limits_text(now + 3600), "")  # устарело — не показываем
+        self.assertEqual(pulse.parse_usage("ошибка"), {})
+
+    def test_one_tap_to_chat(self):
+        pulse.ingest(summary("waiting"))
+        rows = pulse.home_buttons()
+        self.assertEqual(rows[0][0]["url"], "https://claude.ai/code/session_X")
+        text = pulse.home_text()
+        self.assertIn('<a href="https://claude.ai/code/session_X"><b>Бот мониторинга</b></a>', text)
+        pulse.ingest(summary("waiting", prog=None))
+        self.assertIn("Сделано ████████████ 100%", pulse.block(pulse.visible()[0]))  # без плана, но закончил
+
+    def test_menu_square(self):
+        pulse.ensure_kb(42)
+        m, k = self.sent[-1]
+        self.assertEqual(k["reply_markup"]["keyboard"][0][0]["text"], "📡 Чаты")
+        self.assertTrue(k["reply_markup"]["one_time_keyboard"])
+        n = len(self.sent)
+        pulse.ensure_kb(42)  # второй раз — не шлём
+        self.assertEqual(len(self.sent), n)
+        pulse.ingest(summary())
+        msg = lambda t: {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": t}
+        pulse.on_message(msg("📋 Подробно"))
+        self.assertIn("Какой чат?", self.sent[-1][1]["text"])
+        pulse.on_message(msg("🔔 Уведомления"))
+        self.assertIn("Уведомления", self.sent[-1][1]["text"])
+        pulse.on_message(msg("📡 Чаты"))
+        self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
+
+    def test_agent_progress(self):
+        now = time.time()
+        pulse.ingest(summary(agent_list=[
+            {"id": "a1", "name": "Меню КПП", "prog": {"done": 2, "total": 5, "pct": 40}, "steps": 9, "started": now - 60},
+            {"id": "a2", "name": "Меню Студии", "prog": None, "steps": 31, "started": now - 360}]))
+        text = pulse.block(pulse.visible()[0], now)
+        self.assertIn("🤖 Меню КПП — сделано 40% · осталось 60%", text)
+        self.assertIn("🤖 Меню Студии — 6 мин · 31 шаг", text)
+
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
         self.assertFalse(any(pulse.alerts().values()))
@@ -199,13 +277,16 @@ class Bot(unittest.TestCase):
         pulse.notify(pulse.ingest(summary("waiting")) + pulse.ingest(summary("question", question="?")))
         self.assertEqual([m for m, _ in self.sent if m == "sendMessage"], [])
 
+    def test_known_window(self):
+        self.assertEqual(pulse.window("claude-opus-5-5", 213_200), (1_000_000, True))
+
     def test_window_learning(self):
-        w, sure = pulse.window("claude-opus-5-5", 100_000)
+        w, sure = pulse.window("claude-x", 100_000)
         self.assertEqual((w, sure), (200_000, False))
-        self.assertEqual(pulse.window("claude-opus-5-5", 180_000)[0], 1_000_000)  # за порогом сжатия — окно больше
+        self.assertEqual(pulse.window("claude-x", 180_000)[0], 1_000_000)  # за порогом сжатия — окно больше
         pulse.ingest(summary(tokens=150_000))
         pulse.ingest(summary(ctx={"tokens": 0, "compacts": 1, "pre": 640_000}))
-        self.assertEqual(pulse.window("claude-opus-5-5"), (800_000, True))
+        self.assertEqual(pulse.window("claude-x"), (800_000, True))
 
     def test_offline_and_hidden(self):
         pulse.ingest(summary(), now=time.time() - 600)
@@ -245,7 +326,7 @@ class Bot(unittest.TestCase):
     def test_callbacks(self):
         pulse.ingest(summary())
         cq = {"id": "1", "from": {"id": 42}, "message": {"chat": {"id": 42}, "message_id": 5}}
-        for data in ("home", "s|session_A", "al", "at|done", "more", "h|session_A", "unhide", "zzz"):
+        for data in ("home", "dl", "s|session_A", "al", "at|done", "more", "h|session_A", "unhide", "zzz"):
             pulse.on_callback({**cq, "data": data})
         self.assertFalse(pulse.alerts()["done"])
         self.assertNotIn("hidden", pulse.sessions()["session_A"])

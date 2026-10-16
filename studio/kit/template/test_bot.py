@@ -25,6 +25,17 @@ class BotTest(unittest.TestCase):
         self.t.send("идея")
         self.assertEqual(app.notes()[-1]["text"], "идея")
 
+    def test_menu_square(self):
+        """☰ Меню-квадратик у поля ввода (botkit сам, из главного экрана): /start ставит, нажатие — как кнопка."""
+        self.t.send("/start")
+        self.assertIn("➕ Новая", self.t.kb)
+        self.assertIn("🛠 Поддержка", self.t.kb)
+        self.t.send("➕ Новая")  # текст кнопки — не заметка, а то же, что inline-кнопка
+        self.assertIn("Что записать", self.t.last)
+        self.assertEqual(app.notes(), [])
+        self.t.send("идея")
+        self.assertEqual(app.notes()[-1]["text"], "идея")
+
     def test_stranger_locked(self):
         self.t.send("/start", uid=999)
         self.assertIn("личный", self.t.last)

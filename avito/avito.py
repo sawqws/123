@@ -48,6 +48,7 @@ import ai  # noqa: E402
 import chats  # noqa: E402
 import market  # noqa: E402
 import media  # noqa: E402
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода (common/menukb.py)
 import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 chats.ui = sys.modules[__name__]
@@ -855,6 +856,35 @@ def home(chat, name="", mid=None):
     return show(chat, mid, help_text(name), help_buttons())
 
 
+# ---------- ☰ Меню-квадратик у поля ввода (как у Главного, common/menukb.py) ----------
+# Обычная клавиатура Telegram, свёрнутая в значок справа от поля ввода. Нажатие приходит текстом — on_message
+# разбирает его до ожиданий (ответ покупателю, цена) и до рассказа о вещи. Ставится один раз при запуске
+# (версия — st["kb_ver"]) и на каждый /start.
+
+KB = menukb.MenuKB([["🆕 Новое", "📝 Объявление", "🗂 Все объявления"],
+                    ["💬 Чаты Авито", "💬 Ответ покупателю", "📊 Цена на Авито"],
+                    ["📱 Приложение", "⚙️ Режим", "🛠 Поддержка"]], version=1, placeholder="Фото вещи или ☰ справа")
+# кнопка → команда (дальше — тот же экран, что у команды)
+KB_CMD = {"🆕 Новое": "/new", "📝 Объявление": "/ad", "🗂 Все объявления": "/ads", "💬 Чаты Авито": "/chats",
+          "💬 Ответ покупателю": "/buyer", "📊 Цена на Авито": "/price", "📱 Приложение": "/app",
+          "⚙️ Режим": "/mode", "🛠 Поддержка": "kb:support"}
+
+
+def kb_send(chat, text, markup):
+    tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def kb_mark(v):
+    with lock:
+        st["kb_ver"] = v
+        save()
+
+
+def ensure_menu(chat=None, force=False):
+    """Меню у поля ввода: при запуске — владельцу один раз на версию (владельца нет — некому), /start — снова."""
+    return KB.ensure(kb_send, chat or owner(), done=st.get("kb_ver"), mark=kb_mark, force=force)
+
+
 def run(chat, fn, *args, later=None):
     """Тяжёлое (фото, Claude, Авито) — в отдельном потоке, по одному делу на чат.
     later(chat, сек) — что сделать, если чат занят (фото не теряем, а обрабатываем чуть позже)."""
@@ -1160,11 +1190,12 @@ def on_message(msg):
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
         return
-    if text.startswith("/") and (st.get("wait") or {}).get("kind") in ("buyer", "floor", "avreply"):
+    kb = bool(msg.get("text")) and KB.has(text)  # ☰ кнопка меню — как команда: до ожиданий и рассказа о вещи
+    if (text.startswith("/") or kb) and (st.get("wait") or {}).get("kind") in ("buyer", "floor", "avreply"):
         with lock:  # команда — значит, ждать ответа покупателю / цену уже не нужно (как в @BotFather)
             st.pop("wait", None)
             save()
-    if not text.startswith("/") and on_wait(chat, msg, text or (msg.get("caption") or "").strip()):
+    if not text.startswith("/") and not kb and on_wait(chat, msg, text or (msg.get("caption") or "").strip()):
         return
     if media.kind(msg) == "photo":
         add_photo(chat, msg)
@@ -1176,7 +1207,16 @@ def on_message(msg):
         run(chat, from_video, chat, msg)
         return
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd == "/start" and not ui_mode():
+    if kb:
+        cmd = KB_CMD[text]
+    if cmd == "/start":
+        ensure_menu(chat, force=True)  # ☰ меню у поля ввода — на каждый /start
+    if cmd == "kb:support":
+        if SUP:
+            SUP.ask(chat)
+        else:
+            send(chat, fmt("🛠 Поддержка", note="Напиши /fix и что сломалось или чего не хватает."))
+    elif cmd == "/start" and not ui_mode():
         ask_mode(chat)  # первый раз: сначала выбор, чат или приложение
     elif cmd in ("/start", "/help"):
         home(chat, frm.get("first_name") if cmd == "/start" else "")
@@ -1820,6 +1860,7 @@ def main():
         set_menu()
     else:
         threading.Thread(target=https, daemon=True).start()
+    ensure_menu()
     print("Авито-бот запущен")
     global SUP
     SUP = sup = support.Support(TOKEN, "Авито", folders=["avito"], pm2="avito-bot", allowed=allowed,
@@ -1833,6 +1874,9 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            m = u.get("message") or {}
+            if KB.has(m.get("text")):  # кнопка меню — не ответ поддержке, которая ждёт текст
+                sup.waiting.pop((m.get("chat") or {}).get("id"), None)
             if sup.intercept(u):  # 🛠 /fix и ответы поддержке
                 continue
             try:

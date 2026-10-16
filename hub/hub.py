@@ -55,6 +55,9 @@ maker.ui = sys.modules[__name__]
 import check  # noqa: E402
 
 check.ui, check.maker = sys.modules[__name__], maker
+import guard  # noqa: E402  🛡 Страж HDP
+
+guard.ui, guard.maker, guard.check = sys.modules[__name__], maker, check
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -113,6 +116,7 @@ TZ = datetime.timezone(datetime.timedelta(hours=3))  # Москва
 
 lock = threading.RLock()
 offset = 0
+guard.lock = lock  # state.json один: Страж пишет его под тем же замком
 
 
 def esc(x):
@@ -583,6 +587,9 @@ def home(chat, mid=None):
         lines.append("👤 Аккаунт не подключён")
     if sec and sec.get("busy"):
         lines.append("⏳ Секретарь занят поручением")
+    hdp = guard.summary()
+    if hdp:
+        lines.append(hdp)
     bots_btn = b("🤖 Боты", "bots", "danger" if rows and any(a["status"] != "online" for a in rows) else None)
     acc_btn = b("👤 Аккаунт", SEC_PREFIX + "m:home") if sec is not None else b("🔄 Секретарь", "srst", "primary")
     web = app_button() if m == "app" else None
@@ -593,27 +600,28 @@ def home(chat, mid=None):
     task_btn = b(TASK_BTN, "task", "primary")  # поручение Секретарю — первой кнопкой, в обоих режимах
     if web:
         btns = [[web], [task_btn], [bots_btn, b("🧠 Психолог", "psy"), acc_btn],
-                [b("🧪 Проверка", "chk"), b("⚙️ Режим", "mode|ask")]]
+                [b("🧪 Проверка", "chk"), b("⚙️ Режим", "mode|ask")] + ([b("🛡 HDP", "grd", "danger")] if hdp else [])]
         foot += "\n<i>💬 Просто напишите задачу — Секретарь выполнит. Команды тоже работают.</i>"
     else:
         btns = [[task_btn],
                 [bots_btn, acc_btn, b("🛠 Поддержка", "fix")],  # «Доработать» любого бота (maker.ask_fix)
                 [b("🛠 Сделать бота", "mk"), b("⬆️ Обновить всех", "upd"), b("🧪 Проверка", "chk")],
-                [b("🧠 Психолог", "psy"), b("⚙️ Режим", "mode|ask")]]
+                [b("🧠 Психолог", "psy"), b("🛡 Страж HDP", "grd", "danger" if hdp else None), b("⚙️ Режим", "mode|ask")]]
         foot += "\n<i>💬 Просто напишите или надиктуйте задачу — Секретарь выполнит. Фото и видео тоже.</i>"
-    if studio:  # бот, который делает ботов, — в последний ряд (рядов не прибавляется: экран остаётся коротким)
-        btns[-1].append(studio)
+    if studio:  # бот, который делает ботов, — в последний ряд (в ряду не больше 3 кнопок)
+        btns[-1].append(studio) if len(btns[-1]) < 3 else btns.append([studio])
     return show(chat, mid, card("👑 <b>Главный</b>", lines, foot), btns)
 
 
 # ☰ Полное меню — клавиатура у поля ввода: свёрнута в квадратик справа (не is_persistent), по нажатию — все
 # действия; после выбора сама сворачивается (one_time). Кнопки Секретаря (📬, 🗂) — те же тексты, что у него.
-KB_VERSION = 1
+KB_VERSION = 2
 KB_ROWS = [["✨ Поручить", "🤖 Боты", "👤 Аккаунт"],
            ["🧪 Проверка", "🛠 Сделать бота", "✏️ Доработать"],
            ["📬 Что я пропустил", "🧠 Разбор чата", "🗂 Навести порядок"],
            ["⬆️ Обновить всех", "🖥 Сервер", "📂 Все боты"],
-           ["⏰ Напоминания", "⚙️ Режим", "⋯ Ещё"]]
+           ["⏰ Напоминания", "🛡 Страж HDP", "⚙️ Режим"],
+           ["⋯ Ещё"]]
 KB_TEXTS = {t for r in KB_ROWS for t in r}
 
 
@@ -643,6 +651,8 @@ def on_kb(chat, text, msg):
         to_secretary({"message": {**msg, "text": "/menu"}}, chat)
     elif text == "🧪 Проверка":
         check.ask(chat)
+    elif text == "🛡 Страж HDP":
+        send(chat, *guard.screen())
     elif text == "🛠 Сделать бота":
         maker.ask_make(chat)
     elif text == "✏️ Доработать":
@@ -689,7 +699,7 @@ def full_menu(chat, mid=None):
              b("🧠 Психолог", "psy")],
             [b("🛠 Сделать бота", "mk"), b("✏️ Доработать", "fix"), b("📂 Все боты", "all")],
             [b("⬆️ Обновить всех", "upd"), b("🖥 Сервер", "srv"), b("➕ Поставить", "add")],
-            [b("🧪 Проверка ботов", "chk", "success"), b("⏰ Напоминания", "rmd|list")],
+            [b("🧪 Проверка ботов", "chk", "success"), b("🛡 Страж HDP", "grd"), b("⏰ Напоминания", "rmd|list")],
             [b("🤖 Claude", "cl"), b("⚙️ Режим", "mode|ask")]]
     last = [x for x in (studio_button(rows), app_button()) if x]
     if last:
@@ -746,6 +756,8 @@ def app_card(chat, mid, name):
     if name in dict(maker.targets(rows)):
         btns.append([b("✏️ Доработать", f"fix|{name}", "primary"), b("➕ Новая функция", f"fix|{name}")])
     btns += [[b("🔄 Перезапустить", f"rs|{name}", None if btns else "primary"), b("📜 Логи", f"lg|{name}")]]
+    if name == guard.PM2:
+        btns.append([b("🛡 Страж HDP", "grd")])
     slug = next((s for s, i in maker.made().items() if i.get("pm2") == name), None)
     btns.append([b("‹ Назад", "bots")] + ([b("🗑 Удалить", f"del?|{slug}", "danger")] if slug else []))
     return show(chat, mid, card(f"<b>{esc(a['label'])}</b>", lines,
@@ -1535,6 +1547,7 @@ def app_state():
             "mode": ui_mode(),
             "me": maker.username(TOKEN),  # для сайта: «Перейти в чат» → t.me/<бот>
             "check": check.app_state(),
+            "guard": guard.app_state(),
             "support": [{"id": pm2, "name": short(lbl)} for pm2, lbl in maker.targets(rows or [])],
             "live": dict(live), "boot": BOOT, "now": time.time()}
 
@@ -1566,6 +1579,8 @@ def app_action(action, arg):
         return {"ok": True, "text": "Обновляю…", "at": live["at"]}
     if action in ("check", "check_fix", "check_fixall"):  # 🧪 Проверка ботов
         return check.app_action(action, arg)
+    if action == "guard":  # 🛡 Страж HDP: deep | fixall | auto
+        return guard.app_action(arg)
     if action == "mode":  # то же, что POST /app/api/mode {mode}
         return app_mode({"mode": arg})
     if action == "secretary":  # поднять Секретаря (перезапуск или установка) — в фоне, итог придёт в чат
@@ -2102,6 +2117,9 @@ def on_message(msg):
     elif cmd == "/test":  # «/check» — проверка аккаунта у Секретаря, не путать
         setting("wait", None)
         check.ask(chat)
+    elif cmd == "/guard":
+        setting("wait", None)
+        send(chat, *guard.screen())
     elif cmd == "/server":
         server_card(chat, None)
     elif cmd == "/claude":
@@ -2267,6 +2285,9 @@ def callback(chat, mid, uid, data):
     elif data[0] == "chk":
         note = check.on_callback(chat, mid, data)
         note = STALE if note is None else note
+    elif data[0] == "grd":
+        note = guard.on_callback(chat, mid, data)
+        note = STALE if note is None else note
     elif data[0] == "site":
         site_card(chat)
     elif data[0] == "sitel" and arg:  # «✅ Войти» на сайт
@@ -2367,7 +2388,7 @@ def callback(chat, mid, uid, data):
 
 
 COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("site", "Сайт: вход без Telegram"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
-            ("bots", "Боты и сервер"), ("test", "Проверка всех ботов"), ("login", "Войти в аккаунт"),
+            ("bots", "Боты и сервер"), ("test", "Проверка всех ботов"), ("guard", "Страж HDP"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
 ABOUT = "Боты на сервере и личный секретарь: пишите или говорите что угодно."
@@ -2398,6 +2419,7 @@ def main():
         setting("intro", 1)
         threading.Thread(target=maker.show_all, args=(owner(), None, True), daemon=True).start()
     threading.Thread(target=watch, daemon=True).start()
+    threading.Thread(target=guard.loop, daemon=True).start()  # 🛡 Страж HDP
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=set_menu, args=(True,), daemon=True).start()  # узнаёт IP — дальше кнопка и в меню
     threading.Thread(target=check_secretary, daemon=True).start()  # Секретаря нет — поставить
