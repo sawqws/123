@@ -210,6 +210,15 @@ class Bot(unittest.TestCase):
         self.assertEqual(pulse.limits_text(now + 3600), "")  # устарело — не показываем
         self.assertEqual(pulse.parse_usage("ошибка"), {})
 
+    def test_one_tap_to_chat(self):
+        pulse.ingest(summary("waiting"))
+        rows = pulse.home_buttons()
+        self.assertEqual(rows[0][0]["url"], "https://claude.ai/code/session_X")
+        text = pulse.home_text()
+        self.assertIn('<a href="https://claude.ai/code/session_X"><b>Бот мониторинга</b></a>', text)
+        pulse.ingest(summary("waiting", prog=None))
+        self.assertIn("Сделано ████████████ 100%", pulse.block(pulse.visible()[0]))  # без плана, но закончил
+
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
         self.assertFalse(any(pulse.alerts().values()))
@@ -266,7 +275,7 @@ class Bot(unittest.TestCase):
     def test_callbacks(self):
         pulse.ingest(summary())
         cq = {"id": "1", "from": {"id": 42}, "message": {"chat": {"id": 42}, "message_id": 5}}
-        for data in ("home", "s|session_A", "al", "at|done", "more", "h|session_A", "unhide", "zzz"):
+        for data in ("home", "dl", "s|session_A", "al", "at|done", "more", "h|session_A", "unhide", "zzz"):
             pulse.on_callback({**cq, "data": data})
         self.assertFalse(pulse.alerts()["done"])
         self.assertNotIn("hidden", pulse.sessions()["session_A"])

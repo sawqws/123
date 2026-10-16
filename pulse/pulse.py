@@ -557,6 +557,8 @@ def bars(v):
     p = v.get("prog")
     if p and p.get("total"):
         out.append(f"Сделано {bar(p['pct'])} {p['pct']}%")
+    elif v["status"] == "waiting":  # без плана, но запрос выполнен и чат ждёт тебя
+        out.append(f"Сделано {bar(100)} 100%")
     pct = v["ctx"]["pct"]
     out.append(f"Память {bar(pct)} {pct}%" + (" ⚠️ <i>открой новый чат</i>" if pct >= NEW_CHAT_PCT else ""))
     return out
@@ -564,7 +566,10 @@ def bars(v):
 
 def head(v, now=None, n=32):
     extra = f" · {agents_word(v['agents'])}" if v.get("agents") else ""
-    return f"{v['emoji']} <b>{esc(clip(v['title'], n))}</b> · {state_word(v, now)}{extra}"
+    title = f"<b>{esc(clip(v['title'], n))}</b>"
+    if v.get("url"):  # название — ссылка: одно нажатие, и ты в этом чате Claude
+        title = f'<a href="{esc(v["url"])}">{title}</a>'
+    return f"{v['emoji']} {title} · {state_word(v, now)}{extra}"
 
 
 def block(v, now=None):
@@ -598,7 +603,9 @@ def home_text(now=None):
 
 def home_buttons(vs=None):
     vs = visible() if vs is None else vs
-    chats = [btn(f"{v['emoji']} {clip(v['title'], 12)}", f"s|{v['id']}") for v in vs[:9]]
+    # кнопка чата — сразу в чат Claude (Глеб 16.10: «переход одним нажатием»); подробно — в «⚙️» → «📋 Подробно»
+    chats = [link(f"{v['emoji']} {clip(v['title'], 12)}", v["url"]) if v["url"]
+             else btn(f"{v['emoji']} {clip(v['title'], 12)}", f"s|{v['id']}") for v in vs[:9]]
     rows = [chats[i:i + 3] for i in range(0, len(chats), 3)]
     rows += app_buttons()
     rows.append([btn("🔄 Обновить", "home"), btn("⚙️", "more")])
@@ -721,7 +728,8 @@ def more_text():
 
 
 def more_buttons():
-    rows = [[btn("🔔 Уведомления", "al"), btn("⚙️ Режим", "mode")], [support.Support.button()]]
+    rows = [[btn("📋 Подробно по чатам", "dl")], [btn("🔔 Уведомления", "al"), btn("⚙️ Режим", "mode")],
+            [support.Support.button()]]
     if hidden_count():
         rows.append([btn("👁 Показать скрытые", "unhide")])
     rows.append([btn("← Назад", "home")])
@@ -913,6 +921,11 @@ def on_callback(cq):
             show(chat, mid, alerts_text(), alerts_buttons())
         elif data == "more":
             show(chat, mid, more_text(), more_buttons())
+        elif data == "dl":
+            vs = visible()
+            chats = [btn(f"{v['emoji']} {clip(v['title'], 20)}", f"s|{v['id']}") for v in vs[:9]]
+            show(chat, mid, "<b>📋 Подробно</b>\nКакой чат?" if vs else "Сейчас чатов нет.",
+                 [chats[i:i + 2] for i in range(0, len(chats), 2)] + [[btn("← Назад", "home")]])
         elif data == "mode":
             mode_card(chat, mid)
         elif data.startswith("mode:"):
