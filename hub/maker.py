@@ -19,6 +19,8 @@ import time
 import traceback
 import urllib.request
 
+import check
+
 ui = None
 BOTS = os.environ.get("HUB_BOTS_DIR") or "/root/bots"
 CLAUDE_TIMEOUT = 40 * 60
@@ -311,7 +313,9 @@ CODE = """Ты пишешь Telegram-бота для Глеба с нуля в �
 - Главный файл bot.py. Токен — из переменной окружения BOT_TOKEN. Long polling getUpdates, без вебхуков.
 - Владелец — первый, кто нажал /start (храни в data/state.json); остальным «🔒 Это личный бот».
 - Данные — в папке data/ рядом с bot.py. Время — Москва (Europe/Moscow).
-- Красиво и просто: parse_mode HTML, эмодзи к месту, inline-кнопки, короткие понятные тексты по-русски.
+- parse_mode HTML, inline-кнопки, тексты по-русски; экран меняется правкой сообщения (editMessageText), на каждую
+  кнопку — answerCallbackQuery. Мини-приложение (если нужно) — на общем kit: {common}/webapp/kit.css и kit.js.
+{quality}
 - setMyCommands и setMyDescription при запуске. /help — что умеет бот.
 - Ошибки сети не должны ронять бота: try/except вокруг обработки апдейта, повтор getUpdates через 5 с.
 - Голосовые и фото: бот должен их понимать. Готовый помощник — {common}/media.py
@@ -325,6 +329,7 @@ CODE = """Ты пишешь Telegram-бота для Глеба с нуля в �
   Проверь и python3 -m py_compile bot.py.
 - README.md: 5–10 строк — что умеет, команды.
 В конце ответь 2–4 строками по-русски: что умеет бот. Ничего не запускай надолго (сам бот не запускай)."""
+CODE = CODE.replace("{quality}", check.QUALITY)
 
 
 def studio_link():
@@ -395,7 +400,7 @@ def _make(chat, tz):
                     f"3. Username: <code>{ui.esc(info['want'])}_bot</code> (занят — допиши цифры)\n"
                     "4. Пришли сюда токен — сам запущу."),
             [[{"text": "Открыть @BotFather", "url": "https://t.me/BotFather"}], [ui.b("Отмена", "home")]])
-    deploy(chat, slug, token, st)
+    deploy(chat, slug, token, st, locked=True)
 
 
 def secretary_ready():
@@ -423,7 +428,8 @@ def to_folder(name):
                                          "--bots", name, "--auto"), kwargs={"timeout": 120}, daemon=True).start()
 
 
-def deploy(chat, slug, token, st=None):
+def deploy(chat, slug, token, st=None, locked=False):
+    """Запуск в pm2 и сразу — автопроверка (after_check). locked — замок job уже наш (зовут из make)."""
     info = made().get(slug)
     if not info:
         return ui.send(chat, "Этого бота уже нет.")
@@ -463,6 +469,42 @@ def deploy(chat, slug, token, st=None):
              if info["username"] else []) +
             [[ui.b("✏️ Правки", f"fix|{info['pm2']}"), ui.b("📜 Логи", f"lg|{info['pm2']}")],
              [ui.b("🗑 Удалить", f"del?|{slug}")]])
+    after_check(chat, slug, locked)
+
+
+def after_check(chat, slug, locked=False):
+    """🧪 Сразу после запуска нового бота: все его кнопки вживую (через Секретаря), лог, тесты → нашлось — Claude
+    исправляет и улучшает, снова тесты, перезапуск (check.after_install). Только этот бот, других не трогаем."""
+    if not locked and not job.acquire(timeout=CLAUDE_TIMEOUT):
+        return ui.send(chat, "⏳ Claude долго занят — проверь бота сам или попроси правку.")
+    try:
+        info = made().get(slug)
+        if not info:
+            return
+        d = info["dir"]
+        st = Status(chat, f"Проверяю «{info['name']}»")
+        py = os.path.join(d, ".venv", "bin", "python")
+        py = py if os.path.exists(py) else "python3"
+        where = f"папка {d} (bot.py)"
+        res = check.after_install(
+            {"pm2": info["pm2"], "username": info.get("username"), "cwd": d}, ui.sh,
+            fix=lambda tz: claude(FIX.format(label=info["name"], where=where, tz=tz), d, on_step=st.step),
+            tests=lambda: check.own_tests(d, py), commit=lambda msg: commit(d, msg),
+            account=bool((ui.secretary_status() or {}).get("account")), step=st.step)
+        title, lines, foot = check.after_text(res, info["name"])
+        btns = [[ui.b("↩️ Откатить", f"rb|{info['pm2']}|{res['sha']}", "danger")]] if res["sha"] else []
+        btns.append([ui.b("✏️ Правки", f"fix|{info['pm2']}"), ui.b("📜 Логи", f"lg|{info['pm2']}")])
+        try:  # вместо «⏳ Проверяю…» — итог новым сообщением (с уведомлением)
+            ui.tg("deleteMessage", chat_id=chat, message_id=st.mid)
+        except Exception:
+            pass
+        ui.send(chat, ui.card(title, lines, foot), btns)
+    except Exception as e:
+        traceback.print_exc()
+        ui.send(chat, ui.card("⚠️ <b>Автопроверка упала</b>", [ui.esc(str(e)[:300])]))
+    finally:
+        if not locked:
+            job.release()
 
 
 # ---------- ✏️ доработать ----------
@@ -473,11 +515,14 @@ FIX = """Ты дорабатываешь Telegram-бота «{label}» Глеб�
 Что поменять (слова Глеба):
 {tz}
 
-Сделай это аккуратно, в стиле существующего кода. Не трогай секреты (/etc/*.env, .env), tgbot/tmp/ и данные в data/.
+Сделай это аккуратно, в стиле существующего кода, держи планку:
+{quality}
+Не трогай секреты (/etc/*.env, .env), tgbot/tmp/ и данные в data/.
 Если есть тесты для этого бота — запусти их и почини, если упали из-за правки; добавь тест на новое поведение.
 Обнови README, если поменялись команды. Не запускай сам бот и не перезапускай pm2 — это сделает Главный.
 Если просьба непонятна или опасна — ничего не меняй и объясни, что уточнить.
 В конце ответь 2–5 строками по-русски для Глеба: что сделано и как проверить (без кода)."""
+FIX = FIX.replace("{quality}", check.QUALITY)
 
 
 def targets(rows=None):

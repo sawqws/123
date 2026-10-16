@@ -170,6 +170,40 @@ class AppTest(CheckTest):
             check.running.release()
 
 
+class NewBotTest(unittest.TestCase):
+    def test_crawl_new_bot_args(self):
+        """Новый бот: глубина 3, до 80 нажатий, карточка «Как удобнее?» — через «💬 В чате»; без Главного (Студия)."""
+        cmds = []
+
+        class P:
+            stdout = iter(["✅ /start\n"])
+
+            def wait(self):
+                pass
+        with mock.patch.object(check, "ui", None), \
+                mock.patch.object(check.subprocess, "Popen", lambda cmd, **k: cmds.append((cmd, k)) or P()):
+            res = check.crawl("voda_bot", os.path.join(tempfile.mkdtemp(), "no.json"), params=check.NEW_CRAWL)
+        cmd, k = cmds[0]
+        self.assertEqual(cmd[1:3], ["tgbot/botcrawl.py", "voda_bot"])
+        self.assertEqual(cmd[cmd.index("--max") + 1], "80")
+        self.assertEqual(cmd[cmd.index("--depth") + 1], "3")
+        self.assertEqual(cmd[cmd.index("--mode") + 1], "💬 В чате")
+        self.assertEqual(k["cwd"], check.REPO)
+        self.assertIn("fail", res)  # отчёта нет — честный сбой, а не «всё хорошо»
+
+    def test_after_text(self):
+        base = {"clicks": 21, "skip": "", "found": [], "fixed": 0, "left": [], "why": "", "sha": None, "out": ""}
+        self.assertIn("проверил 21 кнопку — всё в порядке", check.after_text(base, "Вода")[0])
+        self.assertIn("ошибок нет, улучшил", check.after_text(dict(base, improved=True), "Вода")[0])
+        self.assertIn("проверил 3 кнопки, исправил 2", check.after_text({**base, "clicks": 3, "fixed": 2}, "Вода")[0])
+        title, lines, foot = check.after_text({**base, "clicks": None, "skip": "нет @username",
+                                               "left": ["тесты: x"], "why": "откатил"}, "<b>")
+        self.assertIn("проверил тесты и логи, осталось 1", title)
+        self.assertIn("&lt;b&gt;", title)
+        self.assertIn("нет @username", foot)
+        self.assertNotIn("{", check.QUALITY + check.POLISH_TZ)  # вставляется в шаблоны .format
+
+
 class RiskyTest(unittest.TestCase):
     def test_crawler_never_presses_check(self):
         """Живой обход Главного не должен запускать проверку сам себя."""

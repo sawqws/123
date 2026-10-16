@@ -133,7 +133,10 @@ class StudioFlow(unittest.TestCase):
         info = studio.registry()["voda"]
         self.assertEqual(info["username"], "voda_test_bot")
         self.assertEqual(studio.draft()["stage"], "done")
-        self.assertIn("готов", self.t.last)
+        self.assertIn("Бот «Водичка» готов", self.texts())
+        # сразу после запуска — автопроверка (Секретаря нет: тесты и лог, кнопки вживую — пропуск с пометкой)
+        self.assertIn("проверил тесты и логи — всё в порядке", self.t.last)
+        self.assertIn("Секретарь не вошёл", self.t.last)
         env = read(os.path.join(info["dir"], ".env"))
         self.assertIn(f"APP_URL={self.base}b/voda/", env)
         self.assertIn(f"BOT_OWNER={OWNER}", env)
@@ -466,6 +469,93 @@ class StudioFlow(unittest.TestCase):
         self.t.send("/start", uid=7)
         self.assertIn("личный", self.t.last)
         self.assertEqual(self.t.api("state", uid=7)[0], 403)
+
+
+class AutoCheck(unittest.TestCase):
+    """Сразу после запуска нового бота: обход всех его кнопок, тесты, лог → Claude исправляет и улучшает → тесты →
+    перезапуск. Claude, botcrawl и Telegram — подменены."""
+    setUp, tearDown, texts = StudioFlow.setUp, StudioFlow.tearDown, StudioFlow.texts
+
+    def build(self):
+        self.t.api("idea", {"text": "вода"})
+        self.t.api("enough")
+        self.t.api("name", {"text": "Вода"})
+        self.t.api("confirm")
+        return studio.registry()["voda"]["dir"]
+
+    def test_quality_in_prompts(self):
+        for prompt in (studio.BUILD, studio.FIX):
+            for need in ("1–5 строк", "до 24 символов", "не больше 3 в ряд", "плавно", "мёртвых кнопок",
+                         "Оникс-стекло", "отклик"):
+                self.assertIn(need, prompt)
+            self.assertNotIn("{quality}", prompt)
+        studio.BUILD.format(name="x", emoji="", dir="d", idea="i", qa="q", plan="p", shots="", fixes="")
+        studio.FIX.format(name="x", dir="d", text="t", shots="")
+        self.assertIn(".fade", studio.BUILD)
+
+    def test_crawls_new_bot_fixes_and_restarts(self):
+        crawled, prompts = [], []
+        db = []
+
+        def crawl(username, out, tick=None, params=None):
+            crawled.append((username, params))
+            tick and tick("✅ /start")
+            db.append(os.path.join(studio.registry()["voda"]["dir"], "data", "db.json"))
+            with open(db[0], "w") as f:  # обход выбрал «💬 В чате» — это выбор владельца, после проверки его нет
+                json.dump({"_mode": "chat", "water": 3}, f)
+            return {"clicks": 12, "problems": ["/start › 📊 Неделя: тишина — бот не ответил",
+                                               "/start: в ряду 4 кнопок: a, b, c, d"]}
+        orig = self.f.claude
+
+        def claude(prompt, cwd, on_step=None, **k):
+            if "автопроверка" in prompt:
+                prompts.append(prompt)
+                with open(os.path.join(cwd, "bot.py"), "a") as f:
+                    f.write("\n# неделя\n")
+                return True, "Починил «Неделю», ряды по 3."
+            return orig(prompt, cwd, on_step=on_step, **k)
+        with mock.patch.object(studio.botcheck, "crawl", crawl), mock.patch.object(studio, "claude", claude), \
+                mock.patch.object(studio.botcheck, "secretary_account", lambda root=None: True):
+            path = self.build()
+        self.assertEqual(crawled, [("voda_test_bot", studio.botcheck.NEW_CRAWL)])  # только новый бот
+        self.assertEqual((crawled[0][1]["max"], crawled[0][1]["depth"]), (80, 3))
+        self.assertEqual(len(prompts), 1)
+        for need in ("тишина", "в ряду 4 кнопок", "красивее, проще, короче", "1–5 строк", "дорабатываешь"):
+            self.assertIn(need, prompts[0])
+        self.assertIn("Бот «Вода» готов", self.texts())
+        self.assertIn("проверил 12 кнопок, исправил 2", self.t.last)
+        self.assertIn("↩️ Откатить", self.t.buttons)
+        self.assertIn("неделя", read(os.path.join(path, "bot.py")))
+        self.assertTrue(any(c[:2] == ("pm2", "restart") and "bot-voda" in c for c in self.f.pm2))
+        with open(db[0]) as f:
+            self.assertEqual(json.load(f), {"water": 3})
+        log = REAL_SH("git", "-C", path, "log", "--format=%s")[1]
+        self.assertIn("Автопроверка", log)
+
+    def test_no_account_no_crawl(self):
+        with mock.patch.object(studio.botcheck, "crawl", lambda *a, **k: self.fail("без входа кнопки не жмём")):
+            self.build()
+        self.assertIn("Кнопки вживую не жал: Секретарь не вошёл в аккаунт", self.t.last)
+        self.assertFalse(any(c[:2] == ("pm2", "restart") for c in self.f.pm2))  # проблем нет — не трогаем
+
+    def test_tests_still_fail_after_fix_rolls_back(self):
+        path = self.build()
+        before = read(os.path.join(path, "bot.py"))
+
+        def claude(prompt, cwd, on_step=None, **k):
+            with open(os.path.join(cwd, "bot.py"), "a") as f:
+                f.write("\n# сломал\n")
+            return True, "Поправил."
+        with mock.patch.object(studio, "run_tests", lambda p: (False, "FAIL: test_home\nAssertionError: нет кнопки")), \
+                mock.patch.object(studio, "claude", claude), \
+                mock.patch.object(studio.botcheck, "crawl", lambda u, o, t=None, p=None: {"clicks": 5, "problems": []}), \
+                mock.patch.object(studio.botcheck, "secretary_account", lambda root=None: True):
+            studio.after_check(OWNER, "voda")
+        self.assertIn("проверил 5 кнопок, осталось 1", self.t.last)
+        self.assertIn("откатил", self.t.last)
+        self.assertNotIn("↩️ Откатить", self.t.buttons)
+        self.assertEqual(read(os.path.join(path, "bot.py")), before)
+        self.assertFalse(studio.job.locked())
 
 
 class FakeReq:
