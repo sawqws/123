@@ -173,7 +173,8 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   }
   const narrow = () => (window.visualViewport ? visualViewport.width : document.documentElement.clientWidth) <= 640;
   if (window.visualViewport) { visualViewport.addEventListener('resize', fitLayer); visualViewport.addEventListener('scroll', fitLayer); }
-  window.addEventListener('resize', fitLayer);
+  window.addEventListener('resize', () => { fitLayer(); schedule(); });
+  if (window.visualViewport) visualViewport.addEventListener('resize', () => schedule());
 
   function el(tag, cls, html) {
     const e = document.createElement(tag);
@@ -317,6 +318,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     }
     S.open = true;
     requestAnimationFrame(() => d.classList.add('hdpx-dr-open'));
+    ensureBar();
     renderPanel(true);
     loadWait(true);
     if (!S.settings) loadSettings();
@@ -331,6 +333,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const d = $('.hdpx-drawer');
     if (d) { d.classList.remove('hdpx-dr-open'); setTimeout(() => { if (!S.open) d.remove(); }, 260); }
     ensureTab();
+    ensureBar();
   }
 
   const typing = () => { const a = document.activeElement; return a && a.closest && a.closest('.hdpx-dr-body') && /^(TEXTAREA|INPUT)$/.test(a.tagName); };
@@ -622,8 +625,8 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Тесты «как человек»</b>
         <span class="hdpx-small hdpx-muted">${s.human ? 'Пауза 20–45 с над каждым вопросом' : 'Сдаю сразу, без пауз'}</span></span>
         <button class="hdpx-switch${s.human ? ' hdpx-switch-on' : ''}" role="switch" aria-checked="${s.human}" data-a="human"><i></i></button></label></div>
-      <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Кнопка бота на странице</b>
-        <span class="hdpx-small hdpx-muted">${S.hideTab ? 'Спрятана — сайт ровно как платформа. Панель открывает тройной тап по странице или Alt+B' : 'Вкладка 🤖 справа. Спрячешь — открывать тройным тапом по странице или Alt+B'}</span></span>
+      <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Кнопки бота на странице</b>
+        <span class="hdpx-small hdpx-muted">${S.hideTab ? 'Спрятаны — сайт ровно как платформа. Панель открывает тройной тап по странице или Alt+B' : '«⚡ Решить и сдать», «👁 Ответы»… внизу страницы и вкладка 🤖 справа. Спрячешь — панель открывает тройной тап или Alt+B'}</span></span>
         <button class="hdpx-switch${S.hideTab ? '' : ' hdpx-switch-on'}" role="switch" aria-checked="${!S.hideTab}" data-a="tabvis"><i></i></button></label></div>
       <div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">Данные бота</b><button class="hdpx-btn hdpx-s hdpx-outline" data-a="ovfresh">↻ Обновить с HDP</button></div>
         <p class="hdpx-small hdpx-muted">Задания, оценки и подтверждения бот берёт с этого сайта — обновляются сами раз в пару минут</p></div>
@@ -770,6 +773,71 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     openPanel('prep');
   }
 
+  /* ---------- кнопки на странице: плавающая полоса внизу ----------
+     Глеб, 16.10: «кнопок по типу решить нету — это просто обычный сайт». Полоса лежит поверх страницы (в слое
+     hdpx-vv) над родной нижней панелью платформы и вёрстку не сдвигает. Прячется вместе с вкладкой (Настройки). */
+  function bottomInset() {
+    // высота родных фиксированных панелей у нижнего края (футер теста «Баллов нужно…», «Отправить на проверку»)
+    const v = window.visualViewport;
+    const vw = v ? v.width : document.documentElement.clientWidth, vh = v ? v.height : window.innerHeight;
+    let inset = 0;
+    for (const fx of [0.15, 0.5, 0.85]) {
+      // фиксированная панель — или полоса у самого низа экрана (у платформы футер — часть раскладки высотой 100vh)
+      let n = document.elementFromPoint(vw * fx, vh - 3);
+      while (n && n !== document.body && n !== document.documentElement) {
+        if (n.closest && n.closest('[data-hdpx]')) break;
+        const r = n.getBoundingClientRect();
+        const pos = getComputedStyle(n).position;
+        if (pos === 'fixed' || pos === 'sticky') { inset = Math.max(inset, Math.round(vh - r.top)); break; }
+        if (Math.abs(r.bottom - vh) <= 2 && r.top > vh * 0.6) inset = Math.max(inset, Math.round(vh - r.top));
+        n = n.parentElement;
+      }
+    }
+    return Math.min(inset, Math.round(vh / 3));
+  }
+
+  function barHtml(p) {
+    if (S.authed === false) return `<span class="hdpx-ab-txt">${I.bot} Нужен вход — напиши боту /site</span>`;
+    const open = `<button class="hdpx-ab-ico" data-a="openhere" aria-label="Панель бота" title="Панель бота">${I.bot}</button>`;
+    if (p.kind === 'topic') {
+      const tasks = cachedTasks(p.topic);
+      if (!tasks) return '';
+      const autos = tasks.filter(autoOk).filter(t => !S.running.has(t.uuid)).length;
+      const work = tasks.filter(t => S.running.has(t.uuid)).length;
+      return open + `<button class="hdpx-ab-btn" data-a="openhere">📖 Подготовь меня</button>`
+        + (autos ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="tauto">⚡ Автотесты (${autos})</button>` : '')
+        + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
+    }
+    const t = taskOf(p.topic, p.task) || (cachedTasks(p.topic) ? guessTask(p) : null);
+    if (!t) return '';
+    const st = S.st || {};
+    if (S.running.has(p.task)) {
+      const l = st.live;
+      return open + `<button class="hdpx-ab-btn hdpx-ab-wide" data-a="openhere">${spin} ${l && l.step ? esc(l.step) : 'Решаю'}${l && l.frac != null ? ` · ${Math.round(l.frac * 100)}%` : ''}</button>`;
+    }
+    const draft = (st.drafts || []).find(d => d.task === p.task);
+    if (draft) return open + `<button class="hdpx-ab-btn hdpx-ab-main" data-a="draft" data-task="${esc(p.task)}">✍️ Черновик готов${draft.send_at ? ` · ${hhmm(draft.send_at)}` : ''}</button>`;
+    if (isTest(t)) {
+      const over = done(t) || t.left === 0;
+      return open + `<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button>`
+        + (over ? '' : '<button class="hdpx-ab-btn hdpx-ab-main" data-a="solve" data-m="do">⚡ Решить и сдать</button>');
+    }
+    if (t.status === 'approved') return '';
+    const rew = ['reworking', 'failed'].includes(t.status);
+    return open + `<button class="hdpx-ab-btn hdpx-ab-main" data-a="solve" data-m="write">${rew ? '🔁 Доделать' : t.status === 'reviewing' ? '✍️ Написать заново' : '✍️ Написать ответ'}</button>`;
+  }
+
+  function ensureBar() {
+    let bar = $('.hdpx-actionbar');
+    const p = where();
+    const html = S.hideTab || S.open || p.kind === 'other' ? '' : barHtml(p);
+    if (!html) { if (bar) bar.remove(); return; }
+    if (!bar) { bar = el('div', 'hdpx-actionbar'); bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'HDP-бот'); layer().append(bar); }
+    swap(bar, html);
+    const b = bottomInset() + 12 + 'px';
+    if (bar.style.bottom !== b) bar.style.bottom = b;
+  }
+
   /* ---------- всё вместе ---------- */
   let pathNow = '';
   function update() {
@@ -781,6 +849,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       setTimeout(update, 2600);  // если якоря так и нет — плавающий блок
     }
     ensureTab();
+    ensureBar();
     const p = where();
     const key = location.pathname;
     if (S.open && key !== S.ctxKey) { S.ctxKey = key; if (p.kind !== 'other') S.tab = 'now'; }
@@ -851,9 +920,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       case 'solve': solve(a, p, d.m); break;
       case 'mini': solve(a, { topic: d.topic, task: d.task }, d.m); break;
       case 'draft': openPanel('now', { draft: d.task }); break;
+      case 'openhere': openPanel('now'); break;
       case 'tabvis':
         S.hideTab = !S.hideTab; store.set('hideTab', S.hideTab);
-        toast(S.hideTab ? 'Кнопка спрятана — панель: тройной тап по странице или Alt+B' : 'Кнопка снова справа');
+        toast(S.hideTab ? 'Кнопки спрятаны — панель: тройной тап по странице или Alt+B' : 'Кнопки снова на странице');
         renderPanel(true); ensureTab();
         break;
       case 'seen': S.seen = (S.st && S.st.last && S.st.last.at) || S.seen; store.set('seen', S.seen); update(); break;
