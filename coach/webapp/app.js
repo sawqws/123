@@ -34,7 +34,7 @@
   const $ = (s, el = document) => el.querySelector(s);
   // Плавающая «🛠» создаётся из body[data-support], но пока атрибут стоит на body, kit.js считает «поддержкой» любой тап по странице
   // (closest('[data-support]') находит body) — создаём кнопку сами и снимаем атрибут.
-  Kit.supportFab(); delete document.body.dataset.support;
+  delete document.body.dataset.support;  // плавающей «🛠» нет (у WHOOP её нет, она перекрывала экран) — «Поддержка» внизу «Сегодня» и в «Ещё»
   const view = $('#view');
   // Модули (journal.js, plan.js, …) подключаются ДО app.js и кладут функцию в window.FormaModules; app.js вызывает
   // каждую с объектом F перед стартом. Что модуль может: F.screens[вид] — экран «подробностей» (открыть: F.openScreen(вид, арг)),
@@ -615,7 +615,7 @@
     return `<section class="wring rise" style="--c:${color}"><div class="wring-c"><svg viewBox="0 0 100 100" aria-hidden="true">
       <circle class="wtrk" cx="50" cy="50" r="${r}" stroke-width="${w}"/>${bd}
       <circle class="arc" cx="50" cy="50" r="${r}" stroke-width="${w}" stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${c.toFixed(2)}" data-off="${off.toFixed(2)}"/></svg>
-      <div class="wring-in"><b class="num">${value}</b><span>${label}</span></div></div></section>`;
+      <div class="wring-in"><i class="wmark">ФОРМА</i><b class="num">${value}</b><span>${label}</span></div></div></section>`;
   }
   // треугольник к норме за 30 дней: форма — куда сдвинулось, цвет — хорошо (бирюза) / плохо (оранжевый) / ни то ни другое (серый)
   function tri(v, b, goodUp, d = 0) {

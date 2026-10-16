@@ -7,6 +7,7 @@
   const tabs = document.getElementById('tabs');
   const esc = Kit.esc;
   if (standalone) document.body.classList.add('standalone');
+  delete document.body.dataset.support;  // иначе любой тап по странице до загрузки app.js открывал «Поддержку»
 
   // сессия кончилась посреди работы — снова экран входа, а не «Открой через Telegram»
   const api0 = Kit.api;

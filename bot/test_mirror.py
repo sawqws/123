@@ -188,6 +188,15 @@ class MirrorTest(unittest.TestCase):
         mirror.relogin.assert_called_once()
         self.assertEqual(len(Upstream.seen), 1)  # вход не удался — второй раз не спрашиваем
 
+    def test_logout_only_leaves_mirror(self):
+        """«Выйти» на платформе в зеркале не разлогинивает бота: запрос не уходит, выходит только cookie зеркала."""
+        code, h, body = self.req("POST", "/api/auth/v1/logout", body=b"{}",
+                                 headers={"Origin": "https://hdp.1-2-3-4.sslip.io", "Content-Type": "application/json"})
+        self.assertEqual(code, 200)
+        self.assertIn("Max-Age=0", h.get("Set-Cookie", ""))
+        self.assertEqual(Upstream.seen, [])
+        self.assertFalse(web.site_check(self.token))
+
     def test_jar_update_and_reload(self):
         j = mirror._jar
         j.update(["hdp-portal-session=NEW; Path=/; HttpOnly", "gone=; Max-Age=0"])
