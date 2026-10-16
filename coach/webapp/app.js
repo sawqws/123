@@ -302,6 +302,7 @@
     const moving = (anim || S.navKind || S.inVT) && !S.popping;
     const cls = [S.inVT ? 'enter vt' : S.navKind ? `enter nav-${S.navKind}` : anim ? 'enter' : '', moving ? '' : 'calm'].join(' ').trim();
     view.innerHTML = `<div class="${cls}">${html}</div>`;
+    document.body.classList.toggle('tab-coach', S.tab === 'coach' && !S.screen);
     if (moving) stagger();
     animate(document, !moving);
     if (F.navSync) F.navSync();
@@ -413,7 +414,7 @@
       <span class="act-m"><b>${esc(w.sport)}</b><span class="num">${esc(w.start)} · ${w.minutes || '—'} мин${w.kcal ? ` · ${big(w.kcal)} ккал` : ''}</span></span>
       <span class="act-v num" style="--c:var(--strain)">${w.strain != null ? num(w.strain, 1) : '—'}</span></button>`));
     return `<div class="sec rise"><div class="cap"><h3>Мой день</h3><button class="addsq" data-a="tab" data-v="plus" aria-label="Добавить">${I.plus}</button></div>
-      <button class="outrow" data-a="detail" data-v="rec"><span>${t.day === S.data.today.day ? 'Прогноз на день' : 'Разбор дня'}</span>${I.next}</button>
+      <button class="outrow" data-a="${document.documentElement.classList.contains('wh') ? 'outlook' : 'detail'}" data-v="rec"><span>${t.day === S.data.today.day ? 'Прогноз на день' : 'Разбор дня'}</span>${I.next}</button>
       <div class="card acts"><div class="acts-h"><b>Активности</b><span class="num">${rows.length || ''}</span></div>${rows.length ? rows.join('') : '<p class="muted small">Сна и тренировок за этот день пока нет — WHOOP пришлёт их после записи.</p>'}</div></div>`;
   }
   // «My Dashboard»: плитки показателей со стрелкой к норме за 30 дней
@@ -454,7 +455,7 @@
       <button class="syncpill" data-a="sync" aria-label="Обновить данные WHOOP">${I.sync}<span class="num">${d.synced ? clock(d.synced) : '—'}</span></button></header>
       <div class="wordmark">ФОРМА</div>`;
     h += slot('homeTop', t, isToday);
-    h += `<section class="dials rise">
+    h += `<section class="dials rise" data-k="${esc(t.day)}-${sleepV}-${r ? r.score : ''}-${c ? c.strain : ''}">
         ${dial(sleepP, 'var(--sleep)', sleepV != null ? `<b class="num">${cnt(sleepV)}<small>%</small></b>` : '<b>—</b>', 'Сон', '', 'sleep')}
         ${dial(r ? r.score / 100 : 0, recC, r ? `<b class="num">${cnt(r.score)}<small>%</small></b>` : '<b>—</b>', 'Восстановление', '', 'rec')}
         ${dial(c && c.strain != null ? c.strain / 21 : 0, 'var(--strain)', c && c.strain != null ? `<b class="num">${cnt(c.strain, 1)}</b>` : '<b>—</b>', 'Нагрузка', '', 'strain')}
@@ -468,6 +469,7 @@
       ${isToday ? `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
         <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Узнать у тренера</button></div>` : ''}</section>`;
 
+    S.outlookHtml = h.slice(h.lastIndexOf('<section class="card outlook'));  // вид WHOOP: совет дня — листом из строки «Прогноз на день»
     const ms = monStat(t), msOk = ms.all && ms.ok === ms.all, sv = c && c.strain != null ? c.strain : null;
     h += `<div class="mons rise"><button class="mon" data-a="tab" data-v="trends"><span class="mon-k">Монитор здоровья${I.next}</span>
         <span class="mon-s"><i class="mon-b" style="--c:${!ms.all ? 'var(--hint)' : msOk ? 'var(--teal)' : ms.ok >= ms.all - 1 ? C.yellow : C.red}">${msOk ? I.check : '!'}</i>
@@ -1170,12 +1172,28 @@
   });
   // шапка становится стеклянной, когда под ней поехало содержимое; большой заголовок уехал — маленький появляется в полосе (как iOS)
   const navbar = document.createElement('header');
-  navbar.id = 'navbar'; navbar.innerHTML = `<button type="button" data-a="back" aria-label="Назад">${I.back}</button><b></b><span></span>`;
+  navbar.id = 'navbar'; navbar.innerHTML = `<button type="button" data-a="back" aria-label="Назад">${I.back}</button><b></b><span></span><div class="mini"></div>`;
   document.body.append(navbar);
   let scTick = false;
   function navSync() {
     scTick = false;
     document.body.classList.toggle('scrolled', window.scrollY > 6);
+    // главная: кольца уехали вверх — в шапке маленькие «◯ СОН ◯ ВОССТАНОВЛЕНИЕ ◯ НАГРУЗКА» (как у WHOOP)
+    const dials = !S.screen && S.tab === 'today' && view.querySelector('.dials');
+    navbar.classList.toggle('rings', !!dials);
+    if (dials) {
+      const mini = navbar.querySelector('.mini');
+      if (!mini.dataset.k || mini.dataset.k !== dials.dataset.k) {
+        mini.dataset.k = dials.dataset.k || '';
+        mini.innerHTML = [...dials.querySelectorAll('.dial')].map(d => {
+          const arc = d.querySelector('.arc'), r = arc.getAttribute('r'), dash = arc.getAttribute('stroke-dasharray'), off = arc.dataset.off;
+          return `<button class="mini-r" data-a="detail" data-v="${d.dataset.v}" style="--c:${d.style.getPropertyValue('--c')}"><svg viewBox="0 0 100 100" aria-hidden="true">
+            <circle cx="50" cy="50" r="${r}" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="10"/><circle cx="50" cy="50" r="${r}" fill="none" stroke="var(--c)" stroke-width="10" stroke-dasharray="${dash}" stroke-dashoffset="${off}"/></svg>${esc(d.getAttribute('aria-label') || '')}</button>`;
+        }).join('');
+      }
+      navbar.classList.toggle('show', dials.getBoundingClientRect().bottom < 60);
+      return;
+    }
     const h1 = view.querySelector('.hero h1, .dhead h1');
     if (!h1) { navbar.classList.remove('show'); return; }
     navbar.querySelector('b').textContent = h1.textContent.trim();
@@ -1247,6 +1265,8 @@
     isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
     dHead, cap, head, hero, chartCard, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
     summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav });
+  // вид WHOOP: «Прогноз на день» открывает совет дня листом (карточки над «Моим днём» у WHOOP нет)
+  if (!F.actions.outlook) F.actions.outlook = () => { if (S.outlookHtml) sheet(`<h2>Прогноз на день</h2>${S.outlookHtml}`); else openScreen('rec'); };
   (window.FormaModules || []).forEach(m => { try { m(F); } catch (e) { console.error('модуль', e); } });
   start();
 })();

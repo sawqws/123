@@ -1,0 +1,193 @@
+/* Форма точь-в-точь как WHOOP 5.0 (Глеб 16.10: «зайди прям в приложение WHOOP, всё протыкай и сделай точь-в-точь»).
+   Сверено по кадрам записи экрана WHOOP 5.0 (iPhone, 2026): главная, сон, восстановление, нагрузка, тренировка, тренер,
+   монитор здоровья, дневник, план, панель, «Ещё». Слой подключается последним и действует при html.wh
+   (вид по умолчанию; «iOS-стекло» — переключатель в «Ещё» → «Вид», хранится в localStorage forma-skin). */
+
+html.wh {
+  --wb-top: #2b3338; --wb-mid: #1f2529; --wb-bot: #16191c;
+  --wc: #2c3338; --wc-2: #353d43; --wc-hi: #343c41;
+  --wk: #e4e8ea; --wg: #8c979d; --wl: rgba(255, 255, 255, .07);
+  --wv: #7d86ff;            /* фиолетово-синие ссылки «EXPLORE … →» */
+  --wact: #1a9bf2;          /* плашка активности */
+  --wsleep: #8fb2ca;        /* плашка сна */
+  --r-xl: 10px; --r-lg: 10px; --r-md: 8px;
+}
+html.wh, html.wh body { background: var(--wb-bot) linear-gradient(180deg, var(--wb-top) 0, var(--wb-mid) 520px, var(--wb-bot) 1100px) no-repeat !important; }
+html.wh #aura { display: none !important; }
+
+/* карточки — ровные, без стекла, бликов и теней; скругление маленькое */
+html.wh .card, html.wh .tile, html.wh .mon, html.wh .wcon, html.wh .list, html.wh .outrow, html.wh .stat, html.wh details.about,
+html.wh .sheet .list, html.wh .cfoot, html.wh .summary-entry {
+  background: linear-gradient(180deg, var(--wc-hi), var(--wc)) !important; box-shadow: none !important; border: 0 !important; border-radius: 10px !important;
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+html.wh .card::after, html.wh .tile::after, html.wh .mon::after, html.wh .list::after, html.wh .outrow::after, html.wh .mepill::after,
+html.wh .datecap::after, html.wh .stat::after, html.wh .wcon::before { content: none !important; }
+html.wh .card .stat, html.wh .card .list { background: rgba(255, 255, 255, .05) !important; }
+html.wh .cfoot { background: rgba(0, 0, 0, .28) !important; border-radius: 6px !important; }
+
+/* подписи — заглавными, мелко, с разрядкой (как у WHOOP); заголовки разделов — обычными, крупно */
+/* (#app * в app.css снимает капс с !important и весом id — поэтому тут тоже через #app) */
+html.wh #app :is(.cap h3, .tile-k, .tk, .mon-k, .ck, .dial-k, .acts-h b, .wtop-t, .dc-t, .act-m b, .label, .btn, .seg button, .wlink, .mon-s b, .cfoot b,
+  .wring-in > span, .cap-r, .co-beta),
+html.wh .sheet :is(.label, .btn, .seg button, .cap h3), html.wh #navbar .mini-r {
+  text-transform: uppercase !important; letter-spacing: .09em !important; }
+html.wh #app .sec > .cap h3, html.wh #app .cap.big h3 { text-transform: none !important; letter-spacing: 0 !important; }
+html.wh .cap h3 { font: 700 11.5px/1.2 var(--head) !important; color: var(--wk); }
+html.wh .sec > .cap h3, html.wh .cap.big h3 { font: 600 20px/1.2 var(--head) !important; text-transform: none !important; letter-spacing: 0 !important; color: #fff; }
+html.wh .cap-r { font: 700 10.5px var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--wk); }
+html.wh .muted, html.wh .hint, html.wh .dial-s, html.wh .act-m span { color: var(--wg) !important; }
+
+/* шапка главной: аватар с серией · «< СЕГОДНЯ >» · обновление; слово-марка над кольцами */
+html.wh .mepill, html.wh .datecap, html.wh .syncpill { background: transparent !important; box-shadow: none !important; border: 0 !important; }
+html.wh .datecap { gap: 4px; }
+html.wh .dc-t { font: 700 10.5px/1 var(--head) !important; padding: 7px 16px; border-radius: 999px; background: #3a4247; color: #fff; }
+html.wh .datecap .pg { color: #fff; }
+html.wh .syncpill { color: var(--wg); font-size: 12px; }
+html.wh .wordmark { display: block !important; margin: 10px 0 14px; font: 300 17px/1 var(--head); letter-spacing: .3em; color: rgba(255, 255, 255, .9); }
+html.wh .wbar, html.wh .wtop, html.wh .dhead { background: transparent !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; box-shadow: none !important; }
+
+/* три кольца главной — небольшие, подпись «СОН ›» */
+html.wh .dials { gap: 18px; margin: 0 8px 18px; }
+html.wh .dial-ring { max-width: 96px; margin: 0 auto; }
+html.wh .dial-v b { font: 700 25px/1 var(--num) !important; }
+html.wh .dial-v small { font-size: .62em; }
+html.wh .dial-k { margin-top: 9px; font: 700 10.5px/1.2 var(--head) !important; letter-spacing: .08em !important; color: #fff; }
+html.wh .dial .trk { stroke: #3a4247 !important; }
+
+/* «Монитор здоровья» / «Цель нагрузки» — две плитки */
+html.wh .mons { gap: 8px; }
+html.wh .mon { padding: 12px !important; gap: 10px; }
+html.wh .mon-k { font: 700 10.5px/1.2 var(--head) !important; color: #fff; display: flex; align-items: center; gap: 4px; }
+html.wh .mon-s b { font: 700 10px/1.2 var(--head) !important; }
+html.wh .mon-s span { font-size: 11px; color: var(--wg); }
+html.wh .mon-b { width: 22px !important; height: 22px !important; border-radius: 4px !important; font-size: 11px !important; }
+
+/* совет дня */
+html.wh .outlook .ot { font: 600 15px/1.3 var(--head); }
+html.wh .outlook .advice, html.wh .outlook p { font-size: 14px; line-height: 1.45; }
+html.wh .coach-link { box-shadow: none !important; }
+
+/* «Мой день»: белый квадрат «+», строка «Прогноз на день», активности с цветной плашкой слева */
+html.wh .addsq { width: 30px; height: 30px; border-radius: 6px; background: #fff; color: #111; }
+html.wh .outrow { padding: 12px 14px !important; margin-bottom: 8px; font: 500 14px var(--head); background: linear-gradient(90deg, #3a4247, #4a5258) !important; }
+html.wh .outrow::before { content: "☼"; margin-right: 10px; font-size: 16px; color: #fff; }
+html.wh .outrow > span { flex: 1; }
+html.wh .acts { padding: 12px !important; }
+html.wh .acts-h b { font: 700 11px var(--head) !important; color: var(--wk); }
+html.wh .act { gap: 12px; padding: 0 !important; margin-top: 8px; border: 0 !important; border-radius: 8px; background: #3a4247 !important; overflow: hidden; }
+html.wh .act-ic { order: 0; width: auto !important; min-width: 84px; height: 44px !important; border-radius: 0 !important; padding: 0 12px; gap: 8px;
+  display: flex !important; align-items: center; justify-content: flex-start; color: #fff !important; background: var(--wact) !important; }
+html.wh .act-ic .ico { width: 18px; height: 18px; }
+html.wh .act[data-v="sleep"] .act-ic { background: var(--wsleep) !important; }
+html.wh .act-v { order: 0; margin-left: -12px; min-width: 0 !important; height: 44px; padding: 0 14px 0 0 !important; display: flex; align-items: center;
+  border-radius: 0 !important; background: var(--wact) !important; color: #fff !important; font: 700 16px var(--num) !important; box-shadow: none !important; }
+html.wh .act[data-v="sleep"] .act-v { background: var(--wsleep) !important; }
+html.wh .act-m { order: 1; flex-direction: row !important; align-items: center; justify-content: space-between; padding-right: 12px; }
+html.wh .act-m b { font: 700 11.5px var(--head) !important; color: #fff; }
+html.wh .act-m span { font-size: 10.5px; text-align: right; white-space: nowrap; border-right: 1.5px solid var(--wact); padding-right: 6px; }
+html.wh .act[data-v="sleep"] .act-m span { border-color: var(--wsleep); }
+
+/* «Сон сегодня» (Tonight's Sleep) */
+html.wh .tonight > div { background: transparent !important; box-shadow: none !important; }
+html.wh .tonight b { font: 700 22px/1 var(--num) !important; }
+html.wh .tk { font: 700 9.5px/1.2 var(--head) !important; color: var(--wg) !important; }
+
+/* «Моя панель» (My Dashboard): строки — значок, ПОДПИСЬ, справа число со стрелкой и норма под ним */
+html.wh .tiles { grid-template-columns: 1fr !important; gap: 8px; }
+html.wh .tile { display: grid !important; grid-template-columns: 1fr auto; grid-template-areas: "k v" "k d"; align-items: center; gap: 0 10px; padding: 10px 14px !important; min-height: 48px; }
+html.wh .tile-k { grid-area: k; font: 700 11px/1.2 var(--head) !important; color: #fff !important; }
+html.wh .tile-v { grid-area: v; justify-self: end; }
+html.wh .tile-v b { font: 700 19px/1 var(--num) !important; }
+html.wh .tile-v small { font-size: 10px; }
+html.wh .tile-d { grid-area: d; justify-self: end; }
+html.wh .tile-d .vs { font: 600 10px var(--num) !important; }
+
+/* экраны разбора: «<  СЕГОДНЯ  ⓘ», кольцо со словом-маркой, строки «что влияет», вывод в фиолетово-синей рамке */
+html.wh .wtop-t { font: 700 12px var(--head) !important; letter-spacing: .1em !important; }
+html.wh .wbtn { background: transparent !important; box-shadow: none !important; }
+html.wh .wbtn.info { border: 1.5px solid rgba(255, 255, 255, .75) !important; width: 24px; height: 24px; font: 600 13px/1 Georgia, serif; }
+html.wh .wring-c { width: min(62vw, 250px); }
+html.wh .wring-in .wmark { font-weight: 300; letter-spacing: .3em; }
+html.wh .wring-in b { font-size: clamp(52px, 15vw, 64px) !important; }
+html.wh .wring-in > span { font: 700 11px/1.35 var(--head) !important; letter-spacing: .1em !important; text-transform: uppercase; }
+html.wh .wcon { padding: 4px 14px 12px !important; }
+html.wh .crow { padding: 13px 0 !important; }
+html.wh .ck { font: 700 10.5px/1.25 var(--head) !important; letter-spacing: .08em !important; text-transform: uppercase !important; color: #fff !important; }
+html.wh .cv { font: 700 17px var(--num) !important; }
+html.wh .cic { color: var(--wg); }
+html.wh .winsight { border-radius: 10px !important; padding: 14px !important;
+  background: linear-gradient(#1b2024, #1b2024) padding-box, linear-gradient(120deg, #6c5cff, #3a8dff 60%, #6c5cff) border-box !important; border: 1px solid transparent !important; }
+html.wh .winsight p { font: 500 14px/1.45 var(--head) !important; }
+html.wh .wlink { font: 700 10.5px var(--head) !important; color: var(--wv) !important; letter-spacing: .09em !important; }
+
+/* кнопки — тёмные плашки с подписью заглавными */
+html.wh .btn { border-radius: 8px !important; font: 700 11px/1 var(--head) !important; min-height: 40px; box-shadow: none !important; }
+html.wh .btn:not(.primary) { background: #3a4247 !important; color: #fff !important; }
+html.wh .btn.primary { background: #fff !important; color: #111 !important; }
+html.wh .seg { background: #23292d !important; border-radius: 8px !important; }
+html.wh .seg button { font: 700 10.5px var(--head) !important; border-radius: 6px !important; }
+html.wh .seg button.on { background: #3e464c !important; color: #fff !important; }
+
+/* меню снизу: плашка «Главная · Здоровье · Добавить · Питание» и отдельный круг тренера со знаком «Ф» */
+html.wh .tabbar { background: rgba(38, 44, 48, .86) !important; border-radius: 22px !important; box-shadow: 0 10px 30px rgba(0, 0, 0, .55) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(140%) !important; backdrop-filter: blur(20px) saturate(140%) !important; }
+html.wh .tabbar button { font: 500 10px/1.1 var(--head) !important; text-transform: none !important; letter-spacing: 0 !important; color: rgba(255, 255, 255, .55) !important; background: none !important; }
+html.wh .tabbar button.on { color: #fff !important; background: none !important; }
+html.wh .tabbar .tab-ind, html.wh .tabbar::before { display: none !important; }
+html.wh .tabbar button[data-tab="plus"] .i { background: none !important; width: auto !important; height: auto !important; color: inherit !important; margin: 0 !important; }
+html.wh .tabbar button[data-tab="coach"] { border-radius: 50% !important; background: radial-gradient(circle at 50% 40%, #2b2f52, #171a2c) !important;
+  box-shadow: inset 0 0 0 2px rgba(122, 108, 255, .55), 0 10px 26px rgba(0, 0, 0, .6) !important; }
+html.wh .tabbar button[data-tab="coach"] .ico { display: none !important; }
+html.wh .tabbar button[data-tab="coach"] .i::before { content: "Ф"; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, .85); font: 400 17px/1 var(--head); color: #fff; }
+
+/* шапка при прокрутке главной — маленькие кольца «◯ СОН ◯ ВОССТАНОВЛЕНИЕ ◯ НАГРУЗКА», как у WHOOP */
+html.wh #navbar { background: rgba(30, 36, 40, .92) !important; -webkit-backdrop-filter: blur(18px) !important; backdrop-filter: blur(18px) !important; box-shadow: none !important; }
+#navbar .mini { display: none; }
+html.wh #navbar.rings { grid-template-columns: 1fr; }
+html.wh #navbar.rings > button, html.wh #navbar.rings > b, html.wh #navbar.rings > span { display: none; }
+html.wh #navbar.rings .mini { display: flex; justify-content: center; gap: 22px; }
+.mini-r { display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; color: #fff; font: 700 10px/1 var(--head); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+.mini-r svg { width: 20px; height: 20px; transform: rotate(-90deg); }
+
+/* Тренер как WHOOP Coach: тёмно-синий фон с фиолетовым, ответы текстом, подсказки — белые капсулы над полем */
+html.wh body.tab-coach, html.wh body.tab-coach::before { background: linear-gradient(180deg, #1a1c38 0, #121428 45%, #0d0e1c 100%) !important; }
+html.wh .co-chat .msg.them { font-size: 15px; line-height: 1.5; }
+html.wh .co-beta { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 14px; padding: 4px 10px 4px 4px; border-radius: 999px; background: rgba(255, 255, 255, .1); font: 500 12px var(--head); color: #fff; }
+html.wh .co-beta i { width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .8); display: grid; place-items: center; font: 400 11px/1 var(--head); font-style: normal; }
+html.wh .composer .chips { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 8px; scrollbar-width: none; margin: 0 -16px 10px; padding: 0 16px; }
+html.wh .composer .chips::-webkit-scrollbar { display: none; }
+html.wh .composer .chip { flex: none; background: #fff !important; color: #111 !important; border: 0 !important; border-radius: 8px !important; padding: 8px 12px; font: 500 12.5px var(--head); white-space: nowrap; }
+html.wh .co-sugg { display: none; }
+html.wh .composer .ask textarea { border-radius: 12px !important; background: linear-gradient(#1c1e33, #1c1e33) padding-box, linear-gradient(90deg, #4b4fa8, #2f3a7a) border-box !important; }
+html.wh .composer .send.alt { border-radius: 12px !important; background: rgba(255, 255, 255, .12) !important; box-shadow: none !important; }
+
+/* совет дня — не карточкой над «Моим днём» (у WHOOP его там нет), а за строкой «Прогноз на день» */
+html.wh .outlook { display: none !important; }
+html.wh .outrow { justify-content: flex-start !important; text-align: left !important; font: 500 14px var(--head) !important; }
+html.wh .tabbar button[data-tab="coach"] .t, html.wh .tabbar button[data-tab="coach"] span:not(.i) { display: none !important; }
+html.wh .dial .arc, html.wh .dial .trk { stroke-width: 8.5px; }
+html.wh .sheet .outlook { display: block !important; background: none !important; padding: 0 !important; }
+html.wh #app .addsq { width: 30px !important; height: 30px !important; border-radius: 6px !important; background: #fff !important; color: #111 !important; box-shadow: none !important; }
+html.wh #app .dial-k { font-size: 9.5px !important; letter-spacing: .05em !important; }
+/* маленькие кольца в шапке — не круглые кнопки «назад» */
+html.wh #navbar .mini-r { width: auto !important; height: auto !important; padding: 4px 0 !important; border-radius: 0 !important; background: none !important; color: #fff !important; display: inline-flex !important; }
+html.wh #navbar .mini-r svg { width: 20px !important; height: 20px !important; }
+html.wh #navbar.rings .mini { gap: 18px; }
+/* Тренер: без большого заголовка — сверху строка «Ф Тренер · бета», как у WHOOP Coach */
+html.wh body.tab-coach .hero { display: none !important; }
+
+/* «Ещё» (More): строки с подписью заглавными, как MY ACCOUNT / DEVICE SETTINGS */
+html.wh #app .more-g .row .title, html.wh #app .list .row .title { font: 700 12px/1.25 var(--head) !important; text-transform: uppercase !important; letter-spacing: .08em !important; }
+html.wh #app .list .row .meta { font-size: 11.5px; color: var(--wg); }
+html.wh #app .list { background: transparent !important; }
+html.wh #app .list .row { background: linear-gradient(180deg, var(--wc-hi), var(--wc)); border-radius: 10px; margin-bottom: 8px; }
+html.wh #app .list .row::before, html.wh #app .list .row + .row::before { content: none !important; }
+.co-top { display: none; }
+html.wh .co-top { display: flex; align-items: center; justify-content: space-between; margin: calc(var(--top) + 8px) 0 16px; }
+html.wh .co-top .co-beta { margin: 0 !important; }
+html.wh .co-new { width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; color: #fff; display: grid; place-items: center; }
+html.wh .co-new .ico { width: 22px; height: 22px; }
+html.wh #navbar.rings .mini { grid-column: 1 / -1; width: 100%; gap: 14px; }
+html.wh #navbar .mini-r { font-size: 9.5px !important; letter-spacing: .06em !important; white-space: nowrap; }
+html.wh body.tab-coach #navbar { display: none !important; }
