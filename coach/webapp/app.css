@@ -996,3 +996,33 @@ textarea:not(.ask textarea) { border-radius: 20px !important; }
 :root, html[data-scheme] { --font: var(--head); --font-d: var(--head); --round: var(--head); }
 body, button, input, textarea, select, .tabbar button, .sheet, .toast { font-family: var(--head); }
 .num, .dial-v b, .wring-in b, .tile-v b, .cv, .kval b, .mv b, .tonight b, .big-line .v, .stat .v, .act-v, .mon-b { font-feature-settings: "tnum"; }
+
+/* ===================== Сверка со скриншотами WHOOP из App Store (16.10) =====================
+   Фон — ровный графит WHOOP (#283339 → #101518), без цветных пятен: лишь лёгкий отсвет цвета восстановления сверху.
+   Кольцо разбора — как у WHOOP: меньше, со словом-маркой над числом. Плавающей «🛠» нет. */
+#aura { inset: 0; animation: none; transform: none;
+  background: radial-gradient(70% 38% at 18% 0%, color-mix(in srgb, var(--zc) 9%, transparent), transparent 75%),
+    linear-gradient(180deg, #283339 0%, #1b2328 40%, #121719 75%, #101518 100%) !important; }
+.sup-fab { display: none !important; }
+.wring { padding: 10px 0 14px; }
+.wring-c { width: min(64vw, 262px); }
+.wring-in b { font-size: clamp(54px, 16vw, 68px); }
+.wring-in .wmark { font: 300 14px/1 var(--head); font-style: normal; letter-spacing: .32em; margin: 0 0 6px .32em; color: rgba(255, 255, 255, .78); }
+.wring-in > span { margin-top: 8px; font-size: 12px; }
+/* Тренер как WHOOP Coach: вопросы — пузыри справа, поле — капсула с фиолетово-синим кантом */
+.co-sugg { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-top: 4px; }
+.co-s { max-width: 86%; padding: 10px 14px; border: 0; border-radius: 18px 18px 6px 18px; background: rgba(255, 255, 255, .09); color: var(--ink);
+  font: 500 15px/1.3 var(--head); text-align: right; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .1);
+  transition: transform .25s var(--ios), background .2s; }
+.co-s:active { transform: scale(.97); background: rgba(255, 255, 255, .14); }
+.co-chat .co-ctx { margin-top: 10px; }
+.composer .ask textarea { border: 1px solid transparent !important;
+  background: linear-gradient(#161c20, #161c20) padding-box, linear-gradient(90deg, #7b61ff, #4aa3ff) border-box !important; }
+/* строки «что влияет» — плотнее и мельче, как у WHOOP (подпись в одну строку, число компактное) */
+.crow { padding: 12px 0; }
+.ck { font: 400 15px/1.25 var(--head) !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv { font-size: 18px; }
+/* ответы тренера — без пузыря, текстом рядом со значком (как WHOOP Coach); вопросы — компактнее */
+.co-chat .msg.them { background: none !important; box-shadow: none !important; padding: 2px 0 2px 30px; }
+.co-chat .msg.them::after { content: none; }
+.co-s { font-size: 14px; padding: 8px 13px; }

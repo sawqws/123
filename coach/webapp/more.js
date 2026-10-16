@@ -180,10 +180,10 @@
     if (!hist) return h + '<div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div>';
     const ps = prompts(t), empty = !hist.length && !S.asking;
     if (empty) {
-      h += `<section class="co-hello rise"><span class="co-badge">${I.spark}</span><h2>${name ? `Привет, ${esc(name)}` : 'Привет'}</h2>
-        <p>Я вижу твой сон, восстановление, нагрузку и еду. Спроси что угодно про тренировки, сон и питание — или выбери вопрос ниже.</p>${context(t)}</section>
-        <div class="co-grid rise">${ps.map(p => `<button class="co-card" data-a="suggest" data-v="${esc(p.text)}" style="--c:${p.col}">
-          <span class="co-ic">${p.ic}</span><b>${esc(p.text)}</b><small>${esc(p.sub)}</small></button>`).join('')}</div>`;
+      // как WHOOP Coach: первое сообщение тренера и готовые вопросы пузырями справа
+      h += `<div class="chat co-chat rise"><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>
+        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Чем помочь? Я вижу твой сон, восстановление, нагрузку и еду.${context(t)}</div>
+        <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
       hist.forEach(m => {
@@ -195,7 +195,7 @@
     }
     h += `<div class="composer">${empty ? '' : `<div class="chips">${ps.map(p => `<button class="chip" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div>`}
       <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${F.I.cam}</button>
-      <textarea id="q" rows="1" placeholder="Спроси тренера…">${esc(S.qDraft || '')}</textarea>
+      <textarea id="q" rows="1" placeholder="Спроси о чём угодно">${esc(S.qDraft || '')}</textarea>
       <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div>
       <p class="co-note">Тренер не врач: при боли, травме или плохом самочувствии — к врачу.</p></div>`;
     return h;
