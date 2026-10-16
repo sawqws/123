@@ -192,6 +192,24 @@ class Bot(unittest.TestCase):
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
         self.assertIn("Память █░░░░░░░░░░░ 5%", self.sent[-1][1]["text"])
 
+    def test_limits(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 10, 16, 8, 15, tzinfo=ZoneInfo("UTC")).timestamp()
+        out = ("Current session: 23% used · resets Oct 16, 11:10am (UTC)\n"
+               "Current week (all models): 20% used · resets Oct 21, 11pm (UTC)\n"
+               "Current week (Fable): 0% used · resets Oct 21, 11pm (UTC)")
+        got = pulse.parse_usage(out, now)
+        self.assertEqual(got["session"], {"pct": 23, "reset": 1792149000.0})
+        self.assertEqual(got["week"]["reset"], 1792623600.0)
+        pulse.st["limits"] = {**got, "at": now}
+        text = pulse.limits_text(now)
+        self.assertIn("Лимит 5 ч ███░░░░░░░░░ 23% · <i>сброс в 14:10</i>", text)
+        self.assertIn("Неделя ██░░░░░░░░░░ 20% · <i>сброс чт в 02:00</i>", text)
+        self.assertNotIn("Fable", text)  # 0% — не показываем
+        self.assertEqual(pulse.limits_text(now + 3600), "")  # устарело — не показываем
+        self.assertEqual(pulse.parse_usage("ошибка"), {})
+
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
         self.assertFalse(any(pulse.alerts().values()))

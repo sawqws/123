@@ -225,10 +225,13 @@ def claim(uid):
 
 # ---------- сводки сессий ----------
 
+KNOWN_WINDOWS = {"claude-opus-5-5": 1_000_000}  # «213.2k of 1M tokens» в Usage приложения Claude (Глеб, 16.10)
+
+
 def window(model, tokens=0):
     """Окно контекста модели: узнаём по первому автосжатию (оно на COMPACT_PCT% окна). До этого — 200 тыс.;
     если чат ушёл за порог сжатия 200 тыс. и не сжался — окно больше (1 млн). -> (окно, точно ли)."""
-    w = st.setdefault("windows", {}).get(model or "?")
+    w = st.setdefault("windows", {}).get(model or "?") or KNOWN_WINDOWS.get(model or "?")
     if w:
         return w, True
     big = st.setdefault("big", {})  # модель, у которой чат уже ушёл за порог сжатия 200 тыс. — окно больше
@@ -356,6 +359,99 @@ def prune(now):
         ss.pop(k, None)
     for k in [k for k, s in ss.items() if now - (s.get("seen") or 0) > 3 * KEEP]:
         ss.pop(k, None)
+
+
+# ---------- лимиты аккаунта (как «Usage» в приложении Claude) ----------
+# `claude -p /usage` на сервере — тот же аккаунт Глеба; токенов не тратит. Раз в LIMITS_EVERY, пока есть живая карточка.
+
+LIMITS_EVERY = 5 * 60
+LIMIT_NAMES = {"session": "Лимит 5 ч", "week": "Неделя", "fable": "Fable"}
+USAGE_RE = re.compile(r"Current (session|week \(all models\)|week \(Fable[^)]*\))\s*:\s*(\d+)% used(?:\s*·\s*resets\s*([^\n(]+?)\s*\(UTC\))?", re.I)
+_limits_at = 0
+
+
+def parse_usage(text, now=None):
+    """Вывод /usage → {"session"|"week"|"fable": {"pct", "reset" (epoch или None)}}."""
+    now = now or time.time()
+    out = {}
+    for m in USAGE_RE.finditer(text or ""):
+        kind = "session" if m.group(1).lower() == "session" else "fable" if "fable" in m.group(1).lower() else "week"
+        out[kind] = {"pct": int(m.group(2)), "reset": utc_time(m.group(3), now)}
+    return out
+
+
+def utc_time(text, now):
+    """«Oct 16, 11:10am» / «11pm» (UTC) → epoch; не разобрали — None."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return None
+    year = datetime.fromtimestamp(now, ZoneInfo("UTC")).year
+    for f in ("%b %d, %I:%M%p", "%b %d, %I%p", "%b %d %I:%M%p", "%b %d %I%p", "%I:%M%p", "%I%p"):
+        try:
+            d = datetime.strptime(text.replace(" am", "am").replace(" pm", "pm"), f)
+        except ValueError:
+            continue
+        if "%b" not in f:
+            today = datetime.fromtimestamp(now, ZoneInfo("UTC"))
+            d = d.replace(year=today.year, month=today.month, day=today.day)
+            t = d.replace(tzinfo=ZoneInfo("UTC")).timestamp()
+            return t + 86400 if t < now - 60 else t
+        return d.replace(year=year, tzinfo=ZoneInfo("UTC")).timestamp()
+    return None
+
+
+def fetch_limits():
+    os.makedirs(DATA, exist_ok=True)
+    try:
+        r = subprocess.run(["claude", "-p", "/usage"], capture_output=True, text=True, timeout=90, cwd=DATA,
+                           env={**os.environ, "CLAUDECODE": ""})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("usage:", e)
+        return None
+    got = parse_usage(r.stdout)
+    return got or None
+
+
+def refresh_limits(force=False):
+    global _limits_at
+    if not force and (time.time() - _limits_at < LIMITS_EVERY or not st.get("live")):
+        return
+    _limits_at = time.time()
+    got = fetch_limits()
+    if got:
+        with LOCK:
+            st["limits"] = {**got, "at": time.time()}
+            st["_dirty"] = True
+
+
+DAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+
+
+def when_reset(ts, now=None):
+    """Время сброса по Москве: «в 14:10», «завтра в 02:00», «чт в 02:00»."""
+    if not ts:
+        return ""
+    now = now or time.time()
+    d, today = datetime.fromtimestamp(ts, TZ), datetime.fromtimestamp(now, TZ)
+    days = (d.date() - today.date()).days
+    day = "" if days <= 0 else "завтра " if days == 1 else DAYS[d.weekday()] + " "
+    return f"сброс {day}в {d:%H:%M}"
+
+
+def limits_text(now=None):
+    """Две-три строки лимитов для карточки; старше 30 мин или нет — пусто."""
+    now = now or time.time()
+    lim = st.get("limits") or {}
+    if not lim or now - (lim.get("at") or 0) > 1800:
+        return ""
+    out = []
+    for k in ("session", "week", "fable"):
+        x = lim.get(k)
+        if not x or (k == "fable" and not x.get("pct")):
+            continue
+        r = when_reset(x.get("reset"), now)
+        out.append(f"{LIMIT_NAMES[k]} {bar(x['pct'])} {x['pct']}%" + (f" · <i>{r}</i>" if r else ""))
+    return "\n".join(out)
 
 
 # ---------- вид в чате ----------
@@ -491,11 +587,13 @@ def mode_note():
 def home_text(now=None):
     now = now or time.time()
     vs = visible(now)
+    lim = limits_text(now)
+    top = "<b>📡 Пульс</b>" + (f"\n{lim}" if lim else "")
     if not vs:
-        return "<b>📡 Пульс</b>\n\nСейчас чатов нет. Напиши в любом чате Claude — он появится здесь."
+        return top + "\n\nСейчас чатов нет. Напиши в любом чате Claude — он появится здесь."
     hid = hidden_count(now)
     foot = f"\n\n<i>скрыто {hid}</i>" if hid else ""
-    return "<b>📡 Пульс</b>\n\n" + "\n\n".join(block(v, now) for v in vs[:8]) + foot
+    return top + "\n\n" + "\n\n".join(block(v, now) for v in vs[:8]) + foot
 
 
 def home_buttons(vs=None):
@@ -526,6 +624,8 @@ def app_buttons(always=False):
 
 def home(chat, mid=None, live=True):
     """Главная карточка; она же живая — правится сама, пока чаты что-то делают."""
+    if time.time() - (st.get("limits") or {}).get("at", 0) > LIMITS_EVERY:
+        threading.Thread(target=lambda: (refresh_limits(force=True), refresh_live(force=True)), daemon=True).start()
     vs = visible()
     r = show(chat, mid, home_text(), home_buttons(vs))
     if live:
@@ -717,6 +817,7 @@ def watcher():
                 if st.pop("_dirty", None) or events:
                     save()
             notify(events)
+            refresh_limits()
             refresh_live()
         except Exception as e:
             print("watcher:", e)
@@ -865,6 +966,7 @@ def check_init_data(init_data, max_age=86400):
 
 def app_state():
     return {"sessions": visible(), "hidden": hidden_count(), "alerts": alerts(), "mode": ui_mode(),
+            "limits": st.get("limits") or {},
             "now": time.time()}
 
 
