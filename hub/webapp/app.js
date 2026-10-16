@@ -28,7 +28,13 @@
     if (tg && tg.showConfirm && tg.platform !== 'unknown') { try { return tg.showConfirm(text, (ok) => res(!!ok)); } catch (e) { /* старый клиент */ } }
     res(window.confirm(text));
   });
-  const toChat = () => { haptic('tap'); try { tg.close(); } catch (e) { toast('Откройте чат с Главным'); } };
+  const SITE = !(tg && tg.initData);  // открыто как сайт / приложение с экрана «Домой», не в Telegram
+  const toChat = () => {
+    haptic('tap');
+    const me = S.hub && S.hub.me;
+    if (SITE) { if (me) location.href = `https://t.me/${me}`; else toast('Откройте чат с Главным'); return; }
+    try { tg.close(); } catch (e) { toast('Откройте чат с Главным'); }
+  };
 
   async function api(path, body) { return Kit.api('/app/api/' + path, body); }
   async function sec(path, body) { return Kit.api('/app/agent/api/' + path, body || {}); }
@@ -119,11 +125,37 @@
   }
 
   function gate() {
-    const outside = !(tg && tg.initData);
     bar && document.getElementById('tabs').setAttribute('hidden', '');
-    view.innerHTML = `<div class="empty gate"><span class="e">${outside ? '📱' : '🔒'}</span>
-      <b>${outside ? 'Откройте в Telegram' : 'Нет доступа'}</b>
-      ${outside ? 'Приложение работает внутри бота «Главный» — кнопка «Приложение» слева от поля ввода.' : esc(S.gate)}</div>`;
+    if (SITE && S.gate === 'login') return loginView();
+    view.innerHTML = `<div class="empty gate"><span class="e">🔒</span><b>Нет доступа</b>${esc(S.gate)}</div>`;
+  }
+
+  // 🌐 вход на сайт: код из /site в чате с Главным (6 цифр) или ссылка с ?c=…
+  function loginView(err) {
+    view.innerHTML = `<div class="login rise"><div class="login-logo"><img src="/app/icon-192.png" alt=""></div>
+      <h1>Главный</h1><p class="hint">Напиши <b>/site</b> в чате с Главным — пришлю код.</p>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000 000" enterkeyhint="go">
+      <div class="hint err-line">${err ? esc(err) : ''}</div>
+      <button class="btn primary" data-login>Войти</button></div>`;
+    const input = $('code');
+    const go = () => login(input.value, view.querySelector('[data-login]'));
+    view.querySelector('[data-login]').addEventListener('click', go);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    input.addEventListener('input', () => { if (input.value.replace(/\D/g, '').length === 6) go(); });
+    input.focus();
+  }
+  async function login(code, btn) {
+    code = String(code || '').replace(/\s/g, '');
+    if (!code) return;
+    try {
+      await (btn ? busy(btn, () => api('login', { code })) : api('login', { code }));
+      haptic('success');
+      S.gate = null;
+      document.getElementById('tabs').removeAttribute('hidden');
+      render(true);
+      await Promise.all([loadHub(), loadSec()]);
+      poll();
+    } catch (e) { haptic('error'); loginView(e.message); }
   }
 
   function hero(logo, title, sub, end) {
@@ -173,6 +205,12 @@
       <div id="chats">${chatsBlock()}</div>`;
     } else {
       out += `<p class="hint center">Боты и дела работают — они на соседних вкладках.</p>`;
+    }
+    if (SITE) {  // сайт: открыть чат в Telegram и выйти (режим чат/приложение тут ни при чём)
+      return out + `<div class="list mode-list"><button class="row tap" data-act="chat"><span class="ic">💬</span><div class="main">
+        <div class="title">Открыть чат в Telegram</div><div class="meta">Кнопки, уведомления и голосовые — там</div></div>
+        <span class="end chev"></span></button><button class="row tap" data-act="logout"><span class="ic">🚪</span><div class="main">
+        <div class="title">Выйти</div><div class="meta">Войти снова — код из /site</div></div><span class="end chev"></span></button></div>`;
     }
     return out + `<div class="list mode-list"><button class="row tap" data-act="tochat"><span class="ic">💬</span><div class="main">
         <div class="title">Перейти в чат</div><div class="meta">Всё кнопками в чате; вернуть приложение — /mode</div></div>
@@ -779,6 +817,11 @@
     }
     if (act === 'older') { S.older = !S.older; haptic('select'); return paintLive(); }
     if (act === 'chat') return toChat();
+    if (act === 'logout') {
+      if (!(await confirmBox('Выйти с этого устройства?'))) return;
+      try { await api('logout', {}); } catch (er) { /* всё равно на экран входа */ }
+      S.gate = 'login'; S.hub = null; S.sec = null; haptic('success'); return render();
+    }
     if (act === 'tochat') {  // режим «💬 чат»: бот пришлёт главное меню, приложение закрывается
       try { await busy(a, () => api('mode', { mode: 'chat' })); haptic('success'); toChat(); } catch (er) { toast(er.message, 'err'); }
       return;
@@ -812,7 +855,7 @@
       else if (u && !u.self && d.live && d.live.kind === 'update' && d.live.done) { S.updating = null; toast(d.live.text, d.live.ok ? 'ok' : 'err'); }
       S.hub = d;
     } catch (e) {
-      if (e.status === 401 || e.status === 403) { S.gate = e.message; }
+      if (e.status === 401 || e.status === 403) { S.gate = SITE && e.status === 401 ? 'login' : e.message; }
       else if (!S.updating && S.hub) toast('Нет связи с Главным — повторю', 'err');
     }
     if (S.tab !== 'sec') render();
@@ -822,7 +865,7 @@
       S.sec = await sec('state', { fresh: !!fresh });
       S.secErr = null;
     } catch (e) {
-      if (e.status === 401 || e.status === 403) S.gate = e.message;
+      if (e.status === 401 || e.status === 403) S.gate = SITE && e.status === 401 ? 'login' : e.message;
       else S.secErr = e.status === 502 ? 'down' : e.message;
     }
     if (S.tab === 'sec') paintLive(); else if (S.tab === 'more') render();
@@ -869,7 +912,14 @@
   } catch (e) { /* без хранилища */ }
   bar = Kit.tabbar($('tabs'), TABS, S.tab, go);
   window.addEventListener('resize', padDock);
-  if (!(tg && tg.initData)) { S.gate = 'нет initData'; render(); return; }
+  if (SITE) {  // сайт: ссылка с кодом — сразу вход, адрес без кода; иначе — по cookie, нет её — экран входа
+    const c = new URLSearchParams(location.search).get('c');
+    if (c) {
+      try { history.replaceState(null, '', location.pathname); } catch (e) { /* старый браузер */ }
+      render(true);
+      return login(c);
+    }
+  }
   render(true);
   Promise.all([loadHub(), loadSec()]).then(() => { if (S.gate) render(); poll(); });
 })();

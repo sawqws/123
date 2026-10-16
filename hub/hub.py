@@ -725,7 +725,7 @@ def more(chat, mid):
     return show(chat, mid, card("⋯ <b>Ещё</b>", ["• ➕ Поставить — готовый бот по токену",
                                                  "• 🤖 Claude — вход для Claude из облака",
                                                  "• ⏰ Напоминания и вечерняя отбивка"]),
-                [[b("➕ Поставить", "add"), b("🤖 Claude", "cl")],
+                [[b("➕ Поставить", "add"), b("🤖 Claude", "cl"), b("🌐 Сайт", "site")],
                  [b("⏰ Напоминания", "rmd|list"), b("🔄 Обновить", "bots")],
                  [b("‹ Назад", "bots")]])
 
@@ -1247,6 +1247,13 @@ def hub_url():
 # Доступ — только владельцу: подпись initData от Telegram (заголовок X-Init-Data).
 WEB = os.path.join(HERE, "webapp")
 WEB_FILES = ("index.html", "kit.css", "app.css", "kit.js", "app.js")
+ICONS = ("icon-180.png", "icon-192.png", "icon-512.png")
+MANIFEST = json.dumps({  # «На экран Домой»: отдельное окно без адресной строки, тёмная шапка, иконка как у бота
+    "name": "Главный", "short_name": "Главный", "lang": "ru", "start_url": "/app/", "scope": "/",
+    "display": "standalone", "background_color": "#070708", "theme_color": "#070708",
+    "icons": [{"src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png"},
+              {"src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
+}, ensure_ascii=False).encode()
 BOOT = time.time()  # приложение видит, что Главный перезапустился (после «Обновить всех»)
 live = {}  # живой статус долгого действия: {kind, text, done, ok, at}
 NO_APP = ("📱 <b>Приложение пока не открыть</b>\n<blockquote>Ему нужен https-адрес сервера, а его нет: Главный не узнал "
@@ -1319,6 +1326,123 @@ def check_init_data(init_data, token=None, max_age=86400):
     return user if isinstance(user, dict) and isinstance(user.get("id"), int) else None
 
 
+# ---------- 🌐 сайт: то же приложение в Safari / «На экран Домой», без Telegram ----------
+# Вход: /site в чате → одноразовый код (6 цифр, для приложения на экране «Домой» — у него свои cookie) и ссылка;
+# дальше cookie hub_site на полгода (HttpOnly, Secure, SameSite=Lax, в файле — только sha256). Cookie действует
+# только вместе с заголовком X-Site: 1 — чужая страница не пошлёт его без CORS, которого нет.
+# Вкладка «Секретарь» идёт через прокси: Главный сам подписывает initData владельца своим токеном.
+SITE_SESSIONS = "site_sessions.json"
+SITE_COOKIE = "hub_site"
+SITE_DAYS = 180
+CODE_TTL = 15 * 60
+site_codes = {}  # код или длинный токен ссылки -> срок; один раз
+site_fails = []  # время неверных кодов: больше 10 за 10 минут — вход закрыт на 10 минут
+site_lock = threading.Lock()
+
+
+def site_new_code(now=None):
+    """(6 цифр, токен ссылки) — оба действуют 15 минут и один раз; старые коды забываются."""
+    now = now or time.time()
+    code = f"{secrets.randbelow(10 ** 6):06d}"
+    link = secrets.token_urlsafe(24)
+    with site_lock:
+        for k in [k for k, t in site_codes.items() if t < now]:
+            site_codes.pop(k, None)
+        site_codes[code] = site_codes[link] = now + CODE_TTL
+    return code, link
+
+
+def site_sessions():
+    try:
+        with open(os.path.join(DATA, SITE_SESSIONS)) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def site_save(d):
+    os.makedirs(DATA, exist_ok=True)
+    path = os.path.join(DATA, SITE_SESSIONS)
+    with open(path + ".tmp", "w") as f:
+        json.dump(d, f)
+    os.chmod(path + ".tmp", 0o600)
+    os.replace(path + ".tmp", path)
+
+
+def site_login(code, now=None):
+    """Код или токен ссылки → новая сессия (сырой токен для cookie) или ValueError."""
+    now = now or time.time()
+    code = re.sub(r"\s", "", str(code or ""))[:64]
+    with site_lock:
+        site_fails[:] = [t for t in site_fails if now - t < 600]
+        if len(site_fails) >= 10:
+            raise PermissionError("слишком много неверных кодов — подожди 10 минут")
+        until = site_codes.pop(code, 0) if code else 0
+        if until < now:
+            site_fails.append(now)
+            raise ValueError("код неверный или устарел — пришли /site в чат с Главным")
+        raw = secrets.token_urlsafe(32)
+        d = {k: v for k, v in site_sessions().items() if v.get("until", 0) > now}
+        d[hashlib.sha256(raw.encode()).hexdigest()] = {"at": int(now), "until": int(now + SITE_DAYS * 86400)}
+        site_save(d)
+    return raw
+
+
+def site_cookie(headers):
+    for part in (headers.get("Cookie") or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == SITE_COOKIE and v:
+            return v
+    return ""
+
+
+def site_user(headers, now=None):
+    """Владелец, если запрос с сайта (X-Site: 1) и cookie — живая сессия; иначе None."""
+    raw = site_cookie(headers)
+    if headers.get("X-Site") != "1" or not raw or not owner():
+        return None
+    s = site_sessions().get(hashlib.sha256(raw.encode()).hexdigest())
+    return {"id": owner(), "site": True} if s and s.get("until", 0) > (now or time.time()) else None
+
+
+def site_logout(headers):
+    raw = site_cookie(headers)
+    if raw:
+        with site_lock:
+            d = site_sessions()
+            if d.pop(hashlib.sha256(raw.encode()).hexdigest(), None) is not None:
+                site_save(d)
+
+
+def sign_init_data(uid, token=None):
+    """initData владельца, подписанный токеном Главного: так сайт открывает вкладку «Секретарь» (его сервер
+    проверяет ту же подпись) — без Telegram."""
+    fields = {"auth_date": str(int(time.time())), "user": json.dumps({"id": uid}, separators=(",", ":"))}
+    secret = hmac.new(b"WebAppData", (token or TOKEN).encode(), hashlib.sha256).digest()
+    check = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
+    fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urllib.parse.urlencode(fields)
+
+
+SITE_TEXTS = {"🌐 Сайт"}
+
+
+def site_card(chat):
+    """/site: ссылка для Safari и код для приложения на экране «Домой»."""
+    base = app_url(lookup=True)
+    if not base:
+        return send(chat, NO_APP)
+    code, link = site_new_code()
+    url = f"{base}/?c={link}"
+    send(chat, card("🌐 <b>Сайт Главного</b>",
+                    [f"Код: <code>{code[:3]} {code[3:]}</code>",
+                     "Открой ссылку → «Поделиться» → «На экран Домой». В приложении с экрана «Домой» введи код.",
+                     f"<a href=\"{url}\">{esc(base)}</a>"],
+                    "<i>Код и ссылка — 15 минут и один раз. Вход держится полгода.</i>"),
+         [[{"text": "🌐 Открыть сайт", "url": url}]])
+
+
 def progress(text, done=False, ok=True, kind=None):
     """Живой статус для приложения (чат об этом пишет сам)."""
     live.update(text=text, done=done, ok=ok, at=time.time())
@@ -1351,6 +1475,7 @@ def app_state():
             "digest": st.get("digest_time") or digest.DEFAULT_TIME,
             "secretary": {"running": (run_all.get(SECRETARY) or {}).get("status") == "online"},
             "mode": ui_mode(),
+            "me": maker.username(TOKEN),  # для сайта: «Перейти в чат» → t.me/<бот>
             "check": check.app_state(),
             "support": [{"id": pm2, "name": short(lbl)} for pm2, lbl in maker.targets(rows or [])],
             "live": dict(live), "boot": BOOT, "now": time.time()}
@@ -1570,9 +1695,11 @@ class Web(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store"):
+    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store", cookie=None):
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
         self.send_response(code)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", cache)
@@ -1588,6 +1715,20 @@ class Web(BaseHTTPRequestHandler):
             return self.reply(200, b"ok", "text/plain; charset=utf-8") if path == "/app/health" else self.proxy("/health")
         if path.startswith("/app/agent/"):
             return self.proxy(path[len("/app/agent"):])
+        if path in ("/", "/index.html"):  # сайт: корень ведёт в приложение (ссылка входа — с кодом)
+            q = urllib.parse.urlparse(self.path).query
+            self.send_response(302)
+            self.send_header("Location", "/app/" + ("?" + q if q else ""))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/app/manifest.webmanifest":
+            return self.reply(200, MANIFEST, "application/manifest+json; charset=utf-8", "public, max-age=3600")
+        if path in ("/apple-touch-icon.png", "/favicon.ico"):
+            path = "/app/icon-180.png"
+        if path.startswith("/app/icon-") and path.endswith(".png") and path[5:] in ICONS:
+            with open(os.path.join(WEB, path[5:]), "rb") as f:
+                return self.reply(200, f.read(), "image/png", "public, max-age=86400")
         if path in ("/app", "/app/", "/app/index.html"):
             files = [os.path.join(WEB, f) for f in WEB_FILES]
             ver = str(int(max(os.path.getmtime(f) for f in files if os.path.exists(f))))
@@ -1609,6 +1750,10 @@ class Web(BaseHTTPRequestHandler):
         if not (path.startswith("/api/") or path == "/health"):
             return self.reply(404, {"error": "not found"})
         headers = {k: self.headers[k] for k in ("X-Init-Data", "Content-Type") if self.headers.get(k)}
+        if not headers.get("X-Init-Data"):  # сайт: подпись за владельца — только после проверки его cookie
+            user = site_user(self.headers)
+            if user:
+                headers["X-Init-Data"] = sign_init_data(user["id"])
         req = urllib.request.Request(f"http://127.0.0.1:{AGENT_PORT}{path}", data=body,
                                      method="POST" if body is not None else "GET", headers=headers)
         try:
@@ -1620,9 +1765,9 @@ class Web(BaseHTTPRequestHandler):
             return self.reply(502, {"error": "Секретарь не запущен", "down": True})
 
     def app_api(self, handler, body=None):
-        user = check_init_data(self.headers.get("X-Init-Data") or "")
+        user = check_init_data(self.headers.get("X-Init-Data") or "") or site_user(self.headers)
         if not user:
-            return self.reply(401, {"error": "Открой приложение через Telegram"})
+            return self.reply(401, {"error": "Нужен вход", "login": True})
         if not allowed(user["id"]):
             return self.reply(403, {"error": "Это личный бот"})
         try:
@@ -1650,6 +1795,20 @@ class Web(BaseHTTPRequestHandler):
             if n > 300_000:
                 return self.reply(413, {"error": "слишком большой запрос"})
             return self.proxy(path[len("/app/agent"):], self.rfile.read(n) if n else b"")
+        if path == "/app/api/login":  # 🌐 сайт: {code} → cookie (без Telegram)
+            try:
+                n = self.length()
+                body = json.loads(self.rfile.read(min(n, 2000)) or b"{}") if n else {}
+                raw = site_login((body if isinstance(body, dict) else {}).get("code"))
+            except PermissionError as e:
+                return self.reply(429, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e) if "код" in str(e) else "bad json"})
+            return self.reply(200, {"ok": True}, cookie=f"{SITE_COOKIE}={raw}; Path=/; Max-Age={SITE_DAYS * 86400}; "
+                                                       "HttpOnly; Secure; SameSite=Lax")
+        if path == "/app/api/logout":
+            site_logout(self.headers)
+            return self.reply(200, {"ok": True}, cookie=f"{SITE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
         if path == "/app/api/support":  # 🛠 из приложения, со скриншотом
             try:
                 n = self.length()
@@ -1859,6 +2018,9 @@ def on_message(msg):
         send(chat, HELP)
     elif cmd == "/app":
         open_app(chat)
+    elif cmd == "/site" or (not cmd and text in SITE_TEXTS):
+        setting("wait", None)
+        site_card(chat)
     elif cmd == "/test":  # «/check» — проверка аккаунта у Секретаря, не путать
         setting("wait", None)
         check.ask(chat)
@@ -2027,6 +2189,8 @@ def callback(chat, mid, uid, data):
     elif data[0] == "chk":
         note = check.on_callback(chat, mid, data)
         note = STALE if note is None else note
+    elif data[0] == "site":
+        site_card(chat)
     elif data[0] == "full":
         setting("wait", None)
         full_menu(chat, mid)
@@ -2117,7 +2281,7 @@ def callback(chat, mid, uid, data):
     return note
 
 
-COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
+COMMANDS = [("start", "Главная"), ("task", "Поручить Секретарю"), ("app", "Приложение"), ("site", "Сайт: вход без Telegram"), ("mode", "Чат или приложение"), ("psy", "Психолог: разбор чатов"),
             ("bots", "Боты и сервер"), ("test", "Проверка всех ботов"), ("login", "Войти в аккаунт"),
             ("jobs", "Расписание"), ("new", "Новый разговор"), ("stop", "Остановить ответ"), ("make", "Сделать бота"),
             ("fix", "Доработать бота"), ("update", "Обновить всех"), ("claude", "Вход для Claude"), ("help", "Что я умею")]
