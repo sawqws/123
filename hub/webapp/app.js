@@ -132,29 +132,56 @@
 
   // 🌐 вход на сайт: код из /site в чате с Главным (6 цифр) или ссылка с ?c=…
   function loginView(err) {
+    clearTimeout(S.waitTimer);
     view.innerHTML = `<div class="login rise"><div class="login-logo"><img src="/app/icon-192.png" alt=""></div>
-      <h1>Главный</h1><p class="hint">Напиши <b>/site</b> в чате с Главным — пришлю код.</p>
-      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000 000" enterkeyhint="go">
+      <h1>Главный</h1>
+      <button class="btn primary" data-tg>📲 Войти через Telegram</button>
+      <p class="hint">Придёт сообщение в чат с Главным — нажми в нём «✅ Войти».</p>
       <div class="hint err-line">${err ? esc(err) : ''}</div>
-      <button class="btn primary" data-login>Войти</button></div>`;
+      <div class="login-or hint">или код из <b>/site</b></div>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000 000" enterkeyhint="go">
+      <button class="btn tonal" data-login>Войти по коду</button></div>`;
     const input = $('code');
     const go = () => login(input.value, view.querySelector('[data-login]'));
     view.querySelector('[data-login]').addEventListener('click', go);
+    view.querySelector('[data-tg]').addEventListener('click', (e) => viaTelegram(e.currentTarget));
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     input.addEventListener('input', () => { if (input.value.replace(/\D/g, '').length === 6) go(); });
-    input.focus();
+  }
+  // вход одним нажатием: просьба → «✅ Войти» в Telegram → страница сама узнаёт и входит
+  async function viaTelegram(btn) {
+    let r;
+    try { r = await busy(btn, () => api('login/request', {})); } catch (e) { haptic('error'); return loginView(e.message); }
+    haptic('tap');
+    const open = r.bot ? `<a class="btn tonal" href="https://t.me/${esc(r.bot)}">Открыть чат с Главным</a>` : '';
+    view.innerHTML = `<div class="login rise"><div class="login-logo"><img src="/app/icon-192.png" alt=""></div>
+      <h1>Жду «Войти»</h1><div class="note live-note"><span class="spin"></span><span>Нажми «✅ Войти» в чате с Главным</span></div>
+      ${open}<button class="btn ghost" data-back>Назад</button></div>`;
+    view.querySelector('[data-back]').addEventListener('click', () => loginView());
+    const tick = async () => {
+      if (S.gate !== 'login') return;
+      try {
+        const p = await api('login/poll', { req: r.req });
+        if (p.ok) return entered();
+      } catch (e) { if (e.status === 410 || e.status === 429) return loginView(e.message); }
+      S.waitTimer = setTimeout(tick, 2000);
+    };
+    S.waitTimer = setTimeout(tick, 2000);
+  }
+  async function entered() {
+    haptic('success');
+    S.gate = null;
+    document.getElementById('tabs').removeAttribute('hidden');
+    render(true);
+    await Promise.all([loadHub(), loadSec()]);
+    poll();
   }
   async function login(code, btn) {
     code = String(code || '').replace(/\s/g, '');
     if (!code) return;
     try {
       await (btn ? busy(btn, () => api('login', { code })) : api('login', { code }));
-      haptic('success');
-      S.gate = null;
-      document.getElementById('tabs').removeAttribute('hidden');
-      render(true);
-      await Promise.all([loadHub(), loadSec()]);
-      poll();
+      await entered();
     } catch (e) { haptic('error'); loginView(e.message); }
   }
 

@@ -212,3 +212,5 @@ html .sheet textarea.sup-text { min-height: 120px; }
 .login h1 { margin: 4px 0 0; font-size: 30px; }
 .login input { text-align: center; font-size: 28px; letter-spacing: 6px; font-variant-numeric: tabular-nums; }
 .login .err-line { color: var(--err, #ff6b6b); min-height: 18px; }
+.login-or { margin-top: 18px; }
+.login a.btn { text-decoration: none; display: flex; align-items: center; justify-content: center; }
