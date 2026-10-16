@@ -40,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "common"))
 import support  # noqa: E402  🛠 /fix — Claude чинит и дорабатывает этого бота
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода
 
 
 def _load_ui():
@@ -855,6 +856,42 @@ def setup_bot():
             print("setup:", e)
 
 
+KB = menukb.MenuKB([["📡 Чаты", "📋 Подробно"], ["🔔 Уведомления", "🛠 Поддержка"], ["⚙️ Режим", "📱 Приложение"]],
+                   version=1, placeholder="☰ меню — справа")
+
+
+def send_kb(chat, text, markup):
+    return tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def ensure_kb(chat, force=False):
+    KB.ensure(send_kb, chat, done=st.get("kb_ver"), mark=lambda v: (st.__setitem__("kb_ver", v), save()), force=force)
+
+
+def chats_list(chat, mid=None):
+    """«📋 Подробно»: какой чат показать подробно."""
+    vs = visible()
+    chats = [btn(f"{v['emoji']} {clip(v['title'], 20)}", f"s|{v['id']}") for v in vs[:9]]
+    show(chat, mid, "<b>📋 Подробно</b>\nКакой чат?" if vs else "Сейчас чатов нет.",
+         [chats[i:i + 2] for i in range(0, len(chats), 2)] + [[btn("← Назад", "home")]])
+
+
+def on_kb(chat, text):
+    """Кнопка меню-квадратика → тот же экран, что у кнопок в сообщениях."""
+    if text == "📡 Чаты":
+        home(chat)
+    elif text == "📋 Подробно":
+        chats_list(chat)
+    elif text == "🔔 Уведомления":
+        send(chat, alerts_text(), alerts_buttons())
+    elif text == "🛠 Поддержка":
+        SUP.ask(chat) if SUP else send(chat, "⚠️ Поддержка ещё запускается — попробуй через минуту")
+    elif text == "⚙️ Режим":
+        mode_card(chat)
+    elif text == "📱 Приложение":
+        on_message({"chat": {"id": chat, "type": "private"}, "from": {"id": owner_id()}, "text": "/app"})
+
+
 def on_message(msg):
     chat = msg["chat"]["id"]
     uid = (msg.get("from") or {}).get("id")
@@ -868,6 +905,10 @@ def on_message(msg):
     if not allowed(uid):
         send(chat, "🔒 Это личный бот.")
         return
+    if KB.has(text):
+        return on_kb(chat, text)
+    if cmd == "/start":
+        ensure_kb(chat)
     if cmd == "/mode":
         mode_card(chat)
     elif cmd == "/alerts":
@@ -922,10 +963,7 @@ def on_callback(cq):
         elif data == "more":
             show(chat, mid, more_text(), more_buttons())
         elif data == "dl":
-            vs = visible()
-            chats = [btn(f"{v['emoji']} {clip(v['title'], 20)}", f"s|{v['id']}") for v in vs[:9]]
-            show(chat, mid, "<b>📋 Подробно</b>\nКакой чат?" if vs else "Сейчас чатов нет.",
-                 [chats[i:i + 2] for i in range(0, len(chats), 2)] + [[btn("← Назад", "home")]])
+            chats_list(chat, mid)
         elif data == "mode":
             mode_card(chat, mid)
         elif data.startswith("mode:"):
@@ -1219,6 +1257,8 @@ def main():
         threading.Thread(target=https, daemon=True).start()
     SUP = sup = support.Support(TOKEN, "Пульс", folders=["pulse"], pm2="pulse-bot", allowed=lambda u: u == owner_id(),
                                 tests=["python3 pulse/test_pulse.py"])
+    with LOCK:
+        ensure_kb(owner_id())  # меню-квадратик — один раз на версию, сам при запуске
     print("Пульс запущен")
     while True:
         try:

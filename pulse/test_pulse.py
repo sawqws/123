@@ -219,6 +219,23 @@ class Bot(unittest.TestCase):
         pulse.ingest(summary("waiting", prog=None))
         self.assertIn("Сделано ████████████ 100%", pulse.block(pulse.visible()[0]))  # без плана, но закончил
 
+    def test_menu_square(self):
+        pulse.ensure_kb(42)
+        m, k = self.sent[-1]
+        self.assertEqual(k["reply_markup"]["keyboard"][0][0]["text"], "📡 Чаты")
+        self.assertTrue(k["reply_markup"]["one_time_keyboard"])
+        n = len(self.sent)
+        pulse.ensure_kb(42)  # второй раз — не шлём
+        self.assertEqual(len(self.sent), n)
+        pulse.ingest(summary())
+        msg = lambda t: {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": t}
+        pulse.on_message(msg("📋 Подробно"))
+        self.assertIn("Какой чат?", self.sent[-1][1]["text"])
+        pulse.on_message(msg("🔔 Уведомления"))
+        self.assertIn("Уведомления", self.sent[-1][1]["text"])
+        pulse.on_message(msg("📡 Чаты"))
+        self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
+
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
         self.assertFalse(any(pulse.alerts().values()))
