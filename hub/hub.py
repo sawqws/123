@@ -1425,6 +1425,64 @@ def sign_init_data(uid, token=None):
     return urllib.parse.urlencode(fields)
 
 
+# Вход одним нажатием: сайт просит вход (POST /app/api/login/request) → Главный пишет в чат «✅ Войти» →
+# Глеб жмёт → страница, которая ждёт (POST /app/api/login/poll {req}), получает cookie. req знает только эта страница.
+site_reqs = {}  # req -> {"id": короткий id для кнопки, "until", "ok": bool, "ua"}
+site_req_times = []  # не чаще 5 запросов за 10 минут (чужой не засыплет чат)
+
+
+def site_ua(ua):
+    ua = ua or ""
+    dev = next((n for k, n in (("iPad", "iPad"), ("iPhone", "iPhone"), ("Android", "Android"), ("Mac OS", "Mac"),
+                               ("Windows", "Windows")) if k in ua), "устройство")
+    app = "приложение с экрана «Домой»" if "Safari" not in ua and dev in ("iPad", "iPhone") else "браузер"
+    return f"{dev} · {app}"
+
+
+def site_request(ua="", now=None):
+    """Новая просьба войти: в чат — карточка с «✅ Войти» и кодом. → (req, бот) или PermissionError."""
+    now = now or time.time()
+    with site_lock:
+        site_req_times[:] = [t for t in site_req_times if now - t < 600]
+        if len(site_req_times) >= 5:
+            raise PermissionError("слишком часто — подожди несколько минут или введи код из /site")
+        site_req_times.append(now)
+        for k in [k for k, v in site_reqs.items() if v["until"] < now]:
+            site_reqs.pop(k, None)
+        req, short_id = secrets.token_urlsafe(24), secrets.token_hex(4)
+        site_reqs[req] = {"id": short_id, "until": now + CODE_TTL, "ok": False, "ua": site_ua(ua)}
+    code, _ = site_new_code(now)
+    send(owner(), card("🌐 <b>Вход на сайт Главного</b>",
+                       [f"{esc(site_reqs[req]['ua'])} просит войти.", f"Или код: <code>{code[:3]} {code[3:]}</code>"],
+                       "<i>Не ты — не нажимай. 15 минут.</i>"),
+         [[b("✅ Войти", f"sitel|{short_id}", "success")]])
+    return req, maker.username(TOKEN)
+
+
+def site_approve(short_id, now=None):
+    with site_lock:
+        for v in site_reqs.values():
+            if v["id"] == short_id and v["until"] > (now or time.time()):
+                v["ok"] = True
+                return v["ua"]
+    return None
+
+
+def site_poll(req, now=None):
+    """→ сырой токен сессии (вход подтверждён, один раз), None — ещё ждём, или ValueError — просьбы нет/устарела."""
+    now = now or time.time()
+    with site_lock:
+        v = site_reqs.get(str(req or ""))
+        if not v or v["until"] < now:
+            raise ValueError("время вышло — нажми «Войти через Telegram» ещё раз")
+        if not v["ok"]:
+            return None
+        site_reqs.pop(req, None)
+        code = f"{secrets.randbelow(10 ** 6):06d}x"  # одноразовый код, тут же обменять на сессию
+        site_codes[code] = now + 60
+    return site_login(code, now)
+
+
 SITE_TEXTS = {"🌐 Сайт"}
 
 
@@ -1804,6 +1862,26 @@ class Web(BaseHTTPRequestHandler):
                 return self.reply(429, {"error": str(e)})
             except ValueError as e:
                 return self.reply(400, {"error": str(e) if "код" in str(e) else "bad json"})
+            return self.reply(200, {"ok": True}, cookie=f"{SITE_COOKIE}={raw}; Path=/; Max-Age={SITE_DAYS * 86400}; "
+                                                       "HttpOnly; Secure; SameSite=Lax")
+        if path in ("/app/api/login/request", "/app/api/login/poll"):  # вход одним нажатием в Telegram
+            try:
+                n = self.length()
+                body = json.loads(self.rfile.read(min(n, 2000)) or b"{}") if n else {}
+                body = body if isinstance(body, dict) else {}
+                if path.endswith("request"):
+                    req, bot = site_request(self.headers.get("User-Agent"))
+                    return self.reply(200, {"req": req, "bot": bot})
+                raw = site_poll(body.get("req"))
+            except PermissionError as e:
+                return self.reply(429, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(410, {"error": str(e) if "время" in str(e) else "bad json"})
+            except Exception as e:  # Telegram не принял сообщение и т. п.
+                traceback.print_exc()
+                return self.reply(502, {"error": "не смог написать в Telegram — введи код из /site"})
+            if not raw:
+                return self.reply(200, {"wait": True})
             return self.reply(200, {"ok": True}, cookie=f"{SITE_COOKIE}={raw}; Path=/; Max-Age={SITE_DAYS * 86400}; "
                                                        "HttpOnly; Secure; SameSite=Lax")
         if path == "/app/api/logout":
@@ -2191,6 +2269,13 @@ def callback(chat, mid, uid, data):
         note = STALE if note is None else note
     elif data[0] == "site":
         site_card(chat)
+    elif data[0] == "sitel" and arg:  # «✅ Войти» на сайт
+        ua = site_approve(arg)
+        if ua:
+            note = "Вхожу…"
+            edit(chat, mid, card("✅ <b>Вход на сайт подтверждён</b>", [esc(ua)]))
+        else:
+            note = "Просьба устарела — нажми «Войти через Telegram» на сайте ещё раз"
     elif data[0] == "full":
         setting("wait", None)
         full_menu(chat, mid)

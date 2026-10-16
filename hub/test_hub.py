@@ -1085,6 +1085,31 @@ class SiteTest(ProxyTest):
         self.assertIn("Max-Age=0", h["Set-Cookie"])
         self.assertEqual(self.site("/app/api/state", cookie=raw)[0], 401)
 
+    def test_one_tap_login(self):
+        """«Войти через Telegram»: в чат — «✅ Войти» (и код), нажатие — страница, что ждёт, получает cookie, один раз."""
+        hub.site_reqs.clear()
+        hub.site_req_times.clear()
+        st, body, _ = self.site("/app/api/login/request", {})
+        self.assertEqual(st, 200)
+        req = json.loads(body)["req"]
+        text, btns = self.last()
+        self.assertIn("Вход на сайт", text)
+        short_id = re.search(r'"sitel\|(\w+)"', btns).group(1)
+        self.assertEqual(json.loads(self.site("/app/api/login/poll", {"req": req})[1]), {"wait": True})
+        self.assertEqual(self.site("/app/api/login/poll", {"req": "чужой"})[0], 410)
+        self.cq(f"sitel|{short_id}", uid=99)  # чужой не подтвердит
+        self.assertEqual(json.loads(self.site("/app/api/login/poll", {"req": req})[1]), {"wait": True})
+        self.cq(f"sitel|{short_id}")
+        self.assertIn("подтверждён", self.last()[0])
+        st, body, h = self.site("/app/api/login/poll", {"req": req})
+        self.assertEqual((st, json.loads(body)), (200, {"ok": True}))
+        raw = h["Set-Cookie"].split(";")[0].split("=", 1)[1]
+        self.assertEqual(self.site("/app/api/state", cookie=raw)[0], 200)
+        self.assertEqual(self.site("/app/api/login/poll", {"req": req})[0], 410)  # один раз
+        for _ in range(4):
+            self.site("/app/api/login/request", {})
+        self.assertEqual(self.site("/app/api/login/request", {})[0], 429)  # не засыпать чат
+
     def test_bruteforce_and_expiry(self):
         code, _ = hub.site_new_code(now=time.time() - hub.CODE_TTL - 1)
         self.assertEqual(self.site("/app/api/login", {"code": code})[0], 400)  # устарел
