@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import json
+import re
 import os
 import subprocess
 import sys
@@ -1024,6 +1025,89 @@ class ProxyTest(AppTest):
         self.assertIsNone(sec["username"])  # своего бота у Секретаря нет
 
 
+
+
+class SiteTest(ProxyTest):
+    """🌐 Сайт: вход кодом из /site, cookie только с X-Site, вкладка «Секретарь» с подписью от Главного, PWA."""
+
+    def site(self, path, body=None, cookie="", xsite=True):
+        h = {"X-Site": "1"} if xsite else {}
+        if cookie:
+            h["Cookie"] = f"{hub.SITE_COOKIE}={cookie}"
+        req = urllib.request.Request(self.url + path, method="POST" if body is not None else "GET", headers=h,
+                                     data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read(), r.headers
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(), e.headers
+
+    def setUp(self):
+        super().setUp()
+        hub.site_codes.clear()
+        hub.site_fails.clear()
+
+    def code_from_chat(self):
+        hub.on_message(self.msg("/site"))
+        text, btns = self.last()
+        code = re.search(r"Код: <code>(\d{3}) (\d{3})</code>", text)
+        link = re.search(r"/app/\?c=([\w-]+)", btns)
+        return code.group(1) + code.group(2), link.group(1)
+
+    def test_login_and_use(self):
+        with mock.patch.object(hub, "app_url", lambda lookup=False: "https://hub.example/app"):
+            code, link = self.code_from_chat()
+        self.assertEqual(self.site("/app/api/state")[0], 401)
+        st, body, _ = self.site("/app/api/login", {"code": "000000" if code != "000000" else "111111"})
+        self.assertEqual(st, 400)
+        st, body, h = self.site("/app/api/login", {"code": code[:3] + " " + code[3:]})
+        self.assertEqual(st, 200)
+        cookie = h["Set-Cookie"]
+        for part in ("HttpOnly", "Secure", "SameSite=Lax", "Max-Age="):
+            self.assertIn(part, cookie)
+        raw = cookie.split(";")[0].split("=", 1)[1]
+        self.assertNotIn(raw, open(os.path.join(hub.DATA, hub.SITE_SESSIONS)).read())  # в файле только sha256
+        self.assertEqual(self.site("/app/api/login", {"code": code})[0], 400)  # код — один раз
+        self.assertEqual(self.site("/app/api/state", cookie=raw)[0], 200)
+        self.assertEqual(self.site("/app/api/state", cookie=raw, xsite=False)[0], 401)  # без X-Site cookie не действует
+        self.assertEqual(self.site("/app/api/state", cookie="foreign")[0], 401)
+        # Секретарь: Главный сам подписывает initData владельца
+        st, body, _ = self.site("/app/agent/api/ask", {"text": "привет"}, cookie=raw)
+        self.assertEqual(st, 200)
+        self.assertEqual(hub.check_init_data(self.got[-1][1])["id"], U)
+        self.site("/app/agent/api/ask", {"text": "x"}, cookie="foreign")
+        self.assertFalse(self.got[-1][1])  # без входа подписи нет
+        # ссылка тоже входит, один раз
+        self.assertEqual(self.site("/app/api/login", {"code": link})[0], 200)
+        self.assertEqual(self.site("/app/api/login", {"code": link})[0], 400)
+        # выход
+        st, _, h = self.site("/app/api/logout", {}, cookie=raw)
+        self.assertIn("Max-Age=0", h["Set-Cookie"])
+        self.assertEqual(self.site("/app/api/state", cookie=raw)[0], 401)
+
+    def test_bruteforce_and_expiry(self):
+        code, _ = hub.site_new_code(now=time.time() - hub.CODE_TTL - 1)
+        self.assertEqual(self.site("/app/api/login", {"code": code})[0], 400)  # устарел
+        for i in range(12):
+            st = self.site("/app/api/login", {"code": f"{i:06d}x"})[0]
+        self.assertEqual(st, 429)
+        good, _ = hub.site_new_code()
+        self.assertEqual(self.site("/app/api/login", {"code": good})[0], 429)  # закрыто для всех на 10 минут
+
+    def test_pwa(self):
+        st, _, h = self.site("/?c=abc")
+        self.assertEqual(st, 200)  # urllib идёт по 302 сам → /app/?c=abc
+        st, body, h = self.site("/app/manifest.webmanifest")
+        m = json.loads(body)
+        self.assertEqual((m["display"], m["start_url"]), ("standalone", "/app/"))
+        for icon in m["icons"]:
+            st, png, h = self.site(icon["src"])
+            self.assertEqual((st, png[:4], h["Content-Type"]), (200, b"\x89PNG", "image/png"))
+        self.assertEqual(self.site("/apple-touch-icon.png")[0], 200)
+        self.assertEqual(self.site("/app/icon-../hub.py")[0], 404)
+        html = self.site("/app/")[1].decode()
+        self.assertIn('rel="manifest"', html)
+        self.assertIn("apple-mobile-web-app-capable", html)
 
 
 class ModeTest(Base):

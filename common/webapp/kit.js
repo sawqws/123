@@ -38,6 +38,7 @@
 
   async function api(path, body, opts) {
     const headers = { 'X-Init-Data': (tg && tg.initData) || '' };
+    if (!headers['X-Init-Data']) headers['X-Site'] = '1';  // открыто как сайт (не в Telegram): вход по cookie
     const init = { method: body ? 'POST' : 'GET', headers };
     if (body instanceof FormData) init.body = body;
     else if (body) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }

@@ -205,3 +205,10 @@ html .sheet textarea.sup-text { min-height: 120px; }
 .chk-row .main > b { display: block; font-weight: 700; }
 .chk-row .btn { flex: none; margin: 0; }
 .chk-card > .btn, .chk-card > .btns { margin-top: 14px; }
+
+/* 🌐 вход на сайт */
+.login { max-width: 360px; margin: 12vh auto 0; text-align: center; display: flex; flex-direction: column; gap: 14px; padding: 0 8px; }
+.login-logo img { width: 88px; height: 88px; border-radius: 22px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+.login h1 { margin: 4px 0 0; font-size: 30px; }
+.login input { text-align: center; font-size: 28px; letter-spacing: 6px; font-variant-numeric: tabular-nums; }
+.login .err-line { color: var(--err, #ff6b6b); min-height: 18px; }
