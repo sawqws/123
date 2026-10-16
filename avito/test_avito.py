@@ -552,7 +552,7 @@ class Mode(Flow):
     def test_first_start_asks(self):
         avito.st.pop("mode")
         avito.on_message(self.msg(text="/start"))
-        self.assertIn("Как удобнее?", self.texts()[0])
+        self.assertIn("Как удобнее?", self.texts()[-1])  # перед ним — ☰ меню у поля ввода
         self.assertEqual([x["callback_data"] for x in self.buttons()], ["mode:chat", "mode:app"])
         self.assertEqual(self.web_apps(), [])
         self.cb("mode:app")  # выбрал приложение: карточка → «✅ Режим», следом главный экран с кнопкой приложения
@@ -632,6 +632,57 @@ def init_data(token, uid=7, age=0):
     pairs["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return urllib.parse.urlencode(pairs)
 
+
+
+class Menu(Flow):
+    """☰ Меню-квадратик у поля ввода: один раз на версию, снова на /start; кнопка — экран, а не рассказ о вещи."""
+
+    def kbs(self):
+        return [p for m, p in self.sent if "keyboard" in (p.get("reply_markup") or {})]
+
+    def test_once_per_version_and_on_start(self):
+        self.assertTrue(avito.ensure_menu())
+        self.assertFalse(avito.ensure_menu())  # та же версия — второй раз не шлём
+        self.assertEqual(avito.st["kb_ver"], avito.KB.version)
+        self.assertEqual(self.kbs()[0]["chat_id"], 7)
+        mk = self.kbs()[0]["reply_markup"]
+        self.assertTrue(mk["one_time_keyboard"] and not mk["is_persistent"])
+        rows = [[x["text"] for x in r] for r in mk["keyboard"]]
+        flat = [t for r in rows for t in r]
+        for need in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение"):
+            self.assertIn(need, flat)
+        self.assertTrue(all(len(r) <= 3 for r in rows) and all(len(t) <= 24 for t in flat))
+        avito.on_message(self.msg(text="/start"))
+        self.assertEqual(len(self.kbs()), 2)  # /start ставит снова
+        avito.st["mode"] = "app"
+        avito.on_message(self.msg(text="/start"))
+        self.assertEqual(len(self.kbs()), 3)  # и в режиме приложения
+        avito.st.clear()
+        with mock.patch.object(avito, "ALLOWED", set()):
+            self.assertFalse(avito.ensure_menu())  # владельца нет — не шлём
+
+    def test_buttons_open_screens_not_claude(self):
+        with mock.patch.object(avito, "on_text") as on_text, mock.patch.object(avito, "on_wait") as on_wait, \
+                mock.patch.object(avito.chats, "show_chats") as chats, \
+                mock.patch.object(avito, "check_market") as mk, mock.patch.object(avito, "SUP") as sup:
+            for t in sorted(avito.KB.texts):
+                avito.on_message(self.msg(text=t))
+            on_text.assert_not_called()  # ни одна кнопка не ушла в описание вещи (Claude)
+            on_wait.assert_not_called()
+            chats.assert_called_once_with(7)
+            mk.assert_called_once_with(7)
+            sup.ask.assert_called_once_with(7)
+        texts = "\n".join(self.texts())
+        self.assertNotIn("Такой команды нет", texts)
+        for want in ("Как удобнее?", "Объявления пока нет", "Сначала сделай объявление", "Приложение"):
+            self.assertIn(want, texts)
+
+    def test_button_cancels_wait(self):
+        avito.st["wait"] = {"kind": "buyer", "ts": avito.time.time()}
+        with mock.patch.object(avito, "buyer_reply") as reply:
+            avito.on_message(self.msg(text="🗂 Все объявления"))
+        reply.assert_not_called()  # текст кнопки — не сообщение покупателя
+        self.assertNotIn("wait", avito.st)
 
 
 class Chats(Flow):
@@ -796,6 +847,7 @@ class Buttons(Chats):
                 mock.patch.object(avito, "load", return_value={"owner": 7}), \
                 mock.patch.object(avito.support, "Support") as sup, mock.patch.object(avito, "public_url", "x"), \
                 mock.patch.object(avito, "set_menu"), mock.patch.object(avito.threading, "Thread"), \
+                mock.patch.object(avito, "ensure_menu"), \
                 mock.patch.object(avito, "st", avito.st), mock.patch.object(avito, "SUP", None):  # main() их меняет
             sup.return_value.intercept.return_value = False
             with self.assertRaises(KeyboardInterrupt):

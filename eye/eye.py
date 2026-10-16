@@ -47,6 +47,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import ai  # noqa: E402
 import media  # noqa: E402
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода (common/menukb.py)
 import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 import photos  # noqa: E402
 import speech  # noqa: E402
@@ -309,6 +310,28 @@ def menu_buttons():
                  {"text": "🩺 Проверка", "callback_data": "status"}],
                 [{"text": "⚙️ Режим", "callback_data": "mode|ask"}, support.Support.button()]]
     return rows
+
+
+# ---------- ☰ Меню-квадратик у поля ввода (как у Главного, common/menukb.py) ----------
+# Обычная клавиатура Telegram, свёрнутая в значок справа от поля ввода. Нажатие приходит текстом — on_message
+# разбирает его до вопроса Claude. Ставится один раз при запуске (версия — setting("kb_ver")) и на каждый /start.
+
+KB = menukb.MenuKB([["👁 Что видел", "🧹 Заново", "🩺 Проверка"],
+                    ["📱 Приложение", "🧭 Ссылка для Safari"],
+                    ["⚙️ Режим", "🛠 Поддержка"]], version=1, placeholder="Спроси или ☰ справа")
+# кнопка → команда (дальше — тот же экран, что у команды); kb:… — действия без своей команды
+KB_CMD = {"👁 Что видел": "kb:seen", "🧹 Заново": "/new", "🩺 Проверка": "/status", "📱 Приложение": "/app",
+          "🧭 Ссылка для Safari": "/link", "⚙️ Режим": "/mode", "🛠 Поддержка": "kb:support"}
+
+
+def kb_send(chat, text, markup):
+    tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def ensure_menu(chat=None, force=False):
+    """Меню у поля ввода: при запуске — владельцу один раз на версию (владельца нет — некому), /start — снова."""
+    return KB.ensure(kb_send, chat or chat_id(), done=setting("kb_ver"), mark=lambda v: setting("kb_ver", v),
+                     force=force)
 
 
 def seen_text(n=8):
@@ -748,7 +771,18 @@ def on_message(msg):
         return send(chat, card("📍", "Запомнил, где ты", esc(place_now() or "координаты получил"),
                                "Верю месту 20 минут — на прогулке лучше трансляция геопозиции."))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
-    if cmd == "/start" and not ui_mode():  # первый раз: сначала выбор, чат или приложение
+    if KB.has(text):  # ☰ кнопка меню у поля ввода — как команда, не вопрос Claude
+        cmd = KB_CMD[text]
+    if cmd == "/start":
+        ensure_menu(chat, force=True)  # ☰ меню у поля ввода — на каждый /start
+    if cmd == "kb:seen":
+        send(chat, seen_text(), [[BACK]])
+    elif cmd == "kb:support":
+        if SUP:
+            SUP.ask(chat)
+        else:
+            send(chat, card("🛠", "Поддержка", note="Напиши /fix и что сломалось или чего не хватает."))
+    elif cmd == "/start" and not ui_mode():  # первый раз: сначала выбор, чат или приложение
         send(chat, *mode_card())
     elif cmd in ("/start", "/help"):
         send(chat, help_text(), menu_buttons())
@@ -1198,6 +1232,7 @@ def main():
         set_menu()
     else:
         threading.Thread(target=https, daemon=True).start()
+    ensure_menu()
     print(f"{NAME} запущен")
     global SUP
     SUP = support.Support(TOKEN, "Глаз", folders=["eye"], pm2="eye-bot", allowed=allowed,
@@ -1217,6 +1252,9 @@ def main():
 def handle(u):
     """Одно обновление Telegram — так его разбирает цикл getUpdates (и проверка кнопок в тестах).
     Необработанная ошибка — человеку «⚠️ …» (oops), а не тишина."""
+    m = u.get("message") or {}
+    if SUP and KB.has(m.get("text")):  # кнопка меню — не ответ поддержке, которая ждёт текст
+        SUP.waiting.pop((m.get("chat") or {}).get("id"), None)
     if SUP and SUP.intercept(u):  # 🛠 /fix и ответы поддержке
         return
     try:
