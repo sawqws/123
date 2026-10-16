@@ -3,7 +3,9 @@
 //
 // --defer (или HORO_DEFER=1): ответы вводятся быстро, но тест НЕ сдаётся — бот сдаст его позже сам
 //   (Глеб, 15.10: «решить максимально быстро, сдать через какое-то время»); пишется horo/tmp/<задание>/defer.json.
-// --continue-only: только продолжить начатую попытку (бот досдаёт отложенный тест) — новую не начинать.
+// --continue-only: досдать отложенный тест в той же попытке — новую не начинать («Попробовать ещё раз» не жмём).
+//   Платформа сохраняет ответы только при сдаче: у отложенной попытки статус created, ответов 0 и кнопка «Начать»,
+//   поэтому ответы вводятся заново. Если попытка уже сдана (недавно), печатает «УЖЕ СДАН» и баллы.
 // После сдачи последней строкой: «БАЛЛЫ: 15/17» и «ПОПЫТКИ: 1/3» (сколько использовано из скольких).
 //
 // answers.json — ответы по номерам вопросов:
@@ -43,16 +45,36 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (m !== 'GET' && r.url().includes('/test-attempts')) console.log(`  [сайт] ${m} ${r.status()} ${r.url().split('/test-attempts')[1] || '/'}`);
     });
 
-    // Попытку создаёт кнопка «Начать» (или «Продолжить», если её уже начали).
+    const scores = (task, all) => {
+      const done = [...all].filter(a => a.status && a.status.type === 'completed').sort((x, y) => String(x.updatedAt).localeCompare(String(y.updatedAt)));
+      const last = done[done.length - 1];
+      if (last && last.grade) console.log(`БАЛЛЫ: ${last.grade.scoreValue}/${task.meta.maximumScoreValue}`);
+      console.log(`ПОПЫТКИ: ${all.length}/${task.meta.availableAttemptsCount}`);
+      return last;
+    };
+    if (continueOnly) {
+      const open = t.attempts.find(a => !a.status || a.status.type !== 'completed');
+      if (!open) {
+        const last = [...t.attempts].sort((x, y) => String(y.updatedAt).localeCompare(String(x.updatedAt)))[0];
+        if (last && Date.now() - Date.parse(last.updatedAt) < 3 * 3600 * 1000) {
+          console.log('УЖЕ СДАН: попытка закрыта');
+          scores(t, t.attempts);
+          return;
+        }
+        throw new Error('Нет начатой попытки — новую без спроса не начинаю');
+      }
+    }
+
+    // Попытку создаёт кнопка «Начать» (или «Продолжить», если её уже начали; у начатой без ответов — тоже «Начать»).
     await page.goto(t.taskUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    const start = page.getByRole('button', { name: continueOnly ? /^Продолжить$/ : /^(Начать|Продолжить|Попробовать ещё раз)$/ });
+    const start = page.getByRole('button', { name: continueOnly ? /^(Начать|Продолжить)$/ : /^(Начать|Продолжить|Попробовать ещё раз)$/ });
     await start.first().waitFor({ timeout: 30000 }).catch(() => {});
     if (await start.count()) {
       console.log('Нажимаю:', await start.first().innerText());
       await start.first().click();
       await page.waitForTimeout(3000);
     } else if (continueOnly) {
-      throw new Error('Нет начатой попытки: тест уже сдан или попытка закрыта');
+      throw new Error('Нет кнопки «Начать»/«Продолжить» у начатой попытки');
     } else if (!page.url().includes('/questions/')) {
       throw new Error('Нет кнопки «Начать»: возможно, попытки закончились или тест уже сдан');
     }
@@ -188,11 +210,7 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         console.log('\nРЕЗУЛЬТАТ:\n' + res.replace(/\n+/g, '\n').slice(0, 400));
         // баллы и попытки — из API (их читает бот: вторая попытка, если не 100%)
         const after = await loadTask(page, url).catch(() => null);
-        const done = after && [...after.attempts].filter(a => a.status && a.status.type === 'completed')
-          .sort((x, y) => String(x.updatedAt).localeCompare(String(y.updatedAt)));
-        const last = done && done[done.length - 1];
-        if (last && last.grade) console.log(`БАЛЛЫ: ${last.grade.scoreValue}/${after.meta.maximumScoreValue}`);
-        if (after) console.log(`ПОПЫТКИ: ${after.attempts.length}/${after.meta.availableAttemptsCount}`);
+        if (after) scores(after, after.attempts);
       }
     }
   } finally {

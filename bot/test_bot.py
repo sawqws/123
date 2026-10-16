@@ -2043,10 +2043,16 @@ class DeferTest(BotTest):
 
     def test_already_submitted_and_errors(self):
         self.say(URL)
-        self.result = (False, "⚠️ Не получилось: Нет начатой попытки: тест уже сдан или попытка закрыта")
+        self.result = "УЖЕ СДАН: попытка закрыта\nБАЛЛЫ: 17/17\nПОПЫТКИ: 1/3"  # сдан до нас — баллы с сайта
         self.due()
         self.assertNotIn(TASK, bot.pending_tests())
-        self.assertIn("Тест уже сдан", self.last()[0])
+        self.assertIn("17 / 17", self.last()[0])
+        self.say(URL)  # 16.10: «Нет начатой попытки» — не «уже сдан», а ошибка с «Сдать сейчас»
+        self.result = (False, "⚠️ Не получилось: Нет начатой попытки — новую без спроса не начинаю")
+        self.due()
+        self.assertEqual(bot.pending_tests()[TASK]["at"], None)
+        self.assertNotIn("уже сдан", self.last()[0])
+        self.assertIn("Не сдал тест", self.last()[0])
         self.say(URL)
         self.result = (False, "⚠️ Сайт долго не отвечает")
         self.due()
