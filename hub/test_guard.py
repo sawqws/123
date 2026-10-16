@@ -213,6 +213,54 @@ class GuardTest(Base):
         b = guard.sig_of("script", "submit.js 71f1a46a-8ad4-4cc9-9a50-b4d600d3af45 -> 1: вопрос 5 из 9")
         self.assertEqual(a, b)
 
+    def test_run_reason_is_error_not_last_stdout_line(self):
+        # grades.js всё вывел, легенда — последняя строка stdout; ошибкой она быть не должна
+        legend = "Уровень → оценка: от 2.0 — 3, от 2.5 — 4, от 3.5 — 5"
+        ok, out, why = guard.run(["bash", "-c", f"echo '{legend}'; exit 1"], 10)
+        self.assertFalse(ok)
+        self.assertIn(legend, out)
+        self.assertEqual(why, "код выхода 1, ошибки не написал")
+        self.assertEqual(guard.run(["bash", "-c", "echo x; echo 'API 500: /disciplines' >&2; exit 1"], 10)[2],
+                         "API 500: /disciplines")
+        self.assertIn("SIGKILL", guard.run(["bash", "-c", "echo x; kill -9 $$"], 10)[2])
+        self.assertEqual(guard.run(["bash", "-c", "echo ok"], 10), (True, "ok\n", ""))
+
+    def test_child_env_drops_pm2_channel(self):
+        with mock.patch.dict(os.environ, {"NODE_CHANNEL_FD": "3", "NODE_CHANNEL_SERIALIZATION_MODE": "json"}):
+            env = guard.child_env()
+        self.assertNotIn("NODE_CHANNEL_FD", env)
+        self.assertNotIn("NODE_CHANNEL_SERIALIZATION_MODE", env)
+        self.assertEqual(env["HOME"], "/root")
+
+    def deep(self, site):
+        """Глубокая проверка с подменой сайта: site — (прошла, вывод, почему); Claude и тесты в порядке."""
+        def fake_run(cmd, timeout):
+            return site if "grades.js" in cmd[-1] else (True, "ok", "")
+        acts = []
+        with mock.patch.object(guard, "run", fake_run), \
+                mock.patch.object(guard.check, "worktree", lambda: None), \
+                mock.patch.object(guard.check, "drop_worktree", lambda src: None), \
+                mock.patch.object(guard.check, "run_test", lambda base, cmd: (True, "")), \
+                mock.patch.object(guard, "handle", acts.extend):
+            guard.deep()
+        return acts
+
+    def test_deep_site_one_off_waits_for_repeat(self):
+        legend = "Уровень → оценка: от 2.0 — 3, от 2.5 — 4, от 3.5 — 5"
+        site = (False, legend, "код выхода 1, ошибки не написал")
+        self.assertEqual(self.deep(site), [])  # разовый сбой — не чиним и не тревожим
+        it = next(iter(self.issues().values()))
+        self.assertIn("код выхода 1", it["text"])
+        self.assertNotIn(legend, it["text"])
+        self.assertEqual([a[0] for a in self.deep(site)], ["fix"])  # повторилось — чиним
+        self.deep((True, legend, ""))
+        self.assertTrue(all(it["closed"] for it in self.issues().values()))  # прошла — ошибка закрыта
+
+    def test_deep_site_killed_is_not_code(self):
+        site = (False, "", "прерван сигналом SIGKILL (память или перезапуск), ошибки не написал")
+        self.deep(site)
+        self.assertEqual([a[0] for a in self.deep(site)], ["tell"])  # повторилось — сказать, но не чинить
+
 
 class JournalInBot(unittest.TestCase):
     """HDP пишет журнал и «пульс» (bot/bot.py) — то, что читает Страж."""

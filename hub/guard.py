@@ -16,6 +16,7 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -46,7 +47,8 @@ deep_lock = threading.Lock()
 # не баги кода — чинить нечего, только сказать (и то если повторяется)
 NOT_CODE = re.compile(r"timed? ?out|timeout|не уложился|network|unreachable|econn|enotfound|temporary failure|"
                       r"name resolution|connection (reset|refused|aborted)|bad gateway|50[234]|429|rate limit|"
-                      r"usage limit|limit reached|overloaded|не вош|login|логин|unauthori|401|403", re.I)
+                      r"usage limit|limit reached|overloaded|не вош|login|логин|unauthori|401|403|"
+                      r"прерван сигналом", re.I)
 KIND_ICON = {"bug": "🐞", "script": "🌐", "claude": "🤖", "net": "📡", "down": "🔴", "hang": "🧊", "web": "🕸",
              "crash": "🟠", "stuck": "⏳", "deep": "🔍", "log": "📜"}
 
@@ -424,15 +426,39 @@ def loop():
 
 # ---------- глубокая проверка ----------
 
+def why_failed(code, err):
+    """Почему команда не прошла: последняя строка stderr, иначе код выхода или сигнал.
+    Не последняя строка stdout — там обычный вывод (у grades.js — легенда «Уровень → оценка…»), а не ошибка."""
+    lines = [s for s in (err or "").strip().splitlines() if s.strip()]
+    if lines:
+        return lines[-1].strip()
+    if code < 0:
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = str(-code)
+        return f"прерван сигналом {name} (память или перезапуск), ошибки не написал"
+    return f"код выхода {code}, ошибки не написал"
+
+
+def child_env():
+    """Окружение для node и claude. Канал pm2 (NODE_CHANNEL_FD) убираем: с ним node, всё выведя, падает при
+    выходе (SIGABRT, код 134) — так «сайт сломан» оказался ложной тревогой (в HDP то же, bot.py)."""
+    env = {k: v for k, v in os.environ.items() if k not in ("NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE")}
+    return {**env, "HOME": "/root"}
+
+
 def run(cmd, timeout):
+    """→ (прошла, вывод, почему не прошла)"""
     try:
         p = subprocess.run(cmd, cwd=ui.REPO, capture_output=True, text=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL, env={**os.environ, "HOME": "/root"})
-        return p.returncode == 0, (p.stdout or "") + (p.stderr or "")
+                           stdin=subprocess.DEVNULL, env=child_env())
+        ok = p.returncode == 0
+        return ok, (p.stdout or "") + (p.stderr or ""), "" if ok else why_failed(p.returncode, p.stderr)
     except subprocess.TimeoutExpired:
-        return False, f"не уложился в {timeout} с"
+        return False, "", f"не уложился в {timeout} с"
     except OSError as e:
-        return False, str(e)
+        return False, "", str(e)
 
 
 def deep(chat=None):
@@ -443,10 +469,10 @@ def deep(chat=None):
         res = {}
         env = "/etc/horo-bot.env"
         site = f"set -a; [ -f {env} ] && . {env}; set +a; exec node horo/grades.js"
-        ok, out = run(["bash", "-c", site], 200)
-        res["site"] = [ok, "" if ok else check.mask(out.strip().splitlines()[-1] if out.strip() else "")[:200]]
-        ok, out = run(["claude", "-p", "Ответь одним словом: ok", "--output-format", "text"], 150)
-        res["claude"] = [ok and bool(out.strip()), "" if ok else check.mask(out.strip()[-200:])]
+        ok, out, why = run(["bash", "-c", site], 200)
+        res["site"] = [ok, check.mask(why)[:200]]
+        ok, out, why = run(["claude", "-p", "Ответь одним словом: ok", "--output-format", "text"], 150)
+        res["claude"] = [ok and bool(out.strip()), check.mask(why or ("" if out.strip() else "пустой ответ"))[:200]]
         src = check.worktree()
         try:
             base = src or ui.REPO
@@ -474,7 +500,10 @@ def deep(chat=None):
                         if it["kind"] == kind and it["text"].startswith(f"глубокая проверка: {names[k]}"):
                             it["closed"] = True
                 else:
-                    raise_issue(g, now, kind, text, why, fixable=k == "tests" or (k == "site" and not NOT_CODE.search(why)))
+                    it = raise_issue(g, now, kind, text, why,
+                                     fixable=k == "tests" or (k == "site" and not NOT_CODE.search(why)))
+                    if k == "site" and it["count"] < 2:
+                        it["fixable_later"] = True  # разовый сбой сайта — как у скрипта в журнале: чиним, если повторится
             acts = decide(g, now)
             ui.save(st)
         if chat:
