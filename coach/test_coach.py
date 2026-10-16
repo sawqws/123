@@ -9,6 +9,7 @@ import io
 import json
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -1368,6 +1369,145 @@ class WhoopHttpTest(unittest.TestCase):
             BotTest.tearDown(self)
 
     fake_tg = BotTest.fake_tg
+
+
+def site_call(path, body=None, cookie="", extra=None):
+    """Запрос сайта (/site/) — без подписи Telegram, с cookie сессии."""
+    h = coach.Web.__new__(coach.Web)
+    raw = json.dumps(body).encode() if body is not None else b""
+    h.headers = {"Content-Length": str(len(raw)), **({"Cookie": cookie} if cookie else {}), **(extra or {})}
+    h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
+    h.path = path
+    out = Resp()
+    h.send_response = lambda c: setattr(out, "code", c)
+    h.send_header = lambda k, v: out.headers.__setitem__(k, v)
+    h.end_headers = lambda: None
+    (h.do_POST if body is not None else h.do_GET)()
+    out.body = h.wfile.getvalue()
+    try:
+        out.json = json.loads(out.body)
+    except ValueError:
+        out.json = None
+    return out
+
+
+class SiteTest(unittest.TestCase):
+    """Форма на экране «Домой»: /site в боте → ссылка и код → cookie → то же API без Telegram."""
+    def setUp(self):
+        self.db, _ = seeded(os.path.join(tempfile.mkdtemp(), "site.db"))
+        self.db.meta("owner", U)
+        self.db.meta("bot_username", "TrainerWhoopbot")
+        self.sent = []
+        coach.pwa._fails.clear()
+        self.p = [mock.patch.object(coach, "db", self.db),
+                  mock.patch.object(coach, "tg", side_effect=lambda m, **kw: self.sent.append((m, kw)) or {"ok": True, "result": {}}),
+                  mock.patch.object(coach, "user_now", return_value=datetime.datetime(2026, 10, 11, 8, 0))]
+        for p in self.p:
+            p.start()
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+        self.db.db.close()
+
+    def cookie_of(self, r):
+        c = r.headers.get("Set-Cookie", "")
+        self.assertIn("HttpOnly", c)
+        self.assertIn("Secure", c)
+        self.assertIn("SameSite=Lax", c)
+        return c.split(";")[0]
+
+    def test_bot_sends_link_and_code(self):
+        coach.on_message({"chat": {"id": U, "type": "private"}, "from": {"id": U, "first_name": "Глеб"}, "text": "/site"})
+        kw = [kw for m, kw in self.sent if m == "sendMessage"][-1]
+        self.assertIn("На экран", kw["text"])
+        code = re.search(r"<code>(\d{3}) (\d{3})</code>", kw["text"])
+        self.assertTrue(code)
+        url = kw["reply_markup"]["inline_keyboard"][0][0]["url"]
+        self.assertTrue(url.startswith("https://coach.example/site/login?c="))
+        # ссылка входит сразу, второй раз — уже нет
+        link = url.split("coach.example")[1]
+        r = site_call(link)
+        self.assertEqual((r.code, r.headers["Location"]), (302, "/site/"))
+        ck = self.cookie_of(r)
+        self.assertIn("expired=1", site_call(link).headers["Location"])
+        # код из того же сообщения — для значка на экране «Домой» (у него свои cookie)
+        r = site_call("/site/login", {"code": code.group(1) + " " + code.group(2)})
+        self.assertEqual(r.code, 200)
+        ck2 = self.cookie_of(r)
+        for c in (ck, ck2):
+            me = site_call("/site/me", cookie=c, extra={"X-Init-Data": ""})
+            self.assertEqual(me.code, 200)
+            self.assertEqual(site_call("/api/all", cookie=c, extra={"X-Init-Data": ""}).code, 200)
+
+    def test_api_guarded(self):
+        code, _ = coach.pwa.new_code(self.db, U)
+        ck = self.cookie_of(site_call("/site/login", {"code": code}))
+        self.assertEqual(site_call("/api/all").code, 401)  # без cookie
+        self.assertEqual(site_call("/api/all", cookie=ck).code, 401)  # без заголовка Kit.api — чужая форма
+        self.assertEqual(site_call("/api/all", cookie=ck, extra={"X-Init-Data": "", "Sec-Fetch-Site": "cross-site"}).code, 401)
+        self.assertEqual(site_call("/api/all", cookie="forma_site=bad", extra={"X-Init-Data": ""}).code, 401)
+        self.assertEqual(site_call("/api/all", cookie=ck, extra={"X-Init-Data": "", "Sec-Fetch-Site": "same-origin"}).code, 200)
+        # не владелец (сменился) — сессия не пускает
+        self.db.meta("owner", 99)
+        self.assertEqual(site_call("/api/all", cookie=ck, extra={"X-Init-Data": ""}).code, 403)
+        self.assertEqual(site_call("/site/me", cookie=ck, extra={"X-Init-Data": ""}).code, 401)
+        # выход
+        self.db.meta("owner", U)
+        r = site_call("/site/logout", cookie=ck)
+        self.assertIn("Max-Age=0", r.headers["Set-Cookie"])
+        self.assertEqual(site_call("/api/all", cookie=ck, extra={"X-Init-Data": ""}).code, 401)
+
+    def test_code_rules(self):
+        now = 1_000_000
+        code, _ = coach.pwa.new_code(self.db, U, now=now)
+        self.assertIsNone(coach.pwa.login(self.db, code, now=now + coach.pwa.CODE_TTL + 1))  # просрочен
+        code, _ = coach.pwa.new_code(self.db, U, now=now)
+        for _ in range(coach.pwa.CODE_USES):
+            self.assertTrue(coach.pwa.login(self.db, code, now=now + 1))
+        self.assertIsNone(coach.pwa.login(self.db, code, now=now + 2))  # входы кончились
+        code, _ = coach.pwa.new_code(self.db, U, now=now)
+        new, _ = coach.pwa.new_code(self.db, U, now=now)
+        self.assertIsNone(coach.pwa.login(self.db, code, now=now + 1) if code != new else None)  # старый сгорел
+        # подбор: после 10 неверных за 10 минут — пауза, даже для верного кода
+        coach.pwa._fails.clear()
+        for _ in range(coach.pwa.FAILS[0]):
+            self.assertIsNone(coach.pwa.login(self.db, "000000" if new != "000000" else "111111", now=now + 3))
+        with self.assertRaises(PermissionError):
+            coach.pwa.login(self.db, new, now=now + 4)
+        self.assertTrue(coach.pwa.login(self.db, new, now=now + 4 + coach.pwa.FAILS[1]))  # через 10 минут — снова можно
+        real, _ = coach.pwa.new_code(self.db, U)
+        coach.pwa._fails[:] = [time.time()] * coach.pwa.FAILS[0]
+        self.assertEqual(site_call("/site/login", {"code": real}).code, 429)
+        coach.pwa._fails.clear()
+        new, _ = coach.pwa.new_code(self.db, U, now=now)
+        # сессия кончается
+        tok = coach.pwa.login(self.db, new, now=now + 5)
+        h = {"Cookie": f"forma_site={tok}", "X-Init-Data": ""}
+        self.assertEqual(coach.pwa.uid_for(self.db, h, now=now + 10), U)
+        self.assertIsNone(coach.pwa.uid_for(self.db, h, now=now + coach.pwa.SESSION_TTL + 10))
+
+    def test_page_and_manifest(self):
+        r = site_call("/site/")
+        self.assertEqual(r.code, 200)
+        html_ = r.body.decode()
+        self.assertNotIn("telegram.org", html_)
+        self.assertIn('rel="manifest"', html_)
+        self.assertIn("apple-mobile-web-app-capable", html_)
+        self.assertIn('class="site"', html_)
+        self.assertIn("site.js", html_)
+        self.assertIn('"app.js?v=', html_)  # приложение грузится после входа, в том же порядке
+        self.assertNotIn('<script src="app.js', html_)
+        self.assertIn("TrainerWhoopbot", html_)
+        self.assertEqual(site_call("/site").headers.get("Location"), "/site/")
+        m = site_call("/site/manifest.webmanifest")
+        self.assertEqual(m.json["start_url"], "/site/")
+        self.assertEqual(m.json["display"], "standalone")
+        for ic in m.json["icons"]:
+            self.assertEqual(site_call(ic["src"]).code, 200)
+        self.assertEqual(site_call("/site/icon-180.png").code, 200)
+        self.assertEqual(site_call("/site/app.js").code, 200)
+        self.assertEqual(site_call("/site/../coach.py").code, 404)
 
 
 if __name__ == "__main__":

@@ -55,6 +55,7 @@ import whoop  # noqa: E402
 import f_assess  # noqa: E402  оценки недели и месяца, календарь
 import f_journal  # noqa: E402  дневник: привычки «да/нет» и их влияние на восстановление
 import f_plan  # noqa: E402  мой план: цели недели, планер сна
+import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
 FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
@@ -262,6 +263,7 @@ def setup_bot():
         {"command": "morning", "description": "Время утреннего разбора"},
         {"command": "sync", "description": "Обновить WHOOP"},
         {"command": "new", "description": "Новый разговор"},
+        {"command": "site", "description": "📲 Форма на экран «Домой»"},
         {"command": "help", "description": "Что я умею"},
     ]
     desc = ("Личный тренер по данным WHOOP: восстановление, сон, нагрузка, питание.\n\n"
@@ -834,6 +836,21 @@ def evening(uid, now):
 
 # ---------- чат ----------
 
+def site_link(chat, uid):
+    """📲 Форма как отдельное приложение на экране «Домой»: ссылка сразу входит, код — для самого значка."""
+    if not public_url:
+        return send(chat, "⏳ Адрес приложения ещё настраивается — что с ним, /status")
+    code, link = pwa.new_code(db, uid)
+    url = f"{public_url}/site/login?c={link}"
+    send(chat, box("📲", "Форма на экране «Домой»", [
+        f"1. Открой в Safari: <a href=\"{esc(url)}\">{esc(public_url.split('//')[-1])}/site</a>\n"
+        "2. «Поделиться» → «На экран „Домой“»\n"
+        "3. Открой значок «Форма» и введи код",
+        f"<code>{code[:3]} {code[3:]}</code>"],
+        note="Ссылка и код — 15 минут. Новый — /site"),
+        [[{"text": "🌐 Открыть в браузере", "url": url}]])
+
+
 def help_text(uid):
     return box("⚡", "Форма — тренер по WHOOP", [
         "☀️ Утром — план на день, после тренировки — что съесть\n"
@@ -841,7 +858,7 @@ def help_text(uid):
         "🍽 Еда — фото, видео или «съел гречку»\n"
         "🎥 Видео упражнения — разбор техники\n"
         "💧 Вода — «выпил 500 мл»",
-        "/today · /food · /water · /goals · /profile · /progress · /morning · /sync · /new · /status · /mode"],
+        "/today · /food · /water · /goals · /profile · /progress · /morning · /sync · /new · /status · /mode · /site"],
         note=("Всё подробно — в приложении: кнопка «Форма» слева от поля ввода." if ui_mode(uid) == "app"
               else "Всё — кнопками и командами здесь; приложение — /app или /mode.") + f"\n{mode_note(uid)}")
 
@@ -1252,6 +1269,8 @@ def on_message(msg):
             send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."), with_app(uid, [], style="primary", always=True))
         else:
             send(chat, "⏳ Приложение ещё запускается — пришлю кнопку, как будет готово. Что с адресом — /status")
+    elif cmd == "/site":
+        site_link(chat, uid)
     elif cmd == "/connect":
         connect(chat, uid)
     elif cmd == "/whoop":
@@ -1668,7 +1687,7 @@ class Web(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store"):
+    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store", headers=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode()
         elif isinstance(body, str):
@@ -1678,6 +1697,8 @@ class Web(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1697,6 +1718,8 @@ class Web(BaseHTTPRequestHandler):
                               "text/html; charset=utf-8")
         if path.startswith("/api/"):
             return self.api(path, dict(urllib.parse.parse_qsl(u.query)))
+        if path == "/site" or path.startswith("/site/"):
+            return self.site_get(path, dict(urllib.parse.parse_qsl(u.query)))
         if path in ("/", "/index.html"):
             with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
                 page = f.read().replace("{{v}}", VERSION)
@@ -1723,12 +1746,23 @@ class Web(BaseHTTPRequestHandler):
             return self.reply(400, {"error": "bad json"})
         if not isinstance(body, dict):
             return self.reply(400, {"error": "bad json"})
+        if path == "/site/login":  # код из /site, введённый в приложении с экрана «Домой»
+            try:
+                tok = pwa.login(db, body.get("code"))
+            except PermissionError as e:
+                return self.reply(429, {"error": str(e)})
+            if not tok:
+                return self.reply(401, {"error": "Неверный или старый код — напиши боту /site за новым"})
+            return self.reply(200, {"ok": True}, headers={"Set-Cookie": pwa.set_cookie(tok)})
         self.api(path, body)
 
     def api(self, path, body):
         user = check_init_data(self.headers.get("X-Init-Data") or "")
+        if not user:  # приложение с экрана «Домой» (/site/) — по cookie сессии
+            sid = pwa.uid_for(db, self.headers)
+            user = {"id": sid} if sid else None
         if not user:
-            return self.reply(401, {"error": "Открой Форму через Telegram"})
+            return self.reply(401, {"error": "Открой Форму через Telegram или войди по коду /site"})
         uid = user["id"]
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
@@ -1748,6 +1782,42 @@ class Web(BaseHTTPRequestHandler):
         except Exception:
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз. Не проходит — «Поддержка» внизу"})
+
+
+    def site_get(self, path, qs):
+        if path in ("/site", "/site/login") and not qs.get("c"):
+            return self.reply(302, "", headers={"Location": "/site/"})
+        if path == "/site/login":  # ссылка из /site: входит сразу и ведёт в приложение
+            try:
+                tok = pwa.login(db, qs.get("c"))
+            except PermissionError:
+                tok = None
+            return self.reply(302, "", headers={"Location": "/site/" if tok else "/site/?expired=1",
+                                                **({"Set-Cookie": pwa.set_cookie(tok)} if tok else {})})
+        if path == "/site/logout":
+            pwa.logout(db, pwa.cookie(self.headers))
+            return self.reply(302, "", headers={"Location": "/site/", "Set-Cookie": pwa.set_cookie("")})
+        if path == "/site/me":
+            sid = pwa.uid_for(db, self.headers)
+            if not sid or not allowed(sid):
+                return self.reply(401, {"error": "нужен вход"})
+            return self.reply(200, {"ok": True, "name": db.user(sid).get("name") or ""})
+        if path == "/site/manifest.webmanifest":
+            return self.reply(200, pwa.manifest(), "application/manifest+json; charset=utf-8", "public, max-age=3600")
+        if path == "/site/":
+            with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
+                page = pwa.page(f.read().replace("{{v}}", VERSION), VERSION, db.meta("bot_username") or "")
+            return self.reply(200, page, "text/html; charset=utf-8")
+        name = os.path.basename(path)
+        file = os.path.join(WEB, name)
+        if name and os.path.isfile(file):  # файлы приложения — те же, что у мини-приложения
+            with open(file, "rb") as f:
+                ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                if ctype.startswith("text/") or ctype.endswith("javascript"):
+                    ctype += "; charset=utf-8"
+                cache = "public, max-age=86400" if name.startswith("icon-") else "public, max-age=31536000, immutable"
+                return self.reply(200, f.read(), ctype, cache)
+        self.reply(404, {"error": "not found"})
 
 
 def day_payload(uid, day):
