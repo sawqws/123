@@ -190,7 +190,7 @@ class Bot(unittest.TestCase):
         pulse.ingest(summary())
         pulse.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
-        self.assertIn("контекст 5%", self.sent[-1][1]["text"])
+        self.assertIn("Память ▱▱▱▱▱▱▱▱▱▱ 5%", self.sent[-1][1]["text"])
 
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
@@ -225,11 +225,11 @@ class Bot(unittest.TestCase):
         self.assertIn("чатов нет", pulse.home_text())
         pulse.ingest(summary(tokens=150_000, prog={"done": 2, "total": 5, "pct": 40}, agents=2))
         text = pulse.home_text()
-        self.assertIn("— работает", text)
-        self.assertIn("Сделано 40% · агентов 2 · контекст 75%", text)
-        self.assertIn("⚠️ Контекст 75% — начни новый чат", text)
+        self.assertIn("· работает · 🤖 2 помощника", text)
+        self.assertIn("Сделано ▰▰▰▰▱▱▱▱▱▱ 40%", text)
+        self.assertIn("Память ▰▰▰▰▰▰▰▰▱▱ 75% ⚠️ <i>открой новый чат</i>", text)
         d = pulse.detail_text(pulse.visible()[0])
-        self.assertIn("Сделано 40% (2 из 5)", d)
+        self.assertIn("40% <i>(2 из 5)</i>", d)
         self.assertIn("✅ Репортёр", d)
         self.assertLessEqual(len(d), 4000)
         rows = pulse.home_buttons()
@@ -240,7 +240,7 @@ class Bot(unittest.TestCase):
         v = pulse.visible()[0]
         self.assertEqual(v["status"], "waiting")  # контейнер уснул, но чат закончил — «готово», а не «нет связи»
         self.assertNotIn("⚠️", pulse.block(v))
-        self.assertIn("— готово", pulse.block(v))
+        self.assertIn("· готово", pulse.block(v))
 
     def test_callbacks(self):
         pulse.ingest(summary())

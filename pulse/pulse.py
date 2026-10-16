@@ -445,46 +445,33 @@ def first_par(text, n=300):
 
 
 def state_word(v, now=None):
-    """«работает 12 мин» / «ждёт ответа» / «готово» — одним словом-двумя."""
-    now = now or time.time()
-    st_ = v["status"]
-    if st_ == "working":
-        start = (v["turn"] or {}).get("started") or (v["prompt"] or {}).get("at")
-        return "работает" + (f" {ago(now - start)}" if start else "")
-    if st_ == "question":
-        return "ждёт твоего ответа"
-    if st_ == "waiting":
-        return "готово"
-    if st_ == "offline":
-        return "нет связи"
-    return "закрыт"
+    """работает / ждёт ответа / готово — одним-двумя словами."""
+    return {"working": "работает", "question": "ждёт ответа", "waiting": "готово", "offline": "нет связи"}.get(
+        v["status"], "закрыт")
 
 
-def numbers(v, full=False):
-    """«Сделано 40% · агентов 2 · контекст 37%» — только то, что есть."""
+def agents_word(n):
+    return f"🤖 {n} {'помощник' if n % 10 == 1 and n % 100 != 11 else 'помощника' if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else 'помощников'}"
+
+
+def bars(v):
+    """Вариант 2 «Полоски» (Глеб выбрал 16.10): «Сделано ▰▰▱ 40%» и «Память ▰▰▱ 37%», от 60% — «⚠️ открой новый чат»."""
     out = []
     p = v.get("prog")
     if p and p.get("total"):
-        out.append(f"Сделано {p['pct']}%" + (f" ({p['done']} из {p['total']})" if full else ""))
-    if v.get("agents"):
-        out.append(f"агентов {v['agents']}")
-    out.append(f"контекст {'' if v['ctx']['sure'] or not full else '≈'}{v['ctx']['pct']}%")
-    return " · ".join(out)
-
-
-def warn(v):
+        out.append(f"Сделано {bar(p['pct'])} {p['pct']}%")
     pct = v["ctx"]["pct"]
-    return f"⚠️ Контекст {pct}% — начни новый чат" if pct >= NEW_CHAT_PCT else ""
+    out.append(f"Память {bar(pct)} {pct}%" + (" ⚠️ <i>открой новый чат</i>" if pct >= NEW_CHAT_PCT else ""))
+    return out
+
+
+def head(v, now=None, n=32):
+    extra = f" · {agents_word(v['agents'])}" if v.get("agents") else ""
+    return f"{v['emoji']} <b>{esc(clip(v['title'], n))}</b> · {state_word(v, now)}{extra}"
 
 
 def block(v, now=None):
-    """Один чат (Глеб 16.10: «максимально просто, кратко и понятно»): название — состояние, строка цифр, ⚠️ от 60%."""
-    out = [f"{v['emoji']} <b>{esc(clip(v['title'], 40))}</b> — {state_word(v, now)}", numbers(v)]
-    if v["status"] == "question" and v["question"]:
-        out.append("Вопрос: " + esc(clip(v["question"], 90)))
-    if warn(v):
-        out.append(warn(v))
-    return "\n".join(out)
+    return "\n".join([head(v, now)] + bars(v))
 
 
 def counts(vs):
@@ -515,7 +502,7 @@ def home_buttons(vs=None):
     chats = [btn(f"{v['emoji']} {clip(v['title'], 12)}", f"s|{v['id']}") for v in vs[:9]]
     rows = [chats[i:i + 3] for i in range(0, len(chats), 3)]
     rows += app_buttons()
-    rows.append([btn("🔄", "home"), btn("⚙️", "more")])
+    rows.append([btn("🔄 Обновить", "home"), btn("⚙️", "more")])
     return rows
 
 
@@ -560,8 +547,11 @@ def md(text, limit=None):
 
 def detail_text(v, now=None):
     c = v["ctx"]
-    parts = [f"{v['emoji']} <b>{esc(v['title'])}</b> — {state_word(v, now)}\n{numbers(v, full=True)}"
-             + (f"\n{warn(v)}" if warn(v) else "")]
+    p = v.get("prog")
+    top = [head(v, now, 60)] + bars(v)
+    if p and p.get("total"):
+        top[1] += f" <i>({p['done']} из {p['total']})</i>"
+    parts = ["\n".join(top)]
     if v["status"] == "question" and v["question"]:
         parts.append("❓ " + esc(v["question"]) + "".join(f"\n• {esc(o)}" for o in v.get("options") or []))
     if v["prompt"]:
