@@ -291,3 +291,22 @@
 .hdpx-trow .hdpx-chip-w { height: 28px; background: var(--hdpx-bg2); }
 .hdpx-more { margin-top: 8px; }
 .hdpx-more summary { cursor: pointer; padding: 6px 0; }
+
+/* Кнопки бота внизу страницы (плавающая полоса над родной нижней панелью, вёрстку не сдвигает) */
+.hdpx-actionbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; display: flex; align-items: center; gap: 8px;
+  max-width: calc(100% - 24px); padding: 6px; border-radius: 14px; background: var(--hdpx-white); border: 1px solid var(--hdpx-violet-bg);
+  box-shadow: 0 8px 28px rgba(39, 32, 93, .18); font-family: inherit; }
+.hdpx-ab-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--hdpx-primary); background: var(--hdpx-white); color: var(--hdpx-primary); font-family: inherit; font-size: 15px; font-weight: 500; line-height: 1;
+  white-space: nowrap; cursor: pointer; min-width: 0; }
+.hdpx-ab-btn:hover { background: var(--hdpx-bg2); }
+.hdpx-ab-main { background: var(--hdpx-primary); color: #fff; }
+.hdpx-ab-main:hover { background: var(--hdpx-primary); filter: brightness(1.08); }
+.hdpx-ab-wide { max-width: 70vw; overflow: hidden; text-overflow: ellipsis; }
+.hdpx-ab-ico { display: inline-grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; padding: 0; border-radius: 10px; border: 0;
+  background: var(--hdpx-violet-bg); color: var(--hdpx-primary); cursor: pointer; }
+.hdpx-ab-ico svg { width: 22px; height: 22px; }
+.hdpx-ab-txt { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--hdpx-ink); font-size: 14px; }
+.hdpx-ab-txt svg { width: 18px; height: 18px; }
+.hdpx-narrow .hdpx-actionbar { gap: 6px; }
+.hdpx-narrow .hdpx-ab-btn { padding: 0 11px; font-size: 14px; }
