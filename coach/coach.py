@@ -60,6 +60,7 @@ FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
+import menukb  # noqa: E402  ☰ меню-квадратик у поля ввода (common/menukb.py)
 import support  # noqa: E402  🛠 поддержка: /fix — Claude чинит и дорабатывает этого бота
 
 TOKEN = os.environ.get("COACH_TOKEN", "")
@@ -880,6 +881,68 @@ def main_menu(uid):
               [btn("⚙️ Режим", "mode|ask"), support.Support.button()])
 
 
+# ☰ Меню-квадратик справа от поля ввода (как у Главного): обычная клавиатура Telegram, свёрнута в значок.
+# Нажатие приходит текстом — on_kb() вызывает то же, что кнопка главного меню; в Claude/еду/воду не идёт.
+# Ставится по /start и один раз на версию владельцу при запуске (db.meta «kb_ver:<uid>»); в обоих режимах.
+KB = menukb.MenuKB([["🧠 Разбор дня", "📈 Прогресс", "📊 Сводка"],
+                    ["🍽 Питание", "💧 Вода", "🎯 Цели"],
+                    ["👤 Профиль", "☀️ Утро", "⚙️ Режим"],
+                    ["🛠 Поддержка", "📱 Приложение"]],
+                   version=1, placeholder="Вопрос тренеру или ☰ справа")
+
+
+def send_kb(chat, text, markup):
+    return tg("sendMessage", chat_id=chat, text=text, reply_markup=markup)
+
+
+def ensure_kb(chat, force=False):
+    """Поставить меню-квадратик (личный чат: chat = uid): по /start (force) — всегда, иначе — один раз на версию."""
+    v = db.meta(f"kb_ver:{chat}")
+    KB.ensure(send_kb, chat, done=int(v) if v and str(v).isdigit() else None,
+              mark=lambda ver: db.meta(f"kb_ver:{chat}", ver), force=force)
+
+
+def kb_on_start():
+    """При запуске: ☰ меню владельцу — один раз на версию. Владельца ещё нет — некому, не шлём."""
+    first = owner() or min(ALLOWED or {0})
+    if first:
+        ensure_kb(first)
+
+
+def kb_release(sup, u):
+    """Кнопка меню, пока поддержка ждёт просьбу: выйти из ожидания (иначе «🍽 Питание» ушло бы в /fix)."""
+    m = u.get("message") or {}
+    if sup and KB.has(m.get("text")):
+        sup.waiting.pop((m.get("chat") or {}).get("id"), None)
+
+
+def open_app(chat, uid):
+    """/app и «📱 Приложение»: кнопка открыть Форму (в любом режиме)."""
+    if public_url:
+        send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."),
+             with_app(uid, [], style="primary", always=True))
+    else:
+        send(chat, "⏳ Приложение ещё запускается — пришлю кнопку, как будет готово. Что с адресом — /status")
+
+
+def on_kb(chat, uid, text):
+    """Кнопка меню-квадратика → то же, что кнопка главного меню (callback) или команда."""
+    if text == "🛠 Поддержка":
+        if SUP:
+            SUP.ask(chat)
+        else:
+            send(chat, err("Поддержка ещё запускается — попробуй через минуту"))
+    elif text == "📱 Приложение":
+        open_app(chat, uid)
+    else:
+        data = {"🧠 Разбор дня": "b|now", "📈 Прогресс": "p|", "📊 Сводка": "sum|week", "🍽 Питание": "food|",
+                "💧 Вода": "water|", "🎯 Цели": "goals|", "👤 Профиль": "pf|", "☀️ Утро": "morning|",
+                "⚙️ Режим": "mode|ask"}[text]
+        note = callback(uid, chat, None, data.split("|") + ["", "", ""], {})
+        if note and note.endswith("…"):  # «Готовлю разбор…» — всплывашки у текста нет, сразу видно действие
+            typing(chat)
+
+
 def welcome(chat, uid, name):
     connected = bool(db.token(uid))
     hint = ("Всё главное — в приложении." if ui_mode(uid) == "app" else "Всё — кнопками ниже и командами.") \
@@ -1245,9 +1308,12 @@ def on_message(msg):
     db.user(uid, frm.get("first_name"))
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     arg = text.split(None, 1)[1].strip() if cmd and len(text.split(None, 1)) > 1 else ""
-    wait = awaiting(uid)
+    wait = awaiting(uid)  # кнопка меню тоже сбрасывает «✍️ Напиши цель…»
+    if KB.has(msg.get("text")):  # кнопка меню-квадратика — экран, не вопрос тренеру и не еда
+        return on_kb(chat, uid, text)
     kind = media.kind(msg)
     if cmd == "/start":
+        ensure_kb(chat, force=True)  # ☰ меню у поля ввода — до главного экрана
         arg = text.split()[1] if len(text.split()) > 1 else ""
         if ui_mode(uid):
             welcome(chat, uid, frm.get("first_name"))
@@ -1265,10 +1331,7 @@ def on_message(msg):
         else:
             send(chat, *profile_view(uid))
     elif cmd == "/app":
-        if public_url:
-            send(chat, box("📱", "Форма", note="Сегодня, тренды, питание и тренер."), with_app(uid, [], style="primary", always=True))
-        else:
-            send(chat, "⏳ Приложение ещё запускается — пришлю кнопку, как будет готово. Что с адресом — /status")
+        open_app(chat, uid)
     elif cmd == "/site":
         site_link(chat, uid)
     elif cmd == "/connect":
@@ -2179,6 +2242,7 @@ def main():
     global SUP
     SUP = sup = support.Support(TOKEN, "Тренер «Форма»", folders=["coach"], pm2="coach-bot", allowed=allowed,
                                 tests=["python3 coach/test_coach.py"])
+    kb_on_start()
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=50, allowed_updates=["message", "callback_query"])
@@ -2188,6 +2252,7 @@ def main():
             continue
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
+            kb_release(sup, u)
             if sup.intercept(u):  # 🛠 /fix и ответы поддержке
                 continue
             try:

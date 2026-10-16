@@ -940,6 +940,12 @@ class BotTest(unittest.TestCase):
         for m, kw in self.sent:
             if m not in ("sendMessage", "editMessageText"):
                 continue
+            if "keyboard" in (kw.get("reply_markup") or {}):  # ☰ меню-квадратик: служебная строка, кнопки — свои
+                self.assertEqual(kw["text"], coach.menukb.NOTE)
+                for row in kw["reply_markup"]["keyboard"]:
+                    self.assertLessEqual(len(row), 3)
+                    self.assertTrue(all(len(b["text"]) <= 24 for b in row))
+                continue
             first = kw["text"].split("\n")[0]
             self.assertRegex(first, r"^\S+ <b>.+</b>$", first)  # «эмодзи <b>Заголовок</b>»
             self.assertIn("<blockquote", kw["text"])
@@ -1050,6 +1056,58 @@ class BotTest(unittest.TestCase):
             self.assertLessEqual(sum(len(r) for r in menu["inline_keyboard"]), 6)  # коротко: открыть + 2–3 действия
             self.assertIn("mode|ask", self.datas(menu))
 
+    def test_menu_keyboard(self):
+        """☰ Меню-квадратик: один раз на версию при запуске, снова — по /start; кнопка — экран, не вопрос Claude."""
+        kb = lambda: [kw for m, kw in self.sent if "keyboard" in (kw.get("reply_markup") or {})]  # noqa: E731
+        with mock.patch.object(coach, "ALLOWED", set()):
+            self.db.meta("owner", "")
+            coach.kb_on_start()  # владельца ещё нет — некому
+            self.assertEqual(kb(), [])
+            self.db.meta("owner", U)
+            coach.kb_on_start()
+            coach.kb_on_start()  # второй запуск бота — уже стоит
+        self.assertEqual(len(kb()), 1)
+        self.assertEqual(kb()[0]["chat_id"], U)
+        mk = kb()[0]["reply_markup"]
+        self.assertTrue(mk["one_time_keyboard"] and not mk["is_persistent"])
+        texts = [b["text"] for row in mk["keyboard"] for b in row]
+        for t in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение", "🧠 Разбор дня"):
+            self.assertIn(t, texts)
+        self.assertEqual(self.db.meta(f"kb_ver:{U}"), "1")
+        coach.on_message(self.msg("/start"))
+        self.assertEqual(len(kb()), 2)  # /start ставит снова (и в режиме «приложение»)
+        self.sent.clear()
+        self.db.meta(f"await:{U}", f"goal:{int(time.time())}")  # ждали цель — кнопка меню не станет целью
+        inline = lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args))  # noqa: E731
+        with mock.patch.object(ai, "claude", side_effect=AssertionError("в Claude")), \
+                mock.patch.object(coach, "answer", side_effect=AssertionError("в вопрос тренеру")), \
+                mock.patch.object(coach, "log_meal", side_effect=AssertionError("в еду")), \
+                mock.patch.object(coach, "public_url", "https://coach.example"), \
+                mock.patch.object(coach, "brief_now") as brief, \
+                mock.patch.object(coach.threading, "Thread", inline):
+            coach.on_message(self.msg("🎯 Цели"))
+            self.assertIn("🎯 <b>Цели", self.texts()[-1])
+            coach.on_message(self.msg("💧 Вода"))
+            coach.on_message(self.msg("🍽 Питание"))
+            coach.on_message(self.msg("⚙️ Режим"))
+            self.assertIn("Как удобнее?", self.texts()[-1])
+            coach.on_message(self.msg("📱 Приложение"))
+            self.assertTrue(self.has_webapp(self.markups()[-1]))
+            coach.on_message(self.msg("🧠 Разбор дня"))
+            brief.assert_called_once_with(U, U)
+            sup = mock.Mock()
+            with mock.patch.object(coach, "SUP", sup):
+                coach.on_message(self.msg("🛠 Поддержка"))
+            sup.ask.assert_called_once_with(U)
+        self.assertEqual(len(self.db.goals(U)), 0)
+        self.assertEqual(len(self.db.history(U)), 0)
+        # поддержка ждала просьбу — кнопка меню выходит из ожидания, а не уходит в /fix
+        s = coach.support.Support("123:TEST", "Тренер", ["coach"], "coach-bot", allowed=lambda uid: True)
+        s.waiting[U] = {"at": time.time(), "shots": []}
+        u = {"message": {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": "💧 Вода"}}
+        coach.kb_release(s, u)
+        self.assertFalse(s.intercept(u))
+
     def test_chat_mode_has_no_webapp_buttons(self):
         """В режиме «чат» кнопок web_app нет нигде, кроме явного /app; длинное — кнопкой «📄 Полностью» сюда же."""
         self.db.meta(f"mode:{U}", "chat")
@@ -1070,7 +1128,8 @@ class BotTest(unittest.TestCase):
             for m in self.markups():
                 self.assertFalse(self.has_webapp(m), m)
             self.assertTrue(any("full|answer" in self.datas(m) for m in self.markups()))  # обрезано → «📄 Полностью»
-            self.assertIn("Режим: 💬 чат", self.texts()[0])
+            self.assertEqual(self.texts()[0], coach.menukb.NOTE)  # /start: сначала ☰ меню у поля ввода
+            self.assertIn("Режим: 💬 чат", self.texts()[1])
             n = len(self.texts())
             coach.on_callback({"id": "2", "from": {"id": U}, "data": "full|answer", "message": {"chat": {"id": U}, "message_id": 3}})
             self.assertGreater(len(self.texts()), n + 1)  # целиком — несколькими сообщениями
