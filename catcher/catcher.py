@@ -56,7 +56,12 @@ bot = kit.Bot("Catcher", emoji="🎯", tg_name="Catcher", about="Ловлю кр
               app_text="Catcher", token=os.environ.get("CATCHER_TOKEN", ""), port=PORT,
               app_url=os.environ.get("CATCHER_URL", ""),
               support={"name": "Catcher", "folders": ["catcher", "tgbot"], "pm2": "catcher-bot", "cwd": REPO,
-                       "tests": ["python3 catcher/test_catcher.py", "python3 tgbot/test_tgbot.py"]})
+                       "tests": ["python3 catcher/test_catcher.py", "python3 tgbot/test_tgbot.py"]},
+              # ☰ меню-квадратик у поля ввода (botkit): нажатие — то же, что inline-кнопка, не разбор @имён
+              kb=[[kit.b("🎲 По пожеланиям", "wish"), kit.b("➕ Имя", "add")],
+                  [kit.b("✨ Идеи", "ideas|"), kit.b("📋 Список", "list"), kit.b("⚙️ Настройки", "settings")],
+                  [kit.KB_APP, kit.KB_MODE, kit.KB_SUPPORT]],
+              kb_version=1, kb_placeholder="Пришли @имя или ☰ справа")
 
 
 # ---------- Секретарь: аккаунт Глеба ----------
