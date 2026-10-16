@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,6 +60,11 @@ API = f"https://api.telegram.org/bot{TOKEN}/"
 LINK = re.compile(r"https://horodigital\.ru/student/topic/[0-9a-f-]{36}/task/[0-9a-f-]{36}\S*")
 TIMEOUT = 20 * 60  # секунд на одно задание (тест сдаётся «как человек» — паузы до 6 мин)
 MSK = ZoneInfo("Europe/Moscow")
+# 🛡 Страж HDP в Главном (hub/guard.py) читает эти два файла: журнал ошибок и «пульс» цикла приёма сообщений
+JOURNAL = os.path.join(REPO, "horo", "tmp", "journal.jsonl")
+HEARTBEAT = os.path.join(REPO, "horo", "tmp", "heartbeat")
+JOURNAL_MAX = 512 * 1024
+journal_lock = threading.Lock()
 
 MAX_PARALLEL = int(os.environ.get("HDP_PARALLEL") or 3)  # сколько заданий решать одновременно (память сервера 2 ГБ)
 
@@ -788,15 +794,43 @@ def kill_orphans():
     return n
 
 
+def journal(kind, text, detail=""):
+    """Ошибка — строкой в horo/tmp/journal.jsonl: Глеб видит одну строку «⚠️», а Страж HDP в Главном — всё,
+    с трассировкой. kind: bug (упал код), script (скрипт сайта), claude, net (сеть). Не мешает работе."""
+    rec = {"at": round(time.time()), "kind": kind, "text": str(text)[:400], "detail": str(detail)[-3000:]}
+    try:
+        with journal_lock:
+            if os.path.exists(JOURNAL) and os.path.getsize(JOURNAL) > JOURNAL_MAX:
+                os.replace(JOURNAL, JOURNAL + ".1")
+            with open(JOURNAL, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("journal:", e)
+
+
+def beat():
+    """«Пульс» цикла приёма сообщений: давно не обновлялся — бот завис (Страж перезапустит)."""
+    try:
+        with open(HEARTBEAT, "w") as f:
+            f.write(str(round(time.time())))
+    except OSError:
+        pass
+
+
 def node(*args, timeout=300, prog="node"):
+    name = " ".join(str(a) for a in args[:1])
     try:
         res = subprocess.run([prog, *args], cwd=REPO, capture_output=True, text=True, timeout=timeout, env=child_env())
     except subprocess.TimeoutExpired:
+        journal("script", f"{prog} {name}: не уложился в {timeout} с")
         return False, "⚠️ Сайт не ответил вовремя, попробуй позже."
     except FileNotFoundError:
+        journal("script", f"нет {prog}")
         return False, f"⚠️ На сервере нет {prog} — нужна переустановка (install.sh)."
     if res.returncode != 0:
         print(prog, *args, "->", res.returncode, (res.stderr or res.stdout)[-3000:])  # подробности — в лог pm2
+        journal("script", f"{prog} {name} -> {res.returncode}: " + explain(res.stderr or res.stdout)[2:].strip(),
+                (res.stderr or "") + "\n" + (res.stdout or "")[-1500:])
         return False, explain(res.stderr or res.stdout)
     return True, res.stdout
 
@@ -869,6 +903,7 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
     if proc.returncode != 0 or not result or result.get("is_error"):
         log = "".join(other)[-3000:] + (json.dumps(result, ensure_ascii=False)[-2000:] if result else "")
         print("claude ->", proc.returncode, log)  # подробности — в лог pm2
+        journal("claude", f"claude -> {proc.returncode}", log)
         low = log.lower()
         if any(w in low for w in ("login", "api key", "401", "unauthorized", "authenticat")):
             return False, "⚠️ Claude на сервере не вошёл в аккаунт. Напиши мне (Claude Code), я войду заново."
@@ -1141,6 +1176,7 @@ def mark_active(task, info):
         act = s.setdefault("active", {})
         if info:
             info["tries"] = act.get(task, {}).get("tries", 0)
+            info["since"] = act.get(task, {}).get("since") or round(time.time())  # Страж видит зависшие
             act[task] = info
         else:
             act.pop(task, None)
@@ -1827,10 +1863,12 @@ def sender_loop():
             due_sends()
         except Exception as e:
             print("sender:", e)
+            journal("bug", f"отправка по таймеру: {type(e).__name__}: {e}", traceback.format_exc())
         try:
             due_tests()
         except Exception as e:
             print("tests:", e)
+            journal("bug", f"сдача тестов по таймеру: {type(e).__name__}: {e}", traceback.format_exc())
         threading.Event().wait(20)
 
 
@@ -3854,15 +3892,23 @@ def main():
             upd = tg("getUpdates", offset=offset, timeout=60)
         except Exception as e:  # сеть моргнула — пробуем снова
             print("getUpdates:", e)
+            journal("net", f"getUpdates: {e}")
+            beat()  # цикл жив, просто нет сети
             time.sleep(5)
             continue
+        beat()
         for u in upd.get("result", []):
             offset = u["update_id"] + 1
             on_update(u, sup)
 
 
-def oops(chat, e):
-    """Непредвиденная ошибка в обработчике или фоновом деле: Глебу — одна строка «⚠️», подробности — в лог pm2."""
+def oops(chat, e, tb=None):
+    """Непредвиденная ошибка в обработчике или фоновом деле: Глебу — одна строка «⚠️», подробности — в лог pm2
+    и в журнал (с трассировкой — по ней Страж HDP в Главном зовёт Claude чинить)."""
+    if tb is None:
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        print(tb, file=sys.stderr)
+    journal("bug", f"{type(e).__name__}: {e}", tb)
     try:
         send(chat, err(f"Что-то сломалось: {e}", "Попробуй ещё раз. Повторится — 🛠 Поддержка (/fix)"),
              menu=True, raw_html=True)
@@ -3874,7 +3920,8 @@ def thread_crash(args):
     """threading.excepthook: дело в фоне упало — раньше Глеб видел только тишину."""
     threading.__excepthook__(args)
     if not issubclass(args.exc_type, SystemExit) and owner():
-        oops(owner(), args.exc_value)
+        oops(owner(), args.exc_value, "".join(traceback.format_exception(args.exc_type, args.exc_value,
+                                                                         args.exc_traceback)))
 
 
 def on_update(u, sup=None):
