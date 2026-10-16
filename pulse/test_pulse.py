@@ -26,7 +26,7 @@ def line(**d):
 
 
 def assistant(content, stop="tool_use", tokens=1000, **kw):
-    return line(type="assistant", message={"model": "claude-opus-5-5", "content": content, "stop_reason": stop,
+    return line(type="assistant", message={"model": "claude-x", "content": content, "stop_reason": stop,
                                            "usage": {"input_tokens": 2, "cache_read_input_tokens": tokens,
                                                      "cache_creation_input_tokens": 0, "output_tokens": 10}}, **kw)
 
@@ -217,13 +217,16 @@ class Bot(unittest.TestCase):
         pulse.notify(pulse.ingest(summary("waiting")) + pulse.ingest(summary("question", question="?")))
         self.assertEqual([m for m, _ in self.sent if m == "sendMessage"], [])
 
+    def test_known_window(self):
+        self.assertEqual(pulse.window("claude-opus-5-5", 213_200), (1_000_000, True))
+
     def test_window_learning(self):
-        w, sure = pulse.window("claude-opus-5-5", 100_000)
+        w, sure = pulse.window("claude-x", 100_000)
         self.assertEqual((w, sure), (200_000, False))
-        self.assertEqual(pulse.window("claude-opus-5-5", 180_000)[0], 1_000_000)  # за порогом сжатия — окно больше
+        self.assertEqual(pulse.window("claude-x", 180_000)[0], 1_000_000)  # за порогом сжатия — окно больше
         pulse.ingest(summary(tokens=150_000))
         pulse.ingest(summary(ctx={"tokens": 0, "compacts": 1, "pre": 640_000}))
-        self.assertEqual(pulse.window("claude-opus-5-5"), (800_000, True))
+        self.assertEqual(pulse.window("claude-x"), (800_000, True))
 
     def test_offline_and_hidden(self):
         pulse.ingest(summary(), now=time.time() - 600)
