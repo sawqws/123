@@ -96,6 +96,8 @@ class Session:
         self.prompts = []          # [{text, at}]
         self.tasks = {}            # id → {id, subject, status, active}
         self.todos = None          # TodoWrite (старые версии) — список целиком
+        self.base = set()          # задачи, сделанные ещё до последнего запроса — в % текущего запроса не входят
+        self.bg = {}               # фоновые агенты: agentId → описание (до <task-notification> с итогом)
         self.reply = ""
         self.last = None           # 'end' | 'tool' | 'result' | 'prompt' — последнее событие главной ветки
         self.pending = {}          # tool_use id → имя (ещё без результата)
@@ -130,6 +132,8 @@ class Session:
             a = d.get("attachment") or {}
             if a.get("type") == "remote_session_change" and a.get("url"):
                 self.url = a["url"]
+            elif a.get("type") == "queued_command":
+                self._notice(a.get("prompt"))
             elif a.get("type") == "model":
                 self.model = (a.get("identity") or {}).get("modelId") or self.model
         elif t == "system" and d.get("subtype") == "compact_boundary":
@@ -179,6 +183,7 @@ class Session:
         m = d.get("message") or {}
         c = m.get("content")
         if isinstance(c, str):
+            self._notice(c)
             if d.get("isMeta") or d.get("isCompactSummary") or c.startswith("<"):
                 return
             self._prompt(c, at)
@@ -195,7 +200,15 @@ class Session:
         if text.strip():
             self._prompt(text, at)
 
+    def _notice(self, text):
+        """<task-notification> о фоновом агенте: закончил — убираем из работающих."""
+        text = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
+        for m in re.finditer(r"<task-id>([\w-]+)</task-id>.*?<status>(\w+)</status>", text or "", re.S):
+            if m.group(2) != "running":
+                self.bg.pop(m.group(1), None)
+
     def _prompt(self, text, at):
+        self.base = {k for k, t in self.tasks.items() if t.get("status") == "completed"}
         self.prompts.append({"text": keep(text, 1500), "at": at})
         del self.prompts[:-8]
         self.turn = self._turn()
@@ -212,6 +225,8 @@ class Session:
         if name == "AskUserQuestion":
             self.question = ""
         res = res if isinstance(res, dict) else {}
+        if res.get("isAsync") and res.get("agentId"):
+            self.bg[str(res["agentId"])] = clip(res.get("description"), 60)
         task = res.get("task") if isinstance(res.get("task"), dict) else None
         if name == "TaskCreate" or task:
             if task and task.get("id"):
@@ -240,13 +255,16 @@ class Session:
     def status(self):
         if self.question and any(n == "AskUserQuestion" for n in self.pending.values()):
             return "question"
-        if self.last in ("end", None) or not self.prompts:
+        if (self.last in ("end", None) or not self.prompts) and not self.bg:
             return "waiting"
         return "working"
 
     def summary(self):
         tasks = self.todos if self.todos is not None and not self.tasks else list(self.tasks.values())
-        agents = sum(1 for n in self.pending.values() if n in ("Agent", "Task"))
+        agents = sum(1 for n in self.pending.values() if n in ("Agent", "Task")) + len(self.bg)
+        cur = tasks if self.todos is not None and not self.tasks else [t for t in tasks if t["id"] not in self.base]
+        done = sum(1 for t in cur if t.get("status") == "completed")
+        prog = {"done": done, "total": len(cur), "pct": round(done * 100 / len(cur))} if cur else None
         st = self.status()
         return {
             "v": 1,
@@ -261,6 +279,8 @@ class Session:
             "prompts": self.prompts[-5:],
             "nprompts": len(self.prompts),
             "tasks": tasks[:40],
+            "prog": prog,
+            "agents": agents,
             "turn": {**self.turn, "edits": [os.path.basename(f) for f in self.turn["edits"]][-30:],
                      "nedits": len(self.turn["edits"]), "agents": agents},
             "action": self.action if st == "working" else "",

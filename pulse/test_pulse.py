@@ -112,6 +112,19 @@ class Reporter(unittest.TestCase):
         r = self.parse(["", "not json", "[1,2]", line(type="assistant", message=None)])
         self.assertEqual(r["status"], "waiting")
 
+    def test_progress_of_current_prompt_and_agents(self):
+        r = self.parse(JOURNAL + [assistant([{"type": "text", "text": "ok"}], stop="end_turn"),
+                                  line(type="user", message={"content": "Ещё"}),
+                                  assistant([use("a1", "Agent", {"description": "x", "run_in_background": True})]),
+                                  result("a1", "Async agent launched", {"isAsync": True, "agentId": "ag1"}),
+                                  assistant([{"type": "text", "text": "жду"}], stop="end_turn")])
+        self.assertEqual(r["prog"], {"done": 0, "total": 1, "pct": 0})  # задача 1 сделана до запроса — не в счёт
+        self.assertEqual(r["agents"], 1)
+        self.assertEqual(r["status"], "working")  # фоновый агент ещё работает
+        r = self.parse(JOURNAL + [line(type="attachment", attachment={
+            "type": "queued_command", "prompt": "<task-notification><task-id>ag1</task-id><status>completed</status>"})])
+        self.assertEqual(r["agents"], 0)
+
     def test_remote_id(self):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_018Abc"}):
             self.assertEqual(reporter.remote_id(), "session_018Abc")
@@ -177,7 +190,7 @@ class Bot(unittest.TestCase):
         pulse.ingest(summary())
         pulse.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
-        self.assertIn("% контекста", self.sent[-1][1]["text"])
+        self.assertIn("контекст 5%", self.sent[-1][1]["text"])
 
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
@@ -209,19 +222,25 @@ class Bot(unittest.TestCase):
             pulse.ingest({"rid": "../etc"})
 
     def test_home_and_detail(self):
-        self.assertIn("ни одного", pulse.home_text())
-        pulse.ingest(summary(tokens=150_000, action="⌨️ Тесты"))
+        self.assertIn("чатов нет", pulse.home_text())
+        pulse.ingest(summary(tokens=150_000, prog={"done": 2, "total": 5, "pct": 40}, agents=2))
         text = pulse.home_text()
-        self.assertIn("Бот мониторинга", text)
-        self.assertIn("1 из 2", text)
-        self.assertIn("⌨️ Тесты", text)
-        self.assertIn("🟡 75% контекста", text)
+        self.assertIn("— работает", text)
+        self.assertIn("Сделано 40% · агентов 2 · контекст 75%", text)
+        self.assertIn("⚠️ Контекст 75% — начни новый чат", text)
         d = pulse.detail_text(pulse.visible()[0])
+        self.assertIn("Сделано 40% (2 из 5)", d)
         self.assertIn("✅ Репортёр", d)
-        self.assertIn("PR #170", d)
         self.assertLessEqual(len(d), 4000)
         rows = pulse.home_buttons()
         self.assertTrue(all(len(b["text"]) <= 24 for r in rows for b in r))
+
+    def test_no_warning_below_60_and_sleeping_done_chat(self):
+        pulse.ingest(summary("waiting", tokens=100_000), now=time.time() - 3600)
+        v = pulse.visible()[0]
+        self.assertEqual(v["status"], "waiting")  # контейнер уснул, но чат закончил — «готово», а не «нет связи»
+        self.assertNotIn("⚠️", pulse.block(v))
+        self.assertIn("— готово", pulse.block(v))
 
     def test_callbacks(self):
         pulse.ingest(summary())
