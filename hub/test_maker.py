@@ -146,6 +146,59 @@ class Make(Base):
         self.assertIn("занят", self.texts()[-1])
 
 
+class AutoCheck(Base):
+    """Сразу после запуска нового бота — обход всех его кнопок, тесты, лог → Claude исправляет и улучшает →
+    тесты → перезапуск. Claude, botcrawl, Секретарь и Telegram — подменены."""
+    fake_claude = Make.fake_claude
+
+    def test_quality_in_prompts(self):
+        for prompt in (maker.CODE, maker.FIX):
+            for need in ("1–5 строк", "до 24 символов", "не больше 3 в ряд", "плавно", "мёртвых кнопок",
+                         "Оникс-стекло", "отклик"):
+                self.assertIn(need, prompt)
+            self.assertNotIn("{quality}", prompt)
+        maker.CODE.format(dir="d", tz="t", name="n", common="c")
+        maker.FIX.format(label="l", where="w", tz="t")
+
+    def test_crawl_fix_restart_after_deploy(self):
+        crawled, prompts = [], []
+
+        def crawl(username, out, tick=None, params=None):
+            crawled.append((username, params))
+            return {"clicks": 9, "problems": ["/start › ⚙️ Настройки: в ответе: ⚠️ ошибка"]}
+
+        def claude(prompt, cwd, on_step=None, timeout=0, tools=True):
+            if "автопроверка" in prompt:
+                prompts.append(prompt)
+                with open(os.path.join(cwd, "bot.py"), "a") as f:
+                    f.write("print('settings')\n")
+                return True, "Починил настройки."
+            return self.fake_claude(prompt, cwd, on_step, timeout, tools)
+        with mock.patch.object(maker, "claude", claude), mock.patch.object(maker.check, "crawl", crawl), \
+                mock.patch.object(maker, "botfather", lambda n, w: ("123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", None)), \
+                mock.patch.object(hub, "secretary_status", lambda: {"account": {"name": "Глеб"}}):
+            self.press("mk")
+            hub.on_message(self.msg("бот, который напоминает пить воду"))
+        self.assertEqual(crawled, [("test_bot", maker.check.NEW_CRAWL)])  # только новый бот
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("⚠️ ошибка", prompts[0])
+        self.assertIn("красивее, проще, короче", prompts[0])
+        self.assertIn("проверил 9 кнопок, исправил 1", self.texts()[-1])
+        self.assertIn(("pm2", "restart", "bot-water"), self.runs)
+        self.assertIn("settings", open(os.path.join(self.bots, "water", "bot.py")).read())
+        self.assertFalse(maker.job.locked())
+
+    def test_no_secretary_account_skips_crawl(self):
+        with mock.patch.object(maker, "claude", self.fake_claude), \
+                mock.patch.object(maker.check, "crawl", lambda *a, **k: self.fail("без входа кнопки не жмём")), \
+                mock.patch.object(maker, "botfather", lambda n, w: (None, "нет")):
+            self.press("mk")
+            hub.on_message(self.msg("бот для воды"))
+            hub.on_message(self.msg("123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+        self.assertIn("всё в порядке", self.texts()[-1])
+        self.assertIn("Секретарь не вошёл", self.texts()[-1])
+
+
 class Update(Base):
     def test_local_commits_rebased(self):
         root = tempfile.mkdtemp()

@@ -13,6 +13,7 @@ https-адрес, необязательно), STUDIO_PORT (8795), STUDIO_BOTS_D
 """
 import http.client
 import hmac
+import importlib.util
 import json
 import mimetypes
 import os
@@ -31,6 +32,17 @@ REPO = os.path.dirname(HERE)
 KIT = os.path.join(HERE, "kit")
 sys.path.insert(0, KIT)
 import botkit as kit  # noqa: E402
+
+
+def _load_check():
+    """hub/check.py — общая проверка ботов (обход кнопок, лог, тесты, требования к качеству): берём оттуда, не дублируем."""
+    spec = importlib.util.spec_from_file_location("botcheck", os.path.join(REPO, "hub", "check.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+botcheck = _load_check()
 
 BOTS = os.environ.get("STUDIO_BOTS_DIR") or "/root/bots"
 REGISTRY = os.path.join(BOTS, "registry.json")
@@ -385,18 +397,19 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
 {plan}{fixes}{shots}
 
 Как делать:
-- Просто, красиво и понятно — это главное. Тексты короткие, по-русски, на «ты», без канцелярита.
-- Стиль чата: заголовок жирным с одним эмодзи, содержимое — цитатой (kit.card), второстепенное — <i>…</i>, ошибки —
-  «⚠️ …» (raise kit.Fail). Кнопки ≤ 24 символов, ≤ 3 в ряд (kit.rows), главное действие — style="primary"/"success",
-  опасное — "danger" и с подтверждением. Колонки пробелами не выравнивать. Экран меняется на месте (c.show),
-  а не новым сообщением.
+{quality}
+- Тексты по-русски, на «ты».
+- Стиль чата: содержимое — цитатой (kit.card), второстепенное — <i>…</i>, ошибки — «⚠️ …» (raise kit.Fail).
+  Кнопки рядами — kit.rows, главное действие — style="primary"/"success", опасное — "danger" и с подтверждением.
+  Колонки пробелами не выравнивать. Экран на месте — c.show; долгое — c.typing() / bot.later.
 - Главный экран — только через bot.menu(c, заголовок, строки, buttons=[ряды кнопок], quick=[1–2 ряда самого нужного]):
   он сам добавляет кнопку приложения, «⚙️ Режим» (выбор «💬 чат / 📱 приложение» встроен в botkit: /mode, /app) и
   «🛠 Поддержка». bot.app_button() сам никуда не добавляй. В режиме «чат» всё должно быть доступно кнопками в чате.
 - Мини-приложение обязательно: то же, что в чате, но нагляднее (цифры крупно, списки, прогресс, вкладки .tabs, если
   экранов несколько). Только классы kit.css и функции kit.js; своё — немного в app.css. Кнопки в ряд — .actions
   или .grid (не свои flex/grid: у .btn + .btn есть отступ сверху). Пустые состояния —
-  .empty с эмодзи. Действия — через @bot.api, после действия — свежее состояние в ответе.
+  .empty с эмодзи, загрузка — .skeleton, новый экран или список — с классом .fade (плавно, без мигания).
+  Действия — через @bot.api, после действия — свежее состояние в ответе (без перезагрузки страницы).
 - Вид приложения — «Оникс-стекло» (это уже даёт kit.css): чёрный фон с золотыми пятнами, тёмное стекло как в iOS 26,
   золотая главная кнопка, шрифт iPhone SF Rounded (var(--round)), крупные скругления (карточки 32 px, кнопки и чипы —
   капсулы). В app.css задай только --accent — светлый насыщенный тон под характер бота; фон, карточки, текст и тени не
@@ -413,6 +426,7 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
   python3 test_bot.py — должно быть OK. Проверь python3 -m py_compile bot.py.
 - Не запускай bot.run(), не трогай .env и data/.
 В конце ответь 2–4 строками по-русски для Глеба: что умеет бот (без кода)."""
+BUILD = BUILD.replace("{quality}", botcheck.QUALITY)
 
 PLAN_SITE = """Ты — «Студия»: делаешь личные сайты для Глеба: красивые, быстрые, понятные с телефона.
 Идея: «{idea}»
@@ -463,11 +477,12 @@ FIX = """Ты дорабатываешь Telegram-бота «{name}» Глеба
 Что поменять (слова Глеба):
 {text}{shots}
 
-Сохрани стиль: просто, красиво, коротко; чат и мини-приложение должны остаться согласованными — если новое
-появилось в чате, добавь и в приложение. Обнови test_bot.py и запусти python3 test_bot.py — должно быть OK.
+Чат и мини-приложение должны остаться согласованными — если новое появилось в чате, добавь и в приложение.
+{quality} Обнови test_bot.py и запусти python3 test_bot.py — должно быть OK.
 Обнови README.md, если поменялись команды. Не запускай bot.run(), не трогай .env и data/.
 Если просьба непонятна — ничего не меняй и объясни, что уточнить.
 В конце ответь 2–4 строками по-русски: что сделано и как проверить."""
+FIX = FIX.replace("{quality}", botcheck.QUALITY)
 
 
 # ---------- экраны чата ----------
@@ -1104,7 +1119,7 @@ def _build(chat):
         put(d)
         st.done(card(f"✅ <b>Код «{esc(d['name'])}» готов</b>", [esc(info["about"])]))
         return ask_token(chat, d)
-    deploy(chat, slug, token, st)
+    deploy(chat, slug, token, st, locked=True)
 
 
 def brief(text, n=600):
@@ -1228,7 +1243,8 @@ def pythons_with_pil():
     return res
 
 
-def deploy(chat, slug, token, st=None):
+def deploy(chat, slug, token, st=None, locked=False):
+    """Запуск в pm2 и сразу — автопроверка (after_check). locked — замок job уже наш (зовут из сборки)."""
     info = registry().get(slug)
     if not info:
         return bot.send(chat, "Этого бота уже нет.")
@@ -1265,8 +1281,40 @@ def deploy(chat, slug, token, st=None):
     put({"stage": "done", "result": {"slug": slug}})
     st.done(done_card(info), done_buttons(info))
     to_folder(info.get("username"))
+    after_check(chat, slug, locked)
     if queued:
         bot.later(fix, chat, slug, "\n".join(queued))
+
+
+def after_check(chat, slug, locked=False):
+    """🧪 Сразу после запуска нового бота: все его кнопки вживую (через Секретаря), лог pm2, тесты → нашлось — Claude
+    исправляет и улучшает, снова тесты, перезапуск (hub/check.py → after_install). Только этот бот, других не трогаем."""
+    info = registry().get(slug)
+    if SITES_ONLY or not info:
+        return
+    if not locked and not job.acquire(timeout=BUILD_TIMEOUT):
+        return bot.send(chat, "⏳ Claude долго занят — проверь бота сам или напиши правку.")
+    try:
+        path = info["dir"]
+        st = Status(chat, f"Проверяю «{info['name']}»", track=False)
+        res = botcheck.after_install(
+            {"pm2": info["pm2"], "username": info.get("username"), "cwd": path,
+             "db": os.path.join(path, "data", "db.json")}, sh,
+            fix=lambda tz: claude(FIX.format(name=info["name"], dir=path, text=tz, shots=""), path, on_step=st.step),
+            tests=lambda: run_tests(path), commit=lambda msg: commit(path, msg),
+            account=botcheck.secretary_account(REPO), step=st.step)
+        title, lines, foot = botcheck.after_text(res, info["name"])
+        btns = [[kit.url("▶️ Открыть", f"https://t.me/{info['username']}", "success")]] if info.get("username") else []
+        btns.append([b("✏️ Правки", f"fix|{slug}")] +
+                    ([b("↩️ Откатить", f"undo|{slug}|{res['sha']}", "danger")] if res["sha"] else []))
+        bot.delete(chat, st.mid)  # вместо «⏳ Проверяю…» — итог новым сообщением (с уведомлением)
+        bot.send(chat, card(title, lines, foot), btns)
+    except Exception as e:
+        print("after_check:", e, flush=True)
+        bot.send(chat, kit.error(f"Автопроверка упала: {esc(str(e)[:300])}"))
+    finally:
+        if not locked:
+            job.release()
 
 
 def done_card(info):

@@ -6,11 +6,17 @@
    опасные кнопки — отправить, заказать, создать, «🧪 Проверка»… — не жмутся, Студия сайтов не трогается).
 Итог — одна карточка: что в порядке, что сломано; у каждого сломанного «🛠 Починить» (Claude, maker.fix) и «Починить всё».
 Подключается из hub.py: check.ui = модуль hub.
+
+🆕 Новый бот (after_install): сразу после установки — обход всех его кнопок, лог, тесты; нашлось — второй проход Claude
+«исправь и улучши», снова тесты, перезапуск. Зовут Студия (studio.py, грузит этот файл как модуль) и Мастерская
+(maker.deploy); тут же — требования к качеству для их промптов (QUALITY). Работает и без hub (ui = None).
 """
 import glob
+import html
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -20,8 +26,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 ui = None
 maker = None
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # без hub (Студия) — этот же репозиторий
 TEST_TIMEOUT = 420
 CRAWL = dict(depth=3, max=60, wait=6)
+# новый бот: глубже и до 80 нажатий; карточку «Как удобнее?» проходим через «💬 В чате» — иначе кнопок не видно
+NEW_CRAWL = dict(depth=3, max=80, wait=6, mode="💬 В чате")
 PARALLEL_TESTS = 3  # у сервера 1 ядро: больше — только толкотня
 PARALLEL_CRAWL = 4
 # тяжёлые тесты почерка HDP (~5 мин на одном ядре сервера) — только в «🔬 Полностью»
@@ -178,16 +187,23 @@ def log_errors(proc, seen):
     return len(errs), mask(errs[-1])[:240] if errs else ""
 
 
-def crawl(username, out_path, on_line=None):
-    """Живой обход кнопок бота через Секретаря. → {"clicks", "problems": [строки], "fail"?}."""
-    py = os.path.join(ui.REPO, "tgbot", ".venv", "bin", "python")
+def repo():
+    return ui.REPO if ui else REPO
+
+
+def crawl(username, out_path, on_line=None, params=None):
+    """Живой обход кнопок бота через Секретаря. → {"clicks", "problems": [строки], "fail"?}.
+    params — глубина/нажатия/ожидание/режим (по умолчанию CRAWL, для нового бота — NEW_CRAWL)."""
+    params = params or CRAWL
+    root = repo()
+    py = os.path.join(root, "tgbot", ".venv", "bin", "python")
     py = py if os.path.exists(py) else "python3"
-    cmd = [py, "tgbot/botcrawl.py", username, "--depth", str(CRAWL["depth"]), "--max", str(CRAWL["max"]),
-           "--wait", str(CRAWL["wait"]), "--out", out_path]
+    cmd = [py, "tgbot/botcrawl.py", username, "--depth", str(params["depth"]), "--max", str(params["max"]),
+           "--wait", str(params["wait"]), "--out", out_path] + (["--mode", params["mode"]] if params.get("mode") else [])
     try:
-        p = subprocess.Popen(cmd, cwd=ui.REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        p = subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              stdin=subprocess.DEVNULL, env={**os.environ, "HOME": "/root",
-                                                            "PYTHONPATH": os.path.join(ui.REPO, "tgbot")})
+                                                            "PYTHONPATH": os.path.join(root, "tgbot")})
     except OSError as e:
         return {"fail": str(e)}
     tail = []
@@ -517,3 +533,185 @@ def on_callback(chat, mid, data):
         threading.Thread(target=fix_all, args=(chat,), daemon=True).start()
         return "Чиню по очереди…"
     return None
+
+
+# ---------- 🆕 новый бот: проверка сразу после установки ----------
+
+# Требования к качеству — в промпты сборки и правок (Студия: BUILD/FIX, Мастерская: CODE/FIX). Без фигурных скобок:
+# текст вставляется в шаблоны .format.
+QUALITY = """Качество — жёстко, это главное (после сборки все кнопки бота протыкают вживую, нарушения вернутся на правку):
+- Эстетично и красиво: общий kit и вид «Оникс-стекло», без самодельных стилей поверх; заголовок — жирный, с одним эмодзи.
+- Просто: минимум экранов и шагов, на экране одно главное действие.
+- Кратко: сообщение — 1–5 строк, кнопка — до 24 символов, не больше 3 в ряд; без канцелярита и повторов.
+- Максимально плавно: экран меняется на месте (правка сообщения), а не новым сообщением; на каждое нажатие —
+  мгновенный отклик (ответ на кнопку, «печатает…» или ⏳ при долгом); в мини-приложении — мягкие переходы
+  (opacity/transform 150–250 мс), без рывков, мигания и прыжков вёрстки.
+- Никаких мёртвых кнопок: каждая что-то делает и отвечает; нет данных — понятное пустое состояние, а не тишина."""
+
+POLISH_TZ = ("Бот только что поставлен, и автопроверка (живой обход всех кнопок в Telegram, тесты, лог pm2) нашла "
+             "проблемы. Исправь всё найденное (баг — чини код, а не тест) и сразу улучши: красивее, проще, короче, "
+             "плавнее.\n" + QUALITY + "\nНайдено:\n")
+
+
+def secretary_account(root=None):
+    """Секретарь запущен и вошёл в аккаунт Глеба (без этого живого обхода нет). Тот же сокет, что у tgbot/tg.py."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(3)
+    try:
+        s.connect(os.path.join(root or repo(), "tgbot", "tmp", "agent.sock"))
+        s.sendall(b'{"cmd": "_status"}\n')
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        r = json.loads(data)
+        return bool(r.get("ok") and (r.get("out") or {}).get("account"))
+    except (OSError, ValueError, AttributeError):
+        return False
+    finally:
+        s.close()
+
+
+def own_tests(cwd, python="python3"):
+    """(ok, вывод) тестов бота, сделанного Мастерской: все test_*.py в его папке и py_compile bot.py."""
+    cmds = [[python, os.path.basename(p)] for p in sorted(glob.glob(os.path.join(cwd, "test_*.py")))]
+    if os.path.exists(os.path.join(cwd, "bot.py")):
+        cmds.append([python, "-m", "py_compile", "bot.py"])
+    ok, outs = True, []
+    for cmd in cmds:
+        good, out = run_test(cwd, cmd)
+        if not good:
+            ok = False
+            outs.append(out)
+    return ok, "\n".join(outs)[-3000:]
+
+
+def forget_mode(db_path):
+    """Обход выбрал «💬 В чате» — стираем выбор (botkit: «_mode» в data/db.json), чтобы владелец выбрал сам при
+    первом /start. Бот в это время остановлен, после — перезапуск."""
+    try:
+        with open(db_path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if isinstance(data, dict) and data.pop("_mode", None) is not None:
+        with open(db_path + ".tmp", "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+        os.replace(db_path + ".tmp", db_path)
+
+
+def _online(sh, pm2):
+    code, out = sh("pm2", "jlist", timeout=30)
+    try:
+        procs = json.loads(out[out.find("["):]) if code == 0 else []
+    except ValueError:
+        procs = []
+    return next((p for p in procs if p.get("name") == pm2), None)
+
+
+def _restart(sh, pm2):
+    sh("pm2", "restart", pm2, timeout=60)
+    time.sleep(5)
+    p = _online(sh, pm2) or {}
+    return (p.get("pm2_env") or {}).get("status") == "online"
+
+
+def after_install(t, sh, fix, tests, commit, account, step=None):
+    """Проверка ТОЛЬКО ЧТО поставленного бота (других не трогает) и починка найденного.
+    t = {pm2, username, cwd, db?} (db — data/db.json бота на botkit: режим после обхода стирается);
+    sh(*cmd, timeout=) → (код, вывод); fix(задача) → (ok, текст) — Claude в папке бота по промпту правок;
+    tests() → (ok, вывод); commit(сообщение) → sha | None; account — Секретарь вошёл (иначе кнопки не жмём).
+    → {"clicks": N | None, "skip": почему без обхода, "found": [..], "fixed": M, "left": [..], "why", "sha", "out"}."""
+    step = step or (lambda text, force=False: None)
+    res = {"clicks": None, "skip": "", "found": [], "fixed": 0, "left": [], "why": "", "sha": None, "out": ""}
+    probs, seen, down = [], {}, False
+    proc = _online(sh, t["pm2"])
+    errs, last = log_errors(proc or {}, seen)  # бот новый: свежий лог — весь его
+    if not t.get("username"):
+        res["skip"] = "нет @username"
+    elif not account:
+        res["skip"] = "Секретарь не вошёл в аккаунт"
+    else:
+        step("жму все кнопки", force=True)
+        n = [0]
+
+        def tick(line):
+            n[0] += 1
+            step(f"нажато кнопок: {n[0]}")
+        out = os.path.join(t["cwd"], "data", "check_crawl.json")
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        r = crawl(t["username"], out, tick, NEW_CRAWL)
+        if r.get("fail"):
+            probs.append("живой обход: " + r["fail"])
+        else:
+            res["clicks"] = r["clicks"]
+            probs += [("кнопка " + x)[:300] for x in r["problems"]]
+        if t.get("db"):  # бот остановлен, пока правим его базу: иначе он перепишет её своей копией из памяти
+            sh("pm2", "stop", t["pm2"], timeout=60)
+            forget_mode(t["db"])
+            if not _restart(sh, t["pm2"]):
+                probs.append("после обхода бот не поднялся")
+    k, last2 = log_errors(_online(sh, t["pm2"]) or proc or {}, seen)
+    if errs + k:
+        probs.append(f"в логе {errs + k} ошибок" + (f", последняя: {last2 or last}" if last2 or last else ""))
+    step("гоняю тесты", force=True)
+    good, log = tests()
+    if not good:
+        probs.append("тесты: " + failure(log))
+    res["found"] = probs
+
+    def finish(**kw):
+        if down and not _restart(sh, t["pm2"]):  # после отката — поднять прежнюю версию
+            kw["why"] = (kw.get("why", "") + "; бот не поднялся — смотри логи").strip("; ")
+        res.update(kw)
+        return res
+
+    if not probs:
+        return finish()
+    step("исправляю и улучшаю", force=True)
+    ok, text = fix(POLISH_TZ + "\n".join("- " + p for p in probs))
+    if not ok:
+        return finish(left=probs, why=text)
+    good, log = tests()
+    if not good:
+        step("чиню тесты", force=True)
+        fix("Тесты после правок не проходят — почини код (не тесты, если они верны):\n" + mask(log[-1500:]))
+        good, log = tests()
+    sha = commit("Автопроверка: исправил найденное и улучшил")
+    if not sha:
+        return finish(left=probs, why="Claude ничего не поменял: " + text[-200:])
+    if good and _restart(sh, t["pm2"]):
+        res.update(fixed=len(probs), sha=sha, out=text)
+        return res
+    code, _ = sh("git", "-C", t["cwd"], "-c", "user.name=Автопроверка", "-c", "user.email=check@localhost",
+                 "revert", "--no-edit", sha, timeout=60)
+    if code != 0:
+        sh("git", "-C", t["cwd"], "revert", "--abort", timeout=60)
+    down = True
+    return finish(left=probs, why=("после правок тесты не прошли: " + failure(log, 200) if not good
+                                   else "после правок бот не поднялся") + " — правки откатил")
+
+
+def plural(n, one, few, many):
+    n = abs(n)
+    return one if n % 10 == 1 and n % 100 != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+
+
+def after_text(res, name):
+    """(заголовок, строки, подвал) итога для карточки владельцу — коротко: «✅ Проверил N кнопок, исправил M»."""
+    esc = html.escape
+    n = res["clicks"]
+    what = f"проверил {n} {plural(n, 'кнопку', 'кнопки', 'кнопок')}" if n is not None else "проверил тесты и логи"
+    if res["left"]:
+        title = f"⚠️ <b>«{esc(name)}»: {what}, осталось {len(res['left'])}</b>"
+        lines = [esc(p[:200]) for p in res["left"][:5]] + ([f"<i>{esc(res['why'][:300])}</i>"] if res["why"] else [])
+    elif res["fixed"]:
+        title = f"✅ <b>«{esc(name)}»: {what}, исправил {res['fixed']}</b>"
+        lines = [esc(res["out"][-500:])] if res["out"] else []
+    else:
+        title = f"✅ <b>«{esc(name)}»: {what} — всё в порядке</b>"
+        lines = []
+    foot = f"<i>Кнопки вживую не жал: {esc(res['skip'])}</i>" if res["skip"] else ""
+    return title, lines, foot
