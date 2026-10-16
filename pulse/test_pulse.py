@@ -26,7 +26,7 @@ def line(**d):
 
 
 def assistant(content, stop="tool_use", tokens=1000, **kw):
-    return line(type="assistant", message={"model": "claude-opus-5-5", "content": content, "stop_reason": stop,
+    return line(type="assistant", message={"model": "claude-x", "content": content, "stop_reason": stop,
                                            "usage": {"input_tokens": 2, "cache_read_input_tokens": tokens,
                                                      "cache_creation_input_tokens": 0, "output_tokens": 10}}, **kw)
 
@@ -192,6 +192,24 @@ class Bot(unittest.TestCase):
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
         self.assertIn("Память █░░░░░░░░░░░ 5%", self.sent[-1][1]["text"])
 
+    def test_limits(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 10, 16, 8, 15, tzinfo=ZoneInfo("UTC")).timestamp()
+        out = ("Current session: 23% used · resets Oct 16, 11:10am (UTC)\n"
+               "Current week (all models): 20% used · resets Oct 21, 11pm (UTC)\n"
+               "Current week (Fable): 0% used · resets Oct 21, 11pm (UTC)")
+        got = pulse.parse_usage(out, now)
+        self.assertEqual(got["session"], {"pct": 23, "reset": 1792149000.0})
+        self.assertEqual(got["week"]["reset"], 1792623600.0)
+        pulse.st["limits"] = {**got, "at": now}
+        text = pulse.limits_text(now)
+        self.assertIn("Лимит 5 ч ███░░░░░░░░░ 23% · <i>сброс в 14:10</i>", text)
+        self.assertIn("Неделя ██░░░░░░░░░░ 20% · <i>сброс чт в 02:00</i>", text)
+        self.assertNotIn("Fable", text)  # 0% — не показываем
+        self.assertEqual(pulse.limits_text(now + 3600), "")  # устарело — не показываем
+        self.assertEqual(pulse.parse_usage("ошибка"), {})
+
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
         self.assertFalse(any(pulse.alerts().values()))
@@ -199,13 +217,16 @@ class Bot(unittest.TestCase):
         pulse.notify(pulse.ingest(summary("waiting")) + pulse.ingest(summary("question", question="?")))
         self.assertEqual([m for m, _ in self.sent if m == "sendMessage"], [])
 
+    def test_known_window(self):
+        self.assertEqual(pulse.window("claude-opus-5-5", 213_200), (1_000_000, True))
+
     def test_window_learning(self):
-        w, sure = pulse.window("claude-opus-5-5", 100_000)
+        w, sure = pulse.window("claude-x", 100_000)
         self.assertEqual((w, sure), (200_000, False))
-        self.assertEqual(pulse.window("claude-opus-5-5", 180_000)[0], 1_000_000)  # за порогом сжатия — окно больше
+        self.assertEqual(pulse.window("claude-x", 180_000)[0], 1_000_000)  # за порогом сжатия — окно больше
         pulse.ingest(summary(tokens=150_000))
         pulse.ingest(summary(ctx={"tokens": 0, "compacts": 1, "pre": 640_000}))
-        self.assertEqual(pulse.window("claude-opus-5-5"), (800_000, True))
+        self.assertEqual(pulse.window("claude-x"), (800_000, True))
 
     def test_offline_and_hidden(self):
         pulse.ingest(summary(), now=time.time() - 600)
