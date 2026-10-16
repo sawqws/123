@@ -246,6 +246,20 @@ class Web(BaseHTTPRequestHandler):
         if self.command not in ("GET", "HEAD", "OPTIONS") and origin and \
                 urllib.parse.urlparse(origin).hostname != (self.headers.get("Host") or "").split(":")[0]:
             return self.reply(403, {"error": "Чужой сайт"})  # запросы с других страниц не пускаем
+        if self.command == "POST" and re.fullmatch(r"/api/auth/v\d+/logout", path):
+            # «Выйти» на платформе: из зеркала выходим, а сессию бота на платформе не трогаем (иначе бот разлогинен)
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 0:
+                self.rfile.read(min(n, 65536))
+            site_logout(self.cookie())
+            body = json.dumps({"success": True, "data": None}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         try:
             mirror.proxy(self, _cfg.get("mirror_version", "0"))
         except Exception as e:
