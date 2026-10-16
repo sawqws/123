@@ -318,7 +318,7 @@ class ChatTest(Base):
             eye.use_url("https://eye.example")
             for m in self.markups():
                 self.assertFalse(self.has_page(m), m)
-            self.assertIn("Режим: 💬 чат", self.texts()[0])
+            self.assertIn("Режим: 💬 чат", self.texts()[1])
             self.assertIn("Зимний дворец", "".join(self.texts()))  # фото в чате разобрано
             self.assertIn("sendVoice", [f[0] for f in self.files])  # и озвучено в чат (страница закрыта)
             eye.on_callback({"id": "1", "from": {"id": U}, "data": "seen", "message": {"chat": {"id": U}, "message_id": 3}})
@@ -404,6 +404,48 @@ class ChatTest(Base):
         eye.oops({"message": {"chat": {"id": U, "type": "private"}}})
         self.assertEqual(self.sent[0][0], "answerCallbackQuery")
         self.assertIn("Что-то пошло не так", self.texts()[-1])
+
+
+class MenuTest(Base):
+    """☰ Меню-квадратик у поля ввода: один раз на версию, снова на /start; кнопка — экран, а не вопрос Claude."""
+
+    def kbs(self):
+        return [kw for k, kw in self.sent if "keyboard" in (kw.get("reply_markup") or {})]
+
+    def test_once_per_version_and_on_start(self):
+        self.assertEqual(len(self.kbs()), 1)  # /start в setUp уже поставил (режим 📱 приложение)
+        self.assertEqual(eye.setting("kb_ver"), eye.KB.version)
+        self.assertFalse(eye.ensure_menu())  # при запуске: та же версия — второй раз не шлём
+        eye.setting("kb_ver", delete=True)
+        self.assertTrue(eye.ensure_menu())
+        self.assertEqual(self.kbs()[-1]["chat_id"], U)
+        mk = self.kbs()[-1]["reply_markup"]
+        self.assertTrue(mk["one_time_keyboard"] and not mk["is_persistent"])
+        rows = [[x["text"] for x in r] for r in mk["keyboard"]]
+        flat = [t for r in rows for t in r]
+        for need in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение"):
+            self.assertIn(need, flat)
+        self.assertTrue(all(len(r) <= 3 for r in rows) and all(len(t) <= 24 for t in flat))
+        eye.on_message(self.msg("/start"))
+        self.assertEqual(len(self.kbs()), 3)  # /start ставит снова
+        eye.setting("owner", delete=True)
+        eye.setting("kb_ver", delete=True)
+        with mock.patch.object(eye, "ALLOWED", set()):
+            self.assertFalse(eye.ensure_menu())  # владельца нет — не шлём
+
+    def test_buttons_open_screens_not_claude(self):
+        self.sent.clear()
+        sup = mock.Mock()
+        sup.intercept.return_value = False
+        with mock.patch.object(eye, "reply_in_chat") as reply, mock.patch.object(eye, "SUP", sup):
+            for t in sorted(eye.KB.texts):
+                eye.handle({"update_id": 1, "message": self.msg(t)})
+        reply.assert_not_called()  # ни одна кнопка не ушла к Claude
+        sup.ask.assert_called_once_with(U)
+        sup.waiting.pop.assert_called()  # кнопка меню снимает ожидание текста поддержки
+        texts = "\n".join(self.texts())
+        for want in ("Что видел", "Начали разговор заново", "Проверка", "Как удобнее?"):
+            self.assertIn(want, texts)
 
 
 class AuditTest(Base):

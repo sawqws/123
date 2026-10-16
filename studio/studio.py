@@ -59,7 +59,10 @@ if SITES_ONLY:
                   short="Делает сайты по описанию",
                   commands=[("start", "Новый сайт"), ("sites", "Мои сайты"), ("cancel", "Отменить черновик")],
                   token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
-                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=False)  # без /fix: это правка кода сервера
+                  data=DATA, webapp=os.path.join(HERE, "webapp"), support=False,  # без /fix: это правка кода сервера
+                  # ☰ меню-квадратик — только по её /start: при запуске не писать (бот чужого человека)
+                  kb=[[kit.b("🆕 Новый сайт", "idea"), kit.b("🌐 Мои сайты", "sites"), kit.KB_HOME]],
+                  kb_boot=False, kb_placeholder="Опиши сайт или ☰ справа")
 else:
     bot = kit.Bot("Студия", emoji="🏗", app_text="Студия",
                   about="Делаю красивых и простых ботов по твоей идее: уточню, покажу план, напишу код, "
@@ -69,7 +72,10 @@ else:
                   token=os.environ.get("STUDIO_TOKEN", ""), port=PORT, app_url="",
                   data=DATA, webapp=os.path.join(HERE, "webapp"),
                   support={"name": "Студия", "folders": ["studio"], "pm2": "studio-bot", "cwd": REPO,
-                           "tests": ["python3 studio/test_studio.py"]})
+                           "tests": ["python3 studio/test_studio.py"]},
+                  kb=[[kit.b("🆕 Новый бот", "idea"), kit.b("🧩 Мои боты", "bots"), kit.b("🌐 Мои сайты", "sites")],
+                      [kit.KB_APP, kit.KB_MODE, kit.KB_SUPPORT]],  # ☰ меню-квадратик у поля ввода (botkit)
+                  kb_placeholder="Опиши бота или ☰ справа")
 if os.environ.get("STUDIO_ALLOWED") and not bot.owner:
     bot.db.set("_owner", int(re.findall(r"\d+", os.environ["STUDIO_ALLOWED"])[0]))
 
@@ -393,6 +399,10 @@ BUILD = """Ты делаешь Telegram-бота «{name}» {emoji} для Гл�
 - Главный экран — только через bot.menu(c, заголовок, строки, buttons=[ряды кнопок], quick=[1–2 ряда самого нужного]):
   он сам добавляет кнопку приложения, «⚙️ Режим» (выбор «💬 чат / 📱 приложение» встроен в botkit: /mode, /app) и
   «🛠 Поддержка». bot.app_button() сам никуда не добавляй. В режиме «чат» всё должно быть доступно кнопками в чате.
+- ☰ Меню-квадратик справа от поля ввода botkit ставит сам (на /start и один раз при запуске): первые 6 кнопок
+  главного экрана + «⚙️ Режим», «🛠 Поддержка»; нажатие — то же, что inline-кнопка. Поэтому главные действия — первыми
+  в buttons. Нужны другие — kit.Bot(..., kb=[[kit.b("➕ Добавить", "add"), kit.b("📊 Неделя", "week")],
+  [kit.KB_MODE, kit.KB_SUPPORT]]): 2–4 ряда, ≤ 3 в ряд, ≤ 24 символов, один эмодзи; поменял состав — kb_version += 1.
 - Мини-приложение обязательно: то же, что в чате, но нагляднее (цифры крупно, списки, прогресс, вкладки .tabs, если
   экранов несколько). Только классы kit.css и функции kit.js; своё — немного в app.css. Кнопки в ряд — .actions
   или .grid (не свои flex/grid: у .btn + .btn есть отступ сверху). Пустые состояния —
@@ -614,6 +624,22 @@ def on_photo(c):
     if c.text:
         return bot._route_text(kit.Ctx(bot, c.chat, c.user, text=c.text, msg=c.msg))
     c.say("📎 Картинку приложу к задаче — теперь напиши, что сделать.")
+
+
+@bot.button("idea")
+def new_idea(c):
+    """☰ «🆕 Новый бот/сайт»: черновик в работе — показать, где остановились; иначе спросить идею."""
+    if draft().get("stage") not in (None, "done", "failed"):
+        return resume(c)
+    what = "сайт" if SITES_ONLY else "бот или сайт"
+    c.ask("idea", f"💡 <b>Какой {what} нужен?</b>\nОпиши текстом или голосом — уточню, покажу план и сделаю.")
+
+
+@bot.reply("idea")
+def got_idea(c):
+    if BOT_TOKEN.search(c.text):  # токен вместо идеи — тот же разбор, что у обычного текста (удалить из чата)
+        return on_text(c)
+    start_idea(c.chat, c.text)
 
 
 @bot.button("new")
@@ -966,14 +992,17 @@ KIT_FILES = ("kit.css", "kit.js")
 
 
 def sync_kits():
-    """Общий дизайн у уже сделанных ботов: kit.css и kit.js из заготовки — в webapp/ каждого бота из реестра, если
-    отличаются. Только эти два файла (app.css, код и данные бота не трогаем), только папки внутри BOTS; в git бота —
-    отдельным коммитом только этих файлов, чтобы /fix и «Откатить» не приняли их за правку. -> [slug, …]"""
+    """Общий дизайн и набор у уже сделанных ботов: kit.css и kit.js из заготовки — в webapp/ каждого бота из реестра,
+    botkit.py — в папку бота (только если он там уже есть), если отличаются. Только эти файлы (app.css, код и данные
+    бота не трогаем), только папки внутри BOTS; в git бота — отдельным коммитом только этих файлов, чтобы /fix и
+    «Откатить» не приняли их за правку; новый botkit.py — перезапуск бота (pm2). -> [slug, …]"""
     src = os.path.join(KIT, "template", "webapp")
     fresh = {}
     for f in KIT_FILES:
         with open(os.path.join(src, f), "rb") as fh:
-            fresh[f] = fh.read()
+            fresh["webapp/" + f] = fh.read()
+    with open(os.path.join(KIT, "botkit.py"), "rb") as fh:  # и набор Студии (☰ меню-квадратик и т. п.)
+        fresh["botkit.py"] = fh.read()
     root = os.path.realpath(BOTS) + os.sep
     done = []
     for slug, info in registry().items():
@@ -984,8 +1013,8 @@ def sync_kits():
             continue
         changed = []
         for f, data in fresh.items():
-            dst = os.path.join(web, f)
-            if os.path.islink(dst):
+            dst = os.path.join(path, f)
+            if os.path.islink(dst) or (f == "botkit.py" and not os.path.isfile(dst)):  # botkit — только заменить
                 continue
             try:
                 with open(dst, "rb") as fh:
@@ -996,13 +1025,16 @@ def sync_kits():
             with open(dst + ".tmp", "wb") as fh:
                 fh.write(data)
             os.replace(dst + ".tmp", dst)
-            changed.append("webapp/" + f)
+            changed.append(f)
         if not changed:
             continue
         if os.path.isdir(os.path.join(path, ".git")):
             git(path, "add", "--", *changed)
             git(path, "-c", "user.name=Студия", "-c", "user.email=studio@localhost", "commit", "-q",
-                "-m", "Общий дизайн: kit.css и kit.js из Студии", "--", *changed)
+                "-m", "Общий " + ("набор и дизайн: " if "botkit.py" in changed else "дизайн: ")
+                + ", ".join(os.path.basename(x) for x in changed) + " из Студии", "--", *changed)
+        if "botkit.py" in changed and info.get("pm2"):  # новый botkit — в работу (бот поставит новое меню сам)
+            sh("pm2", "restart", info["pm2"], timeout=60)
         done.append(slug)
     return done
 

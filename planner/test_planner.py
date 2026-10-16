@@ -215,6 +215,12 @@ class BotTest(unittest.TestCase):
         for m, p in self.sent:
             if m not in ("sendMessage", "editMessageText"):
                 continue
+            if "keyboard" in p.get("reply_markup", {}):  # ☰ меню-квадратик: служебная строка, кнопки — свои
+                self.assertEqual(p["text"], planner.menukb.NOTE)
+                for row in p["reply_markup"]["keyboard"]:
+                    self.assertLessEqual(len(row), 3)
+                    self.assertTrue(all(len(b["text"]) <= 24 for b in row))
+                continue
             first = p["text"].split("\n")[0]
             self.assertRegex(first, r"^\S+ <b>.+</b>$")
             self.assertNotIn("  ", p["text"])
@@ -691,6 +697,53 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(planner, "owner", lambda: 999):  # чужим в PUBLIC кнопку не показываем
             self.msg("/help")
         self.assertNotIn("sup|ask", json.dumps(self.sent))
+
+    def test_menu_keyboard(self):
+        """☰ Меню-квадратик: один раз на версию при запуске, снова — по /start, кнопка открывает экран, а не задачу."""
+        kb = lambda: [p for m, p in self.sent if "keyboard" in p.get("reply_markup", {})]
+        planner.ensure_kb(U)
+        planner.ensure_kb(U)  # второй запуск бота — уже стоит
+        self.assertEqual(len(kb()), 1)
+        mk = kb()[0]["reply_markup"]
+        self.assertTrue(mk["one_time_keyboard"] and not mk["is_persistent"])
+        texts = [b["text"] for row in mk["keyboard"] for b in row]
+        for t in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение", "📅 Сегодня"):
+            self.assertIn(t, texts)
+        self.assertEqual(self.db.meta("kb_ver"), "1")
+        self.msg("/start")
+        self.assertEqual(len(kb()), 2)  # /start ставит снова
+        self.sent.clear()
+        with mock.patch.object(planner, "claude", side_effect=AssertionError("в Claude")), \
+                mock.patch.object(planner, "quick_add", side_effect=AssertionError("в задачи")):
+            self.msg("🗓 Неделя")
+            self.assertIn("Неделя", self.texts()[-1])
+            self.msg("📅 Сегодня")
+            self.msg("⚙️ Режим")
+            self.assertIn("Как удобнее", self.texts()[-1])
+            self.msg("📱 Приложение")
+            self.assertTrue(self.has_app())
+            sup = mock.Mock()
+            with mock.patch.object(planner, "SUP", sup), mock.patch.object(planner, "owner", lambda: U):
+                self.msg("🛠 Поддержка")
+            sup.ask.assert_called_once_with(U)
+        self.assertEqual(self.db.tasks(U), [])
+        # в режиме ожидания поддержки кнопка меню — не текст просьбы
+        sup = support.Support("123:TEST", "Планер", ["planner"], "planner-bot", allowed=lambda uid: True)
+        sup.waiting[U] = {"at": time.time(), "shots": []}
+        with mock.patch.object(sup, "start", side_effect=AssertionError("в поддержку")):
+            planner.handle_update({"message": {"chat": {"id": U, "type": "private"}, "from": {"id": U},
+                                               "text": "🎯 Цели"}}, sup)
+        self.assertNotIn(U, sup.waiting)
+
+    def test_menu_keyboard_needs_owner(self):
+        """Без владельца меню при запуске не шлётся (некому)."""
+        with mock.patch.object(planner, "ALLOWED", set()):
+            planner.kb_on_start()
+            self.assertEqual(self.sent, [])
+            self.db.meta("owner", U)
+            planner.kb_on_start()
+            planner.kb_on_start()
+        self.assertEqual([(m, p["chat_id"]) for m, p in self.sent], [("sendMessage", U)])
 
     def test_api_routes(self):
         r = planner.route(U, "/api/task", {"title": "Шаг", "date": "2026-10-09"})

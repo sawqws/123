@@ -398,6 +398,74 @@ class Api(Base):
         self.assertTrue(all(i["mark"] for i in r["ideas"]))
 
 
+def boot(bot):
+    """bot.run() до первого getUpdates: то, что бот делает при запуске (без сети, профиля и поддержки)."""
+    t = bot.testing_mode
+    fake = bot._call
+
+    def stop(method, params, files=None):
+        if method == "getUpdates":
+            raise SystemExit
+        return fake(method, params, files)
+    with mock.patch.object(bot, "setup"), mock.patch.object(bot, "_start_support"), \
+            mock.patch.object(bot, "port", 0), mock.patch.object(bot, "jobs", []), mock.patch.object(bot, "_call", stop):
+        try:
+            bot.run()
+        except SystemExit:
+            pass
+    return t
+
+
+class Menu(Base):
+    """☰ Меню-квадратик у поля ввода (botkit): один раз на версию, /start — снова, нажатие — действие, а не имя."""
+
+    def kb_count(self):
+        return sum(1 for m, p in self.t.calls if m == "sendMessage" and "keyboard" in (p.get("reply_markup") or {}))
+
+    def test_once_per_version_and_start(self):
+        boot(app.bot)
+        self.assertEqual(self.kb_count(), 1)
+        mk = [p for m, p in self.t.calls if m == "sendMessage" and "keyboard" in (p.get("reply_markup") or {})][0]
+        self.assertEqual(mk["chat_id"], self.t.owner)
+        self.assertTrue(mk["reply_markup"]["one_time_keyboard"] and not mk["reply_markup"]["is_persistent"])
+        for btn in ("🎲 По пожеланиям", "✨ Идеи", "📋 Список", "⚙️ Настройки", "⚙️ Режим", "🛠 Поддержка"):
+            self.assertIn(btn, self.t.kb)
+        for row in mk["reply_markup"]["keyboard"]:
+            self.assertLessEqual(len(row), 3)
+            for btn in row:
+                self.assertLessEqual(len(btn["text"]), 24)
+        boot(app.bot)  # перезапуск без новой версии — не пишем
+        self.assertEqual(self.kb_count(), 1)
+        self.t.send("/start")  # /start — ставит снова
+        self.assertEqual(self.kb_count(), 2)
+        self.assertIn("Catcher", self.t.last)  # главный экран — последним, под меню
+        with mock.patch.object(app.bot, "kb_version", 2):  # новая версия — один раз при запуске
+            boot(app.bot)
+            boot(app.bot)
+        self.assertEqual(self.kb_count(), 3)
+
+    def test_press_is_action_not_name_or_ideas(self):
+        self.t.send("✨ Идеи")  # «иде» в тексте — но это кнопка: спросить тему, а не придумывать
+        self.assertIn("На какую тему", self.t.last)
+        self.t.send("➕ Имя")  # «имя» — тоже не разбор и не идеи
+        self.assertIn("Какие имена ловить", self.t.last)
+        self.t.send("🎲 По пожеланиям")
+        self.assertIn("По пожеланиям", self.t.last)
+        self.t.send("📋 Список")
+        self.assertIn("Имена", self.t.last)
+        self.t.send("⚙️ Настройки")
+        self.assertIn("Как ловить", self.t.last)
+        self.assertEqual(app.names(), [])
+        self.assertFalse([c for c, _ in self.agent.calls if c in ("username", "grab")])
+        with mock.patch.object(kit, "claude") as cl:
+            self.t.send("✨ Идеи")
+            cl.assert_not_called()
+        self.t.send("🛠 Поддержка")  # в тестах поддержки нет — честно говорим
+        self.assertIn("Поддержка", self.t.last)
+        self.t.send("✨ Идеи", uid=999)  # чужому — замок, как у любого текста
+        self.assertIn("личный", self.t.last)
+
+
 class Parse(unittest.TestCase):
     def test_parse_names(self):
         self.assertEqual(app.parse_names("@Cool_Name, https://t.me/second и third5 но не @abc"), ["cool_name", "second", "third5"])

@@ -84,7 +84,8 @@ def action_text(name, inp):
 class Session:
     """Сводка по журналу; feed() принимает строки по одной (читаем журнал с места, где остановились)."""
 
-    def __init__(self):
+    def __init__(self, sidechain=False):
+        self.sidechain = sidechain  # журнал агента (subagents/agent-*.jsonl): там все записи isSidechain
         self.title = ""
         self.url = ""
         self.model = ""
@@ -140,9 +141,9 @@ class Session:
             self.compacts += 1
             self.pre_tokens = int((d.get("compactMetadata") or {}).get("preTokens") or 0)
             self.tokens = 0
-        elif t == "assistant" and not d.get("isSidechain"):
+        elif t == "assistant" and (self.sidechain or not d.get("isSidechain")):
             self._assistant(d, at)
-        elif t == "user" and not d.get("isSidechain"):
+        elif t == "user" and (self.sidechain or not d.get("isSidechain")):
             self._user(d, at)
 
     def _assistant(self, d, at):
@@ -290,6 +291,54 @@ class Session:
         }
 
 
+class Agents:
+    """Работающие агенты чата: их журналы subagents/agent-<id>.jsonl рядом с журналом сессии.
+    По каждому — описание, план (если агент его ведёт) → «сделано N%», шаги и сколько работает."""
+
+    def __init__(self):
+        self.cache = {}  # путь → (размер, Session)
+
+    def running(self, path, s):
+        folder = os.path.join(path[:-len(".jsonl")], "subagents")
+        if not os.path.isdir(folder):
+            return []
+        pending = {k for k, n in s.pending.items() if n in ("Agent", "Task")}
+        out = []
+        for meta_path in glob.glob(os.path.join(folder, "agent-*.meta.json")):
+            aid = os.path.basename(meta_path)[len("agent-"):-len(".meta.json")]
+            try:
+                with open(meta_path) as f:
+                    meta = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if aid not in s.bg and meta.get("toolUseId") not in pending:
+                continue
+            a = self.read(os.path.join(folder, f"agent-{aid}.jsonl"))
+            if a is None:
+                continue
+            sm = a.summary()
+            out.append({"id": aid, "name": clip(meta.get("description") or s.bg.get(aid) or "агент", 60),
+                        "prog": sm["prog"], "steps": sm["turn"]["tools"], "started": a.started,
+                        "updated": a.updated, "action": a.action})
+        out.sort(key=lambda a: a["started"] or 0)
+        return out[:6]
+
+    def read(self, path):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return None
+        old = self.cache.get(path)
+        if old and old[0] == size:
+            return old[1]
+        a = Session(sidechain=True)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                a.feed(line)
+        self.cache[path] = (size, a)
+        return a
+
+
 def session_id():
     return os.environ.get("CLAUDE_CODE_SESSION_ID", "")
 
@@ -336,7 +385,7 @@ def alive(pid):
 
 
 def run(sid):
-    path, pos, s = None, 0, Session()
+    path, pos, s, ag = None, 0, Session(), Agents()
     sent, sent_at, buf = None, 0, b""
     claude = int(os.environ.get("CLAUDE_PID") or 0)
     while True:
@@ -359,6 +408,7 @@ def run(sid):
                 if line.strip():
                     s.feed(line.decode("utf-8", "replace"))
             body = {"sid": sid, "rid": remote_id(), **s.summary()}
+            body["agent_list"] = ag.running(path, s)
             body["repos"] = sorted(os.path.basename(os.path.dirname(g.rstrip("/")))
                                    for g in glob.glob("/home/user/*/.git/"))
             digest = hashlib.sha1(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

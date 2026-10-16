@@ -125,6 +125,31 @@ class Reporter(unittest.TestCase):
             "type": "queued_command", "prompt": "<task-notification><task-id>ag1</task-id><status>completed</status>"})])
         self.assertEqual(r["agents"], 0)
 
+    def test_running_agents_from_their_journals(self):
+        d = tempfile.mkdtemp()
+        main = os.path.join(d, "sess.jsonl")
+        os.makedirs(os.path.join(d, "sess", "subagents"))
+        with open(os.path.join(d, "sess", "subagents", "agent-ag1.meta.json"), "w") as f:
+            json.dump({"description": "Меню КПП", "toolUseId": "a1"}, f)
+        with open(os.path.join(d, "sess", "subagents", "agent-ag1.jsonl"), "w") as f:
+            for x in [line(type="user", isSidechain=True, message={"content": "Сделай меню"}),
+                      assistant([use("t1", "TaskCreate", {})], isSidechain=True),
+                      result("t1", "ok", {"task": {"id": "1", "subject": "A"}}).replace('"type": "user"', '"type": "user", "isSidechain": true'),
+                      assistant([use("t2", "TaskCreate", {})], isSidechain=True),
+                      result("t2", "ok", {"task": {"id": "2", "subject": "B"}}).replace('"type": "user"', '"type": "user", "isSidechain": true'),
+                      assistant([use("t3", "TaskUpdate", {})], isSidechain=True),
+                      result("t3", "ok", {"taskId": "1", "statusChange": {"to": "completed"}}).replace('"type": "user"', '"type": "user", "isSidechain": true')]:
+                f.write(x + "\n")
+        s = reporter.Session()
+        for x in [line(type="user", message={"content": "go"}),
+                  assistant([use("a1", "Agent", {"description": "Меню КПП", "run_in_background": True})]),
+                  result("a1", "Async agent launched", {"isAsync": True, "agentId": "ag1", "description": "Меню КПП"})]:
+            s.feed(x)
+        got = reporter.Agents().running(main, s)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["name"], "Меню КПП")
+        self.assertEqual(got[0]["prog"], {"done": 1, "total": 2, "pct": 50})
+
     def test_remote_id(self):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_REMOTE_SESSION_ID": "cse_018Abc"}):
             self.assertEqual(reporter.remote_id(), "session_018Abc")
@@ -218,6 +243,32 @@ class Bot(unittest.TestCase):
         self.assertIn('<a href="https://claude.ai/code/session_X"><b>Бот мониторинга</b></a>', text)
         pulse.ingest(summary("waiting", prog=None))
         self.assertIn("Сделано ████████████ 100%", pulse.block(pulse.visible()[0]))  # без плана, но закончил
+
+    def test_menu_square(self):
+        pulse.ensure_kb(42)
+        m, k = self.sent[-1]
+        self.assertEqual(k["reply_markup"]["keyboard"][0][0]["text"], "📡 Чаты")
+        self.assertTrue(k["reply_markup"]["one_time_keyboard"])
+        n = len(self.sent)
+        pulse.ensure_kb(42)  # второй раз — не шлём
+        self.assertEqual(len(self.sent), n)
+        pulse.ingest(summary())
+        msg = lambda t: {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": t}
+        pulse.on_message(msg("📋 Подробно"))
+        self.assertIn("Какой чат?", self.sent[-1][1]["text"])
+        pulse.on_message(msg("🔔 Уведомления"))
+        self.assertIn("Уведомления", self.sent[-1][1]["text"])
+        pulse.on_message(msg("📡 Чаты"))
+        self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
+
+    def test_agent_progress(self):
+        now = time.time()
+        pulse.ingest(summary(agent_list=[
+            {"id": "a1", "name": "Меню КПП", "prog": {"done": 2, "total": 5, "pct": 40}, "steps": 9, "started": now - 60},
+            {"id": "a2", "name": "Меню Студии", "prog": None, "steps": 31, "started": now - 360}]))
+        text = pulse.block(pulse.visible()[0], now)
+        self.assertIn("🤖 Меню КПП — сделано 40% · осталось 60%", text)
+        self.assertIn("🤖 Меню Студии — 6 мин · 31 шаг", text)
 
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
