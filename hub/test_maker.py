@@ -195,7 +195,7 @@ class AutoCheck(Base):
             self.press("mk")
             hub.on_message(self.msg("бот для воды"))
             hub.on_message(self.msg("123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
-        self.assertIn("всё в порядке", self.texts()[-1])
+        self.assertIn("ошибок нет, улучшил", self.texts()[-1])  # Глеб 16.10: улучшать сразу, даже без ошибок
         self.assertIn("Секретарь не вошёл", self.texts()[-1])
 
 

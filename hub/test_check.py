@@ -194,6 +194,7 @@ class NewBotTest(unittest.TestCase):
     def test_after_text(self):
         base = {"clicks": 21, "skip": "", "found": [], "fixed": 0, "left": [], "why": "", "sha": None, "out": ""}
         self.assertIn("проверил 21 кнопку — всё в порядке", check.after_text(base, "Вода")[0])
+        self.assertIn("ошибок нет, улучшил", check.after_text(dict(base, improved=True), "Вода")[0])
         self.assertIn("проверил 3 кнопки, исправил 2", check.after_text({**base, "clicks": 3, "fixed": 2}, "Вода")[0])
         title, lines, foot = check.after_text({**base, "clicks": None, "skip": "нет @username",
                                                "left": ["тесты: x"], "why": "откатил"}, "<b>")

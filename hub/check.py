@@ -551,6 +551,10 @@ QUALITY = """Качество — жёстко, это главное (посл�
 POLISH_TZ = ("Бот только что поставлен, и автопроверка (живой обход всех кнопок в Telegram, тесты, лог pm2) нашла "
              "проблемы. Исправь всё найденное (баг — чини код, а не тест) и сразу улучши: красивее, проще, короче, "
              "плавнее.\n" + QUALITY + "\nНайдено:\n")
+# Глеб 16.10: «сразу после установки — проверка всех кнопок, исправление и сразу улучшаешь» — улучшение и без ошибок
+POLISH_CLEAN = ("Бот только что поставлен, автопроверка (живой обход всех кнопок в Telegram, тесты, лог pm2) ошибок не нашла. "
+                "Сразу улучши его: красивее, проще, короче, плавнее — без новых функций и ничего не сломав, тесты должны проходить.\n"
+                + QUALITY)
 
 
 def secretary_account(root=None):
@@ -668,22 +672,20 @@ def after_install(t, sh, fix, tests, commit, account, step=None):
         res.update(kw)
         return res
 
-    if not probs:
-        return finish()
-    step("исправляю и улучшаю", force=True)
-    ok, text = fix(POLISH_TZ + "\n".join("- " + p for p in probs))
+    step("исправляю и улучшаю" if probs else "улучшаю", force=True)
+    ok, text = fix(POLISH_TZ + "\n".join("- " + p for p in probs) if probs else POLISH_CLEAN)
     if not ok:
-        return finish(left=probs, why=text)
+        return finish(left=probs, why=text) if probs else finish()
     good, log = tests()
     if not good:
         step("чиню тесты", force=True)
         fix("Тесты после правок не проходят — почини код (не тесты, если они верны):\n" + mask(log[-1500:]))
         good, log = tests()
-    sha = commit("Автопроверка: исправил найденное и улучшил")
+    sha = commit("Автопроверка: исправил найденное и улучшил" if probs else "Автопроверка: улучшил")
     if not sha:
-        return finish(left=probs, why="Claude ничего не поменял: " + text[-200:])
+        return finish(left=probs, why="Claude ничего не поменял: " + text[-200:]) if probs else finish()
     if good and _restart(sh, t["pm2"]):
-        res.update(fixed=len(probs), sha=sha, out=text)
+        res.update(fixed=len(probs), improved=True, sha=sha, out=text)
         return res
     code, _ = sh("git", "-C", t["cwd"], "-c", "user.name=Автопроверка", "-c", "user.email=check@localhost",
                  "revert", "--no-edit", sha, timeout=60)
@@ -708,10 +710,13 @@ def after_text(res, name):
         title = f"⚠️ <b>«{esc(name)}»: {what}, осталось {len(res['left'])}</b>"
         lines = [esc(p[:200]) for p in res["left"][:5]] + ([f"<i>{esc(res['why'][:300])}</i>"] if res["why"] else [])
     elif res["fixed"]:
-        title = f"✅ <b>«{esc(name)}»: {what}, исправил {res['fixed']}</b>"
+        title = f"✅ <b>«{esc(name)}»: {what}, исправил {res['fixed']} и улучшил</b>"
+        lines = [esc(res["out"][-500:])] if res["out"] else []
+    elif res.get("improved"):
+        title = f"✅ <b>«{esc(name)}»: {what} — ошибок нет, улучшил</b>"
         lines = [esc(res["out"][-500:])] if res["out"] else []
     else:
         title = f"✅ <b>«{esc(name)}»: {what} — всё в порядке</b>"
-        lines = []
+        lines = [f"<i>{esc(res['why'][:300])}</i>"] if res.get("why") else []
     foot = f"<i>Кнопки вживую не жал: {esc(res['skip'])}</i>" if res["skip"] else ""
     return title, lines, foot
