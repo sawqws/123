@@ -190,7 +190,7 @@ class Bot(unittest.TestCase):
         pulse.ingest(summary())
         pulse.on_message({"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": "/start"})
         self.assertIn("📡 Пульс", self.sent[-1][1]["text"])
-        self.assertIn("Память ▱▱▱▱▱▱▱▱▱▱ 5%", self.sent[-1][1]["text"])
+        self.assertIn("Память █░░░░░░░░░░░ 5%", self.sent[-1][1]["text"])
 
     def test_quiet_by_default(self):
         pulse.st.pop("alerts")
@@ -226,8 +226,8 @@ class Bot(unittest.TestCase):
         pulse.ingest(summary(tokens=150_000, prog={"done": 2, "total": 5, "pct": 40}, agents=2))
         text = pulse.home_text()
         self.assertIn("· работает · 🤖 2 помощника", text)
-        self.assertIn("Сделано ▰▰▰▰▱▱▱▱▱▱ 40%", text)
-        self.assertIn("Память ▰▰▰▰▰▰▰▰▱▱ 75% ⚠️ <i>открой новый чат</i>", text)
+        self.assertIn("Сделано █████░░░░░░░ 40%", text)
+        self.assertIn("Память █████████░░░ 75% ⚠️ <i>открой новый чат</i>", text)
         d = pulse.detail_text(pulse.visible()[0])
         self.assertIn("40% <i>(2 из 5)</i>", d)
         self.assertIn("✅ Репортёр", d)
