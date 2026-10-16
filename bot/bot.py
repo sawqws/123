@@ -1735,10 +1735,6 @@ def finish_test(task):
     finally:
         lock.release()
     if not ok:
-        if "Нет начатой попытки" in out:  # уже сдан (например, перезапуск после нажатия «Отправить»)
-            set_test(task, None)
-            send(chat, card("Тест уже сдан", note=f"{esc(title)} · баллы — на сайте", icon="✅"), menu=True, raw_html=True)
-            return
         set_test(task, {**t, "finishing": False, "at": None})
         send(chat, card("Не сдал тест", esc(plain(out)), esc(title), "⚠️"), markup=test_kb(task), raw_html=True)
         return
