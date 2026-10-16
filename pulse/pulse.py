@@ -66,7 +66,8 @@ public_url = (os.environ.get("PULSE_URL") or "").rstrip("/")
 https_note = "ищу адрес"
 
 OFFLINE = 180              # нет сводки 3 мин (сводка — минимум раз в минуту) — «нет связи»
-KEEP = 24 * 3600           # на экране — чаты, от которых что-то было за сутки
+KEEP = 6 * 3600            # на экране — чаты, где что-то было за 6 часов (остальные — в «скрытых» не числятся)
+NEW_CHAT_PCT = 60          # с этого заполнения контекста — «пора в новый чат» (Глеб 16.10)
 DEFAULT_WINDOW = 200_000   # окно контекста, пока не узнали точнее (см. window())
 BIG_WINDOW = 1_000_000
 COMPACT_PCT = 80           # автосжатие в облаке — на 80% окна (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
@@ -252,7 +253,8 @@ def status_of(s, now=None):
     if s.get("gone"):
         return "ended"
     if now - (s.get("seen") or 0) > OFFLINE:
-        return "offline"
+        # контейнер уснул: закончивший чат так и ждёт тебя, а «работал и пропал» — нет связи
+        return "waiting" if s.get("status") == "waiting" else "offline"
     return s.get("status") if s.get("status") in STATUS else "waiting"
 
 
@@ -271,7 +273,7 @@ def view(s, now=None):
     return {
         "id": s["id"], "title": s.get("title") or "Чат", "url": s.get("url") or "",
         "status": stt, "emoji": STATUS[stt][0], "label": STATUS[stt][1], "model": s.get("model") or "",
-        "ctx": ctx_of(s), "tasks": tasks, "done": sum(1 for t in tasks if t.get("status") == "completed"),
+        "ctx": ctx_of(s), "prog": s.get("prog"), "agents": int(s.get("agents") or 0), "tasks": tasks, "done": sum(1 for t in tasks if t.get("status") == "completed"),
         "total": len(tasks), "prompt": s.get("prompt"), "nprompts": s.get("nprompts") or 0,
         "prompts": s.get("prompts") or [], "turn": s.get("turn") or {},
         "action": s.get("action") or "", "question": s.get("question") or "", "options": s.get("options") or [],
@@ -297,7 +299,7 @@ def hidden_count(now=None):
 
 
 FIELDS = ("title", "url", "model", "started", "updated", "status", "ctx", "prompt", "prompts", "nprompts", "tasks",
-          "turn", "action", "question", "options", "reply", "repos")
+          "turn", "action", "question", "options", "reply", "repos", "prog", "agents")
 
 
 def ingest(body, now=None):
@@ -442,35 +444,46 @@ def first_par(text, n=300):
     return par
 
 
-def block(v, now=None):
-    """Один чат на карточке (вариант 1 «Коротко», Глеб 15.10): заголовок · время, серая строка цифр, одна строка дела."""
+def state_word(v, now=None):
+    """«работает 12 мин» / «ждёт ответа» / «готово» — одним словом-двумя."""
     now = now or time.time()
     st_ = v["status"]
     if st_ == "working":
         start = (v["turn"] or {}).get("started") or (v["prompt"] or {}).get("at")
-        when = ago(now - start) if start else "работает"
-    elif st_ == "question":
-        when = "ждёт ответа"
-    elif st_ == "waiting":
-        sec = now - (v["updated"] or now)
-        when = "готово только что" if sec < 60 else f"готово {ago(sec)} назад"
-    elif st_ == "offline":
-        when = f"нет связи {ago(now - (v['seen'] or now))}"
-    else:
-        when = "закрыт"
-    nums = [ctx_short(v)] + ([f"план {v['done']} из {v['total']}"] if v["total"] else [])
-    out = [f"{v['emoji']} <b>{esc(clip(v['title'], 44))}</b> · {when}", f"<i>{' · '.join(nums)}</i>"]
-    if st_ == "question" and v["question"]:
-        out.append(esc(clip(v["question"], 90)))
-    elif st_ == "working":
-        cur = current_task(v)
-        line = f"▸ {cur}" if cur else v["action"]
-        if line:
-            out.append(esc(clip(line, 70)))
-    elif st_ == "waiting":
-        _, you = split_reply(v["reply"])
-        if you:
-            out.append("👉 " + esc(first_line(you, 100)))
+        return "работает" + (f" {ago(now - start)}" if start else "")
+    if st_ == "question":
+        return "ждёт твоего ответа"
+    if st_ == "waiting":
+        return "готово"
+    if st_ == "offline":
+        return "нет связи"
+    return "закрыт"
+
+
+def numbers(v, full=False):
+    """«Сделано 40% · агентов 2 · контекст 37%» — только то, что есть."""
+    out = []
+    p = v.get("prog")
+    if p and p.get("total"):
+        out.append(f"Сделано {p['pct']}%" + (f" ({p['done']} из {p['total']})" if full else ""))
+    if v.get("agents"):
+        out.append(f"агентов {v['agents']}")
+    out.append(f"контекст {'' if v['ctx']['sure'] or not full else '≈'}{v['ctx']['pct']}%")
+    return " · ".join(out)
+
+
+def warn(v):
+    pct = v["ctx"]["pct"]
+    return f"⚠️ Контекст {pct}% — начни новый чат" if pct >= NEW_CHAT_PCT else ""
+
+
+def block(v, now=None):
+    """Один чат (Глеб 16.10: «максимально просто, кратко и понятно»): название — состояние, строка цифр, ⚠️ от 60%."""
+    out = [f"{v['emoji']} <b>{esc(clip(v['title'], 40))}</b> — {state_word(v, now)}", numbers(v)]
+    if v["status"] == "question" and v["question"]:
+        out.append("Вопрос: " + esc(clip(v["question"], 90)))
+    if warn(v):
+        out.append(warn(v))
     return "\n".join(out)
 
 
@@ -491,8 +504,7 @@ def home_text(now=None):
     now = now or time.time()
     vs = visible(now)
     if not vs:
-        return fmt("📡 Пульс", "Пока ни одного чата Claude Code.\nОткрой чат — он появится здесь через "
-                   "несколько секунд.", "Карточка обновляется сама")
+        return "<b>📡 Пульс</b>\n\nСейчас чатов нет. Напиши в любом чате Claude — он появится здесь."
     hid = hidden_count(now)
     foot = f"\n\n<i>скрыто {hid}</i>" if hid else ""
     return "<b>📡 Пульс</b>\n\n" + "\n\n".join(block(v, now) for v in vs[:8]) + foot
@@ -547,37 +559,27 @@ def md(text, limit=None):
 
 
 def detail_text(v, now=None):
-    now = now or time.time()
     c = v["ctx"]
-    lines = [block(v, now).split("\n", 1)[0]]
-    nums = [f"{'' if c['sure'] else '≈'}{c['pct']}% контекста ({kilo(c['tokens'])} из {kilo(c['window'])})"]
-    if c["compacts"]:
-        nums.append(f"сжатий {c['compacts']}")
-    if v["total"]:
-        nums.append(f"план {v['done']} из {v['total']}")
-    lines.append(f"<i>{' · '.join(nums)}</i>")
-    parts = ["\n".join(lines)]
+    parts = [f"{v['emoji']} <b>{esc(v['title'])}</b> — {state_word(v, now)}\n{numbers(v, full=True)}"
+             + (f"\n{warn(v)}" if warn(v) else "")]
     if v["status"] == "question" and v["question"]:
         parts.append("❓ " + esc(v["question"]) + "".join(f"\n• {esc(o)}" for o in v.get("options") or []))
+    if v["prompt"]:
+        parts.append("<b>Твой запрос:</b> " + esc(clip(v["prompt"].get("text"), 300)))
     if v["tasks"]:
         icon = {"completed": "✅", "in_progress": "▸"}
-        parts.append("\n".join(f"{icon.get(t.get('status'), '○')} {esc(clip(t.get('subject'), 80))}"
-                               for t in v["tasks"][:20]))
+        parts.append("<b>План:</b>\n" + "\n".join(f"{icon.get(t.get('status'), '○')} {esc(clip(t.get('subject'), 70))}"
+                                                  for t in v["tasks"][-12:]))
     if v["status"] == "working" and v["action"]:
-        turn = v["turn"] or {}
-        parts.append(f"{esc(v['action'])}\n<i>шагов {turn.get('tools') or 0}"
-                     + (f" · файлов {turn['nedits']}" if turn.get("nedits") else "") + "</i>")
-    if v["prompt"]:
-        parts.append("💬 <i>" + esc(clip(v["prompt"].get("text"), 300)) + "</i>")
+        parts.append("<b>Сейчас:</b> " + esc(v["action"]))
     if v["reply"] and v["status"] != "working":
         main, you = split_reply(v["reply"])
         if main:
-            parts.append(quote(md(main, 1200), expandable=len(main) > 400))
+            parts.append("<b>Ответ:</b> " + md(first_par(main, 500)))
         if you:
-            parts.append("👉 " + md(you, 500))
-    prs = (v["turn"] or {}).get("prs") or []
-    if prs:
-        parts.append("🔗 " + " · ".join(f'<a href="{esc(u)}">PR #{esc(u.rsplit("/", 1)[-1])}</a>' for u in prs[:5]))
+            parts.append("👉 " + md(you, 400))
+    if c["compacts"]:
+        parts.append(f"Сжатий контекста: {c['compacts']}")
     text = "\n\n".join(parts)
     while len(text) > 4000 and len(parts) > 2:
         parts.pop()
