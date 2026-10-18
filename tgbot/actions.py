@@ -378,7 +378,7 @@ BRIDGE_TAG = "[Claude Глеба]"
 
 
 def bridge(c, a):
-    """Связь Claude Глеба с Claude другого человека: в чаты из TG_BRIDGE_CHATS (id через запятую, в /etc/hub-bot.env)
+    """Связь Claude Глеба с Claude другого человека: в чаты из TG_BRIDGE_CHATS (id через запятую, в /etc/tg-agent.env)
     Claude из облака пишет без кнопки — только с меткой и только --auto (от Claude Секретаря auto снимает агент)."""
     ids = {x.strip() for x in os.environ.get("TG_BRIDGE_CHATS", "").split(",") if x.strip()}
     return bool(a.get("auto")) and str(getattr(c, "id", "")) in ids and (a.get("text") or "").startswith(BRIDGE_TAG) \
