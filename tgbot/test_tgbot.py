@@ -229,6 +229,15 @@ class Actions(unittest.TestCase):
         self.assertIn("все боты", ctx.asked[0])
         self.assertIn("+ все боты", out)
 
+    def test_folder_unread_all_chats(self):
+        """«Непрочитано»: все типы чатов, прочитанные Telegram убирает сам."""
+        ctx = Ctx()
+        out = run(actions.run(ctx, "folder", {"name": "Непрочитано", "chats": [], "all_chats": True, "unread": True}))
+        f = ctx.client.calls[-1].filter
+        self.assertTrue(all((f.contacts, f.non_contacts, f.groups, f.broadcasts, f.bots, f.exclude_read)))
+        self.assertIn("только непрочитанные", ctx.asked[0])
+        self.assertIn("все чаты, только непрочитанные", out)
+
     def test_botsfolder(self):
         ctx = Ctx()
         ctx.client.dialogs.append(dialog(user(50, "HDP", username="HDP_DIGITALBOT")))
