@@ -374,6 +374,17 @@ def cut(t, n=700):
     return t if len(t) <= n else t[:n] + "…"
 
 
+BRIDGE_TAG = "[Claude Глеба]"
+
+
+def bridge(c, a):
+    """Связь Claude Глеба с Claude другого человека: в чаты из TG_BRIDGE_CHATS (id через запятую, в /etc/hub-bot.env)
+    Claude из облака пишет без кнопки — только с меткой и только --auto (от Claude Секретаря auto снимает агент)."""
+    ids = {x.strip() for x in os.environ.get("TG_BRIDGE_CHATS", "").split(",") if x.strip()}
+    return bool(a.get("auto")) and str(getattr(c, "id", "")) in ids and (a.get("text") or "").startswith(BRIDGE_TAG) \
+        and not a.get("file") and not a.get("at")
+
+
 @command("send", write=True)
 async def send(ctx, a):
     c = await chat(ctx, a["chat"])
@@ -384,7 +395,8 @@ async def send(ctx, a):
     what = f"📤 Написать в «{name(c)}»" + (f" ответом на {a['reply']}" if a.get("reply") else "") \
         + (f" в {when:%d.%m %H:%M}" if when else "") + (f", файл {os.path.basename(f)}" if f else "") \
         + ":\n\n" + cut(a.get("text") or "")
-    await ctx.confirm(what)
+    if not bridge(c, a):
+        await ctx.confirm(what)
     m = await ctx.client.send_message(c, a.get("text") or "", reply_to=a.get("reply"), file=f, schedule=when,
                                       parse_mode=None, link_preview=False)
     return f"✅ Отправлено в «{name(c)}» (сообщение {m.id})" + (" — запланировано" if when else "")

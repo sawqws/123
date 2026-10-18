@@ -152,6 +152,24 @@ class Actions(unittest.TestCase):
         self.assertEqual(ctx.client.sent[0][1], "буду в 6")
         self.assertIn("✅", out)
 
+    def test_bridge_sends_without_asking_only_when_allowed(self):
+        """Мост Claude↔Claude: без кнопки — только --auto, чат из TG_BRIDGE_CHATS и метка [Claude Глеба]."""
+        petya = str(run(actions.chat(Ctx(), "Петя")).id)
+        tag = actions.BRIDGE_TAG + " привет"
+        with mock.patch.dict(os.environ, {"TG_BRIDGE_CHATS": petya}):
+            ctx = Ctx(answer=False)
+            run(actions.run(ctx, "send", {"chat": "Петя", "text": tag, "auto": True}))
+            self.assertEqual((ctx.asked, ctx.client.sent[0][1]), ([], tag))
+            for a in ({"chat": "Петя", "text": "привет", "auto": True},   # без метки
+                      {"chat": "Петя", "text": tag},                      # без --auto
+                      {"chat": "8Б", "text": tag, "auto": True}):          # чат не из списка
+                ctx = Ctx(answer=False)
+                run(actions.run(ctx, "send", a))
+                self.assertEqual((len(ctx.asked), ctx.client.sent), (1, []), a)
+        ctx = Ctx(answer=False)  # список пуст — всегда спрашивает
+        run(actions.run(ctx, "send", {"chat": "Петя", "text": tag, "auto": True}))
+        self.assertEqual(ctx.client.sent, [])
+
     def test_refused_nothing_sent(self):
         ctx = Ctx(answer=False)
         out = run(actions.run(ctx, "send", {"chat": "Петя", "text": "x"}))

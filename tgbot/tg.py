@@ -65,6 +65,8 @@ def parser():
     c.add_argument("--reply", type=int, help="id сообщения, на которое ответить")
     c.add_argument("--at", help="отправить позже: «2026-10-10 09:00» (Москва)")
     c.add_argument("--file", help="путь к файлу")
+    c.add_argument("--auto", action="store_true",
+                   help="без подтверждения — только в чаты из TG_BRIDGE_CHATS и с меткой [Claude Глеба] (связь Claude)")
     c = cmd("edit", "⚠ изменить своё сообщение")
     c.add_argument("chat")
     c.add_argument("id", type=int)
