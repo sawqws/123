@@ -640,10 +640,14 @@ async def folder(ctx, a):
     drop = {utils.get_peer_id(c) for c in rem}
     peers = [p for p in peers if utils.get_peer_id(p) not in drop]
     bots = bool(a.get("all_bots"))  # «все боты» — тип чатов: попадут и будущие боты
-    if not peers and not bots and not (f and (f.contacts or f.non_contacts or f.groups or f.broadcasts or f.bots)):
+    every = bool(a.get("all_chats"))  # все типы чатов — так делают «Непрочитано» вместе с --unread
+    unread = bool(a.get("unread"))  # прочитанные чаты Telegram сам убирает из папки
+    if not peers and not bots and not every and not (f and (f.contacts or f.non_contacts or f.groups or f.broadcasts or f.bots)):
         raise Fail("в папке не останется чатов — удали её через --delete")
     what = (f"📁 Папка «{a['name']}»" + (" (новая)" if not f else "")
             + ("\n🤖 все боты — и те, что появятся потом" if bots else "")
+            + ("\n💬 все чаты — и те, что появятся потом" if every else "")
+            + ("\n🔵 только непрочитанные" if unread else "")
             + (":\n➕ " + ", ".join(name(c) for c in add) if add else "")
             + ("\n➖ " + ", ".join(name(c) for c in rem) if rem else ""))
     if not a.get("auto"):
@@ -656,12 +660,19 @@ async def folder(ctx, a):
             f.emoticon = a["emoji"]
         if bots:
             f.bots = True
+        if every:
+            f.contacts = f.non_contacts = f.groups = f.broadcasts = f.bots = True
+        if unread:
+            f.exclude_read = True
     else:
         fid = max([f.id for f in fs] + [1]) + 1
         f = types.DialogFilter(id=fid, title=types.TextWithEntities(a["name"], []), pinned_peers=[],
-                               include_peers=peers, exclude_peers=[], emoticon=a.get("emoji"), bots=bots or None)
+                               include_peers=peers, exclude_peers=[], emoticon=a.get("emoji"), bots=(bots or every) or None,
+                               contacts=every or None, non_contacts=every or None, groups=every or None,
+                               broadcasts=every or None, exclude_read=unread or None)
     await ctx.client(functions.messages.UpdateDialogFilterRequest(f.id, f))
-    return f"✅ Папка «{a['name']}»: {len(peers)} чатов" + (" + все боты" if bots else "")
+    return (f"✅ Папка «{a['name']}»: " + ("все чаты" if every else f"{len(peers)} чатов" + (" + все боты" if bots else ""))
+            + (", только непрочитанные" if unread else ""))
 
 
 async def edit_folder(ctx, a, folder_id, verb):
