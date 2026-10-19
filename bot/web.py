@@ -4,8 +4,10 @@
 {"/api/…": функция(тело запроса) -> dict}. Здесь только сервер, проверка подписи Telegram и туннель.
 Пускает только владельца бота (по подписанным данным Telegram, их не подделать без токена).
 
-Сайт в браузере (/site/, bot/site/): то же API, вход без Telegram — одноразовой ссылкой из бота (/site):
-ссылка живёт 15 минут и срабатывает один раз, дальше браузер помнит вход 30 дней (cookie hdp_site).
+Сайт в браузере (/site/, bot/site/): то же API, вход без Telegram-браузера — прямо на странице входа в Safari:
+«📲 Войти через Telegram» (бот пишет «✅ Войти», страница ждёт и получает cookie) или код из 6 цифр из /site;
+ещё — одноразовая ссылка из /site. Код и ссылка живут 15 минут и срабатывают один раз, дальше браузер помнит
+вход полгода (cookie hdp_site).
 Постоянный адрес — https://hdp.<ip-через-дефисы>.sslip.io (его держит Caddy планера), иначе адрес туннеля.
 На постоянном адресе сайт — зеркало настоящего horodigital.ru с кнопками бота (bot/mirror.py): всё, что не API бота,
 не /site/ и не /_hdp/, после входа уходит на платформу. Прежний сайт (bot/site/) остаётся по адресу /site/.
@@ -39,7 +41,7 @@ SITE = os.path.join(HERE, "site")
 SESSIONS = os.path.join(os.path.dirname(HERE), "horo", "tmp", "site_sessions.json")
 COOKIE = "hdp_site"
 CODE_TTL = 15 * 60          # одноразовая ссылка входа
-SESSION_TTL = 30 * 86400    # сколько браузер помнит вход
+SESSION_TTL = 180 * 86400   # сколько браузер помнит вход (полгода)
 PORT = int(os.environ.get("HORO_WEB_PORT") or 8788)
 BIN = os.path.join(os.path.dirname(HERE), "horo", "tmp", "bin", "cloudflared")  # если cloudflared не установлен
 
@@ -112,9 +114,9 @@ def _save_sessions(data):
     os.replace(tmp, SESSIONS)
 
 
-def site_code():
-    """Новый одноразовый код входа (для ссылки из бота)."""
-    code = secrets.token_urlsafe(24)
+def site_code(pin=False):
+    """Новый одноразовый код входа: длинный — для ссылки из бота, pin=True — 6 цифр, чтобы ввести на сайте."""
+    code = f"{secrets.randbelow(10 ** 6):06d}" if pin else secrets.token_urlsafe(24)
     with _slock:
         data = _sessions()
         data[_digest(code)] = {"kind": "code", "exp": time.time() + CODE_TTL}
@@ -122,15 +124,86 @@ def site_code():
     return code
 
 
+_fails = []  # время неверных кодов: 10 за 10 минут — вход по коду закрыт на 10 минут (6 цифр не перебрать)
+
+
+def site_locked(now=None):
+    now = now or time.time()
+    with _slock:
+        _fails[:] = [t for t in _fails if now - t < 600]
+        return len(_fails) >= 10
+
+
 def site_login(code):
-    """Код из ссылки -> токен сессии (код сгорает). None — код неверный, просрочен или уже использован."""
+    """Код (ссылки или 6 цифр) -> токен сессии (код сгорает). None — код неверный, просрочен или уже использован."""
+    code = re.sub(r"\s", "", str(code or ""))[:64]
+    if site_locked():
+        return None
     with _slock:
         data = _sessions()
-        rec = data.pop(_digest(code or ""), None)
+        rec = data.pop(_digest(code), None)
         if not rec or rec.get("kind") != "code":
+            _fails.append(time.time())
             return None
         token = secrets.token_urlsafe(32)
         data[_digest(token)] = {"kind": "session", "exp": time.time() + SESSION_TTL, "at": int(time.time())}
+        _save_sessions(data)
+    return token
+
+
+# Вход одним нажатием: страница входа просит вход (POST /site/api/login/request) → бот пишет Глебу «✅ Войти» →
+# он жмёт → страница, которая ждёт (POST /site/api/login/poll {req}), получает cookie. req знает только эта страница.
+_reqs = {}  # req -> {"id": короткий id для кнопки, "exp", "ok", "ua"}
+_req_times = []  # не чаще 5 просьб за 10 минут (чужой не засыплет чат)
+
+
+def site_ua(ua):
+    ua = ua or ""
+    dev = next((n for k, n in (("iPad", "iPad"), ("iPhone", "iPhone"), ("Android", "Android"), ("Mac OS", "Mac"),
+                               ("Windows", "Windows")) if k in ua), "Устройство")
+    app = "приложение с экрана «Домой»" if "Safari" not in ua and dev in ("iPad", "iPhone") else "браузер"
+    return f"{dev} · {app}"
+
+
+def site_request(ua="", now=None):
+    """Новая просьба войти: бот пишет Глебу карточку с «✅ Войти» и кодом. -> req или PermissionError."""
+    now = now or time.time()
+    with _slock:
+        _req_times[:] = [t for t in _req_times if now - t < 600]
+        if len(_req_times) >= 5:
+            raise PermissionError("Слишком часто — подожди несколько минут или введи код из /site")
+        _req_times.append(now)
+        for k in [k for k, v in _reqs.items() if v["exp"] < now]:
+            _reqs.pop(k, None)
+        req, short = secrets.token_urlsafe(24), secrets.token_hex(4)
+        _reqs[req] = {"id": short, "exp": now + CODE_TTL, "ok": False, "ua": site_ua(ua)}
+    _cfg["login_ask"](short, _reqs[req]["ua"], site_code(pin=True))
+    return req
+
+
+def site_approve(short, now=None):
+    """Глеб нажал «✅ Войти» -> устройство (строкой) или None, если просьба устарела."""
+    with _slock:
+        for v in _reqs.values():
+            if v["id"] == short and v["exp"] > (now or time.time()):
+                v["ok"] = True
+                return v["ua"]
+    return None
+
+
+def site_poll(req, now=None):
+    """-> токен сессии (вход подтверждён, один раз), None — ещё ждём, ValueError — просьбы нет или устарела."""
+    now = now or time.time()
+    with _slock:
+        v = _reqs.get(str(req or ""))
+        if not v or v["exp"] < now:
+            raise ValueError("Время вышло — нажми «Войти через Telegram» ещё раз")
+        if not v["ok"]:
+            return None
+        _reqs.pop(req, None)
+        token = secrets.token_urlsafe(32)
+        data = _sessions()
+        data[_digest(token)] = {"kind": "session", "exp": now + SESSION_TTL, "at": int(now)}
         _save_sessions(data)
     return token
 
@@ -191,7 +264,7 @@ class Web(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # без шума в логах pm2
         pass
 
-    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store"):
+    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store", cookie=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode()
         elif isinstance(body, str):
@@ -202,6 +275,8 @@ class Web(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")  # код входа из ссылки не уходит в чужие запросы
+        if cookie:
+            self.send_header("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age={SESSION_TTL}; HttpOnly; Secure; SameSite=Lax")
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -318,6 +393,8 @@ class Web(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path in ("/site/api/login/code", "/site/api/login/request", "/site/api/login/poll"):
+            return self.login(path)
         if self.mirror_host() and path not in _cfg["routes"]:
             return self.mirror(path)
         try:
@@ -327,6 +404,39 @@ class Web(BaseHTTPRequestHandler):
         except ValueError:
             return self.reply(400, {"error": "bad json"})
         self.api(path, body if isinstance(body, dict) else {})
+
+    def login(self, path):
+        """Вход на странице входа (без cookie): код из 6 цифр, или «Войти через Telegram» — просьба и ожидание."""
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).hostname != (self.headers.get("Host") or "").split(":")[0]:
+            return self.reply(403, {"error": "Чужой сайт"})
+        try:
+            n = max(0, int(self.headers.get("Content-Length") or 0))
+            body = json.loads(self.rfile.read(min(n, 2000)) or b"{}") if n else {}
+            body = body if isinstance(body, dict) else {}
+        except ValueError:
+            return self.reply(400, {"error": "bad json"})
+        try:
+            if path.endswith("/code"):
+                token = site_login(body.get("code"))
+                if not token:
+                    return self.reply(429 if site_locked() else 400,
+                                      {"error": "Много неверных кодов — подожди 10 минут" if site_locked()
+                                       else "Код неверный или устарел — напиши боту /site"})
+            elif path.endswith("/request"):
+                return self.reply(200, {"req": site_request(self.headers.get("User-Agent"))})
+            else:
+                token = site_poll(body.get("req"))
+                if not token:
+                    return self.reply(200, {"wait": True})
+        except PermissionError as e:
+            return self.reply(429, {"error": str(e)})
+        except ValueError as e:
+            return self.reply(410, {"error": str(e)})
+        except Exception:
+            traceback.print_exc()
+            return self.reply(502, {"error": "Не смог написать в Telegram — введи код из /site"})
+        return self.reply(200, {"ok": True, "home": "/student" if self.mirror_host() else "/site/"}, cookie=token)
 
     def other(self):
         """PUT/PATCH/DELETE/HEAD/OPTIONS — только зеркалу (у API бота их нет)."""
@@ -441,9 +551,10 @@ def tunnel():
         time.sleep(5)
 
 
-def start(token, owner, routes, on_url):
-    """Запускает сервер и (если нет HORO_WEB_URL) туннель. on_url(адрес) зовётся, когда адрес готов или сменился."""
-    _cfg.update(token=token, owner=owner, routes=routes, on_url=on_url, version=version(),
+def start(token, owner, routes, on_url, login_ask=None):
+    """Запускает сервер и (если нет HORO_WEB_URL) туннель. on_url(адрес) зовётся, когда адрес готов или сменился.
+    login_ask(id, устройство, код) — написать Глебу «✅ Войти» (кнопка с id) для входа на сайт."""
+    _cfg.update(token=token, owner=owner, routes=routes, on_url=on_url, login_ask=login_ask, version=version(),
                 site_version=version(SITE), mirror_version=version(mirror.FILES))
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=watch_site, daemon=True).start()

@@ -90,8 +90,10 @@ class MirrorTest(unittest.TestCase):
         for p in self.patches:
             p.start()
         Upstream.seen.clear()
+        self.asked = []
         web._cfg.update(token="t", owner=lambda: 1, routes={"/api/state": lambda b: {"bot": True}},
-                        version="1", site_version="1", mirror_version="7")
+                        version="1", site_version="1", mirror_version="7", login_ask=lambda *a: self.asked.append(a))
+        web._reqs.clear(), web._req_times.clear(), web._fails.clear()
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), web.Web)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.token = web.site_login(web.site_code())
@@ -187,6 +189,55 @@ class MirrorTest(unittest.TestCase):
         code, _, body = self.req("GET", "/site/", cookie=False)
         self.assertEqual(code, 200)
         self.assertEqual(Upstream.seen, [])
+
+    def post(self, path, body, origin=None):
+        return self.req("POST", path, cookie=False, body=json.dumps(body).encode(),
+                        headers={"Content-Type": "application/json", **({"Origin": origin} if origin else {})})
+
+    def test_login_by_pin_on_site(self):
+        """Вход прямо в Safari кодом из 6 цифр (/site): cookie на полгода, код срабатывает один раз."""
+        pin = web.site_code(pin=True)
+        self.assertRegex(pin, r"^\d{6}$")
+        code, h, body = self.post("/site/api/login/code", {"code": pin[:3] + " " + pin[3:]})
+        self.assertEqual((code, json.loads(body)["home"]), (200, "/student"))
+        cookie = h["Set-Cookie"]
+        self.assertIn(f"Max-Age={180 * 86400}", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertTrue(web.site_check(cookie.split(";")[0].split("=", 1)[1]))
+        self.assertEqual(self.post("/site/api/login/code", {"code": pin})[0], 400)  # второй раз — нет
+        self.assertEqual(Upstream.seen, [])
+
+    def test_pin_bruteforce_locked(self):
+        for _ in range(10):
+            self.post("/site/api/login/code", {"code": "000000"})
+        pin = web.site_code(pin=True)
+        code, h, _ = self.post("/site/api/login/code", {"code": pin})
+        self.assertEqual(code, 429)  # даже верный код — после 10 неверных пауза
+        self.assertNotIn("Set-Cookie", h)
+
+    def test_login_via_telegram_button(self):
+        """«Войти через Telegram»: бот пишет «✅ Войти», страница ждёт; после нажатия — cookie один раз."""
+        code, _, body = self.post("/site/api/login/request", {})
+        req = json.loads(body)["req"]
+        short, ua, pin = self.asked[-1]
+        self.assertRegex(pin, r"^\d{6}$")
+        code, h, body = self.post("/site/api/login/poll", {"req": req})
+        self.assertEqual((code, json.loads(body)), (200, {"wait": True}))
+        self.assertNotIn("Set-Cookie", h)
+        self.assertIsNone(web.site_approve("чужой"))
+        self.assertTrue(web.site_approve(short))
+        code, h, body = self.post("/site/api/login/poll", {"req": req})
+        self.assertEqual(code, 200)
+        self.assertTrue(web.site_check(h["Set-Cookie"].split(";")[0].split("=", 1)[1]))
+        self.assertEqual(self.post("/site/api/login/poll", {"req": req})[0], 410)  # второй раз — нет
+        self.assertEqual(self.post("/site/api/login/poll", {"req": "выдумка"})[0], 410)
+
+    def test_login_request_limits(self):
+        self.assertEqual(self.post("/site/api/login/request", {}, origin="https://evil.example")[0], 403)
+        for _ in range(5):
+            self.assertEqual(self.post("/site/api/login/request", {})[0], 200)
+        self.assertEqual(self.post("/site/api/login/request", {})[0], 429)  # чат не засыпать
+        self.assertEqual(len(self.asked), 5)
 
     def test_tunnel_host_is_not_mirror(self):
         code, _, _ = self.req("GET", "/student", host="abc.trycloudflare.com")

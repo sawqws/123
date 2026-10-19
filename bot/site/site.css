@@ -341,6 +341,13 @@ textarea:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--brand)
 .login h2 { font-size: 24px; margin-bottom: 10px; }
 .login p { color: var(--ink2); }
 .login .btn { margin-top: 14px; }
+.lg-wait { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 14px; color: var(--ink2); }
+.lg-wait .spin { width: 18px; height: 18px; border-width: 2px; flex: none; }
+.lg-or { margin-top: 22px; color: var(--ink2); font-size: 14px; }
+.lg-code { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+.lg-code input { width: 9em; font: inherit; font-size: 20px; letter-spacing: .12em; text-align: center; padding: 10px 12px;
+  border-radius: 14px; border: 1px solid var(--line, rgba(127,127,127,.3)); background: transparent; color: inherit; }
+.lg-code .btn { margin-top: 0; }
 .foot-note { text-align: center; color: var(--ink2); font-size: 13px; margin-top: 30px; }
 .upd { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; opacity: .85; position: relative; z-index: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -1951,6 +1951,13 @@ def on_callback(cq):
     chat = cq["message"]["chat"]["id"]
     mid = cq["message"].get("message_id")
     data = cq.get("data") or ""
+    if data.startswith("sitel:"):  # «✅ Войти» на сайт: страница входа в Safari ждёт и получит cookie
+        ua = web.site_approve(data[6:])
+        quiet("answerCallbackQuery", callback_query_id=cq["id"],
+              text="Вхожу…" if ua else "Просьба устарела — нажми «Войти через Telegram» на сайте ещё раз")
+        if ua:
+            edit(chat, mid, card("Вход на сайт подтверждён", esc(ua), icon="✅"), resend=False)
+        return
     if data.startswith("m:"):  # меню «Ещё»: правится на месте
         on_more(chat, mid, cq["id"], data[2:])
         return
@@ -3835,16 +3842,25 @@ def send_app(chat):
 
 
 def send_site(chat):
-    """Сайт HDP в браузере: одноразовая ссылка входа (15 минут, один раз), дальше браузер помнит вход 30 дней."""
-    link = web.site_link()
-    if not link:
+    """Сайт HDP в браузере: код из 6 цифр (ввести на сайте в Safari) и одноразовая ссылка — 15 минут, один раз;
+    дальше браузер помнит вход полгода. На самом сайте есть и «Войти через Telegram» — подтверждение кнопкой."""
+    base = web.site_url()
+    if not base:
         send(chat, err("Сайт ещё запускается — попробуй через минуту"), menu=True, raw_html=True)
         return
-    send(chat, card("Сайт HDP — копия платформы", "Всё как на horodigital.ru, один в один. Сверху — кнопки бота: у задания "
-                    "«⚡ Решить и сдать» / «👁 Ответы» / «✍️ Написать», у темы «📖 Подготовь меня» и «⚡ Автотесты», "
-                    "справа вкладка 🤖 — черновики, ожидание, подтверждения, настройки.",
-                    "Ссылка входа одноразовая, живёт 15 минут. Браузер запомнит вход на 30 дней", "🌐"),
-         markup=kb([("🌐 Открыть сайт", {"url": link}, "primary")]), raw_html=True)
+    pin = web.site_code(pin=True)
+    send(chat, card("Сайт HDP — копия платформы",
+                    f"Открой в Safari: <b>{esc(base.split('//')[-1])}</b>\n"
+                    f"Войди кнопкой «Войти через Telegram» или кодом <code>{pin[:3]} {pin[3:]}</code>",
+                    "Код живёт 15 минут. Safari запомнит вход на полгода", "🌐"),
+         markup=kb([("🌐 Открыть сайт", {"url": web.site_link()}, "primary")]), raw_html=True)
+
+
+def site_login_ask(short, ua, pin):
+    """Страница входа на сайт просит вход: карточка Глебу с «✅ Войти» (и код — на случай, если удобнее ввести)."""
+    send(owner(), card("Вход на сайт HDP", f"{esc(ua)} просит войти.\nИли код: <code>{pin[:3]} {pin[3:]}</code>",
+                       "Не ты — не нажимай. 15 минут", "🌐"),
+         markup=kb([("✅ Войти", f"sitel:{short}", "success")]), raw_html=True)
 
 
 def setup_profile():
@@ -3858,7 +3874,7 @@ def main():
     global offset
     threading.excepthook = thread_crash
     threading.Thread(target=setup_profile, daemon=True).start()
-    web.start(TOKEN, owner, ROUTES, on_app_url)
+    web.start(TOKEN, owner, ROUTES, on_app_url, site_login_ask)
     print("Бот запущен")
 
     def alphabet_startup():  # по очереди (оба правят один файл букв) и не задерживая приём сообщений
