@@ -132,6 +132,22 @@ class MirrorTest(unittest.TestCase):
         self.assertNotIn("_ym_uid", sent["Cookie"])                         # чужие домены — нет
         self.assertIn("i18n", mirror._jar.c)                                # Set-Cookie платформы — в банку
 
+    def test_plain_switch_off_and_on(self):
+        """«⏻ Выключить всё»: cookie hdp_plain — страница платформы без кнопок бота (guard.js остаётся); /_hdp/on — назад."""
+        code, h, _ = self.req("GET", "/_hdp/off?to=/student/topic/x")
+        self.assertEqual((code, h["Location"]), (302, "/student/topic/x"))
+        self.assertIn("hdp_plain=1", h["Set-Cookie"])
+        self.assertNotIn("Max-Age=0", h["Set-Cookie"])
+        _, _, body = self.req("GET", "/student", cookie=False,
+                             headers={"Accept": "text/html", "Cookie": f"hdp_site={self.token}; hdp_plain=1"})
+        html = body.decode()
+        self.assertIn("/_hdp/guard.js", html)
+        self.assertNotIn("overlay.js", html)
+        self.assertNotIn("overlay.css", html)
+        code, h, _ = self.req("GET", "/_hdp/on?to=//evil.example")
+        self.assertEqual((code, h["Location"]), (302, "/student"))  # чужой адрес — нет
+        self.assertIn("Max-Age=0", h["Set-Cookie"])
+
     def test_json_gzip_rewritten(self):
         code, h, body = self.req("GET", "/api/education/v1/x", headers={"Origin": "https://hdp.1-2-3-4.sslip.io"})
         self.assertEqual(code, 200)

@@ -36,6 +36,17 @@
     if (this.source === 'horodigital.ru$' && s === location.host) return true;
     return test.apply(this, arguments);
   };
+  // «⏻ Выключить всё» (cookie hdp_plain): кнопок бота на странице нет. Включить обратно — 5 быстрых тапов или Alt+B
+  if (typeof document !== 'undefined' && /(^|;\s*)hdp_plain=1(;|$)/.test(document.cookie || '')) {
+    const on = () => { if (confirm('Включить кнопки HDP-бота?')) location.href = '/_hdp/on?to=' + encodeURIComponent(location.pathname + location.search); };
+    let taps = [];
+    addEventListener('pointerdown', () => {
+      const now = Date.now();
+      taps = taps.filter(t => now - t < 1500).concat(now);
+      if (taps.length >= 5) { taps = []; on(); }
+    }, true);
+    addEventListener('keydown', e => { if (e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); on(); } }, true);
+  }
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
   if (d && d.get) {
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {

@@ -6,6 +6,8 @@
    · «Эта страница» — на задании: «⚡ Решить и сдать» / «👁 Ответы» (тест) или «✍️ Написать ответ», ход решения,
      черновик; на теме: «📖 Подготовь меня» (1/5/10 мин), «⚡ Автотесты темы» и кнопки у каждого задания темы;
    · Сейчас (ход работы, черновики учителю, автотесты), Ожидание, Подтверждения 2.0/3.0, Подготовка, Настройки.
+   «⏻ Выключить всё» (шапка панели, Настройки) — /_hdp/off: cookie hdp_plain, сервер больше не вставляет этот файл,
+   сайт — чистая платформа; включить обратно — 5 быстрых тапов или Alt+B (это ловит guard.js) → /_hdp/on.
    Данные и действия — API бота (bot/bot.py → ROUTES), те же функции, что кнопки в чате. Вход — cookie по ссылке из бота (/site).
    Тип и статус заданий — из API самой платформы (тот же запрос, что делает её страница темы), иначе из данных бота. */
 (() => {
@@ -309,7 +311,8 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     let d = $('.hdpx-drawer');
     if (!d) {
       d = el('div', 'hdpx-drawer', `<div class="hdpx-dr-head"><span class="hdpx-ava">${I.bot}</span><p class="hdpx-dr-title">HDP-бот</p>
-        <span class="hdpx-sp"></span><button class="hdpx-iconbtn" data-a="close" aria-label="Закрыть" title="Закрыть">${I.x}</button></div>
+        <span class="hdpx-sp"></span><button class="hdpx-btn hdpx-s hdpx-outline" data-a="plain" title="Обычная платформа без кнопок бота">⏻ Выключить всё</button>
+        <button class="hdpx-iconbtn" data-a="close" aria-label="Закрыть" title="Закрыть">${I.x}</button></div>
         <div class="hdpx-tabs" role="tablist"></div><div class="hdpx-dr-body"></div>`);
       d.setAttribute('role', 'dialog');
       d.setAttribute('aria-label', 'HDP-бот');
@@ -628,6 +631,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Кнопки бота на странице</b>
         <span class="hdpx-small hdpx-muted">${S.hideTab ? 'Спрятаны — сайт ровно как платформа. Панель открывает тройной тап по странице или Alt+B' : '«⚡ Решить и сдать», «👁 Ответы»… внизу страницы и вкладка 🤖 справа. Спрячешь — панель открывает тройной тап или Alt+B'}</span></span>
         <button class="hdpx-switch${S.hideTab ? '' : ' hdpx-switch-on'}" role="switch" aria-checked="${!S.hideTab}" data-a="tabvis"><i></i></button></label></div>
+      <div class="hdpx-card"><div class="hdpx-row"><span class="hdpx-grow"><b>Обычная платформа</b>
+        <span class="hdpx-small hdpx-muted">Выключить все функции бота. Включить обратно — 5 быстрых тапов или Alt+B</span></span>
+        <button class="hdpx-btn hdpx-s hdpx-outline" data-a="plain">⏻ Выключить всё</button></div></div>
       <div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">Данные бота</b><button class="hdpx-btn hdpx-s hdpx-outline" data-a="ovfresh">↻ Обновить с HDP</button></div>
         <p class="hdpx-small hdpx-muted">Задания, оценки и подтверждения бот берёт с этого сайта — обновляются сами раз в пару минут</p></div>
       <p class="hdpx-small hdpx-muted hdpx-tc">Действия идут через @${BOT} — результат приходит и сюда, и в чат · <a class="hdpx-link" href="/site/logout">выйти</a></p>`;
@@ -909,6 +915,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     };
     switch (act) {
       case 'close': closePanel(); break;
+      case 'plain':  // Глеб 19.10: «одной кнопкой выключить все доп. функции — просто обычная платформа»
+        if (await ask({ title: 'Выключить всё?', text: 'Будет обычная платформа, без кнопок бота. Включить обратно — 5 быстрых тапов по странице или Alt+B.', ok: '⏻ Выключить' }))
+          location.href = '/_hdp/off?to=' + encodeURIComponent(location.pathname + location.search);
+        break;
       case 'tab':
         S.tab = d.v; store.set('tab', d.v);
         if (d.v === 'exams' && !S.exams) loadExams(false);
