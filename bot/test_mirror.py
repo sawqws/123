@@ -6,6 +6,8 @@ import gzip
 import http.client
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -202,6 +204,16 @@ class MirrorTest(unittest.TestCase):
         j.update(["hdp-portal-session=NEW; Path=/; HttpOnly", "gone=; Max-Age=0"])
         self.assertIn("hdp-portal-session=NEW", j.header())
         self.assertTrue(j.has_session())
+
+    @unittest.skipUnless(shutil.which("node"), "нужен node")
+    def test_guard_keeps_hdp_brand(self):
+        """На адресе зеркала платформа включала бренд «Perlem»: её проверка /horodigital.ru$/ должна быть «да»."""
+        js = ("const location={host:'hdp.1-2-3-4.sslip.io',href:'https://hdp.1-2-3-4.sslip.io/'};"
+              "const window=globalThis;window.location=location;globalThis.HTMLIFrameElement=function(){};"
+              f"{open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'site', 'mirror', 'guard.js')).read()}"
+              "console.log(/horodigital.ru$/.test(window.location.host), /horodigital.ru$/.test('evil.com'), /a/.test('a'))")
+        out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.stdout.strip(), "true false true", out.stderr)
 
     def test_inject_without_head(self):
         out = mirror.inject("<p>x</p>", "3")

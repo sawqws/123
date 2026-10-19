@@ -29,6 +29,13 @@
     } catch (e) { /* чужое окно — не трогаем */ }
   };
   patch(window);
+  // Бренд: платформа включает «HDP» только на *.horodigital.ru (Bm = /horodigital.ru$/.test(location.host)),
+  // иначе — чужой бренд «Perlem» (заголовок вкладки, значок, поддержка). Для этой одной проверки адрес — как у оригинала.
+  const test = RegExp.prototype.test;
+  RegExp.prototype.test = function (s) {
+    if (this.source === 'horodigital.ru$' && s === location.host) return true;
+    return test.apply(this, arguments);
+  };
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
   if (d && d.get) {
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
