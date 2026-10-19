@@ -330,3 +330,18 @@
 .hdpx-ab-txt svg { width: 18px; height: 18px; }
 .hdpx-narrow .hdpx-actionbar { gap: 6px; }
 .hdpx-narrow .hdpx-ab-btn { padding: 0 11px; font-size: 14px; }
+
+/* Чаты (Глеб 19.10: «плохо сделаны чаты»): на вертикальном экране (iPad, окно Split View) платформа сворачивает
+   список чатов в кружки без имён (@media (orientation: portrait) → _chatSmall, ширина колонки 5.25rem). Где места
+   хватает (от 760 px) — полный список, как на компьютере: имя, предмет, последнее сообщение. Классы платформы — по
+   началу имени (хэш после «_» меняется при её обновлениях). Кнопки бота на этой странице бледнее — не закрывают сообщения. */
+@media (orientation: portrait) and (min-width: 760px) {
+  html.hdpx-chat [class*="_pageContent_"] { width: calc(100% - 2.5rem) !important; max-width: 69.375rem; margin-left: auto; margin-right: auto; }
+  html.hdpx-chat [class*="_chatSidebar_"][class*="_chatSidebarChatsMode_"] { width: min(21rem, 38vw) !important; }
+  html.hdpx-chat [class*="_chatSidebar_"] [class*="_tabs_"] { display: flex !important; }
+  html.hdpx-chat [class*="_chatAdaptable_"][class*="_chatLarge_"] { display: flex !important; }
+  html.hdpx-chat [class*="_chatAdaptable_"][class*="_chatSmall_"] { display: none !important; }
+  html.hdpx-chat [class*="_placeholderAdaptable_"][class*="_placeholder_"] { display: flex !important; }
+}
+html.hdpx-chat .hdpx-tab, html.hdpx-chat .hdpx-pwr { opacity: .45; transition: opacity .2s, width .15s; }
+html.hdpx-chat .hdpx-tab:hover, html.hdpx-chat .hdpx-pwr:hover, html.hdpx-chat .hdpx-tab-on { opacity: 1; }
