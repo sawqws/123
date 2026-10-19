@@ -2,7 +2,8 @@
 /* Сайт HDP в браузере: те же разделы, что на horodigital.ru (профиль, предметы, тема, статусы, успеваемость),
    и у каждого задания — «⚡ Сделать» / «👁 Ответы», у каждой темы — «📖 Подготовь меня».
    Данные и действия — API HDP-бота (bot/bot.py → ROUTES): то же, что кнопки в чате; результат приходит и сюда, и в чат.
-   Вход — cookie по одноразовой ссылке из бота (/site); каждый запрос несёт заголовок X-Site. */
+   Вход — прямо здесь («Войти через Telegram» или код из /site) или ссылкой из бота; дальше cookie на полгода,
+   каждый запрос несёт заголовок X-Site. */
 (() => {
   const BOT = 'HDP_DIGITALBOT';
   const HDP = 'https://horodigital.ru';
@@ -474,15 +475,67 @@
     return out;
   }
 
+  /* Вход прямо в Safari (без браузера Telegram): «Войти через Telegram» — бот пишет «✅ Войти», страница ждёт
+     и входит сама; или код из 6 цифр из /site. Дальше Safari помнит вход полгода. */
+  const L = { req: '', wait: false, busy: false, timer: 0 };
   function loginPage() {
     const expired = location.hash.includes('login-expired');
     return hero({ title: 'HDP', center: true }) + `<main class="page"><div class="wrap"><section class="card login">
       <div style="font-size:54px">🔐</div>
       <h2>${expired ? 'Ссылка уже не работает' : 'Вход на сайт HDP'}</h2>
-      <p>${expired ? 'Ссылка входа одноразовая и живёт 15 минут.' : 'Сайт личный.'} Напиши боту <b>/site</b> — пришлю новую ссылку. Браузер запомнит вход на 30 дней.</p>
-      <a class="btn primary" href="https://t.me/${BOT}?start=site" target="_blank" rel="noopener">Открыть @${BOT}</a>
+      <p>Safari запомнит вход на полгода.</p>
+      ${L.wait ? `<div class="lg-wait"><span class="spin"></span><span>Нажми «✅ Войти» в <a href="https://t.me/${BOT}" target="_blank" rel="noopener">@${BOT}</a> — эта страница войдёт сама</span></div>
+        <button class="btn ghost" data-l="cancel">Отмена</button>`
+        : `<button class="btn primary" data-l="tg"${L.busy ? ' disabled' : ''}>📲 Войти через Telegram</button>`}
+      <div class="lg-or">или код из бота — напиши ему <b>/site</b></div>
+      <form class="lg-code" data-l="code"><input name="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="7"
+        placeholder="000 000" aria-label="Код из 6 цифр"><button class="btn">Войти</button></form>
     </section></div></main>`;
   }
+
+  async function lpost(path, body) {
+    const r = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}) });
+    let d = {};
+    try { d = await r.json(); } catch (e) { /* не JSON */ }
+    if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+    return d;
+  }
+
+  const enter = d => { clearTimeout(L.timer); location.replace(d.home || '/site/'); };
+
+  async function lpoll() {
+    clearTimeout(L.timer);
+    if (!L.wait) return;
+    try {
+      const d = await lpost('/site/api/login/poll', { req: L.req });
+      if (d.ok) return enter(d);
+    } catch (e) { L.wait = false; toast(e.message, 'err'); render(); return; }
+    L.timer = setTimeout(lpoll, 2000);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && L.wait) lpoll(); });  // вернулся из Telegram
+
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('[data-l]');
+    if (!b || b.tagName === 'FORM') return;
+    if (b.dataset.l === 'cancel') { L.wait = false; clearTimeout(L.timer); render(); return; }
+    if (b.dataset.l !== 'tg' || L.busy) return;
+    L.busy = true; render();
+    try {
+      L.req = (await lpost('/site/api/login/request')).req;
+      L.wait = true;
+      L.timer = setTimeout(lpoll, 2000);
+    } catch (err) { toast(err.message, 'err'); }
+    L.busy = false; render();
+  });
+  document.addEventListener('submit', async e => {
+    const f = e.target.closest('[data-l="code"]');
+    if (!f) return;
+    e.preventDefault();
+    const pin = f.pin.value.replace(/\D/g, '');
+    if (pin.length !== 6) { toast('Код — 6 цифр из бота (/site)', 'err'); return; }
+    try { enter(await lpost('/site/api/login/code', { code: pin })); } catch (err) { toast(err.message, 'err'); }
+  });
 
   /* ---------- живой ход работы ---------- */
   function dock() {
