@@ -48,7 +48,7 @@ BIN = os.path.join(os.path.dirname(HERE), "horo", "tmp", "bin", "cloudflared")  
 # маршруты, которые что-то делают (решают, сдают, меняют настройки): GET на них не принимаем
 WRITE = {"/api/solve", "/api/auto", "/api/human", "/api/mode", "/api/support", "/api/check", "/api/alphabet",
          "/api/draft/send", "/api/draft/drop", "/api/draft/save", "/api/prep/run",
-         "/api/site/send", "/api/site/hold", "/api/site/settings/set", "/api/site/prep"}
+         "/api/site/send", "/api/site/hold", "/api/site/settings/set", "/api/site/prep", "/api/site/check"}
 
 url = os.environ.get("HORO_WEB_URL", "").rstrip("/")  # текущий https-адрес приложения
 _cfg = {}

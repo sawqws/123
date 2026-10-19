@@ -41,6 +41,7 @@ from zoneinfo import ZoneInfo
 
 import drafts
 import prep
+import sitecheck
 import web
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
@@ -187,7 +188,7 @@ COMMANDS = [  # меню команд у поля ввода
     ("prep", "Подготовка к проверочной"), ("app", "Открыть приложение"),
     ("site", "Сайт HDP в браузере"),
     ("mode", "Чат или приложение"),
-    ("help", "Что я умею"), ("check", "Проверить, что всё работает"),
+    ("help", "Что я умею"), ("check", "Проверить, что всё работает"), ("sitecheck", "Проверка сайта от А до Я"),
     ("style", "Настроить почерк"), ("alphabet", "Заполнить алфавит почерка"),
     ("send", "Когда отправлять учителю"), ("delay", "Сдача как человек: вкл/выкл"),
     ("update", "Обновить бота"), ("emoji", "Премиум-эмодзи"),
@@ -1992,6 +1993,10 @@ def on_callback(cq):
         if ua:
             edit(chat, mid, card("Вход на сайт подтверждён", esc(ua), icon="✅"), resend=False)
         return
+    if data.startswith("sc:"):  # 🧪 проверка сайта: починить найденное / подробно / ещё раз
+        quiet("answerCallbackQuery", callback_query_id=cq["id"])
+        on_sitecheck(chat, data[3:])
+        return
     if data.startswith("m:"):  # меню «Ещё»: правится на месте
         on_more(chat, mid, cq["id"], data[2:])
         return
@@ -2137,6 +2142,7 @@ def more_kb():
     rows = [
         [("❗ Просрочки", "m:late"), ("🛠 Поддержка", "sup|ask")],  # sup|… ловит support.Support
         [("✍️ Почерк", "m:hand"), ("🩺 Проверка", "m:check")],
+        [("🧪 Проверка сайта", "m:sitecheck")],
         [("❓ Помощь", "m:help"), ("⚙️ Режим", "m:mode")] + app,
         [(btn_delay(), "m:human"), ("⏳ Ожидание", "w:upd")],
     ]
@@ -2157,6 +2163,8 @@ def on_more(chat, mid, cq_id, key):
         threading.Thread(target=send_alphabet, args=(chat,), daemon=True).start()
     elif key == "check":
         threading.Thread(target=check, args=(chat,), daemon=True).start()
+    elif key == "sitecheck":
+        threading.Thread(target=site_check, args=(chat,), daemon=True).start()
     elif key == "human":  # ⏳ Отправка — настройка на месте меню
         edit(chat, mid, send_card(), send_kb())
 
@@ -2318,6 +2326,59 @@ def retry_alphabet():
 
 
 # ---------- Проверка ----------
+
+def site_check(chat):
+    """🧪 Сайт от А до Я: обход всех страниц зеркала (ошибки, картинки, вёрстка, панель бота) → отчёт и «Починить»."""
+    if sitecheck.running():
+        send(chat, card("Проверка сайта уже идёт", note="Отчёт придёт сюда", icon="🧪"), raw_html=True)
+        return
+    send(chat, card("Проверяю сайт от А до Я", "Все страницы платформы через зеркало: ошибки, картинки, вёрстка на "
+                    "компьютере, iPad и телефоне, кнопки бота. На платформе ничего не меняю.",
+                    "Минут 5–15 — отчёт придёт сюда", "🧪"), raw_html=True)
+    try:
+        rep = sitecheck.run()
+    except Exception as e:
+        send(chat, err(f"Проверка сайта: {e}"), menu=True, raw_html=True)
+        return
+    send_sitecheck(chat, rep)
+
+
+def send_sitecheck(chat, rep):
+    head, rows, mine = sitecheck.summary(rep)
+    btns = [[("🛠 Починить найденное", "sc:fix", "primary")]] if mine and SUP else []
+    btns.append([("📋 Подробно", "sc:more"), ("🔁 Ещё раз", "sc:again")])
+    send(chat, card(esc(head), esc("\n".join(rows)), icon="✅" if not mine else "🧪"), markup=kb(*btns), raw_html=True)
+
+
+def on_sitecheck(chat, what):
+    rep = sitecheck.last()
+    if what == "again":
+        threading.Thread(target=site_check, args=(chat,), daemon=True).start()
+    elif not rep:
+        send(chat, err("Отчёта ещё нет — запусти проверку"), raw_html=True)
+    elif what == "fix":
+        if not SUP or not sitecheck.ours(rep):
+            send(chat, card("Чинить нечего", icon="✅"), raw_html=True)
+            return
+        SUP.start(chat, sitecheck.fix_text(rep))  # тот же Claude, что «🛠 Поддержка»: правка, тесты, перезапуск, откат
+    elif what == "more":
+        rows = [f"{p['path']} — {p['ms'] / 1000:.1f} с" + (f" · ошибок {p['n']}" if p["n"] else "") for p in rep.get("list", [])]
+        rows += ["", "Все ошибки:"] + [("· " if not i.get("platform") else "· (платформа) ") + sitecheck.line(i)
+                                       for i in rep.get("issues", [])[:40]]
+        send(chat, card("Проверка сайта подробно", esc("\n".join(rows))[:3800], icon="📋"), raw_html=True)
+
+
+def app_site_check(b):
+    """Сайт: «🧪 Проверка сайта» (POST) — запустить; отчёт придёт в чат и сюда."""
+    if b.get("start"):
+        if sitecheck.running():
+            raise ValueError("Проверка уже идёт")
+        threading.Thread(target=site_check, args=(owner(),), daemon=True).start()
+    rep = sitecheck.last()
+    head, rows, mine = sitecheck.summary(rep) if rep else ("", [], [])
+    return {"running": sitecheck.running(), "head": head, "rows": rows, "errors": len(mine),
+            "age": sitecheck.age(rep)}
+
 
 def check(chat):
     if not lock.acquire(blocking=False):
@@ -2973,6 +3034,9 @@ def handle(msg):
         return
     if text.startswith("/alphabet") or text == BTN_HAND:
         threading.Thread(target=send_alphabet, args=(chat,), daemon=True).start()
+        return
+    if text.startswith("/sitecheck"):
+        threading.Thread(target=site_check, args=(chat,), daemon=True).start()
         return
     if text.startswith("/check") or text == BTN_CHECK:
         threading.Thread(target=check, args=(chat,), daemon=True).start()
@@ -3850,6 +3914,7 @@ def app_site_prep(b):
 ROUTES.update({"/api/site/wait": app_site_wait, "/api/site/exams": app_site_exams, "/api/site/times": app_site_times,
                "/api/site/send": app_site_send, "/api/site/hold": app_site_hold,
                "/api/site/settings": app_site_settings, "/api/site/settings/set": app_site_settings_set,
+               "/api/site/check": app_site_check,
                "/api/site/draft/files": app_site_draft_files, "/api/site/prep": app_site_prep})
 
 
