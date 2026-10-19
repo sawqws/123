@@ -179,6 +179,15 @@ class MirrorTest(unittest.TestCase):
         code, h, _ = self.req("GET", "/site/login?c=" + web.site_code(), cookie=False)
         self.assertEqual((code, h["Location"]), (302, "/student"))
 
+    def test_old_site_goes_to_mirror_when_logged_in(self):
+        """Прежний самодельный сайт /site/ на адресе зеркала: вошёл — сразу платформа, не вошёл — карточка входа."""
+        for p in ("/site", "/site/", "/site/index.html"):
+            code, h, _ = self.req("GET", p)
+            self.assertEqual((code, h.get("Location")), (302, "/student"), p)
+        code, _, body = self.req("GET", "/site/", cookie=False)
+        self.assertEqual(code, 200)
+        self.assertEqual(Upstream.seen, [])
+
     def test_tunnel_host_is_not_mirror(self):
         code, _, _ = self.req("GET", "/student", host="abc.trycloudflare.com")
         self.assertEqual(code, 404)  # там мини-приложение, а не платформа
