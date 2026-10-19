@@ -3,7 +3,10 @@
 Каждую минуту (тихо, без сети и без Claude):
   • pm2: не работает → перезапуск; падает по кругу → ошибка;
   • «пульс» цикла приёма сообщений (horo/tmp/heartbeat) старше 10 мин → бот завис → перезапуск;
-  • его сервер (127.0.0.1:8788/health — приложение и сайт) не отвечает → перезапуск;
+  • его сервер (127.0.0.1:8788/health — приложение и сайт) не отвечает 2 мин → перезапуск, ещё 3 мин → Claude чинит
+    сразу (Глеб 19.10: «если сайт упал — автоматом поднимает сразу же Claude»), даже если HDP занят;
+  • сайт снаружи (https://hdp.<ip>.sslip.io/health, через Caddy планера) не открывается, а сам HDP жив → перезапуск
+    planner-bot (он держит Caddy), не помогло — Claude чинит planner-bot;
   • журнал ошибок HDP (horo/tmp/journal.jsonl: упавший код с трассировкой, скрипты сайта, Claude, сеть) и
     Traceback в логе pm2;
   • зависшие дела: задание решается дольше 45 мин, тест не сдан в срок, ответ учителю не ушёл в срок.
@@ -29,6 +32,7 @@ maker = None
 check = None
 
 PM2 = "horo-bot"
+CADDY = "planner-bot"  # держит Caddy: https-адреса всех ботов, и hdp.<ip>.sslip.io тоже
 EVERY = 60
 DEEP_EVERY = 2 * 3600
 HANG = 10 * 60           # «пульс» старше — завис (getUpdates ждёт до 60 с; обработка сообщения — не дольше минут)
@@ -41,6 +45,7 @@ FIX_AGAIN = 12 * 3600    # одну и ту же ошибку чиним не ч
 TELL_AGAIN = 12 * 3600   # и напоминаем о ней не чаще
 KEEP = 3 * 86400         # закрытые ошибки и события храним столько
 WEB = "http://127.0.0.1:8788/health"
+URGENT_AGAIN = 3600      # сайт лежит: Claude зовём снова не раньше чем через час (а не через 12 ч)
 
 lock = threading.RLock()  # hub.py ставит сюда свой lock: state.json один на всех
 deep_lock = threading.Lock()
@@ -105,6 +110,25 @@ def close(g, kind):
 
 def proc_of(procs):
     return next((p for p in procs or [] if p.get("name") == PM2), None)
+
+
+def site_url():
+    ip = os.environ.get("HUB_IP") or (ui.server_ip() if hasattr(ui, "server_ip") else None)
+    return f"https://hdp.{ip.replace('.', '-')}.sslip.io/health" if ip else ""
+
+
+def site_ok():
+    """Сайт HDP снаружи (через Caddy): True / False, None — адрес неизвестен (не судим)."""
+    url = site_url()
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            return r.status < 500
+    except urllib.error.HTTPError as e:
+        return e.code < 500
+    except Exception:
+        return False
 
 
 def heartbeat_age(now):
@@ -182,6 +206,7 @@ def tick(now=None, procs=None):
     acts = []
     # медленное (сеть, файлы HDP) — до блокировки: state.json Главного не держим занятым
     web = web_ok()
+    site = site_ok() if web else None
     age = heartbeat_age(now)
     jams = stuck(hdp_settings(), now)
     logs = []
@@ -230,15 +255,31 @@ def tick(now=None, procs=None):
                 acts.append(("restart", "завис"))
             else:
                 close(g, "hang")
-            # 4. сервер приложения и сайта
+            # 4. сервер приложения и сайта: 2 мин — перезапуск, ещё 3 мин — Claude чинит сразу
             if not web:
                 g["web"] = g.get("web", 0) + 1
-                if g["web"] == 3:
-                    raise_issue(g, now, "web", "приложение и сайт не отвечают", fixable=False)
-                    acts.append(("restart", "приложение не отвечало"))
+                if g["web"] == 2:
+                    raise_issue(g, now, "web", "сайт и приложение не отвечают", fixable=False)
+                    acts.append(("restart", "сайт не отвечал"))
+                if g["web"] >= 4:
+                    it = raise_issue(g, now, "web", "сайт не поднимается после перезапуска", tail())
+                    it["urgent"] = True
             else:
                 g["web"] = 0
-                close(g, "web")
+                if site is not False:
+                    close(g, "web")
+            # 4б. сайт снаружи (Caddy планера): HDP жив, а адрес не открывается
+            if web and site is False:
+                g["site"] = g.get("site", 0) + 1
+                if g["site"] == 2:
+                    raise_issue(g, now, "web", "сайт снаружи не открывается (Caddy)", fixable=False)
+                    acts.append(("caddy", "сайт снаружи не открывался"))
+                if g["site"] >= 4:
+                    it = raise_issue(g, now, "web", "сайт снаружи не открывается и после перезапуска Caddy",
+                                     ui.log_text(CADDY, 60, 2500) if hasattr(ui, "log_text") else "")
+                    it["urgent"], it["target"] = True, CADDY
+            elif site:
+                g["site"] = 0
             # 5. зависшие дела
             for text, detail in jams:
                 raise_issue(g, now, "stuck", text, detail)
@@ -293,8 +334,10 @@ def decide(g, now):
     for it in g["issues"].values():
         if it.get("closed") or it.get("muted"):
             continue
-        can_fix = it.get("fixable") and not (it.get("fixable_later") and it["count"] < 2)
-        if (can_fix and fix_allowed(g, now) and now - it.get("fix_at", 0) > FIX_AGAIN
+        urgent = it.get("urgent")
+        can_fix = urgent or it.get("fixable") and not (it.get("fixable_later") and it["count"] < 2)
+        again = URGENT_AGAIN if urgent else FIX_AGAIN
+        if (can_fix and fix_allowed(g, now) and now - it.get("fix_at", 0) > again
                 and not any(a[0] == "fix" for a in acts)):
             acts.append(("fix", it["sig"]))
             it["fix_at"] = round(now)  # пока не начали — пометка, чтобы не звать дважды
@@ -343,7 +386,7 @@ def run_fix(chat, sig, by_hand=False):
     if not by_hand:
         ui.send(chat, ui.card("🛡 <b>HDP: нашёл ошибку — чиню сам</b>", [ui.esc(it["text"][:200])]),
                 [[ui.b("🛡 Страж", "grd")]])
-    maker.fix(chat, PM2, FIX_TZ.format(text=it["text"], count=it["count"], detail=(it.get("detail") or "—")[-2500:]))
+    maker.fix(chat, it.get("target") or PM2, FIX_TZ.format(text=it["text"], count=it["count"], detail=(it.get("detail") or "—")[-2500:]))
     with lock:
         st = ui.load()
         x = state(st)["issues"].get(sig)
@@ -392,8 +435,17 @@ def handle(acts, now=None):
             ok, text = restart(arg)
             ui.send(chat, f"🛡 HDP {arg} — перезапустил" if ok else ui.card("🛡 <b>HDP не поднимается</b>", [ui.esc(text)]),
                     None if ok else [[ui.b("📜 Логи", f"lg|{PM2}"), ui.b("🛡 Страж", "grd")]])
+        elif kind == "caddy":
+            ok, text = ui.restart_app(CADDY, wait=8)
+            with lock:
+                st = ui.load()
+                event(state(st), time.time(), "web", f"перезапустил Caddy ({arg})" if ok else text)
+                ui.save(st)
+            ui.send(chat, f"🛡 Сайт HDP: {arg} — перезапустил Caddy" if ok else ui.card("🛡 <b>Caddy не поднимается</b>", [ui.esc(text)]))
         elif kind == "fix":
-            if busy():  # HDP решает или сдаёт — подождём: починка его перезапустит
+            with lock:
+                urgent = (state(ui.load())["issues"].get(arg) or {}).get("urgent")
+            if busy() and not urgent:  # HDP решает или сдаёт — подождём: починка его перезапустит (сайт лежит — не ждём)
                 with lock:
                     st = ui.load()
                     it = state(st)["issues"].get(arg)

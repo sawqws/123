@@ -590,7 +590,7 @@ class BotTest(unittest.TestCase):
         conf, cands = planner.caddyfile("2.27.206.165")
         self.assertEqual(cands, ["https://2-27-206-165.sslip.io", "https://2.27.206.165"])
         self.assertIn("profile shortlived", conf)
-        self.assertEqual(conf.count("encode zstd gzip"), 2)  # сжатие — для приложения на имени и на IP
+        self.assertEqual(conf.count("encode zstd gzip"), 3)  # сжатие — приложение на имени и на IP, сайт HDP
         self.assertIn(f"reverse_proxy 127.0.0.1:{planner.PORT}", conf)
         for name, port in (("coach", 8789), ("hub", 8790), ("eye", 8791), ("kpp", 8792), ("avito", 8793), ("agent", 8794),
                            ("apps", 8795)):
