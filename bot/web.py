@@ -277,6 +277,8 @@ class Web(BaseHTTPRequestHandler):
             site_logout(self.cookie())
             return self.redirect("/site/", "")
         if path in ("/site", "/site/", "/site/index.html"):
+            if self.mirror_host() and site_check(self.cookie()):
+                return self.redirect("/student")  # вошёл — сразу зеркало платформы, а не прежний самодельный сайт
             with open(os.path.join(SITE, "index.html"), encoding="utf-8") as f:
                 page = f.read().replace("{{v}}", _cfg.get("site_version", "0"))
             return self.reply(200, page, "text/html; charset=utf-8")
