@@ -6,8 +6,8 @@
    · «Эта страница» — на задании: «⚡ Решить и сдать» / «👁 Ответы» (тест) или «✍️ Написать ответ», ход решения,
      черновик; на теме: «📖 Подготовь меня» (1/5/10 мин), «⚡ Автотесты темы» и кнопки у каждого задания темы;
    · Сейчас (ход работы, черновики учителю, автотесты), Ожидание, Подтверждения 2.0/3.0, Подготовка, Настройки.
-   «⏻ Выключить всё» (шапка панели, Настройки) — /_hdp/off: cookie hdp_plain, сервер больше не вставляет этот файл,
-   сайт — чистая платформа; включить обратно — 5 быстрых тапов или Alt+B (это ловит guard.js) → /_hdp/on.
+   ⏻ над вкладкой 🤖 (и «⏻ Выключить всё» в шапке панели, Настройках) — одним нажатием /_hdp/off: cookie hdp_plain,
+   сервер больше не вставляет этот файл, сайт — чистая платформа; на том же месте guard.js рисует ⏻ «включить» → /_hdp/on.
    Данные и действия — API бота (bot/bot.py → ROUTES), те же функции, что кнопки в чате. Вход — cookie по ссылке из бота (/site).
    Тип и статус заданий — из API самой платформы (тот же запрос, что делает её страница темы), иначе из данных бота. */
 (() => {
@@ -56,6 +56,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return left < 60 ? 'меньше минуты' : left < 3600 ? `через ${Math.floor(left / 60)} мин` : `через ${Math.floor(left / 3600)} ч ${Math.floor(left % 3600 / 60)} мин`;
   };
   const I = {
+    pwr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3.5v8"/><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0"/></svg>',
     bot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5.5"/><circle cx="12" cy="4.2" r="1.2"/><path d="M9.2 13.2v1.6M14.8 13.2v1.6M2 13v2.6M22 13v2.6"/></svg>',
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/></svg>',
@@ -278,9 +279,12 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   }
 
   /* ---------- вкладка справа и панель ---------- */
+  // Глеб 19.10: «выкл одной кнопкой и вкл одной кнопкой» — без вопросов
+  const plainOff = () => { location.href = '/_hdp/off?to=' + encodeURIComponent(location.pathname + location.search); };
+
   function ensureTab() {
     let tab = $('.hdpx-tab');
-    if (S.hideTab && !S.open) { if (tab) tab.remove(); return; }
+    if (S.hideTab && !S.open) { if (tab) tab.remove(); const pw = $('.hdpx-pwr'); if (pw) pw.remove(); return; }
     if (!tab) {
       tab = el('button', 'hdpx-tab', I.bot + '<span class="hdpx-badge" hidden></span>');
       tab.type = 'button';
@@ -296,6 +300,17 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const vw = vv ? vv.offsetLeft + vv.width : window.innerWidth, vh = vv ? vv.offsetTop + vv.height : window.innerHeight;
     const bottom = r && r.height && r.right >= vw - 2 ? Math.round(vh - r.top + 12) : 190;
     if (tab.style.bottom !== bottom + 'px') tab.style.bottom = bottom + 'px';
+    // ⏻ над вкладкой: одно нажатие — обычная платформа без бота (включить — та же кнопка на том же месте, её рисует guard.js)
+    let pwr = $('.hdpx-pwr');
+    if (!pwr) {
+      pwr = el('button', 'hdpx-pwr', I.pwr);
+      pwr.type = 'button';
+      pwr.title = 'Выключить HDP-бота — обычная платформа';
+      pwr.setAttribute('aria-label', pwr.title);
+      pwr.addEventListener('click', plainOff);
+      layer().append(pwr);
+    } else if (pwr.parentElement !== layer()) layer().append(pwr);
+    if (pwr.style.bottom !== bottom + 72 + 'px') pwr.style.bottom = bottom + 72 + 'px';
     const n = (S.st && (S.st.drafts || []).length) || 0;
     const badge = $('.hdpx-badge', tab);
     const work = S.running.size || (S.st && S.st.working);
@@ -632,7 +647,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         <span class="hdpx-small hdpx-muted">${S.hideTab ? 'Спрятаны — сайт ровно как платформа. Панель открывает тройной тап по странице или Alt+B' : '«⚡ Решить и сдать», «👁 Ответы»… внизу страницы и вкладка 🤖 справа. Спрячешь — панель открывает тройной тап или Alt+B'}</span></span>
         <button class="hdpx-switch${S.hideTab ? '' : ' hdpx-switch-on'}" role="switch" aria-checked="${!S.hideTab}" data-a="tabvis"><i></i></button></label></div>
       <div class="hdpx-card"><div class="hdpx-row"><span class="hdpx-grow"><b>Обычная платформа</b>
-        <span class="hdpx-small hdpx-muted">Выключить все функции бота. Включить обратно — 5 быстрых тапов или Alt+B</span></span>
+        <span class="hdpx-small hdpx-muted">Выключить все функции бота. Включить обратно — кнопка ⏻ справа на том же месте</span></span>
         <button class="hdpx-btn hdpx-s hdpx-outline" data-a="plain">⏻ Выключить всё</button></div></div>
       <div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">Данные бота</b><button class="hdpx-btn hdpx-s hdpx-outline" data-a="ovfresh">↻ Обновить с HDP</button></div>
         <p class="hdpx-small hdpx-muted">Задания, оценки и подтверждения бот берёт с этого сайта — обновляются сами раз в пару минут</p></div>
@@ -915,10 +930,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     };
     switch (act) {
       case 'close': closePanel(); break;
-      case 'plain':  // Глеб 19.10: «одной кнопкой выключить все доп. функции — просто обычная платформа»
-        if (await ask({ title: 'Выключить всё?', text: 'Будет обычная платформа, без кнопок бота. Включить обратно — 5 быстрых тапов по странице или Alt+B.', ok: '⏻ Выключить' }))
-          location.href = '/_hdp/off?to=' + encodeURIComponent(location.pathname + location.search);
-        break;
+      case 'plain': plainOff(); break;  // Глеб 19.10: «одной кнопкой выключить все доп. функции — обычная платформа»
       case 'tab':
         S.tab = d.v; store.set('tab', d.v);
         if (d.v === 'exams' && !S.exams) loadExams(false);
