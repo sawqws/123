@@ -240,13 +240,68 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     layer().append(m);
   }
 
-  // заменить содержимое своего блока, если оно поменялось; раскрытые <details data-k> остаются раскрытыми
+  // Плавное обновление (Глеб 19.10: «резко дёргается… сделай сайт сильно плавнее»): блок не перерисовывается целиком —
+  // меняется только то, что поменялось (без мигания картинок, сброса прокрутки и поля ввода). Карточки с data-key
+  // появляются и исчезают анимацией; раскрытые <details> остаются раскрытыми.
+  const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const keyOf = n => (n.nodeType === 1 ? n.getAttribute('data-key') : null);
+  const sameKind = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || (a.tagName === b.tagName && keyOf(a) === keyOf(b)));
+  function leave(n) {
+    if (REDUCED || n.nodeType !== 1 || !keyOf(n)) { n.remove(); return; }
+    n.dataset.leaving = '1';
+    n.style.height = n.offsetHeight + 'px';
+    n.classList.add('hdpx-leave');
+    requestAnimationFrame(() => { n.style.height = '0px'; });
+    setTimeout(() => n.remove(), 280);
+  }
+  function patch(a, b) {
+    if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+    for (const at of [...a.attributes]) {
+      if (!b.hasAttribute(at.name) && !(at.name === 'open' && a.tagName === 'DETAILS')) a.removeAttribute(at.name);
+    }
+    for (const at of [...b.attributes]) {
+      if (at.name === 'open' && a.tagName === 'DETAILS') continue;  // раскрыл/свернул сам — не трогаем
+      let v = at.value;
+      if (at.name === 'class' && a.classList.contains('hdpx-enter')) v += ' hdpx-enter';
+      if (a.getAttribute(at.name) !== v) a.setAttribute(at.name, v);
+    }
+    if (a === document.activeElement && /^(TEXTAREA|INPUT)$/.test(a.tagName)) return;  // не сбивать ввод
+    sync(a, b);
+  }
+  function sync(from, to) {
+    const live = [...from.childNodes].filter(n => !(n.nodeType === 1 && n.dataset.leaving));
+    const keyed = new Map(live.filter(keyOf).map(n => [keyOf(n), n]));
+    const used = new Set();
+    let ref = live[0] || null;
+    const next = n => { let x = n.nextSibling; while (x && x.nodeType === 1 && x.dataset.leaving) x = x.nextSibling; return x; };
+    for (const nn of [...to.childNodes]) {
+      const k = keyOf(nn);
+      let m = k ? keyed.get(k) : null;
+      if (!k) m = live.find(o => !used.has(o) && !keyOf(o) && sameKind(o, nn)) || null;
+      if (m && used.has(m)) m = null;
+      if (m) {
+        used.add(m);
+        patch(m, nn);
+        if (m !== ref) from.insertBefore(m, ref);
+        ref = next(m);
+      } else {
+        const fresh = document.importNode(nn, true);
+        if (k && !REDUCED && fresh.nodeType === 1) {
+          fresh.classList.add('hdpx-enter');
+          setTimeout(() => fresh.classList.remove('hdpx-enter'), 400);
+        }
+        from.insertBefore(fresh, ref);
+      }
+    }
+    for (const o of live) if (!used.has(o)) leave(o);
+  }
   function swap(box, html) {
     if (box.dataset.html === html) return false;
-    const open = $$('details[open][data-k]', box).map(x => x.dataset.k);
-    box.innerHTML = html;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    if (box.dataset.html == null && !box.childNodes.length) box.append(tpl.content);  // первый раз — просто вставить
+    else sync(box, tpl.content);
     box.dataset.html = html;
-    for (const k of open) { const x = $(`details[data-k="${k}"]`, box); if (x) x.open = true; }
     return true;
   }
 
@@ -468,7 +523,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         <button class="hdpx-btn hdpx-s hdpx-outline" data-a="send" data-m="now" data-task="${esc(d.task)}">⚡ Сейчас</button>
         <button class="hdpx-btn hdpx-s hdpx-outline" data-a="hold" data-task="${esc(d.task)}">✖ Отменить</button></div>`;
     }
-    return `<div class="hdpx-card hdpx-draft" data-task="${esc(d.task)}">
+    return `<div class="hdpx-card hdpx-draft" data-key="d-${esc(d.task)}" data-task="${esc(d.task)}">
       <div class="hdpx-row"><span>✍️</span><b class="hdpx-grow">${esc(d.title)}</b>
         ${d.url ? `<a class="hdpx-iconbtn hdpx-iconbtn-s" href="${esc(local(d.url))}" data-a="go" title="Открыть задание" aria-label="Открыть задание">${I.out}</a>` : ''}</div>
       <p class="hdpx-small hdpx-muted">Черновик ответа учителю — поправь текст, бот запомнит правки</p>
@@ -490,12 +545,26 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     </div>`;
   }
 
+  // черновик с таймером или уже отправляется — компактная карточка «Уйдёт учителю» (поле и кнопки не нужны)
+  function queuedCard(d) {
+    const when = d.sending ? `${spin}<span class="hdpx-grow">Отправляю учителю…</span>`
+      : `<span class="hdpx-grow">⏳ Отправлю в <b>${hhmm(d.send_at)}</b> <span class="hdpx-muted">· ${soon(d.send_at)}</span></span>`;
+    return `<div class="hdpx-card hdpx-queued" data-key="q-${esc(d.task)}" data-task="${esc(d.task)}">
+      <div class="hdpx-row"><span>📬</span><b class="hdpx-grow">${esc(d.title)}</b>
+        ${d.url ? `<a class="hdpx-iconbtn hdpx-iconbtn-s" href="${esc(local(d.url))}" data-a="go" title="Открыть задание" aria-label="Открыть задание">${I.out}</a>` : ''}</div>
+      <div class="hdpx-row hdpx-q-when">${when}</div>
+      ${d.sending ? '' : `<div class="hdpx-acts"><button class="hdpx-btn hdpx-s hdpx-outline" data-a="send" data-m="now" data-task="${esc(d.task)}">⚡ Сейчас</button>
+        <button class="hdpx-btn hdpx-s hdpx-outline" data-a="hold" data-task="${esc(d.task)}">✖ Отменить</button></div>`}</div>`;
+  }
+
   function nowTab() {
     const st = S.st;
     if (!st) return `<div class="hdpx-card hdpx-center">${spin}<p class="hdpx-p hdpx-muted">Связываюсь с ботом…</p></div>`;
     const parts = [hereCard(), liveCard(), lastCard()];
     const drafts = st.drafts || [];
-    if (drafts.length) parts.push(`<p class="hdpx-h3 hdpx-sec">Черновики учителю <span class="hdpx-count">${drafts.length}</span></p>` + drafts.map(draftCard).join(''));
+    const queued = drafts.filter(d => d.send_at || d.sending), ready = drafts.filter(d => !d.send_at && !d.sending);
+    if (queued.length) parts.push(`<p class="hdpx-h3 hdpx-sec" data-key="sec-q">Уйдут учителю <span class="hdpx-count">${queued.length}</span></p>` + queued.map(queuedCard).join(''));
+    if (ready.length) parts.push(`<p class="hdpx-h3 hdpx-sec" data-key="sec-d">Черновики учителю <span class="hdpx-count">${ready.length}</span></p>` + ready.map(draftCard).join(''));
     const autos = S.ov ? (S.ov.tasks || []).filter(t => t.auto && ['appointed', 'reworking'].includes(t.rawStatus)).length : null;
     parts.push(`<div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">⚡ Автотесты</b>${autos == null ? `<span class="hdpx-muted hdpx-small">${spin}</span>` : ''}</div>
       <p class="hdpx-small hdpx-muted">${autos ? `Новых тестов с автопроверкой: ${autos}. Бот решит и сдаст их — до 3 сразу, остальные в очереди.` : autos === 0 ? 'Новых тестов с автопроверкой нет' : 'Считаю тесты…'}</p>
@@ -960,6 +1029,11 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       if (r) { S.st = r; delete S.edits[task]; }
       return !!r;
     };
+    // сразу показать результат нажатия (карточка уезжает в «Уйдут учителю»), а бот подтвердит следом
+    const optimistic = (task, patch) => {
+      const dr = S.st && (S.st.drafts || []).find(x => x.task === task);
+      if (dr) { Object.assign(dr, patch); update(); }
+    };
     switch (act) {
       case 'close': closePanel(); break;
       case 'plain': plainOff(); break;
@@ -1002,9 +1076,12 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         if (d.m === 'now' && !(await ask({ title: 'Отправить учителю сейчас?', text: `«${dr.title || 'Ответ'}» уйдёт на HDP сразу.`, ok: '⚡ Отправить' }))) return;
         if (d.m === 'send' && !(await ask({ title: 'Отправить ответ учителю?', text: S.settings && S.settings.delay !== '0' ? `Уйдёт через ${S.settings.label}, как будто ты сам отправил. Отменить можно до отправки.` : 'Ответ уйдёт на HDP сразу.', ok: '✅ Отправить' }))) return;
         if (!(await saveFirst(a, d.task))) return;
+        if (d.m === 'now') optimistic(d.task, { sending: true });
         const r = await busy(a, () => api('/api/site/send', { task: d.task, mode: d.m }));
+        if (!r) { tick(); break; }
         if (r) {
           S.st = r;
+          update();
           toast(d.m === 'now' ? 'Отправляю учителю…' : d.m === 'later' ? 'Отправлю с задержкой — время видно на черновике' : 'Готово — время отправки видно на черновике');
           setTimeout(tick, 1200);
           loadWait(true);
@@ -1021,13 +1098,16 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         break;
       case 'at': {
         if (!(await saveFirst(a, d.task))) return;
+        S.timeOpen = '';
+        optimistic(d.task, { send_at: Number(d.at) });
         const r = await busy(a, () => api('/api/site/send', { task: d.task, mode: 'at', at: Number(d.at) }));
-        if (r) { S.st = r; S.timeOpen = ''; toast(`Отправлю в ${hhmm(Number(d.at))}`); setTimeout(tick, 800); loadWait(true); }
+        if (r) { S.st = r; update(); toast(`Отправлю в ${hhmm(Number(d.at))}`); setTimeout(tick, 800); loadWait(true); } else tick();
         break;
       }
       case 'hold': {
+        optimistic(d.task, { send_at: null, sending: false });
         const r = await busy(a, () => api('/api/site/hold', { task: d.task }));
-        if (r) { S.st = r; toast('Не отправляю — черновик остался'); loadWait(true); update(); }
+        if (r) { S.st = r; toast('Не отправляю — черновик остался'); loadWait(true); update(); } else tick();
         break;
       }
       case 'drop': {
