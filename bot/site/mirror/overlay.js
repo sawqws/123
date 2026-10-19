@@ -166,6 +166,20 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     if (!L) { L = el('div', 'hdpx-vv'); document.body.append(L); fitLayer(); }
     return L;
   }
+  // Глеб пишет в поле платформы (открыта клавиатура iPad) — плавающие кнопки бота уезжают, чтобы не висеть посреди
+  // текста задания (Глеб 19.10: «вот так иногда ещё уходит»); вернутся, когда поле отпустит
+  const editable = n => n && n.closest && !n.closest('[data-hdpx], .hdpx-vv') &&
+    (n.isContentEditable || /^(TEXTAREA|SELECT)$/.test(n.tagName) || (n.tagName === 'INPUT' && !/^(button|checkbox|radio|submit|file|range|color)$/i.test(n.type)));
+  function typingState() {
+    const a = document.activeElement;  // поле ответа платформы — редактор TinyMCE в iframe: фокус у самого iframe
+    document.documentElement.classList.toggle('hdpx-typing', !!(editable(a) || (a && a.tagName === 'IFRAME' && !a.closest('[data-hdpx], .hdpx-vv'))));
+  }
+  document.addEventListener('focusin', typingState, true);
+  document.addEventListener('focusout', () => setTimeout(typingState, 60), true);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', typingState);
+  window.addEventListener('blur', () => setTimeout(typingState, 0));  // фокус ушёл в iframe редактора — focusin тут не приходит
+  window.addEventListener('focus', typingState);
+
   function fitLayer() {
     const L = document.querySelector('body > .hdpx-vv');
     if (!L) return;
