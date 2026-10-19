@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -55,6 +56,11 @@ class Upstream(BaseHTTPRequestHandler):
         if self.path == "/student/assets/app.js":
             return self.answer(200, b"console.log('https://horodigital.ru')", "application/javascript",
                                [("Cache-Control", "public, max-age=31536000")])
+        if self.path.startswith("/store/t/"):
+            Upstream.store = getattr(Upstream, "store", 0) + 1
+            return self.answer(200, b"JPEGDATA", "image/jpeg", [("Cache-Control", "client,max-age=5356800")])
+        if self.path == "/api/education/v1/files":
+            return self.answer(200, b'{"img": "https://horodigital.ru/store/t/' + b"a" * 32 + b'"}', "application/json")
         if self.path == "/go":
             return self.answer(302, b"", "text/plain", [("Location", "https://horodigital.ru/login")])
         self.answer(404, b"{}", "application/json")
@@ -85,6 +91,7 @@ class MirrorTest(unittest.TestCase):
             mock.patch.object(mirror, "_jar", mirror.Jar(state)),
             mock.patch.object(mirror, "_pool", mirror.Pool()),
             mock.patch.object(mirror, "relogin", mock.Mock(return_value=False)),
+            mock.patch.object(mirror, "_store", mirror.Store(os.path.join(self.tmp.name, "cache"))),
             mock.patch.object(web, "SESSIONS", os.path.join(self.tmp.name, "sessions.json")),
         ]
         for p in self.patches:
@@ -131,6 +138,24 @@ class MirrorTest(unittest.TestCase):
         self.assertNotIn("hdp_site", sent["Cookie"])                        # наша cookie на платформу не уходит
         self.assertNotIn("_ym_uid", sent["Cookie"])                         # чужие домены — нет
         self.assertIn("i18n", mirror._jar.c)                                # Set-Cookie платформы — в банку
+
+    def test_store_cached_and_warmed(self):
+        """Картинки /store/…: из ответа API качаются заранее; браузер получает их из кэша, платформу второй раз не просят."""
+        Upstream.store = 0
+        self.req("GET", "/api/education/v1/files", headers={"Origin": "https://hdp.1-2-3-4.sslip.io"})
+        path = "/store/t/" + "a" * 32
+        for _ in range(50):
+            if mirror._store.get(path):
+                break
+            time.sleep(0.05)
+        self.assertTrue(mirror._store.get(path))  # скачано заранее, до запроса браузера
+        for _ in range(2):
+            code, h, body = self.req("GET", path)
+            self.assertEqual((code, body, h["Content-Type"]), (200, b"JPEGDATA", "image/jpeg"))
+            self.assertIn("max-age", h["Cache-Control"])
+        self.assertEqual(Upstream.store, 1)  # платформу спросили один раз
+        code, _, _ = self.req("GET", "/store/t/" + "b" * 32, cookie=False)
+        self.assertEqual(code, 401)  # без входа — ничего
 
     def test_plain_switch_off_and_on(self):
         """«⏻ Выключить всё»: cookie hdp_plain — страница платформы без кнопок бота (guard.js остаётся); /_hdp/on — назад."""
