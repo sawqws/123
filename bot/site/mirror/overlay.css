@@ -281,7 +281,20 @@
 .hdpx-narrow .hdpx-tb-draft { flex-wrap: wrap; }
 .hdpx-narrow .hdpx-tb-draft > .hdpx-btn { width: 100%; }
 .hdpx-narrow .hdpx-dr-body { padding: 12px; }
+/* плавность: карточки появляются и уезжают, кнопки откликаются на нажатие (Глеб 19.10) */
+.hdpx-enter { animation: hdpx-in .26s cubic-bezier(.2, .8, .2, 1) both; }
+.hdpx-leave { overflow: hidden; opacity: 0; margin-top: 0 !important; margin-bottom: 0 !important; padding-top: 0 !important;
+  padding-bottom: 0 !important; border-width: 0 !important; transition: height .26s cubic-bezier(.2, .8, .2, 1), opacity .18s ease,
+  margin .26s ease, padding .26s ease; pointer-events: none; }
+.hdpx-btn, .hdpx-chip, .hdpx-ab-btn, .hdpx-iconbtn, .hdpx-tabbtn, .hdpx-seg { transition: background-color .15s, color .15s,
+  border-color .15s, opacity .15s, transform .12s ease; -webkit-tap-highlight-color: transparent; }
+.hdpx-btn:active, .hdpx-chip:active, .hdpx-ab-btn:active, .hdpx-iconbtn:active, .hdpx-tabbtn:active, .hdpx-seg:active { transform: scale(.97); }
+.hdpx-dr-body { scroll-behavior: smooth; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.hdpx-queued .hdpx-q-when { margin-top: 6px; }
+.hdpx-bar i { transition: width .6s cubic-bezier(.2, .8, .2, 1); }
 @media (prefers-reduced-motion: reduce) {
+  .hdpx-enter { animation: none; }
+  .hdpx-btn:active, .hdpx-chip:active, .hdpx-ab-btn:active, .hdpx-iconbtn:active { transform: none; }
   .hdpx-drawer, .hdpx-bar i { transition: none; }
   .hdpx-spin, .hdpx-wait::after, .hdpx-rot svg, .hdpx-bar-ind i, .hdpx-badge-dot { animation-duration: 2.4s; }
 }
