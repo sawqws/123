@@ -213,7 +213,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return new Promise(res => {
       const m = el('div', 'hdpx-modal', `<div class="hdpx-dialog" role="dialog" aria-modal="true">
         <p class="hdpx-h2">💬 Пожелание к заданию</p>
-        <div class="hdpx-chips">${WISHES.map(w => `<button class="hdpx-chip" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>
+        <div class="hdpx-chips hdpx-wishchips">${WISHES.map(w => `<button class="hdpx-chip" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>
         <textarea class="hdpx-ta" id="hdpx-wish" rows="3" maxlength="500" placeholder="Например: короче, без примеров из жизни"></textarea>
         <p class="hdpx-small hdpx-muted">${def ? `Всегда: «${esc(def)}» — меняется в ⚙️ Настройках` : 'Пожеланий по умолчанию нет — их можно задать в ⚙️ Настройках'}</p>
         <div class="hdpx-acts hdpx-acts-end"><button class="hdpx-btn hdpx-outline" data-v="0">Отмена</button>
@@ -978,7 +978,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         break;
       case 'solve': solve(a, p, d.m); break;
       case 'wish': {
-        if (!S.settings) loadSettings();
+        if (!S.settings) await loadSettings();  // иначе в окне «пожеланий по умолчанию нет»
         const w = await wishBox(d.m);
         if (w !== null) solve(a, p, d.m, w);
         break;

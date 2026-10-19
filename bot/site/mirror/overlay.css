@@ -165,6 +165,7 @@
 
 .hdpx-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .hdpx-small + .hdpx-chips { margin-top: 12px; }
+.hdpx-wishchips { margin-top: 14px; }
 .hdpx-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--hdpx-line);
   background: var(--hdpx-white); color: var(--hdpx-ink); font: 400 14px/1 var(--hdpx-font); cursor: pointer; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .hdpx-chip:hover { border-color: var(--hdpx-primary); }
