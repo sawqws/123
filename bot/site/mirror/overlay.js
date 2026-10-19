@@ -744,6 +744,8 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     pollPrep();
   }
 
+  const agoText = s => (s < 3600 ? `${Math.max(1, Math.round(s / 60))} мин назад` : s < 86400 ? `${Math.round(s / 3600)} ч назад` : `${Math.round(s / 86400)} дн назад`);
+
   /* --- Настройки --- */
   function setTab() {
     const s = S.settings;
@@ -764,6 +766,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       <div class="hdpx-card"><div class="hdpx-row"><span class="hdpx-grow"><b>Обычная платформа</b>
         <span class="hdpx-small hdpx-muted">Выключить все функции бота. Включить обратно — кнопка ⏻ справа на том же месте</span></span>
         <button class="hdpx-btn hdpx-s hdpx-outline" data-a="plain">⏻ Выключить всё</button></div></div>
+      <div class="hdpx-card"><div class="hdpx-row"><span class="hdpx-grow"><b>🧪 Проверка сайта от А до Я</b>
+        <span class="hdpx-small hdpx-muted">${S.sc ? (S.sc.running ? 'Идёт проверка — отчёт придёт в чат' : S.sc.head ? esc(S.sc.head) + (S.sc.age != null ? ' · ' + agoText(S.sc.age) : '') : 'Все страницы, картинки, вёрстка, кнопки бота') : 'Все страницы, картинки, вёрстка, кнопки бота'}</span></span>
+        <button class="hdpx-btn hdpx-s hdpx-outline" data-a="sitecheck"${S.sc && S.sc.running ? ' disabled' : ''}>${S.sc && S.sc.running ? spin : 'Проверить'}</button></div></div>
       <div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">Данные бота</b><button class="hdpx-btn hdpx-s hdpx-outline" data-a="ovfresh">↻ Обновить с HDP</button></div>
         <p class="hdpx-small hdpx-muted">Задания, оценки и подтверждения бот берёт с этого сайта — обновляются сами раз в пару минут</p></div>
       <p class="hdpx-small hdpx-muted hdpx-tc">Действия идут через @${BOT} — результат приходит и сюда, и в чат · <a class="hdpx-link" href="/site/logout">выйти</a></p>`;
@@ -1053,6 +1058,11 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     switch (act) {
       case 'close': closePanel(); break;
       case 'plain': plainOff(); break;
+      case 'sitecheck': {
+        const r = await busy(a, () => api('/api/site/check', { start: true }));
+        if (r) { S.sc = r; toast('Проверяю сайт — отчёт придёт в чат (5–15 мин)'); renderPanel(true); }
+        break;
+      }
       case 'defwish': {
         const r = await busy(a, () => api('/api/site/settings/set', { wish: ($('#hdpx-defwish') || {}).value || '' }));
         if (r) { S.settings = r; toast(r.wish ? `Буду учитывать: «${r.wish}»` : 'Пожеланий по умолчанию нет'); renderPanel(true); }
@@ -1062,7 +1072,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         S.tab = d.v; store.set('tab', d.v);
         if (d.v === 'exams' && !S.exams) loadExams(false);
         if (d.v === 'prep') prepOpen();
-        if (d.v === 'set') loadSettings();
+        if (d.v === 'set') { loadSettings(); api('/api/site/check', {}).then(r => { S.sc = r; renderPanel(true); }).catch(() => {}); }
         if (d.v === 'now' && !S.ov) loadOv();
         renderPanel(true);
         break;

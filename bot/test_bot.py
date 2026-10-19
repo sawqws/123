@@ -16,6 +16,7 @@ sys.path.insert(0, HERE)
 os.environ.setdefault("TELEGRAM_TOKEN", "test")
 import bot  # noqa: E402
 import drafts  # noqa: E402
+import sitecheck  # noqa: E402
 import web  # noqa: E402
 
 URL = "https://horodigital.ru/student/topic/11111111-1111-1111-1111-111111111111/task/22222222-2222-2222-2222-222222222222"
@@ -1273,6 +1274,34 @@ class SiteTest(BotTest):
     def tearDown(self):
         self.sp.stop()
         super().tearDown()
+
+    def test_sitecheck_runs_reports_and_logs_out(self):
+        """🧪 Проверка сайта: вход только на время проверки, отчёт, наши ошибки отдельно от ошибок платформы."""
+        rep = {"at": 1, "pages": 12, "avg_ms": 2400, "secs": 300, "list": [{"path": "/student", "ms": 2000, "n": 1}],
+               "issues": [{"kind": "js", "text": "TypeError: x", "views": ["desktop", "phone"], "pages": ["/student"]},
+                          {"kind": "http", "text": "500 GET /api/a", "platform": True, "views": ["desktop"], "pages": []},
+                          {"kind": "slow", "text": "9 с /api/b", "views": ["desktop"], "pages": []}]}
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["token"] = kw["env"]["SITE_TOKEN"]
+            self.assertTrue(web.site_check(seen["token"]))  # во время проверки вход есть
+            with open(cmd[3], "w") as f:
+                json.dump(rep, f)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(sitecheck, "DIR", self.tmp.name), \
+                mock.patch.object(sitecheck, "LAST", os.path.join(self.tmp.name, "last.json")), \
+                mock.patch.object(web, "site_url", lambda: "https://hdp.1-2-3-4.sslip.io"), \
+                mock.patch.object(sitecheck.subprocess, "run", fake_run):
+            got = sitecheck.run()
+            self.assertFalse(web.site_check(seen["token"]))  # после — вход закрыт
+            head, rows, mine = sitecheck.summary(got)
+            self.assertEqual(len(mine), 1)
+            self.assertIn("ошибок 1", head)
+            self.assertIn("TypeError", sitecheck.fix_text(got))
+            self.assertNotIn("500 GET", sitecheck.fix_text(got))  # ошибка платформы — не наша
+            st = bot.app_site_check({})
+            self.assertEqual((st["errors"], st["running"]), (1, False))
 
     def test_wishes_default_short_and_own(self):
         """💬 Пожелания: по умолчанию «максимально кратко», своё — с сайта или словами рядом со ссылкой."""
