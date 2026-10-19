@@ -194,4 +194,5 @@ async function panel(page, sink) {
   fs.writeFileSync(OUT, JSON.stringify(report, null, 1));
   const ours = issues.filter(i => !i.platform && i.kind !== 'slow');
   console.log(`СТРАНИЦ: ${pages.length} · ОШИБОК: ${ours.length} (+${issues.length - ours.length} не наших/медленных) · ${report.secs} с`);
+  process.exit(0);  // отчёт записан — не ждём, пока Chromium на сервере закроется (там он иногда падает при выходе)
 })().catch(e => { console.error('sitecheck:', e.message); process.exit(1); });
