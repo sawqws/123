@@ -964,6 +964,8 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   let pathNow = '';
   function update() {
     if (!document.body) return;
+    // страница чатов: свой вид (overlay.css, html.hdpx-chat) — полный список с именами и на iPad
+    document.documentElement.classList.toggle('hdpx-chat', location.pathname.startsWith('/student/chat'));
     if (location.pathname !== pathNow) {  // сменилась страница SPA
       pathNow = location.pathname;
       S.routeAt = Date.now();
