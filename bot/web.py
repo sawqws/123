@@ -308,6 +308,18 @@ class Web(BaseHTTPRequestHandler):
 
     def mirror(self, path):
         """Зеркало платформы: свои файлы /_hdp/, остальное — на horodigital.ru (только после входа)."""
+        if path in ("/_hdp/on", "/_hdp/off"):  # «⏻ выключить всё» / включить кнопки бота обратно
+            to = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("to") or ["/student"])[0]
+            to = to if to.startswith("/") and not to.startswith(("//", "/\\")) else "/student"  # только свой сайт
+            age = SESSION_TTL if path.endswith("off") else 0
+            self.send_response(302)
+            self.send_header("Location", to)
+            self.send_header("Cache-Control", "no-store")
+            # не HttpOnly: guard.js по ней понимает, что кнопки выключены, и ждёт 5 тапов, чтобы включить
+            self.send_header("Set-Cookie", f"{mirror.PLAIN}=1; Path=/; Max-Age={age}; Secure; SameSite=Lax")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path.startswith("/_hdp/"):
             got = mirror.file(path[len("/_hdp/"):])
             if not got:

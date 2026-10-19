@@ -211,10 +211,19 @@ def decode(data, enc):
     return data
 
 
-def inject(html, version="0"):
-    """HTML страницы: без метрики, с guard.js первым и кнопками бота."""
+PLAIN = "hdp_plain"  # cookie «⏻ выключить всё»: страница — чистая платформа, без кнопок бота (guard.js остаётся)
+
+
+def plain(h):
+    return any(p.strip() == f"{PLAIN}=1" for p in (h.headers.get("Cookie") or "").split(";"))
+
+
+def inject(html, version="0", bare=False):
+    """HTML страницы: без метрики, с guard.js первым и кнопками бота (bare — без кнопок: «⏻ выключить всё»)."""
     html = METRIKA.sub("", html)
     head = (f'<script src="/_hdp/guard.js?v={version}"></script>')
+    if bare:
+        return re.sub(r"<head[^>]*>", lambda m: m.group(0) + head, html, count=1, flags=re.I)
     tail = (f'<link rel="stylesheet" href="/_hdp/overlay.css?v={version}">'
             f'<script defer src="/_hdp/overlay.js?v={version}"></script>')
     html = re.sub(r"<head[^>]*>", lambda m: m.group(0) + head, html, count=1, flags=re.I)
@@ -279,7 +288,7 @@ def proxy(h, version="0"):
         text = data.decode(charset.group(1) if charset else "utf-8", "replace")
         text = rewrite(text)
         if ctype.startswith("text/html"):
-            text = inject(text, version)
+            text = inject(text, version, plain(h))
             out = [(k, v) for k, v in out if k.lower() not in ("etag", "last-modified")]
             out.append(("Cache-Control", "no-store"))
             out = dedupe(out)
