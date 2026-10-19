@@ -139,9 +139,9 @@ def connect():
 
 class Pool:
     """Открытые соединения с платформой (TLS-рукопожатие дорогое). Простоявшие дольше IDLE — закрываем."""
-    IDLE = 15
+    IDLE = 50
 
-    def __init__(self, size=8):
+    def __init__(self, size=32):  # страница платформы — ~100 запросов разом: соединения не открываем заново
         self.size, self.free, self.lock = size, [], threading.Lock()
 
     def get(self):
@@ -171,10 +171,16 @@ _pool = Pool()
 # ответов API — в фоне, по 4 сразу. Повторно и заранее скачанная картинка отдаётся сразу (Глеб 19.10: «фотки плохо
 # грузятся»). Видео и всё больше FILE_MAX идёт как раньше, мимо кэша; запросы с Range — тоже.
 STORE = re.compile(r"/store/[tp]/[0-9a-f]{32}")
+# Файлы самого сайта платформы: имя с хэшем (index-DJ0UYpRl.js) не меняется — держим у себя и отдаём с кэшем на год.
+# Платформа их отдаёт без Cache-Control, а сам сайт — ~70–80 файлов на страницу (Глеб 19.10: «чтобы сайт работал
+# сильно быстрее»). Найденные внутри скриптов имена других файлов качаются заранее — весь сайт оседает на сервере.
+ASSET = re.compile(r"/student/(?:assets/[\w.-]+|tinymce/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|webp|jpe?g|gif)")
+CHUNK = re.compile(r"(?<![\w.-])([A-Za-z_][\w.]*(?:-[\w]+)*-[A-Za-z0-9_-]{8}\.(?:js|css|png|svg|woff2?|webp))(?![\w])")
+IMMUTABLE = "public, max-age=31536000, immutable"
 CACHE = os.path.join(REPO, "horo", "tmp", "mirror_cache")
 CACHE_MAX = 1024 * 2**20
 FILE_MAX = 12 * 2**20
-KEEP = ("content-type", "content-disposition", "cache-control", "last-modified", "etag")
+KEEP = ("content-type", "content-disposition", "cache-control", "last-modified", "etag", "content-encoding")
 
 
 class Store:
@@ -217,15 +223,19 @@ class Store:
         return self.get(path)
 
     def _download(self, path, warm):
+        asset = bool(ASSET.fullmatch(path))
         headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+        if asset:
+            headers["Accept-Encoding"] = "gzip"  # скрипты храним сжатыми, как отдаёт платформа
         ck = _jar.header()
         if ck:
             headers["Cookie"] = ck
         conn, resp = request("GET", path, headers, None)
         size = int(resp.headers.get("Content-Length") or 0)
         ctype = (resp.headers.get("Content-Type") or "").lower()
-        if resp.status != 200 or resp.headers.get("Content-Encoding") or size > FILE_MAX or \
-                (warm and not ctype.startswith("image/")):
+        enc = (resp.headers.get("Content-Encoding") or "").lower()
+        if resp.status != 200 or (enc and not (asset and enc == "gzip")) or size > FILE_MAX or \
+                (warm and not asset and not ctype.startswith("image/")):
             conn.close()  # не читаем зря (видео, ошибка, чужая сжатая выдача): соединение не переиспользуем
             return
         os.makedirs(self.dir, exist_ok=True)
@@ -246,14 +256,28 @@ class Store:
             return
         _pool.put(conn)
         os.replace(f + ".part", f)
-        meta = {"size": got, "headers": [(k, v) for k, v in resp.headers.items() if k.lower() in KEEP]}
+        hdrs = [(k, v) for k, v in resp.headers.items() if k.lower() in KEEP]
+        if asset:
+            hdrs = [(k, v) for k, v in hdrs if k.lower() not in ("cache-control", "expires")] + [("Cache-Control", IMMUTABLE)]
+        meta = {"size": got, "headers": hdrs}
         with open(f + ".json", "w") as fh:
             json.dump(meta, fh)
         self.trim()
+        if asset and path.endswith((".js", ".css")):  # другие файлы сайта, на которые ссылается этот, — заранее
+            try:
+                with open(f, "rb") as fh:
+                    data = fh.read()
+                self.warm(decode(data, enc).decode("utf-8", "replace"), base=path.rsplit("/", 1)[0] + "/")
+            except (OSError, ValueError, zlib.error):
+                pass
 
-    def warm(self, text):
-        """Ссылки /store/… из ответа платформы — скачать заранее, пока браузер до них не дошёл."""
-        for path in set(STORE.findall(text)):
+    def warm(self, text, base=None):
+        """Ссылки /store/… и файлы сайта из ответа платформы — скачать заранее, пока браузер до них не дошёл.
+        base — папка файла, в котором нашлись имена (у скриптов сайта ссылки на соседей — просто «имя-хэш.js»)."""
+        paths = set(STORE.findall(text)) | set(ASSET.findall(text))
+        if base:
+            paths |= {base + n for n in CHUNK.findall(text) if ASSET.fullmatch(base + n)}
+        for path in paths:
             with self.lock:
                 if path in self.busy:
                     continue
@@ -395,6 +419,84 @@ def request(method, path, headers, body):
     raise OSError("нет связи с платформой")
 
 
+# ---------- «сразу из памяти, обновить в фоне» ----------
+# Каркас страницы (HTML одинаковый для всех /student/…) и редко меняющиеся ответы API (настройки школы, модули,
+# подсказки, документы на подпись — до 2,6 с у платформы) отдаются сразу из памяти, а свежие тут же берутся в фоне:
+# следующее открытие — уже с ними. Данные заданий и оценок так не кэшируются — только то, что не меняется от действий.
+SWR = re.compile(r"/student(?:/[\w/-]*)?|/api/(?:schools/v1/current/(?:settings|platform-modules)|"
+                 r"platform/v1/schools/current/stages/\d+/settings|guides/v1/webapp|edc/v1/documents/pending-signing|"
+                 r"education/v1/students/current/(?:study-class|growth-plans)|education/v1/grant-requests/current)"
+                 r"(?:\?[\w=&%.-]*)?")
+SWR_MAX = 6 * 3600   # старше — не отдаём (ждём платформу, как обычно)
+SWR_FRESH = 15       # моложе — в фоне не обновляем
+
+
+class Swr:
+    def __init__(self):
+        self.lock, self.mem, self.busy = threading.Lock(), {}, set()
+
+    @staticmethod
+    def key(path):
+        return "html" if path.startswith("/student") else path
+
+    def get(self, path):
+        k = self.key(path)
+        with self.lock:
+            at, val = self.mem.get(k, (0, None))
+        age = time.time() - at
+        if val is None or age > SWR_MAX:
+            return None
+        if age > SWR_FRESH:
+            self.refresh(path)
+        return val
+
+    def put(self, path, val):
+        with self.lock:
+            self.mem[self.key(path)] = (time.time(), val)
+
+    def refresh(self, path):
+        k = self.key(path)
+        with self.lock:
+            if k in self.busy:
+                return
+            self.busy.add(k)
+        threading.Thread(target=self._refresh, args=(path, k), daemon=True).start()
+
+    def _refresh(self, path, k):
+        try:
+            headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip",
+                       "Accept": "text/html" if k == "html" else "application/json"}
+            ck = _jar.header()
+            if ck:
+                headers["Cookie"] = ck
+            conn, resp = request("GET", path, headers, None)
+            data = resp.read()
+            _pool.put(conn)
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if resp.status == 200 and ctype.startswith("text/html" if k == "html" else TEXT):
+                _jar.update(resp.headers.get_all("Set-Cookie") or [])
+                out = [(kk, v) for kk, v in resp.headers.items() if kk.lower() not in DROP_RESP]
+                if ctype.startswith("text/html"):
+                    out = dedupe([(kk, v) for kk, v in out if kk.lower() not in ("etag", "last-modified")]
+                                 + [("Cache-Control", "no-store")])
+                charset = re.search(r"charset=([\w-]+)", ctype)
+                text = rewrite(decode(data, resp.headers.get("Content-Encoding")).decode(
+                    charset.group(1) if charset else "utf-8", "replace"))
+                self.put(path, (200, out, text, ctype))
+                _store.warm(text)
+            elif resp.status == 401:
+                with self.lock:
+                    self.mem.pop(k, None)  # сессия кончилась — из памяти не отдаём, пусть браузер пойдёт обычным путём
+        except (http.client.HTTPException, OSError, ValueError, zlib.error):
+            pass
+        finally:
+            with self.lock:
+                self.busy.discard(k)
+
+
+_swr = Swr()
+
+
 def proxy(h, version="0"):
     """Переслать запрос браузера на платформу и отдать ответ (h — BaseHTTPRequestHandler)."""
     if (h.headers.get("Upgrade") or "").lower() == "websocket":
@@ -402,10 +504,17 @@ def proxy(h, version="0"):
     method = h.command
     body = read_body(h) if method not in ("GET", "HEAD") else None
     path = h.path if h.path.startswith("/") else "/"
-    if method == "GET" and STORE.fullmatch(path) and not h.headers.get("Range"):
+    if method == "GET" and (STORE.fullmatch(path) or ASSET.fullmatch(path)) and not h.headers.get("Range"):
         got = _store.get(path) or _store.fetch(path)
         if got:
             return send_file(h, *got)
+    if method == "GET" and SWR.fullmatch(path) and (path.startswith("/api/") or "text/html" in (h.headers.get("Accept") or "")):
+        hit = _swr.get(path)
+        if hit:
+            status, out, text, ctype = hit
+            if ctype.startswith("text/html"):
+                text = inject(text, version, plain(h))
+            return send(h, status, "OK", out, text.encode("utf-8"))
     for attempt in range(2):
         headers = up_headers(h, UP)
         try:
@@ -434,6 +543,9 @@ def proxy(h, version="0"):
         text = data.decode(charset.group(1) if charset else "utf-8", "replace")
         text = rewrite(text)
         _store.warm(text)
+        if method == "GET" and resp.status == 200 and SWR.fullmatch(path) and \
+                (path.startswith("/api/") or ctype.startswith("text/html")):
+            _swr.put(path, (resp.status, out, text, ctype))
         if ctype.startswith("text/html"):
             text = inject(text, version, plain(h))
             out = [(k, v) for k, v in out if k.lower() not in ("etag", "last-modified")]
@@ -441,6 +553,8 @@ def proxy(h, version="0"):
             out = dedupe(out)
         return send(h, resp.status, resp.reason, out, text.encode("utf-8"))
     # остальное (скрипты, шрифты, картинки, файлы) — как есть, по кускам
+    if ASSET.fullmatch(path) and resp.status == 200:
+        out = [(k, v) for k, v in out if k.lower() not in ("cache-control", "expires")] + [("Cache-Control", IMMUTABLE)]
     enc = resp.headers.get("Content-Encoding")
     if enc:
         out.append(("Content-Encoding", enc))

@@ -53,6 +53,16 @@ class Upstream(BaseHTTPRequestHandler):
             return self.answer(200, data, "application/json", [("Content-Encoding", "gzip")])
         if self.path == "/api/auth/v1/expired":
             return self.answer(401, b"{}", "application/json")
+        if self.path == "/student/assets/index-AbCd1234.js":
+            Upstream.assets = getattr(Upstream, "assets", 0) + 1
+            return self.answer(200, gzip.compress(b'import("./Topic-XyZ98765.js");'), "application/javascript",
+                               [("Content-Encoding", "gzip")])
+        if self.path == "/student/assets/Topic-XyZ98765.js":
+            Upstream.chunk = getattr(Upstream, "chunk", 0) + 1
+            return self.answer(200, b"export default 1", "application/javascript")
+        if self.path == "/api/schools/v1/current/settings":
+            Upstream.settings = getattr(Upstream, "settings", 0) + 1
+            return self.answer(200, json.dumps({"n": Upstream.settings}).encode(), "application/json")
         if self.path == "/student/assets/app.js":
             return self.answer(200, b"console.log('https://horodigital.ru')", "application/javascript",
                                [("Cache-Control", "public, max-age=31536000")])
@@ -92,6 +102,7 @@ class MirrorTest(unittest.TestCase):
             mock.patch.object(mirror, "_pool", mirror.Pool()),
             mock.patch.object(mirror, "relogin", mock.Mock(return_value=False)),
             mock.patch.object(mirror, "_store", mirror.Store(os.path.join(self.tmp.name, "cache"))),
+            mock.patch.object(mirror, "_swr", mirror.Swr()),
             mock.patch.object(web, "SESSIONS", os.path.join(self.tmp.name, "sessions.json")),
         ]
         for p in self.patches:
@@ -157,6 +168,40 @@ class MirrorTest(unittest.TestCase):
         code, _, _ = self.req("GET", "/store/t/" + "b" * 32, cookie=False)
         self.assertEqual(code, 401)  # без входа — ничего
 
+    def test_assets_cached_gzip_immutable_and_chunks_warmed(self):
+        """Файлы сайта: с сервера, сжатые, с кэшем на год; соседние скрипты скачиваются заранее."""
+        Upstream.assets = Upstream.chunk = 0
+        for _ in range(2):
+            code, h, body = self.req("GET", "/student/assets/index-AbCd1234.js")
+            self.assertEqual((code, gzip.decompress(body)), (200, b'import("./Topic-XyZ98765.js");'))
+            self.assertEqual(h["Content-Encoding"], "gzip")
+            self.assertIn("immutable", h["Cache-Control"])
+        self.assertEqual(Upstream.assets, 1)
+        for _ in range(50):
+            if mirror._store.get("/student/assets/Topic-XyZ98765.js"):
+                break
+            time.sleep(0.05)
+        self.assertTrue(mirror._store.get("/student/assets/Topic-XyZ98765.js"))  # найден в скрипте и уже скачан
+        self.assertEqual(self.req("GET", "/student/assets/Topic-XyZ98765.js")[2], b"export default 1")
+        self.assertEqual(Upstream.chunk, 1)
+
+    def test_settings_from_memory_then_refreshed(self):
+        """Редкие ответы (настройки школы): второй раз — сразу из памяти, свежие берутся в фоне."""
+        Upstream.settings = 0
+        h = {"Origin": "https://hdp.1-2-3-4.sslip.io"}
+        self.assertEqual(json.loads(self.req("GET", "/api/schools/v1/current/settings", headers=h)[2]), {"n": 1})
+        with mock.patch.object(mirror, "SWR_FRESH", -1):
+            self.assertEqual(json.loads(self.req("GET", "/api/schools/v1/current/settings", headers=h)[2]), {"n": 1})
+            for _ in range(50):
+                if Upstream.settings == 2:
+                    break
+                time.sleep(0.05)
+        time.sleep(0.1)
+        self.assertEqual(json.loads(self.req("GET", "/api/schools/v1/current/settings", headers=h)[2]), {"n": 2})
+        code, _, _ = self.req("GET", "/api/education/v1/x")
+        code2, _, _ = self.req("GET", "/api/education/v1/x")
+        self.assertEqual(sum(1 for m, pth, *_ in Upstream.seen if pth == "/api/education/v1/x"), 2)  # данные — всегда свежие
+
     def test_plain_switch_off_and_on(self):
         """«⏻ Выключить всё»: cookie hdp_plain — страница платформы без кнопок бота (guard.js остаётся); /_hdp/on — назад."""
         code, h, _ = self.req("GET", "/_hdp/off?to=/student/topic/x")
@@ -183,7 +228,7 @@ class MirrorTest(unittest.TestCase):
     def test_assets_streamed_as_is(self):
         code, h, body = self.req("GET", "/student/assets/app.js")
         self.assertEqual((code, body), (200, b"console.log('https://horodigital.ru')"))
-        self.assertEqual(h["Cache-Control"], "public, max-age=31536000")
+        self.assertEqual(h["Cache-Control"], "public, max-age=31536000, immutable")  # имя с хэшем — не меняется
 
     def test_redirect_location_relative(self):
         code, h, _ = self.req("GET", "/go")

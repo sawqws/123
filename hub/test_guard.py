@@ -21,11 +21,12 @@ class GuardTest(Base):
         super().setUp()
         self.repo = tempfile.mkdtemp()
         os.makedirs(os.path.join(self.repo, "horo", "tmp"))
-        self.status, self.restarts, self.exit, self.web = "online", 1, 0, True
+        self.status, self.restarts, self.exit, self.web, self.site = "online", 1, 0, True, True
         self.fixes, self.rs = [], []
         self.q = [mock.patch.object(hub, "REPO", self.repo),
                   mock.patch.object(hub, "HDP_SETTINGS", self.tmp("bot_settings.json")),
                   mock.patch.object(guard, "web_ok", lambda: self.web),
+                  mock.patch.object(guard, "site_ok", lambda: self.site),
                   mock.patch.object(hub, "log_text", lambda *a: "хвост лога"),
                   mock.patch.object(hub, "restart_app", self.fake_restart),
                   mock.patch.object(hub.maker, "fix", lambda chat, pm2, tz: self.fixes.append((pm2, tz)))]
@@ -96,6 +97,35 @@ class GuardTest(Base):
             acts = self.tick(NOW + 60 * i)
         self.assertNotIn(("restart", "не работал"), acts)  # 3 перезапуска за час — хватит
         self.assertTrue(any("не поднимается" in it["text"] for it in self.issues().values()))
+
+    def test_site_down_restart_then_claude_at_once(self):
+        """Сайт лёг: 2 мин — перезапуск, не поднялся — Claude чинит сразу, даже если HDP занят."""
+        self.web = False
+        self.assertEqual(self.tick(), [])
+        self.assertIn(("restart", "сайт не отвечал"), self.tick(NOW + 60))
+        self.assertFalse([a for a in self.tick(NOW + 120) if a[0] == "fix"])
+        fix = [a for a in self.tick(NOW + 180) if a[0] == "fix"]
+        self.assertEqual(len(fix), 1)
+        self.assertTrue(self.issues()[fix[0][1]]["urgent"])
+        with mock.patch.object(guard, "busy", lambda: True), mock.patch.object(guard.threading, "Thread") as th:
+            guard.handle(fix)
+        th.assert_called_once()  # сайт лежит — не ждём, пока HDP освободится
+        self.web = True
+        self.tick(NOW + 240)
+        self.assertIsNone(guard.summary())  # поднялся — всё закрыто
+
+    def test_site_outside_down_restarts_caddy_then_claude(self):
+        self.site = False
+        self.assertEqual(self.tick(), [])
+        self.assertIn(("caddy", "сайт снаружи не открывался"), self.tick(NOW + 60))
+        self.tick(NOW + 120)
+        fix = [a for a in self.tick(NOW + 180) if a[0] == "fix"]
+        self.assertEqual(self.issues()[fix[0][1]].get("target"), "planner-bot")
+        guard.handle([("caddy", "тест")])
+        self.assertIn("planner-bot", self.rs)
+        self.site = True
+        self.tick(NOW + 240)
+        self.assertIsNone(guard.summary())
 
     def test_bug_in_journal_fixes_once(self):
         self.log("bug", "KeyError: 'title'", "Traceback ... KeyError: 'title'")
