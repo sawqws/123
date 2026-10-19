@@ -36,15 +36,33 @@
     if (this.source === 'horodigital.ru$' && s === location.host) return true;
     return test.apply(this, arguments);
   };
-  // «⏻ Выключить всё» (cookie hdp_plain): кнопок бота на странице нет. Включить обратно — 5 быстрых тапов или Alt+B
+  // «⏻ Выключить всё» (cookie hdp_plain): кнопок бота на странице нет, кроме одной — ⏻ «включить» на месте
+  // кнопки выключения (над вкладкой 🤖 у правого края). Одно нажатие (или Alt+B) — /_hdp/on, бот снова на странице.
   if (typeof document !== 'undefined' && /(^|;\s*)hdp_plain=1(;|$)/.test(document.cookie || '')) {
-    const on = () => { if (confirm('Включить кнопки HDP-бота?')) location.href = '/_hdp/on?to=' + encodeURIComponent(location.pathname + location.search); };
-    let taps = [];
-    addEventListener('pointerdown', () => {
-      const now = Date.now();
-      taps = taps.filter(t => now - t < 1500).concat(now);
-      if (taps.length >= 5) { taps = []; on(); }
-    }, true);
+    const on = () => { location.href = '/_hdp/on?to=' + encodeURIComponent(location.pathname + location.search); };
+    const place = () => {
+      if (!document.body) return;
+      let b = document.getElementById('hdpx-on');
+      if (!b) {
+        b = document.createElement('button');
+        b.id = 'hdpx-on';
+        b.type = 'button';
+        b.title = 'Включить HDP-бота';
+        b.setAttribute('aria-label', b.title);
+        b.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3.5v8"/><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0"/></svg>';
+        b.style.cssText = 'position:fixed;right:0;z-index:2147483000;width:32px;height:40px;padding:0;display:grid;place-items:center;' +
+          'border:0;border-radius:8px 0 0 8px;background:#5854a4;color:#fff;cursor:pointer;box-shadow:0 4px 16px rgba(40,36,90,.18)';
+        b.addEventListener('click', on);
+      }
+      if (b.parentElement !== document.body) document.body.append(b);
+      // то же место, что у ⏻ «выключить»: над родной вкладкой-календарём, если она есть, иначе 190 + 72 px от низа
+      const own = document.querySelector('[data-testid="aiAssistantButton"]');
+      const r = own && own.getBoundingClientRect();
+      const bottom = (r && r.height && r.right >= innerWidth - 2 ? Math.round(innerHeight - r.top + 12) : 190) + 72;
+      if (b.style.bottom !== bottom + 'px') b.style.bottom = bottom + 'px';
+    };
+    addEventListener('DOMContentLoaded', place);
+    setInterval(place, 1000);  // страница — приложение: перерисовывается и меняет раскладку
     addEventListener('keydown', e => { if (e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); on(); } }, true);
   }
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');

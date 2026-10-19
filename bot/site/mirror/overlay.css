@@ -110,6 +110,12 @@
 .hdpx-tab:hover { background: var(--hdpx-primary-hover); width: 36px; }
 .hdpx-tab svg { width: 22px; height: 22px; }
 .hdpx-tab-on { background: var(--hdpx-ink); }
+/* ⏻ выключить бота: над вкладкой, белая (включить — такая же фиолетовая на том же месте, её рисует guard.js) */
+.hdpx-pwr { position: absolute; right: 0; bottom: 262px; z-index: 2147483000; width: 32px; height: 40px; padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--hdpx-line, #e4e3ef); border-right: 0; border-radius: 8px 0 0 8px; background: #fff; color: var(--hdpx-primary);
+  cursor: pointer; box-shadow: var(--hdpx-shadow); transition: width .15s; }
+.hdpx-pwr:hover { width: 36px; }
+.hdpx-pwr svg { width: 18px; height: 18px; }
 .hdpx-badge { position: absolute; top: -7px; left: -7px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   background: #f0643c; color: #fff; font: 600 11px/18px var(--hdpx-font); text-align: center; border: 2px solid #fff; box-sizing: content-box; }
 .hdpx-badge[hidden] { display: none; }
