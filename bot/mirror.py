@@ -511,8 +511,9 @@ def proxy(h, version="0"):
         return websocket(h)
     method = h.command
     body = read_body(h) if method not in ("GET", "HEAD") else None
-    if method not in ("GET", "HEAD", "OPTIONS"):
-        _swr.clear()  # Глеб что-то сделал на платформе — не показывать ему старое
+    if method not in ("GET", "HEAD", "OPTIONS") and path.startswith("/api/education/") and "mark-as-viewed" not in path:
+        _swr.clear()  # Глеб что-то сдал или начал на платформе — не показывать ему старое (служебные запросы страницы —
+        # отметки «прочитано», черновик поля ответа, вход — не в счёт: страница шлёт их при каждом открытии)
     path = h.path if h.path.startswith("/") else "/"
     if method == "GET" and (STORE.fullmatch(path) or ASSET.fullmatch(path)) and not h.headers.get("Range"):
         got = _store.get(path) or _store.fetch(path)
