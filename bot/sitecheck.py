@@ -55,10 +55,11 @@ def run(max_pages=45, orig=True):
                                env={**os.environ, "SITE_TOKEN": token})
         except subprocess.TimeoutExpired:
             raise RuntimeError("Проверка не уложилась в 30 минут")
-        if r.returncode != 0 or not os.path.exists(out):
-            raise RuntimeError((r.stderr or r.stdout or "проверка упала").strip().splitlines()[-1][:300])
-        with open(out) as f:
-            rep = json.load(f)
+        try:  # отчёт записан — он и есть результат (Chromium на сервере иногда падает уже при выходе)
+            with open(out) as f:
+                rep = json.load(f)
+        except (OSError, ValueError):
+            raise RuntimeError(((r.stderr or r.stdout or "").strip().splitlines() or ["проверка упала"])[-1][:300])
         os.replace(out, LAST)
         return rep
     finally:
