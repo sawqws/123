@@ -107,6 +107,20 @@ class GuardTest(Base):
         it = self.issues()[fix[0][1]]
         self.assertEqual(it["count"], 2)
 
+    def test_stale_bug_not_fixed_next_day(self):
+        """16.10: нарочные сбои тестов (ValueError «фон упал») ждали в очереди — лимит 4 починки в сутки, — и через
+        21 ч Страж позвал Claude чинить ошибку, которой давно нет. Не повторялась 6 ч — не чиним и не напоминаем."""
+        with hub.lock:
+            st = hub.load()
+            guard.state(st)["fixes"] = [NOW - 4 * 3600] * guard.FIX_PER_DAY  # лимит на сутки исчерпан
+            hub.save(st)
+        self.log("bug", "ValueError: фон упал")
+        self.assertFalse([a for a in self.tick() if a[0] == "fix"])
+        later = NOW + 21 * 3600  # лимит прошёл, ошибка больше не появлялась
+        self.assertFalse([a for a in self.tick(later) if a[0] in ("fix", "tell")])
+        self.log("bug", "ValueError: фон упал")  # повторилась — снова свежая, чиним
+        self.assertTrue([a for a in self.tick(later + 60) if a[0] == "fix"])
+
     def test_handle_fix_runs_claude_when_idle(self):
         self.log("bug", "TypeError: boom", "tb")
         acts = self.tick()
