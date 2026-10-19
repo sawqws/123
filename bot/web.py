@@ -473,6 +473,8 @@ class Web(BaseHTTPRequestHandler):
         fn = _cfg["routes"].get(path)
         if not fn:
             return self.reply(404, {"error": "нет такого метода"})
+        if path in WRITE:
+            mirror._swr.clear()  # бот что-то меняет на платформе — зеркало берёт свежее
         try:
             self.reply(200, fn(body))
         except ValueError as e:  # понятная ошибка для человека

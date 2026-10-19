@@ -1169,6 +1169,7 @@ def run_task(chat, url, text, show=False, mid=None, retry=None):
         with running_lock:
             running.discard(task)
         mark_active(task, None)
+        web.mirror._swr.clear()  # сайт-зеркало: статусы заданий поменялись — показать свежие
 
 
 def mark_active(task, info):
@@ -1785,6 +1786,13 @@ TRIES = re.compile(r"^ПОПЫТКИ:\s*(\d+)\s*/\s*(\d+)", re.M)
 
 
 def finish_test(task):
+    try:
+        return _finish_test(task)
+    finally:
+        web.mirror._swr.clear()  # тест сдан — зеркало показывает свежий статус
+
+
+def _finish_test(task):
     """Сдать отложенный тест (тот же answers.json, только начатая попытка) и сообщить баллы."""
     t = pending_tests().get(task)
     if not t:
