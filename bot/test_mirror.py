@@ -198,6 +198,8 @@ class MirrorTest(unittest.TestCase):
                 time.sleep(0.05)
         time.sleep(0.1)
         self.assertEqual(json.loads(self.req("GET", "/api/schools/v1/current/settings", headers=h)[2]), {"n": 2})
+        self.req("PUT", "/api/drafts/v1/x", body=b"{}", headers={"Content-Type": "application/json", **h})
+        self.assertEqual(mirror._swr.mem, {})  # действие на платформе — память сброшена
         code, _, _ = self.req("GET", "/api/education/v1/x")
         code2, _, _ = self.req("GET", "/api/education/v1/x")
         self.assertEqual(sum(1 for m, pth, *_ in Upstream.seen if pth == "/api/education/v1/x"), 2)  # данные — всегда свежие

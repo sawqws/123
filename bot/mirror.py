@@ -425,8 +425,12 @@ def request(method, path, headers, body):
 # следующее открытие — уже с ними. Данные заданий и оценок так не кэшируются — только то, что не меняется от действий.
 SWR = re.compile(r"/student(?:/[\w/-]*)?|/api/(?:schools/v1/current/(?:settings|platform-modules)|"
                  r"platform/v1/schools/current/stages/\d+/settings|guides/v1/webapp|edc/v1/documents/pending-signing|"
-                 r"education/v1/students/current/(?:study-class|growth-plans)|education/v1/grant-requests/current)"
-                 r"(?:\?[\w=&%.-]*)?")
+                 r"education/v1/students/current/(?:study-class|growth-plans|disciplines|topics/[\w-]+|"
+                 r"statistics[\w/-]*|achievements[\w/-]*)|education/v1/grant-requests/current|"
+                 r"profile/v1/users/current)"
+                 r"(?:\?[\w=&%.,-]*)?")
+# что меняется от действий (задания, попытки, ответы, черновики, чаты) — сюда не входит; любое действие Глеба через
+# зеркало (POST/PUT/DELETE) и через кнопки бота сбрасывает память — следующее открытие берёт свежее
 SWR_MAX = 6 * 3600   # старше — не отдаём (ждём платформу, как обычно)
 SWR_FRESH = 15       # моложе — в фоне не обновляем
 
@@ -449,6 +453,10 @@ class Swr:
         if age > SWR_FRESH:
             self.refresh(path)
         return val
+
+    def clear(self):
+        with self.lock:
+            self.mem.clear()
 
     def put(self, path, val):
         with self.lock:
@@ -503,6 +511,8 @@ def proxy(h, version="0"):
         return websocket(h)
     method = h.command
     body = read_body(h) if method not in ("GET", "HEAD") else None
+    if method not in ("GET", "HEAD", "OPTIONS"):
+        _swr.clear()  # Глеб что-то сделал на платформе — не показывать ему старое
     path = h.path if h.path.startswith("/") else "/"
     if method == "GET" and (STORE.fullmatch(path) or ASSET.fullmatch(path)) and not h.headers.get("Range"):
         got = _store.get(path) or _store.fetch(path)
