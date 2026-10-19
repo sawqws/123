@@ -165,6 +165,148 @@ class Pool:
 _pool = Pool()
 
 
+# ---------- кэш файлов платформы (/store/t|p/<id>) ----------
+# Платформа отдаёт картинки (особенно /store/t — миниатюры вложений) по 5–11 с: делает их на лету. Файл по id не
+# меняется (Cache-Control — на два месяца), поэтому зеркало держит их у себя и качает заранее: ссылки /store/… из
+# ответов API — в фоне, по 4 сразу. Повторно и заранее скачанная картинка отдаётся сразу (Глеб 19.10: «фотки плохо
+# грузятся»). Видео и всё больше FILE_MAX идёт как раньше, мимо кэша; запросы с Range — тоже.
+STORE = re.compile(r"/store/[tp]/[0-9a-f]{32}")
+CACHE = os.path.join(REPO, "horo", "tmp", "mirror_cache")
+CACHE_MAX = 1024 * 2**20
+FILE_MAX = 12 * 2**20
+KEEP = ("content-type", "content-disposition", "cache-control", "last-modified", "etag")
+
+
+class Store:
+    def __init__(self, folder=CACHE):
+        self.dir, self.lock, self.busy, self.slots = folder, threading.Lock(), {}, threading.Semaphore(4)
+
+    def _file(self, path):
+        return os.path.join(self.dir, path.strip("/").replace("/", "_"))
+
+    def get(self, path):
+        """-> (заголовки, файл) из кэша или None."""
+        f = self._file(path)
+        try:
+            with open(f + ".json") as fh:
+                meta = json.load(fh)
+            if os.path.getsize(f) == meta["size"]:
+                return meta["headers"], f
+        except (OSError, ValueError, KeyError):
+            pass
+        return None
+
+    def fetch(self, path, warm=False):
+        """Скачать в кэш (одно скачивание на файл: кто пришёл вторым — ждёт первого). -> как get() или None."""
+        with self.lock:
+            ev, mine = self.busy.get(path), False
+            if ev is None:
+                ev, mine = threading.Event(), True
+                self.busy[path] = ev
+        if not mine:
+            ev.wait(TIMEOUT * 2)
+            return self.get(path)
+        try:
+            self._download(path, warm)
+        except (http.client.HTTPException, OSError):
+            pass
+        finally:
+            with self.lock:
+                self.busy.pop(path, None)
+            ev.set()
+        return self.get(path)
+
+    def _download(self, path, warm):
+        headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+        ck = _jar.header()
+        if ck:
+            headers["Cookie"] = ck
+        conn, resp = request("GET", path, headers, None)
+        size = int(resp.headers.get("Content-Length") or 0)
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        if resp.status != 200 or resp.headers.get("Content-Encoding") or size > FILE_MAX or \
+                (warm and not ctype.startswith("image/")):
+            conn.close()  # не читаем зря (видео, ошибка, чужая сжатая выдача): соединение не переиспользуем
+            return
+        os.makedirs(self.dir, exist_ok=True)
+        f = self._file(path)
+        got = 0
+        with open(f + ".part", "wb") as fh:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > FILE_MAX:
+                    break
+                fh.write(chunk)
+        if got > FILE_MAX or (size and got != size):
+            conn.close()
+            os.remove(f + ".part")
+            return
+        _pool.put(conn)
+        os.replace(f + ".part", f)
+        meta = {"size": got, "headers": [(k, v) for k, v in resp.headers.items() if k.lower() in KEEP]}
+        with open(f + ".json", "w") as fh:
+            json.dump(meta, fh)
+        self.trim()
+
+    def warm(self, text):
+        """Ссылки /store/… из ответа платформы — скачать заранее, пока браузер до них не дошёл."""
+        for path in set(STORE.findall(text)):
+            with self.lock:
+                if path in self.busy:
+                    continue
+            if not self.get(path):
+                threading.Thread(target=self._warm, args=(path,), daemon=True).start()
+
+    def _warm(self, path):
+        with self.slots:
+            if not self.get(path):
+                self.fetch(path, warm=True)
+
+    def trim(self):
+        """Больше CACHE_MAX — удаляем самые старые, пока не станет 80 %."""
+        try:
+            files = [(e.stat().st_mtime, e.stat().st_size, e.path) for e in os.scandir(self.dir)
+                     if e.is_file() and not e.name.endswith((".json", ".part"))]
+        except OSError:
+            return
+        total = sum(x[1] for x in files)
+        if total <= CACHE_MAX:
+            return
+        for _, size, path in sorted(files):
+            if total <= CACHE_MAX * 0.8:
+                break
+            for x in (path, path + ".json"):
+                try:
+                    os.remove(x)
+                except OSError:
+                    pass
+            total -= size
+
+
+_store = Store()
+
+
+def send_file(h, headers, path):
+    size = os.path.getsize(path)
+    h.send_response(200)
+    for k, v in headers:
+        h.send_header(k, v)
+    h.send_header("Content-Length", str(size))
+    h.end_headers()
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(65536)
+                if not chunk:
+                    break
+                h.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
 def up_headers(h, host):
     """Заголовки запроса к платформе: как у браузера Глеба, но с сессией бота и адресом платформы."""
     out = {}
@@ -260,6 +402,10 @@ def proxy(h, version="0"):
     method = h.command
     body = read_body(h) if method not in ("GET", "HEAD") else None
     path = h.path if h.path.startswith("/") else "/"
+    if method == "GET" and STORE.fullmatch(path) and not h.headers.get("Range"):
+        got = _store.get(path) or _store.fetch(path)
+        if got:
+            return send_file(h, *got)
     for attempt in range(2):
         headers = up_headers(h, UP)
         try:
@@ -287,6 +433,7 @@ def proxy(h, version="0"):
         charset = re.search(r"charset=([\w-]+)", ctype)
         text = data.decode(charset.group(1) if charset else "utf-8", "replace")
         text = rewrite(text)
+        _store.warm(text)
         if ctype.startswith("text/html"):
             text = inject(text, version, plain(h))
             out = [(k, v) for k, v in out if k.lower() not in ("etag", "last-modified")]

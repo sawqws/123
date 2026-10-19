@@ -206,6 +206,34 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     });
   }
 
+  // 💬 Пожелания к заданию (Глеб 19.10): своё слово к этому решению; по умолчанию у всех — из Настроек
+  const WISHES = ['максимально кратко', 'подробнее', 'проще, как 8 класс', 'по пунктам', 'без вступлений'];
+  function wishBox(mode) {
+    const def = S.settings ? S.settings.wish : '';
+    return new Promise(res => {
+      const m = el('div', 'hdpx-modal', `<div class="hdpx-dialog" role="dialog" aria-modal="true">
+        <p class="hdpx-h2">💬 Пожелание к заданию</p>
+        <div class="hdpx-chips">${WISHES.map(w => `<button class="hdpx-chip" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div>
+        <textarea class="hdpx-ta" id="hdpx-wish" rows="3" maxlength="500" placeholder="Например: короче, без примеров из жизни"></textarea>
+        <p class="hdpx-small hdpx-muted">${def ? `Всегда: «${esc(def)}» — меняется в ⚙️ Настройках` : 'Пожеланий по умолчанию нет — их можно задать в ⚙️ Настройках'}</p>
+        <div class="hdpx-acts hdpx-acts-end"><button class="hdpx-btn hdpx-outline" data-v="0">Отмена</button>
+        <button class="hdpx-btn hdpx-primary" data-v="1">${mode === 'do' ? '⚡ Решить и сдать' : '✍️ Написать'}</button></div></div>`);
+      const ta = $('textarea', m);
+      const finish = v => { m.remove(); document.removeEventListener('keydown', key, true); res(v); };
+      const key = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+      m.addEventListener('click', e => {
+        const w = e.target.closest('[data-w]');
+        if (w) { ta.value = ta.value.trim() ? `${ta.value.trim().replace(/[,.]$/, '')}, ${w.dataset.w}` : w.dataset.w; ta.focus(); return; }
+        const b = e.target.closest('[data-v]');
+        if (b) finish(b.dataset.v === '1' ? ta.value.trim() : null);
+        else if (e.target === m) finish(null);
+      });
+      document.addEventListener('keydown', key, true);
+      layer().append(m);
+      ta.focus();
+    });
+  }
+
   function lightbox(src, name) {
     const m = el('div', 'hdpx-modal hdpx-lightbox', `<img src="${esc(src)}" alt="${esc(name)}"><button class="hdpx-iconbtn hdpx-lb-x" aria-label="Закрыть">${I.x}</button>`);
     m.addEventListener('click', () => m.remove());
@@ -640,6 +668,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return `<div class="hdpx-card"><p class="hdpx-h3">Ответ учителю после «Отправить»</p>
       <p class="hdpx-small hdpx-muted">Как будто ты сам отправил чуть позже. На каждом черновике можно выбрать иначе: ⚡ Сразу · ⏳ С задержкой · 🕐 Ко времени</p>
       <div class="hdpx-chips">${s.choices.map(c => `<button class="hdpx-chip${c.v === s.delay ? ' hdpx-chip-on' : ''}" data-a="delay" data-v="${esc(c.v)}">${esc(c.label)}</button>`).join('')}</div></div>
+      <div class="hdpx-card"><p class="hdpx-h3">Пожелания по умолчанию</p>
+        <p class="hdpx-small hdpx-muted">Бот учитывает их в каждом задании. К одному заданию — кнопка 💬 рядом с «Написать»</p>
+        <textarea class="hdpx-ta" id="hdpx-defwish" rows="2" maxlength="500" placeholder="Например: максимально кратко">${esc(s.wish || '')}</textarea>
+        <div class="hdpx-acts hdpx-acts-end"><button class="hdpx-btn hdpx-s hdpx-primary" data-a="defwish">Сохранить</button></div></div>
       <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Тесты «как человек»</b>
         <span class="hdpx-small hdpx-muted">${s.human ? 'Пауза 20–45 с над каждым вопросом' : 'Сдаю сразу, без пауз'}</span></span>
         <button class="hdpx-switch${s.human ? ' hdpx-switch-on' : ''}" role="switch" aria-checked="${s.human}" data-a="human"><i></i></button></label></div>
@@ -686,13 +718,13 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       hint = `<span class="hdpx-tb-hint">${t.status === 'approved' ? 'Тест зачтён — могу показать ответы' : noTries ? 'Попытки закончились — могу показать ответы'
         : `Тест с автопроверкой${t.left != null ? ` · осталось ${t.left} ${word(t.left, 'попытка', 'попытки', 'попыток')}` : ''}`}</span>`;
       acts = `<button class="hdpx-btn hdpx-s hdpx-outline" data-a="solve" data-m="show">👁 ${done(t) || noTries ? 'Ответы' : 'Только ответы'}</button>`
-        + (done(t) || noTries ? '' : '<button class="hdpx-btn hdpx-s hdpx-primary" data-a="solve" data-m="do">⚡ Решить и сдать</button>');
+        + (done(t) || noTries ? '' : '<button class="hdpx-btn hdpx-s hdpx-outline" data-a="wish" data-m="do">💬 С пожеланием</button><button class="hdpx-btn hdpx-s hdpx-primary" data-a="solve" data-m="do">⚡ Решить и сдать</button>');
     } else {
       const rew = ['reworking', 'failed'].includes(t.status);
       hint = `<span class="hdpx-tb-hint">${t.status === 'approved' ? 'Ответ зачтён' : t.status === 'reviewing' ? 'Ответ на проверке у учителя'
         : rew ? 'На доработке — доделаю по комментарию учителя, черновик покажу тебе' : 'Проверка учителем — напишу черновик, ты проверишь и отправишь'}</span>`;
       if (t.status !== 'approved') {
-        acts = `<button class="hdpx-btn hdpx-s ${t.status === 'reviewing' ? 'hdpx-outline' : 'hdpx-primary'}" data-a="solve" data-m="write">${rew ? '🔁 Доделать' : t.status === 'reviewing' ? '✍️ Написать заново' : '✍️ Написать ответ'}</button>`;
+        acts = `<button class="hdpx-btn hdpx-s hdpx-outline" data-a="wish" data-m="write">💬 С пожеланием</button><button class="hdpx-btn hdpx-s ${t.status === 'reviewing' ? 'hdpx-outline' : 'hdpx-primary'}" data-a="solve" data-m="write">${rew ? '🔁 Доделать' : t.status === 'reviewing' ? '✍️ Написать заново' : '✍️ Написать ответ'}</button>`;
       }
     }
     let live = '';
@@ -710,10 +742,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       ${acts ? `<div class="hdpx-tb-acts">${acts}</div>` : ''}</div>${live}${dr}${running ? '' : lastCard(p.task)}`;
   }
 
-  async function solve(btn, p, mode) {
+  async function solve(btn, p, mode, wish = '') {
     const t = taskOf(p.topic, p.task) || {};
     const url = taskUrl(p.topic, p.task);
-    if (mode === 'do') {
+    if (mode === 'do' && !wish) {
       const ok = await ask({
         title: 'Решить и сдать тест?',
         text: `Бот решит «${t.title || 'тест'}» и отправит ответы на HDP — это тратит попытку${t.left != null ? ` (осталось ${t.left})` : ''}. Результат придёт сюда и в чат.`,
@@ -721,7 +753,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       });
       if (!ok) return false;
     }
-    const r = await busy(btn, () => api('/api/solve', { url, show: mode === 'show' }));
+    const r = await busy(btn, () => api('/api/solve', { url, show: mode === 'show', wish }));
     if (!r) return false;
     toast(mode === 'show' ? 'Смотрю ответы — покажу здесь и в чате' : mode === 'do' ? 'Решаю и сдаю — результат придёт сюда и в чат' : 'Пишу ответ — черновик придёт тебе на проверку');
     S.running.add(p.task);
@@ -841,11 +873,11 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     if (isTest(t)) {
       const over = done(t) || t.left === 0;
       return open + `<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button>`
-        + (over ? '' : '<button class="hdpx-ab-btn hdpx-ab-main" data-a="solve" data-m="do">⚡ Решить и сдать</button>');
+        + (over ? '' : '<button class="hdpx-ab-btn" data-a="wish" data-m="do" title="Решить с пожеланием">💬</button><button class="hdpx-ab-btn hdpx-ab-main" data-a="solve" data-m="do">⚡ Решить и сдать</button>');
     }
     if (t.status === 'approved') return '';
     const rew = ['reworking', 'failed'].includes(t.status);
-    return open + `<button class="hdpx-ab-btn hdpx-ab-main" data-a="solve" data-m="write">${rew ? '🔁 Доделать' : t.status === 'reviewing' ? '✍️ Написать заново' : '✍️ Написать ответ'}</button>`;
+    return open + `<button class="hdpx-ab-btn" data-a="wish" data-m="write" title="Написать с пожеланием">💬</button><button class="hdpx-ab-btn hdpx-ab-main" data-a="solve" data-m="write">${rew ? '🔁 Доделать' : t.status === 'reviewing' ? '✍️ Написать заново' : '✍️ Написать ответ'}</button>`;
   }
 
   function ensureBar() {
@@ -930,7 +962,12 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     };
     switch (act) {
       case 'close': closePanel(); break;
-      case 'plain': plainOff(); break;  // Глеб 19.10: «одной кнопкой выключить все доп. функции — обычная платформа»
+      case 'plain': plainOff(); break;
+      case 'defwish': {
+        const r = await busy(a, () => api('/api/site/settings/set', { wish: ($('#hdpx-defwish') || {}).value || '' }));
+        if (r) { S.settings = r; toast(r.wish ? `Буду учитывать: «${r.wish}»` : 'Пожеланий по умолчанию нет'); renderPanel(true); }
+        break;
+      }  // Глеб 19.10: «одной кнопкой выключить все доп. функции — обычная платформа»
       case 'tab':
         S.tab = d.v; store.set('tab', d.v);
         if (d.v === 'exams' && !S.exams) loadExams(false);
@@ -940,6 +977,12 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         renderPanel(true);
         break;
       case 'solve': solve(a, p, d.m); break;
+      case 'wish': {
+        if (!S.settings) loadSettings();
+        const w = await wishBox(d.m);
+        if (w !== null) solve(a, p, d.m, w);
+        break;
+      }
       case 'mini': solve(a, { topic: d.topic, task: d.task }, d.m); break;
       case 'draft': openPanel('now', { draft: d.task }); break;
       case 'openhere': openPanel('now'); break;

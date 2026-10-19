@@ -1066,6 +1066,8 @@ def prompt_for(url, text, show, retry=None):
         + HANDWRITE.format(url=url, d=d, grade=GRADE8)
         + REWORK.format(url=url, d=d)
         + PRIVATE
+        + "".join(f"Пожелание Глеба к этому заданию (выполни, оно важнее общих правил оформления): {w}.\n"
+                  for w in ([] if only_show else wishes(text)))
         + f"Сначала прочитай {os.path.relpath(drafts.STYLE, REPO)}, если он есть: это правила Глеба по его прошлым правкам, "
         "они важнее общих. Бот сам покажет черновик Глебу: в ответе текст черновика не повторяй, напиши 1–2 строки, что сделал.\n"
         "Ответ пиши для Telegram, коротко, без markdown-таблиц: что написал по каждому вопросу. Если работа сдана и сайт "
@@ -1465,6 +1467,30 @@ SEND_DELAY = os.environ.get("HDP_SEND_DELAY") or "4-12"
 def human_on():
     """Сдавать «как человек» (паузы в тестах, отправка учителю через несколько минут)? Включено, пока не выключат."""
     return load_settings().get("human", True)
+
+
+WISH_DEFAULT = "текстовые ответы — максимально кратко"  # Глеб 19.10: «по умолчанию текстовые задания максимально кратко»
+
+
+def default_wish():
+    """Пожелание ко всем заданиям (меняется на сайте: ⚙️ → «Пожелания по умолчанию»; пусто — без пожеланий)."""
+    w = load_settings().get("wish")
+    return WISH_DEFAULT if w is None else w
+
+
+def set_default_wish(text):
+    with settings_lock:
+        s = load_settings()
+        s["wish"] = str(text or "").strip()[:500]
+        save_settings(s)
+
+
+def wishes(text):
+    """Пожелания к заданию для Claude: по умолчанию + слова Глеба рядом со ссылкой (или из «💬 Пожелания» на сайте)."""
+    own = re.sub(r"\s+", " ", LINK.sub(" ", text or "")).strip()
+    if re.fullmatch(r"(?i)(сделай|реши|пж|пожалуйста|плиз|вот|это|\W)*", own):
+        own = ""  # «сделай пж <ссылка>» — не пожелание
+    return [w for w in (default_wish(), own[:500]) if w]
 
 
 def set_human(on):
@@ -3164,7 +3190,8 @@ def app_solve(b):
     m = LINK.search(str(b.get("url") or ""))
     if not m:
         raise ValueError("Это не ссылка на задание HDP")
-    threading.Thread(target=run_task, args=(owner(), m.group(0), "", bool(b.get("show"))), daemon=True).start()
+    wish = str(b.get("wish") or "").strip()[:500]  # «💬 Пожелания» к заданию на сайте
+    threading.Thread(target=run_task, args=(owner(), m.group(0), wish, bool(b.get("show"))), daemon=True).start()
     return {"ok": True}
 
 
@@ -3762,7 +3789,7 @@ def app_site_hold(b):
 
 
 def app_site_settings(_=None):
-    return {"human": human_on(), "delay": delay_range(), "label": delay_label(),
+    return {"human": human_on(), "delay": delay_range(), "label": delay_label(), "wish": default_wish(),
             "choices": [{"v": v, "label": lab} for v, lab in SEND_CHOICES]}
 
 
@@ -3774,6 +3801,8 @@ def app_site_settings_set(b):
         set_delay_range(str(b["delay"]))
     if "human" in b:
         set_human(bool(b["human"]))
+    if "wish" in b:
+        set_default_wish(b["wish"])
     return app_site_settings()
 
 

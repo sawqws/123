@@ -1274,6 +1274,26 @@ class SiteTest(BotTest):
         self.sp.stop()
         super().tearDown()
 
+    def test_wishes_default_short_and_own(self):
+        """💬 Пожелания: по умолчанию «максимально кратко», своё — с сайта или словами рядом со ссылкой."""
+        url = "https://horodigital.ru/student/topic/" + "1" * 8 + "-1111-1111-1111-" + "1" * 12 + "/task/" + \
+            "2" * 8 + "-2222-2222-2222-" + "2" * 12
+        p = bot.prompt_for(url, "", False)
+        self.assertIn("максимально кратко", p)
+        p = bot.prompt_for(url, url + " без вступлений", False)
+        self.assertIn("без вступлений", p)
+        self.assertNotIn("сделай пж", bot.prompt_for(url, "сделай пж " + url, False))
+        self.assertEqual(bot.wishes("сделай пж " + url), [bot.WISH_DEFAULT])
+        self.assertNotIn("Пожелание", bot.prompt_for(url, "", True))  # «только ответы» — без пожеланий
+        r = bot.app_site_settings_set({"wish": "  по пунктам  "})
+        self.assertEqual(r["wish"], "по пунктам")
+        self.assertEqual(bot.wishes(""), ["по пунктам"])
+        bot.app_site_settings_set({"wish": ""})
+        self.assertEqual(bot.wishes(""), [])  # убрал совсем — пожеланий нет
+        with mock.patch.object(bot.threading, "Thread") as th:
+            bot.app_solve({"url": url, "wish": "кратко"})
+        self.assertEqual(th.call_args.kwargs["args"][2], "кратко")
+
     def test_link_works_once_and_session_remembered(self):
         code = web.site_code()
         token = web.site_login(code)
