@@ -43,6 +43,8 @@ RESTARTS_PER_HOUR = 3
 FIX_PER_DAY = 4
 FIX_AGAIN = 12 * 3600    # одну и ту же ошибку чиним не чаще
 TELL_AGAIN = 12 * 3600   # и напоминаем о ней не чаще
+FRESH = 6 * 3600         # чиним и напоминаем, только если ошибка была недавно: дольше не повторялась — уже починена
+                         # (16.10 нарочные сбои тестов из журнала ждали в очереди сутки, и Claude звали чинить призрак)
 KEEP = 3 * 86400         # закрытые ошибки и события храним столько
 WEB = "http://127.0.0.1:8788/health"
 URGENT_AGAIN = 3600      # сайт лежит: Claude зовём снова не раньше чем через час (а не через 12 ч)
@@ -332,7 +334,7 @@ def decide(g, now):
     """Что делать с открытыми ошибками: починить сам или сказать. → [("fix", sig) | ("tell", sig)]."""
     acts = []
     for it in g["issues"].values():
-        if it.get("closed") or it.get("muted"):
+        if it.get("closed") or it.get("muted") or now - it.get("last", now) > FRESH:
             continue
         urgent = it.get("urgent")
         can_fix = urgent or it.get("fixable") and not (it.get("fixable_later") and it["count"] < 2)
