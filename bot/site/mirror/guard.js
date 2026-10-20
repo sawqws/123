@@ -312,6 +312,40 @@
   // прикрепляется к ответу через скрепку платформы (вместо окна выбора файла ей отдаём снимок); Enter / Esc — готово.
   if (typeof document !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
     let pend = null;  // снимок для следующего «выбора файла» платформы
+    // Фото грузились долго (Глеб 20.10): снимок iPad — 3–5 МБ, по LTE через VPN это десятки секунд. Перед загрузкой
+    // уменьшаем до MAX_SIDE по длинной стороне, JPEG JPEG_Q (~0,4–0,8 МБ, почерк читается); остальные файлы — как есть.
+    const MAX_SIDE = 2400, JPEG_Q = 0.82, BIG = 900 * 1024;
+    const shrink = file => new Promise(done => {
+      if (!/^image\/(jpeg|png|heic|heif|webp)$/i.test(file.type) || file.size < BIG) return done(file);
+      const url = URL.createObjectURL(file);
+      const img = new Image();  // <img> сам учитывает поворот из EXIF
+      img.onload = () => {
+        const k = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(b => done(b && b.size < file.size ? new File([b], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file), 'image/jpeg', JPEG_Q);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); done(file); };
+      img.src = url;
+    });
+    // выбрал фото в окне скрепки — платформа получает уже сжатые (событие придерживаем, пока сжимаем)
+    let mine = false;
+    addEventListener('change', e => {
+      const inp = e.target;
+      if (mine || !inp || inp.type !== 'file' || !inp.files || !inp.files.length) return;
+      const files = [...inp.files];
+      if (!files.some(f => /^image\//i.test(f.type) && f.size >= BIG)) return;
+      e.stopImmediatePropagation();
+      Promise.all(files.map(shrink)).then(out => {
+        const dt = new DataTransfer();
+        out.forEach(f => dt.items.add(f));
+        inp.files = dt.files;
+        mine = true;
+        try { inp.dispatchEvent(new Event('change', { bubbles: true })); } finally { mine = false; }
+      });
+    }, true);
     const click0 = HTMLInputElement.prototype.click;
     HTMLInputElement.prototype.click = function () {
       if (this.type === 'file' && pend) {
@@ -319,8 +353,11 @@
         pend.forEach(f => dt.items.add(f));
         pend = null;
         this.files = dt.files;
-        this.dispatchEvent(new Event('input', { bubbles: true }));
-        this.dispatchEvent(new Event('change', { bubbles: true }));
+        mine = true;  // снимок камеры уже уменьшен — второй раз не сжимаем
+        try {
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        } finally { mine = false; }
         return;
       }
       return click0.apply(this, arguments);
@@ -363,8 +400,9 @@
       const shoot = () => {
         if (!video.videoWidth) return;
         const c = document.createElement('canvas');
-        c.width = video.videoWidth; c.height = video.videoHeight;
-        c.getContext('2d').drawImage(video, 0, 0);
+        const k = Math.min(1, MAX_SIDE / Math.max(video.videoWidth, video.videoHeight));  // меньше файл — быстрее загрузка
+        c.width = Math.round(video.videoWidth * k); c.height = Math.round(video.videoHeight * k);
+        c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
         flash.style.transition = 'none'; flash.style.opacity = '.85';
         requestAnimationFrame(() => { flash.style.transition = 'opacity .25s ease'; flash.style.opacity = '0'; });
         shutter.style.transform = 'scale(.9)'; setTimeout(() => { shutter.style.transform = ''; }, 120);
@@ -373,7 +411,7 @@
           const ok = attach(new File([b], `photo_${Date.now()}.jpg`, { type: 'image/jpeg' }));
           shots += ok ? 1 : 0;
           count.textContent = ok ? `Прикреплено: ${shots}` : 'Не прикрепилось — нажми скрепку';
-        }, 'image/jpeg', 0.92);
+        }, 'image/jpeg', JPEG_Q);
       };
       box.shoot = shoot;
       try {
