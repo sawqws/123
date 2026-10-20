@@ -335,7 +335,7 @@ class Web(BaseHTTPRequestHandler):
             t, x = (q.get("t") or [""])[0], (q.get("x") or [""])[0]
             if not (site_check(self.cookie()) and re.fullmatch(r"[\w-]{8,64}", t) and re.fullmatch(r"[\w-]{8,64}", x)):
                 return self.reply(403, {})
-            body = json.dumps(mirror._ahead.bundle(t, x), ensure_ascii=False).encode()
+            body = json.dumps(mirror._ahead.bundle(t, x, first_too=q.get("first") == ["1"]), ensure_ascii=False).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")

@@ -435,6 +435,9 @@ class MirrorTest(unittest.TestCase):
                                     att + "/A1"})
         self.assertEqual(out[att + "/A1"][0], 200)
         self.assertIn('"A1"', out[att + "/A1"][2])
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
+            out = mirror._ahead.bundle("T1", "X1", first_too=True)  # касание карточки — и первое звено
+        self.assertIn(edu + "/topics/T1/tasks?taskUuid=X1", out)
         code, h, body = self.req("GET", "/_hdp/sw.js", cookie=False)
         self.assertEqual((code, h.get("Service-Worker-Allowed"), h.get("Cache-Control")), (200, "/", "no-cache"))
         self.assertIn(b"/_hdp/bundle", body)
