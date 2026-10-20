@@ -350,3 +350,6 @@ html.hdpx-chat .hdpx-tab:hover, html.hdpx-chat .hdpx-pwr:hover, html.hdpx-chat .
 .hdpx-actionbar { transition: opacity .2s ease, transform .2s ease; }
 html.hdpx-typing .hdpx-actionbar { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
 html.hdpx-typing .hdpx-tab, html.hdpx-typing .hdpx-pwr { opacity: 0; pointer-events: none; transition: opacity .2s; }
+
+/* «⏻ Выключить всё» без перезагрузки (overlay.js plainOff): всё бота спрятано, страница — чистая платформа */
+html.hdpx-off .hdpx-vv, html.hdpx-off [data-hdpx] { display: none !important; }

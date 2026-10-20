@@ -49,11 +49,13 @@
   // «⏻ Выключить всё» (cookie hdp_plain): кнопок бота на странице нет, кроме одной — ⏻ «включить» на месте
   // кнопки выключения (над вкладкой 🤖 у правого края). Одно нажатие (или Alt+B) — /_hdp/on, бот снова на странице.
   // Её можно убрать (Глеб 20.10): долгое нажатие или свайп вправо — уезжает за край; тройной тап по странице — обратно.
-  if (typeof document !== 'undefined' && /(^|;\s*)hdp_plain=1(;|$)/.test(document.cookie || '')) {
+  // Выключение — тоже без перезагрузки (overlay.js plainOff → window.__hdpxPlain): режим можно включить в любой момент.
+  if (typeof document !== 'undefined') {
     const reload = () => { location.href = '/_hdp/on?to=' + encodeURIComponent(location.pathname + location.search); };
-    // Включить (Глеб 20.10: «сразу, без перезагрузки 2–3 с»): снимаем cookie и подгружаем кнопки бота прямо в эту
-    // страницу — как их вставил бы сервер; не вышло — прежний путь через перезагрузку.
-    let plainMode = true, tick = 0;
+    const V = (/[?&]v=([^&]+)/.exec(SRC) || [])[1] || '0';
+    // Включить (Глеб 20.10: «сразу, без перезагрузки 2–3 с»): снимаем cookie; кнопки бота уже в странице — просто
+    // показываем (__hdpxResume), иначе подгружаем их сюда — как их вставил бы сервер; не вышло — перезагрузка.
+    let plainMode = false, tick = 0;
     const on = () => {
       if (!plainMode) return;
       plainMode = false;
@@ -61,14 +63,16 @@
       document.cookie = 'hdp_plain=; Path=/; Max-Age=0; Secure; SameSite=Lax';
       fetch('/_hdp/on', { redirect: 'manual', credentials: 'same-origin' }).catch(() => {});  // и на сервере
       const b = document.getElementById('hdpx-on');
-      if (b) { b.style.opacity = '0'; b.style.transform = 'translateX(115%)'; setTimeout(() => b.remove(), 300); }
-      const v = (/[?&]v=([^&]+)/.exec(SRC) || [])[1] || '0';
+      if (b) { b.style.opacity = '0'; b.style.transform = 'translateX(115%)'; setTimeout(() => { if (!plainMode) b.remove(); }, 300); }
+      if (window.__hdpxResume) { window.__hdpxResume(); return; }
       const css = document.createElement('link');
-      css.rel = 'stylesheet'; css.href = '/_hdp/overlay.css?v=' + v;
+      css.rel = 'stylesheet'; css.href = '/_hdp/overlay.css?v=' + V;
       const js = document.createElement('script');
-      js.src = '/_hdp/overlay.js?v=' + v;
+      js.src = '/_hdp/overlay.js?v=' + V;
       js.onerror = css.onerror = reload;
-      document.head.append(css);
+      const pre = document.createElement('link');  // скрипт качается вместе со стилем, а не после него
+      pre.rel = 'preload'; pre.as = 'script'; pre.href = js.src;
+      document.head.append(pre, css);
       css.onload = () => document.head.append(js);  // сначала вид, потом кнопки — без вспышки без стилей
     };
     const KEY = 'hdpx.onHidden';
@@ -143,8 +147,30 @@
       const bottom = (r && r.height && r.right >= innerWidth - 2 ? Math.round(innerHeight - r.top + 12) : 190) + 72;
       if (b.style.bottom !== bottom + 'px') b.style.bottom = bottom + 'px';
     };
-    addEventListener('DOMContentLoaded', () => { if (plainMode) place(); });
-    tick = setInterval(place, 1000);  // страница — приложение: перерисовывается и меняет раскладку
+    // режим «выключено»: ⏻ «включить» на месте и раз в секунду — на своём месте (страница — приложение, раскладка меняется)
+    const plainStart = () => {
+      if (plainMode) return;
+      plainMode = true;
+      if (document.body) {
+        place();
+        const b = document.getElementById('hdpx-on');
+        if (b && !hidden) {  // выезжает из-за края, как уехала кнопка «выключить»
+          b.style.transition = 'none'; b.style.transform = 'translateX(115%)'; b.style.opacity = '0';
+          requestAnimationFrame(() => requestAnimationFrame(() => { b.style.transition = 'transform .28s cubic-bezier(.2,.8,.2,1),opacity .22s ease'; show(b); }));
+        }
+      }
+      clearInterval(tick);
+      tick = setInterval(place, 1000);
+    };
+    window.__hdpxPlain = plainStart;
+    if (/(^|;\s*)hdp_plain=1(;|$)/.test(document.cookie || '')) {
+      plainStart();
+      addEventListener('DOMContentLoaded', () => { if (plainMode) place(); });
+      // кнопки бота заранее в кэш браузера (файлы с версией, кэш на год) — «включить» срабатывает без ожидания сети
+      addEventListener('load', () => setTimeout(() => {
+        for (const f of ['overlay.css', 'overlay.js']) fetch(`/_hdp/${f}?v=${V}`, { credentials: 'same-origin' }).catch(() => {});
+      }, 2500));
+    }
     // спрятана — тройной тап (клик) по пустому месту страницы возвращает её
     let taps = [];
     addEventListener('pointerup', e => {
