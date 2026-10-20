@@ -173,8 +173,17 @@
       to.scrollIntoView({ block: 'nearest' });
     };
     new MutationObserver(aim).observe(document, { childList: true, subtree: true, characterData: true });
+    // «Назад» (Глеб 20.10) — двойной Enter; поэтому «Далее» ждёт 0,3 с, не будет ли второго нажатия
+    const prevBtn = () => {
+      const n = document.querySelector('[data-testid=testFormNextButton]');
+      const box = n && n.parentElement;
+      const b = document.querySelector('[data-testid=testFormPrevButton],[data-testid=testFormBackButton]') ||
+        (box ? [...box.querySelectorAll('button')] : []).find(x => /^назад$/i.test((x.textContent || '').trim()));
+      return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
+    };
+    let lastEnter = 0, pending = 0;
     addEventListener('keydown', e => {
-      if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+      if (e.key !== 'Enter' || e.repeat || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
       const a = document.activeElement;
       const f = fields();
       const i = f.indexOf(a);
@@ -183,13 +192,21 @@
         (!!a.closest('[data-testid=questionView]') && !a.matches(FIELD + ',select,[contenteditable]'));
       if (i < 0 && !onPage) return;  // своё поле или кнопка — Enter работает как обычно
       if (!document.querySelector('[data-testid=questionTitle]')) return;
+      e.preventDefault(); e.stopPropagation();
+      const now = Date.now();
+      if (now - lastEnter < 350) {  // второй Enter подряд — «Назад» вместо «Далее»
+        lastEnter = 0; clearTimeout(pending);
+        const p = prevBtn();
+        if (p) { if (document.activeElement !== proxy) hold(); setTimeout(() => p.click(), 30); }
+        return;
+      }
+      lastEnter = now;
       const later = i >= 0 ? f.slice(i + 1).find(x => !x.value) : null;
-      if (later) { e.preventDefault(); e.stopPropagation(); later.focus(); return; }
+      if (later) { later.focus(); return; }
       const b = nextBtn();
       if (!b) return;
-      e.preventDefault(); e.stopPropagation();
       if (i >= 0) hold();  // уход из поля = blur: платформа сохраняет ответ, клавиатура остаётся
-      setTimeout(() => b.click(), 60);
+      pending = setTimeout(() => b.click(), 330);
     }, true);
     // «Далее» мышкой или пальцем — тоже держим клавиатуру до следующего поля
     addEventListener('pointerdown', e => {
