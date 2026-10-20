@@ -250,6 +250,26 @@
       if (e.target.closest && e.target.closest('[data-testid=testFormNextButton]') && fields().includes(document.activeElement)) hold();
     }, true);
   }
+  // Плавность (Глеб 20.10): палец коснулся карточки задания — сервер уже берёт её данные у платформы,
+  // пока браузер только начинает переход (mirror.Ahead): страница задания открывается без долгого скелета.
+  if (typeof document !== 'undefined') {
+    let last = '';
+    const intent = e => {
+      const a = e.target.closest && e.target.closest('a[href*="/task/"]');
+      const m = a && /\/topic\/([\w-]+)\/task\/([\w-]+)/.exec(a.getAttribute('href') || '');
+      if (!m || m[0] === last) return;
+      last = m[0];
+      setTimeout(() => { if (last === m[0]) last = ''; }, 15000);
+      fetch(`/_hdp/ahead?t=${m[1]}&x=${m[2]}`, { credentials: 'same-origin', keepalive: true }).catch(() => {});
+    };
+    addEventListener('pointerdown', intent, { capture: true, passive: true });
+    // курсор (трекпад iPad, мышь): задержался на карточке 150 мс — тоже заранее; пробежал мимо — нет
+    let hover = 0;
+    addEventListener('mouseover', e => {
+      clearTimeout(hover);
+      if (e.target.closest && e.target.closest('a[href*="/task/"]')) hover = setTimeout(() => intent(e), 150);
+    }, { capture: true, passive: true });
+  }
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
   if (d && d.get) {
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {

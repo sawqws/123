@@ -71,6 +71,15 @@ class Upstream(BaseHTTPRequestHandler):
             return self.answer(200, b"JPEGDATA", "image/jpeg", [("Cache-Control", "client,max-age=5356800")])
         if self.path == "/api/education/v1/files":
             return self.answer(200, b'{"img": "https://horodigital.ru/store/t/' + b"a" * 32 + b'"}', "application/json")
+        edu = "/api/education/v1/students/current"
+        if self.path == edu + "/topics/T1/tasks?taskUuid=X1":
+            return self.answer(200, b'{"group": {"uuid": "G1"}, "tasks": [{"uuid": "X1", "type": "test"}]}', "application/json")
+        if self.path in (edu + "/topics/T1/tasks/X1", "/api/profile/v1/users/preferences"):
+            return self.answer(200, b'{"ok": 1}', "application/json")
+        if self.path.startswith(edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts?"):
+            return self.answer(200, b'[{"uuid": "A1"}]', "application/json")
+        if self.path == edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts/A1":
+            return self.answer(200, b'{"uuid": "A1", "answers": []}', "application/json")
         if self.path == "/go":
             return self.answer(302, b"", "text/plain", [("Location", "https://horodigital.ru/login")])
         self.answer(404, b"{}", "application/json")
@@ -364,6 +373,53 @@ class MirrorTest(unittest.TestCase):
               "console.log(/horodigital.ru$/.test(window.location.host), /horodigital.ru$/.test('evil.com'), /a/.test('a'))")
         out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30)
         self.assertEqual(out.stdout.strip(), "true false true", out.stderr)
+
+    def test_task_page_chain_fetched_ahead(self):
+        """Страница задания: сервер сам берёт цепочку (задание, попытки, попытка) — браузер получает её из памяти."""
+        edu = "/api/education/v1/students/current"
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
+            code, _, body = self.req("GET", edu + "/topics/T1/tasks?taskUuid=X1", headers={"X-Site": "1"})
+            self.assertEqual(code, 200)
+            att = edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts"
+            chain = [edu + "/topics/T1/tasks/X1", att + "?status=completed",
+                     att + "?status=started&status=created&view=full", att + "/A1"]
+            for _ in range(100):  # цепочка качается в фоне
+                if all(any(p == c for _, p, _, _ in Upstream.seen) for c in chain):
+                    break
+                time.sleep(0.05)
+            before = len(Upstream.seen)
+            for c in chain:
+                code, _, body = self.req("GET", c, headers={"X-Site": "1"})
+                self.assertEqual(code, 200, c)
+            self.assertEqual(len(Upstream.seen), before)  # всё — из памяти, к платформе не ходили
+            self.assertEqual(json.loads(body)["uuid"], "A1")
+            # второй раз — уже с платформы (отдаётся один раз), а действие сбрасывает загруженное наперёд
+            self.req("GET", chain[0], headers={"X-Site": "1"})
+            self.assertEqual(Upstream.seen[-1][1], chain[0])
+            mirror._ahead.want(["/api/profile/v1/users/preferences"])
+            time.sleep(0.3)
+            mirror._swr.clear()
+            self.assertIsNone(mirror._ahead.take("/api/profile/v1/users/preferences"))
+
+    def test_ahead_on_touch_needs_login(self):
+        """Касание карточки (/_hdp/ahead) запускает цепочку задания — только со входом и с uuid-подобными параметрами."""
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
+            code, _, _ = self.req("GET", "/_hdp/ahead?t=T1xxxxxxx&x=X1xxxxxxx", cookie=False)
+            self.assertEqual(code, 204)
+            code, _, _ = self.req("GET", "/_hdp/ahead?t=../../x&x=X1xxxxxxx")
+            self.assertEqual(code, 204)
+            time.sleep(0.2)
+            self.assertFalse([p for _, p, _, _ in Upstream.seen if "taskUuid" in p])
+            self.req("GET", "/_hdp/ahead?t=T1xxxxxxx&x=X1xxxxxxx")
+            for _ in range(60):
+                if any("taskUuid=X1xxxxxxx" in p for _, p, _, _ in Upstream.seen):
+                    break
+                time.sleep(0.05)
+            self.assertTrue(any(p.endswith("/topics/T1xxxxxxx/tasks?taskUuid=X1xxxxxxx") for _, p, _, _ in Upstream.seen))
+
+    def test_i18n_cached_like_assets(self):
+        self.assertTrue(mirror.ASSET.fullmatch("/student/i18n/ru/taskPage.json?v=prod-react@ddf9ecfc"))
+        self.assertFalse(mirror.ASSET.fullmatch("/student/i18n/ru/taskPage.json"))  # без версии — не навсегда
 
     def test_inject_without_head(self):
         out = mirror.inject("<p>x</p>", "3")
