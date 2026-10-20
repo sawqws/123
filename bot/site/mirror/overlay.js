@@ -64,6 +64,15 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>',
   };
   const spin = '<span class="hdpx-spin" aria-hidden="true"></span>';
+  // тёмная тема — своя у платформы (hdp-theme-storage в localStorage, читается при загрузке страницы)
+  const THEME = 'hdp-theme-storage';
+  const darkOn = () => { try { return !!JSON.parse(localStorage.getItem(THEME)).state.darkThemeEnabled; } catch (e) { return false; } };
+  const darkSet = v => {
+    try {
+      let t; try { t = JSON.parse(localStorage.getItem(THEME)) || {}; } catch (e) { t = {}; }
+      localStorage.setItem(THEME, JSON.stringify({ ...t, state: { ...(t.state || {}), darkThemeEnabled: v }, version: t.version || 0 }));
+    } catch (e) { /* без хранилища */ }
+  };
 
   /* ---------- API бота ---------- */
   async function api(path, body) {
@@ -519,7 +528,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const icon = l.ok ? (l.kind === 'sent' ? '📬' : l.show ? '👁' : '✅') : '⚠️';
     return `<div class="hdpx-card hdpx-last ${l.ok ? 'hdpx-ok' : 'hdpx-fail'}"><div class="hdpx-row"><span>${icon}</span><b class="hdpx-grow">${esc(l.title)}</b>
       <button class="hdpx-iconbtn hdpx-iconbtn-s" data-a="seen" aria-label="Скрыть" title="Скрыть">${I.x}</button></div>
-      ${l.score ? `<p class="hdpx-p"><b>Баллы: ${esc(l.score.join(' из '))}</b></p>` : ''}
+      ${l.score ? `<p class="hdpx-p"><b>Баллы: ${esc(l.score[1] ? `${l.score[0]} из ${l.score[1]}` : `${l.score[2]}%`)}</b></p>` : ''}
       ${l.text ? `<details class="hdpx-more" data-k="last-${l.at}"><summary>${esc(l.text.split('\n')[0].slice(0, 140))}</summary><div class="hdpx-pre">${esc(l.text)}</div></details>` : ''}
       ${l.url && !onlyUrl ? `<a class="hdpx-link" href="${esc(local(l.url))}" data-a="go">Открыть задание</a>` : ''}</div>`;
   }
@@ -760,6 +769,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Тесты «как человек»</b>
         <span class="hdpx-small hdpx-muted">${s.human ? 'Пауза 20–45 с над каждым вопросом' : 'Сдаю сразу, без пауз'}</span></span>
         <button class="hdpx-switch${s.human ? ' hdpx-switch-on' : ''}" role="switch" aria-checked="${s.human}" data-a="human"><i></i></button></label></div>
+      <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Тёмная тема</b>
+        <span class="hdpx-small hdpx-muted">Тёмная тема самой платформы — как её переключатель на главной</span></span>
+        <button class="hdpx-switch${darkOn() ? ' hdpx-switch-on' : ''}" role="switch" aria-checked="${darkOn()}" data-a="dark"><i></i></button></label></div>
       <div class="hdpx-card"><label class="hdpx-row hdpx-switchrow"><span class="hdpx-grow"><b>Кнопки бота на странице</b>
         <span class="hdpx-small hdpx-muted">${S.hideTab ? 'Спрятаны — сайт ровно как платформа. Панель открывает тройной тап по странице или Alt+B' : '«⚡ Решить и сдать», «👁 Ответы»… внизу страницы и вкладка 🤖 справа. Спрячешь — панель открывает тройной тап или Alt+B'}</span></span>
         <button class="hdpx-switch${S.hideTab ? '' : ' hdpx-switch-on'}" role="switch" aria-checked="${!S.hideTab}" data-a="tabvis"><i></i></button></label></div>
@@ -1086,6 +1098,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       case 'mini': solve(a, { topic: d.topic, task: d.task }, d.m); break;
       case 'draft': openPanel('now', { draft: d.task }); break;
       case 'openhere': openPanel('now'); break;
+      case 'dark': darkSet(!darkOn()); location.reload(); break;
       case 'tabvis':
         S.hideTab = !S.hideTab; store.set('hideTab', S.hideTab);
         toast(S.hideTab ? 'Кнопки спрятаны — панель: тройной тап по странице или Alt+B' : 'Кнопки снова на странице');
