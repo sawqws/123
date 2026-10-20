@@ -125,6 +125,77 @@
     }, { capture: true, passive: true });
     addEventListener('keydown', e => { if (e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); on(); } }, true);
   }
+  // Тест (Глеб 20.10): на новом вопросе курсор сразу в поле ответа; Enter — к следующему пустому полю, затем «Далее».
+  // Только «Далее» (data-testid=testFormNextButton) — «Отправить на проверку» Enter не нажимает.
+  if (typeof document !== 'undefined') {
+    const FIELD = 'input:not([type]),input[type=text],input[type=number],input[type=search],input[type=tel],textarea';
+    const fields = () => {
+      const v = document.querySelector('[data-testid=questionView]');
+      return v ? [...v.querySelectorAll(FIELD)].filter(i => !i.readOnly && !i.disabled && i.offsetParent) : [];
+    };
+    const nextBtn = () => {
+      const b = document.querySelector('[data-testid=testFormNextButton]');
+      return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && !/отправ/i.test(b.textContent || '') ? b : null;
+    };
+    // iPad: клавиатура держится только за фокус из нажатия — до появления нового поля держим её на невидимом
+    let proxy, back;
+    const hold = () => {
+      back = document.activeElement;
+      if (!proxy) {
+        proxy = document.createElement('input');
+        proxy.setAttribute('aria-hidden', 'true');
+        proxy.tabIndex = -1;
+        proxy.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;font-size:16px;border:0;padding:0;pointer-events:none';
+      }
+      if (proxy.parentElement !== document.body) document.body.append(proxy);
+      try { proxy.focus({ preventScroll: true }); } catch (e) { proxy.focus(); }
+      setTimeout(() => {  // вопрос не сменился — вернуть курсор в прежнее поле
+        if (document.activeElement !== proxy) return;
+        if (back && back.isConnected && back !== document.body) back.focus(); else proxy.blur();
+      }, 2500);
+    };
+    const free = () => { const a = document.activeElement; return !a || a === document.body || a === proxy || a.matches('[data-testid=testFormNextButton]'); };
+    let seen = '';
+    const aim = () => {
+      const t = document.querySelector('[data-testid=questionTitle]');
+      if (!t) { seen = ''; return; }
+      const key = location.pathname + '|' + t.textContent;
+      if (key === seen) return;
+      const f = fields();
+      if (!f.length) {  // вопрос без поля (выбор, порядок) — клавиатуре держаться не за что
+        if (document.activeElement === proxy) proxy.blur();
+        return;  // поле может дорисоваться позже — ключ не запоминаем
+      }
+      seen = key;
+      const to = f.find(i => !i.value) || f[0];
+      if (!free()) return;
+      try { to.focus({ preventScroll: true }); } catch (e) { to.focus(); }
+      to.scrollIntoView({ block: 'nearest' });
+    };
+    new MutationObserver(aim).observe(document, { childList: true, subtree: true, characterData: true });
+    addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+      const a = document.activeElement;
+      const f = fields();
+      const i = f.indexOf(a);
+      // выбор варианта (фокус на нём) — тоже «Далее»; чужие поля и кнопки не трогаем
+      const onPage = !a || a === document.body || a === proxy ||
+        (!!a.closest('[data-testid=questionView]') && !a.matches(FIELD + ',select,[contenteditable]'));
+      if (i < 0 && !onPage) return;  // своё поле или кнопка — Enter работает как обычно
+      if (!document.querySelector('[data-testid=questionTitle]')) return;
+      const later = i >= 0 ? f.slice(i + 1).find(x => !x.value) : null;
+      if (later) { e.preventDefault(); e.stopPropagation(); later.focus(); return; }
+      const b = nextBtn();
+      if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      if (i >= 0) hold();  // уход из поля = blur: платформа сохраняет ответ, клавиатура остаётся
+      setTimeout(() => b.click(), 60);
+    }, true);
+    // «Далее» мышкой или пальцем — тоже держим клавиатуру до следующего поля
+    addEventListener('pointerdown', e => {
+      if (e.target.closest && e.target.closest('[data-testid=testFormNextButton]') && fields().includes(document.activeElement)) hold();
+    }, true);
+  }
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
   if (d && d.get) {
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
