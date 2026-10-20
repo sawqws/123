@@ -2,6 +2,7 @@
    Глушит отправку аналитики и отчётов об ошибках (Яндекс-метрика, Sentry): иначе платформа получала бы адрес зеркала.
    Sentry берёт «чистый» fetch из пустого iframe — поэтому патчим и окна iframe. */
 (() => {
+  const SRC = (typeof document !== 'undefined' && document.currentScript && document.currentScript.src) || '';  // …/guard.js?v=<версия> — та же у overlay
   const BLOCK = /(^|\.)(mc\.yandex\.(ru|com)|yandex\.(ru|com)\/(metrika|watch)|sentry\.)/i;
   const bad = u => {
     try { const x = new URL(String(u), location.href); return x.host !== location.host && BLOCK.test(x.host + x.pathname); } catch (e) { return false; }
@@ -49,7 +50,27 @@
   // кнопки выключения (над вкладкой 🤖 у правого края). Одно нажатие (или Alt+B) — /_hdp/on, бот снова на странице.
   // Её можно убрать (Глеб 20.10): долгое нажатие или свайп вправо — уезжает за край; тройной тап по странице — обратно.
   if (typeof document !== 'undefined' && /(^|;\s*)hdp_plain=1(;|$)/.test(document.cookie || '')) {
-    const on = () => { location.href = '/_hdp/on?to=' + encodeURIComponent(location.pathname + location.search); };
+    const reload = () => { location.href = '/_hdp/on?to=' + encodeURIComponent(location.pathname + location.search); };
+    // Включить (Глеб 20.10: «сразу, без перезагрузки 2–3 с»): снимаем cookie и подгружаем кнопки бота прямо в эту
+    // страницу — как их вставил бы сервер; не вышло — прежний путь через перезагрузку.
+    let plainMode = true, tick = 0;
+    const on = () => {
+      if (!plainMode) return;
+      plainMode = false;
+      clearInterval(tick);
+      document.cookie = 'hdp_plain=; Path=/; Max-Age=0; Secure; SameSite=Lax';
+      fetch('/_hdp/on', { redirect: 'manual', credentials: 'same-origin' }).catch(() => {});  // и на сервере
+      const b = document.getElementById('hdpx-on');
+      if (b) { b.style.opacity = '0'; b.style.transform = 'translateX(115%)'; setTimeout(() => b.remove(), 300); }
+      const v = (/[?&]v=([^&]+)/.exec(SRC) || [])[1] || '0';
+      const css = document.createElement('link');
+      css.rel = 'stylesheet'; css.href = '/_hdp/overlay.css?v=' + v;
+      const js = document.createElement('script');
+      js.src = '/_hdp/overlay.js?v=' + v;
+      js.onerror = css.onerror = reload;
+      document.head.append(css);
+      css.onload = () => document.head.append(js);  // сначала вид, потом кнопки — без вспышки без стилей
+    };
     const KEY = 'hdpx.onHidden';
     let hidden = false;
     try { hidden = localStorage.getItem(KEY) === '1'; } catch (e) { /* без хранилища — видна */ }
@@ -122,17 +143,17 @@
       const bottom = (r && r.height && r.right >= innerWidth - 2 ? Math.round(innerHeight - r.top + 12) : 190) + 72;
       if (b.style.bottom !== bottom + 'px') b.style.bottom = bottom + 'px';
     };
-    addEventListener('DOMContentLoaded', place);
-    setInterval(place, 1000);  // страница — приложение: перерисовывается и меняет раскладку
+    addEventListener('DOMContentLoaded', () => { if (plainMode) place(); });
+    tick = setInterval(place, 1000);  // страница — приложение: перерисовывается и меняет раскладку
     // спрятана — тройной тап (клик) по пустому месту страницы возвращает её
     let taps = [];
     addEventListener('pointerup', e => {
-      if (!hidden || (e.target.closest && e.target.closest('a, button, input, textarea, select, label, [contenteditable]'))) return;
+      if (!plainMode || !hidden || (e.target.closest && e.target.closest('a, button, input, textarea, select, label, [contenteditable]'))) return;
       const now = Date.now();
       taps = taps.filter(t => now - t < 700).concat(now);
       if (taps.length >= 3) { taps = []; setHidden(false); }
     }, { capture: true, passive: true });
-    addEventListener('keydown', e => { if (e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); on(); } }, true);
+    addEventListener('keydown', e => { if (plainMode && e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); on(); } }, true);
   }
   // Тест (Глеб 20.10): на новом вопросе курсор сразу в поле ответа; Enter — к следующему пустому полю, затем «Далее».
   // Только «Далее» (data-testid=testFormNextButton) — «Отправить на проверку» Enter не нажимает.
