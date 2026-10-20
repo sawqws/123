@@ -339,6 +339,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   /* ---------- опрос бота ---------- */
   async function tick() {
     clearTimeout(S.timer);
+    if (S.off) return;
     try {
       const [st, run] = await Promise.all([api('/api/state'), api('/api/site/running')]);
       S.st = st;
@@ -354,7 +355,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     } catch (e) { /* бот недоступен или нет входа — следующий опрос */ }
     update();
     const fast = (S.st && (S.st.working || S.st.busy)) || S.running.size || (S.prep && S.prep.running);
-    S.timer = setTimeout(tick, document.hidden ? 30000 : S.authed === false ? 20000 : fast ? 2500 : 10000);
+    if (!S.off) S.timer = setTimeout(tick, document.hidden ? 30000 : S.authed === false ? 20000 : fast ? 2500 : 10000);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 
@@ -386,7 +387,30 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
 
   /* ---------- вкладка справа и панель ---------- */
   // Глеб 19.10: «выкл одной кнопкой и вкл одной кнопкой» — без вопросов
-  const plainOff = () => { location.href = '/_hdp/off?to=' + encodeURIComponent(location.pathname + location.search); };
+  // «⏻ Выключить всё» (Глеб 20.10: «слишком долго думает») — без перезагрузки: кнопки бота прячутся сразу
+  // (html.hdpx-off), опрос бота встаёт, cookie hdp_plain — как у /_hdp/off; ⏻ «включить» рисует guard.js.
+  // Включение обратно — window.__hdpxResume (из guard.js): тот же экземпляр, без новой загрузки.
+  const plainOff = () => {
+    if (S.off) return;
+    if (!window.__hdpxPlain) { location.href = '/_hdp/off?to=' + encodeURIComponent(location.pathname + location.search); return; }
+    if (S.open) closePanel();
+    S.off = true;
+    clearTimeout(S.timer); clearTimeout(S.prepTimer); clearTimeout(queued); queued = 0;
+    const html = document.documentElement;
+    html.classList.add('hdpx-off');
+    html.classList.remove('hdpx-chat', 'hdpx-typing');
+    document.cookie = 'hdp_plain=1; Path=/; Max-Age=15552000; Secure; SameSite=Lax';
+    fetch('/_hdp/off', { redirect: 'manual', credentials: 'same-origin' }).catch(() => {});  // и на сервере
+    window.__hdpxPlain();
+  };
+  window.__hdpxResume = () => {
+    if (!S.off) return;
+    S.off = false;
+    document.documentElement.classList.remove('hdpx-off');
+    pathNow = '';
+    update();
+    tick();
+  };
 
   function ensureTab() {
     let tab = $('.hdpx-tab');
@@ -994,7 +1018,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   /* ---------- всё вместе ---------- */
   let pathNow = '';
   function update() {
-    if (!document.body) return;
+    if (!document.body || S.off) return;
     // страница чатов: свой вид (overlay.css, html.hdpx-chat) — полный список с именами и на iPad
     document.documentElement.classList.toggle('hdpx-chat', location.pathname.startsWith('/student/chat'));
     if (location.pathname !== pathNow) {  // сменилась страница SPA
@@ -1242,12 +1266,13 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   // кнопка спрятана — панель открывают тройной тап (телефон) / тройной клик по странице или Alt+B
   let taps = [];
   document.addEventListener('pointerup', e => {
-    if (!S.hideTab || S.open || (e.target.closest && e.target.closest('[data-hdpx], a, button, input, textarea, select, label'))) return;
+    if (S.off || !S.hideTab || S.open || (e.target.closest && e.target.closest('[data-hdpx], a, button, input, textarea, select, label'))) return;
     const now = Date.now();
     taps = taps.filter(t => now - t < 700).concat(now);
     if (taps.length >= 3) { taps = []; openPanel(); }
   }, { passive: true });
   document.addEventListener('keydown', e => {
+    if (S.off) return;
     if (e.altKey && (e.code === 'KeyB' || e.key === 'b' || e.key === 'и')) { e.preventDefault(); S.open ? closePanel() : openPanel(); return; }
     if (e.key !== 'Escape') return;
     if (S.chooser) { S.chooser = false; update(); } else if (S.open && !$('.hdpx-modal')) closePanel();
