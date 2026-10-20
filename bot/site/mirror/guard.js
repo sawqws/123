@@ -307,6 +307,116 @@
       if (e.target.closest && e.target.closest('a[href*="/task/"]')) hover = setTimeout(() => intent(e), 150);
     }, { capture: true, passive: true });
   }
+  // Камера (Глеб 20.10: «чтобы я мог фоткать пробелом»): на странице задания с полем ответа — кнопка 📷 рядом со
+  // скрепкой платформы (или Пробел, когда курсор не в поле). Живая камера: Пробел / кнопка — снимок, он сразу
+  // прикрепляется к ответу через скрепку платформы (вместо окна выбора файла ей отдаём снимок); Enter / Esc — готово.
+  if (typeof document !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    let pend = null;  // снимок для следующего «выбора файла» платформы
+    const click0 = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function () {
+      if (this.type === 'file' && pend) {
+        const dt = new DataTransfer();
+        pend.forEach(f => dt.items.add(f));
+        pend = null;
+        this.files = dt.files;
+        this.dispatchEvent(new Event('input', { bubbles: true }));
+        this.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      return click0.apply(this, arguments);
+    };
+    const attachBtn = () => document.querySelector('[data-testid=attachButton]');
+    const attach = file => { const b = attachBtn(); if (!b) return false; pend = [file]; b.click(); if (pend) { pend = null; return false; } return true; };
+    let box = null, stream = null, shots = 0;
+    const css = (el, st) => { el.style.cssText = st; return el; };
+    const close = () => {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      if (box) { const b = box; b.style.opacity = '0'; setTimeout(() => b.remove(), 200); }
+      box = null;
+    };
+    const open = async () => {
+      if (box || !attachBtn()) return;
+      shots = 0;
+      box = css(document.createElement('div'), 'position:fixed;inset:0;z-index:2147483600;background:#0b0b10;display:flex;flex-direction:column;' +
+        'align-items:center;justify-content:center;opacity:0;transition:opacity .2s ease;font:500 15px/1.3 system-ui,-apple-system,sans-serif;color:#fff');
+      box.id = 'hdpx-cam';
+      const video = css(document.createElement('video'), 'max-width:100%;max-height:calc(100% - 150px);border-radius:16px;background:#000');
+      video.playsInline = true; video.muted = true; video.autoplay = true;
+      const flash = css(document.createElement('div'), 'position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s ease');
+      const bar = css(document.createElement('div'), 'position:absolute;left:0;right:0;bottom:0;height:130px;display:flex;align-items:center;justify-content:center;gap:28px');
+      const info = css(document.createElement('div'), 'position:absolute;left:24px;bottom:52px;opacity:.75;font-size:14px');
+      info.textContent = 'Пробел — снимок · Enter — готово';
+      const count = css(document.createElement('div'), 'position:absolute;right:24px;bottom:52px;font-size:15px');
+      const shutter = css(document.createElement('button'), 'width:74px;height:74px;border-radius:50%;border:5px solid rgba(255,255,255,.9);' +
+        'background:#fff;background-clip:content-box;padding:4px;cursor:pointer;transition:transform .12s ease');
+      shutter.type = 'button'; shutter.setAttribute('aria-label', 'Снимок');
+      const x = css(document.createElement('button'), 'position:absolute;top:18px;right:18px;width:44px;height:44px;border-radius:50%;border:0;' +
+        'background:rgba(255,255,255,.14);color:#fff;font-size:22px;cursor:pointer');
+      x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Готово');
+      bar.append(shutter);
+      box.append(video, flash, bar, info, count, x);
+      document.body.append(box);
+      requestAnimationFrame(() => { if (box) box.style.opacity = '1'; });
+      x.addEventListener('click', close);
+      shutter.addEventListener('click', () => shoot());
+      const shoot = () => {
+        if (!video.videoWidth) return;
+        const c = document.createElement('canvas');
+        c.width = video.videoWidth; c.height = video.videoHeight;
+        c.getContext('2d').drawImage(video, 0, 0);
+        flash.style.transition = 'none'; flash.style.opacity = '.85';
+        requestAnimationFrame(() => { flash.style.transition = 'opacity .25s ease'; flash.style.opacity = '0'; });
+        shutter.style.transform = 'scale(.9)'; setTimeout(() => { shutter.style.transform = ''; }, 120);
+        c.toBlob(b => {
+          if (!b) return;
+          const ok = attach(new File([b], `photo_${Date.now()}.jpg`, { type: 'image/jpeg' }));
+          shots += ok ? 1 : 0;
+          count.textContent = ok ? `Прикреплено: ${shots}` : 'Не прикрепилось — нажми скрепку';
+        }, 'image/jpeg', 0.92);
+      };
+      box.shoot = shoot;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 4032 }, height: { ideal: 3024 } } });
+        if (!box) { stream.getTracks().forEach(t => t.stop()); return; }
+        video.srcObject = stream;
+      } catch (e) {
+        info.textContent = 'Нет доступа к камере — разреши её для сайта в Safari';
+      }
+    };
+    const typing = () => { const a = document.activeElement; return a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT|IFRAME)$/.test(a.tagName)); };
+    addEventListener('keydown', e => {
+      if (box) {
+        if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) box.shoot(); }
+        else if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+        return;
+      }
+      if ((e.code === 'Space' || e.key === ' ') && !e.repeat && !e.altKey && !e.ctrlKey && !e.metaKey && !typing() && attachBtn()) {
+        e.preventDefault(); e.stopPropagation(); open();
+      }
+    }, true);
+    // 📷 рядом со скрепкой платформы (своя кнопка поверх, вёрстку не трогает)
+    const camBtn = () => {
+      const a = attachBtn();
+      let b = document.getElementById('hdpx-camb');
+      if (!a || !a.getBoundingClientRect().width) { if (b) b.remove(); return; }
+      if (!b) {
+        b = document.createElement('button');
+        b.id = 'hdpx-camb'; b.type = 'button'; b.title = 'Камера · Пробел — снимок';
+        b.setAttribute('aria-label', 'Камера');
+        b.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.4"/></svg>';
+        b.addEventListener('click', open);
+        document.body.append(b);
+      }
+      const ar = a.getBoundingClientRect();  // слева от скрепки: справа от QR сразу начинается поле ответа
+      const st = `position:fixed;z-index:2147482000;top:${Math.round(ar.top)}px;left:${Math.max(2, Math.round(ar.left - ar.width - 6))}px;width:${Math.round(ar.width)}px;` +
+        `height:${Math.round(ar.height)}px;display:grid;place-items:center;border:0;background:transparent;color:${getComputedStyle(a).color};cursor:pointer;padding:0`;
+      if (b.style.cssText !== st) b.style.cssText = st;
+    };
+    setInterval(camBtn, 700);
+    addEventListener('resize', camBtn);
+  }
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
   if (d && d.get) {
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
