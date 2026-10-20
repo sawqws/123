@@ -585,6 +585,28 @@ class Ahead:
         if group and self.kind.get(task) == "test":
             self.want(self._attempts(group, topic, task))
 
+    def bundle(self, topic, task, wait=4.0):
+        """Вся цепочка задания одним ответом (для sw.js): {путь: [статус, тип, текст]}. Ждёт, пока докачается.
+        Первый запрос страницы (задания темы) браузер берёт сам — его тут нет."""
+        first = f"{EDU}/topics/{topic}/tasks?taskUuid={task}"
+        self.want([first])
+        self.asked(first)  # задание и настройки — сразу, не дожидаясь первого звена
+        mine = lambda p: task in p or p == "/api/profile/v1/users/preferences"  # noqa: E731
+        end = time.time() + wait
+        while time.time() < end:
+            with self.lock:
+                busy = [p for p in self.busy if mine(p)]
+            if not busy and task in self.kind:
+                break
+            time.sleep(0.03)
+        out = {}
+        with self.lock:
+            for p in [p for p in self.mem if mine(p) and p != first]:
+                at, val = self.mem.pop(p)
+                if time.time() - at < AHEAD_TTL:
+                    out[p] = [val[0], val[3], val[2]]
+        return out
+
     @staticmethod
     def _attempts(group, topic, task):
         base = f"{EDU}/study-groups/{group}/topics/{topic}/tasks/{task}/test-attempts"

@@ -417,6 +417,28 @@ class MirrorTest(unittest.TestCase):
                 time.sleep(0.05)
             self.assertTrue(any(p.endswith("/topics/T1xxxxxxx/tasks?taskUuid=X1xxxxxxx") for _, p, _, _ in Upstream.seen))
 
+    def test_bundle_for_service_worker(self):
+        """sw.js: вся цепочка задания одним ответом (без первого звена — его браузер берёт сам); sw.js — на весь сайт."""
+        edu = "/api/education/v1/students/current"
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
+            code, _, _ = self.req("GET", "/_hdp/bundle?t=T1xxxxxxx&x=X1", cookie=False)
+            self.assertEqual(code, 403)
+            code, _, body = self.req("GET", "/_hdp/bundle?t=T1&x=X1")
+            self.assertEqual(code, 403)  # короткие/чужие параметры
+        Upstream.seen.clear()
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()), \
+                mock.patch.object(mirror, "TASKS_OF", mirror.TASKS_OF):
+            out = mirror._ahead.bundle("T1", "X1")
+        att = edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts"
+        self.assertEqual(set(out), {edu + "/topics/T1/tasks/X1", "/api/profile/v1/users/preferences",
+                                    att + "?status=completed", att + "?status=started&status=created&view=full",
+                                    att + "/A1"})
+        self.assertEqual(out[att + "/A1"][0], 200)
+        self.assertIn('"A1"', out[att + "/A1"][2])
+        code, h, body = self.req("GET", "/_hdp/sw.js", cookie=False)
+        self.assertEqual((code, h.get("Service-Worker-Allowed"), h.get("Cache-Control")), (200, "/", "no-cache"))
+        self.assertIn(b"/_hdp/bundle", body)
+
     def test_i18n_cached_like_assets(self):
         self.assertTrue(mirror.ASSET.fullmatch("/student/i18n/ru/taskPage.json?v=prod-react@ddf9ecfc"))
         self.assertFalse(mirror.ASSET.fullmatch("/student/i18n/ru/taskPage.json"))  # без версии — не навсегда

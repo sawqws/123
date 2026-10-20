@@ -320,6 +320,29 @@ class Web(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/_hdp/sw.js":  # service worker зеркала (bundle задания): область — весь сайт, без долгого кэша
+            got = mirror.file("sw.js")
+            self.send_response(200)
+            self.send_header("Content-Type", got[1])
+            self.send_header("Service-Worker-Allowed", "/")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(got[0])))
+            self.end_headers()
+            self.wfile.write(got[0])
+            return
+        if path == "/_hdp/bundle":  # sw.js: цепочка данных задания одним ответом (mirror.Ahead.bundle)
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            t, x = (q.get("t") or [""])[0], (q.get("x") or [""])[0]
+            if not (site_check(self.cookie()) and re.fullmatch(r"[\w-]{8,64}", t) and re.fullmatch(r"[\w-]{8,64}", x)):
+                return self.reply(403, {})
+            body = json.dumps(mirror._ahead.bundle(t, x), ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/_hdp/ahead":  # палец коснулся карточки задания — сервер берёт её данные заранее (mirror.Ahead)
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             t, x = (q.get("t") or [""])[0], (q.get("x") or [""])[0]
