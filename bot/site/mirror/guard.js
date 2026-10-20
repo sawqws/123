@@ -36,6 +36,15 @@
     if (this.source === 'horodigital.ru$' && s === location.host) return true;
     return test.apply(this, arguments);
   };
+  // Тёмная тема по умолчанию (Глеб 20.10): своя тема платформы (hdp-theme-storage), включаем один раз до её бандла —
+  // дальше как выберет он сам (переключатель платформы на главной или «Тёмная тема» в Настройках панели бота).
+  try {
+    if (!localStorage.getItem('hdpx.darkInit')) {
+      let t; try { t = JSON.parse(localStorage.getItem('hdp-theme-storage')) || {}; } catch (e) { t = {}; }
+      localStorage.setItem('hdp-theme-storage', JSON.stringify({ ...t, state: { ...(t.state || {}), darkThemeEnabled: true }, version: t.version || 0 }));
+      localStorage.setItem('hdpx.darkInit', '1');
+    }
+  } catch (e) { /* без хранилища — как у платформы */ }
   // «⏻ Выключить всё» (cookie hdp_plain): кнопок бота на странице нет, кроме одной — ⏻ «включить» на месте
   // кнопки выключения (над вкладкой 🤖 у правого края). Одно нажатие (или Alt+B) — /_hdp/on, бот снова на странице.
   // Её можно убрать (Глеб 20.10): долгое нажатие или свайп вправо — уезжает за край; тройной тап по странице — обратно.
@@ -155,22 +164,28 @@
       }, 2500);
     };
     const free = () => { const a = document.activeElement; return !a || a === document.body || a === proxy || a.matches('[data-testid=testFormNextButton]'); };
-    let seen = '';
+    // новый вопрос — по заголовку «Вопрос N/M» (дёшево, на каждое изменение страницы); поле ищем несколько раз
+    // каждые 50 мс до 1,5 с (оно дорисовывается позже заголовка), а не на каждое изменение — иначе лишний пересчёт вёрстки
+    let seen = '', tries = 0, timer = 0;
+    const focusField = () => {
+      const f = fields();
+      if (!f.length) {
+        if (++tries < 30) { timer = setTimeout(focusField, 50); return; }
+        if (document.activeElement === proxy) proxy.blur();  // вопрос без поля (выбор, порядок)
+        return;
+      }
+      const to = f.find(i => !i.value) || f[0];
+      if (!free()) return;
+      try { to.focus({ preventScroll: true }); } catch (e) { to.focus(); }
+      to.scrollIntoView({ block: 'nearest' });
+    };
     const aim = () => {
       const t = document.querySelector('[data-testid=questionTitle]');
       if (!t) { seen = ''; return; }
       const key = location.pathname + '|' + t.textContent;
       if (key === seen) return;
-      const f = fields();
-      if (!f.length) {  // вопрос без поля (выбор, порядок) — клавиатуре держаться не за что
-        if (document.activeElement === proxy) proxy.blur();
-        return;  // поле может дорисоваться позже — ключ не запоминаем
-      }
-      seen = key;
-      const to = f.find(i => !i.value) || f[0];
-      if (!free()) return;
-      try { to.focus({ preventScroll: true }); } catch (e) { to.focus(); }
-      to.scrollIntoView({ block: 'nearest' });
+      seen = key; tries = 0; clearTimeout(timer);
+      timer = setTimeout(focusField, 0);
     };
     new MutationObserver(aim).observe(document, { childList: true, subtree: true, characterData: true });
     // «Назад» (Глеб 20.10) — двойной Enter; поэтому «Далее» ждёт 0,3 с, не будет ли второго нажатия
@@ -183,6 +198,7 @@
     };
     let lastEnter = 0, pending = 0;
     addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && !/^(Shift|Alt|Control|Meta)$/.test(e.key)) lastEnter = 0;  // набрал ответ — это уже не двойной Enter
       if (e.key !== 'Enter' || e.repeat || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
       const a = document.activeElement;
       const f = fields();
