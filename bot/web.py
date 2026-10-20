@@ -320,6 +320,15 @@ class Web(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/_hdp/ahead":  # палец коснулся карточки задания — сервер берёт её данные заранее (mirror.Ahead)
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            t, x = (q.get("t") or [""])[0], (q.get("x") or [""])[0]
+            if site_check(self.cookie()) and re.fullmatch(r"[\w-]{8,64}", t) and re.fullmatch(r"[\w-]{8,64}", x):
+                mirror._ahead.want([f"{mirror.EDU}/topics/{t}/tasks?taskUuid={x}"])
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path.startswith("/_hdp/"):
             got = mirror.file(path[len("/_hdp/"):])
             if not got:

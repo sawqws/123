@@ -174,7 +174,8 @@ STORE = re.compile(r"/store/[tp]/[0-9a-f]{32}")
 # Файлы самого сайта платформы: имя с хэшем (index-DJ0UYpRl.js) не меняется — держим у себя и отдаём с кэшем на год.
 # Платформа их отдаёт без Cache-Control, а сам сайт — ~70–80 файлов на страницу (Глеб 19.10: «чтобы сайт работал
 # сильно быстрее»). Найденные внутри скриптов имена других файлов качаются заранее — весь сайт оседает на сервере.
-ASSET = re.compile(r"/student/(?:assets/[\w.-]+|tinymce/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|webp|jpe?g|gif)")
+ASSET = re.compile(r"/student/(?:(?:assets/[\w.-]+|tinymce/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|webp|jpe?g|gif)|"
+                   r"i18n/[\w-]+/[\w-]+\.json\?v=[\w@.-]+)")  # i18n: тексты страниц, версия сайта — в адресе
 CHUNK = re.compile(r"(?<![\w.-])([A-Za-z_][\w.]*(?:-[\w]+)*-[A-Za-z0-9_-]{8}\.(?:js|css|png|svg|woff2?|webp))(?![\w])")
 IMMUTABLE = "public, max-age=31536000, immutable"
 CACHE = os.path.join(REPO, "horo", "tmp", "mirror_cache")
@@ -457,6 +458,7 @@ class Swr:
     def clear(self):
         with self.lock:
             self.mem.clear()
+        _ahead.clear()
 
     def put(self, path, val):
         with self.lock:
@@ -505,6 +507,117 @@ class Swr:
 _swr = Swr()
 
 
+# ---------- «наперёд»: цепочка запросов страницы задания ----------
+# Глеб 20.10: «сделай сайт плавнее сильно». Страница задания спрашивает платформу по цепочке — каждый запрос ждёт
+# предыдущий (задания темы → задание → попытки → попытка): ~6 кругов iPad ↔ сервер ↔ платформа, 1,5–2 с скелета.
+# Как только браузер начал открывать задание, сервер сам и параллельно берёт всю цепочку — следующие запросы браузера
+# получают ответ из памяти. Только чтение (GET), живёт AHEAD_TTL секунд, отдаётся один раз; любое действие сбрасывает.
+AHEAD_TTL = 20
+EDU = "/api/education/v1/students/current"
+TASKS_OF = re.compile(EDU + r"/topics/([\w-]+)/tasks\?taskUuid=([\w-]+)")
+ATTEMPTS = re.compile(EDU + r"/study-groups/[\w-]+/topics/[\w-]+/tasks/[\w-]+/test-attempts")
+
+
+class Ahead:
+    def __init__(self):
+        self.lock, self.mem, self.busy, self.gen = threading.Lock(), {}, {}, 0
+        self.group, self.kind = {}, {}  # тема → учебная группа, задание → тип (из прошлых ответов)
+
+    def clear(self):
+        with self.lock:
+            self.mem.clear()
+            self.gen += 1  # то, что сейчас качается, — уже старое
+
+    def take(self, path):
+        """Ответ из загруженного наперёд (ждёт, если он ещё в пути) или None."""
+        with self.lock:
+            ev = self.busy.get(path)
+        if ev is not None:
+            ev.wait(8)
+        with self.lock:
+            at, val = self.mem.pop(path, (0, None))
+        return val if val is not None and time.time() - at < AHEAD_TTL else None
+
+    def want(self, paths):
+        for path in paths:
+            with self.lock:
+                if path in self.busy or path in self.mem:
+                    continue
+                self.busy[path] = threading.Event()
+                gen = self.gen
+            threading.Thread(target=self._fetch, args=(path, gen), daemon=True).start()
+
+    def _fetch(self, path, gen):
+        try:
+            headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*",
+                       "Accept-Encoding": "gzip"}
+            ck = _jar.header()
+            if ck:
+                headers["Cookie"] = ck
+            conn, resp = request("GET", path, headers, None)
+            data = resp.read()
+            _pool.put(conn)
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if resp.status == 200 and ctype.startswith("application/json"):
+                _jar.update(resp.headers.get_all("Set-Cookie") or [])
+                out = [(k, v) for k, v in resp.headers.items() if k.lower() not in DROP_RESP]
+                text = rewrite(decode(data, resp.headers.get("Content-Encoding")).decode("utf-8", "replace"))
+                with self.lock:
+                    if gen == self.gen:
+                        self.mem[path] = (time.time(), (200, out, text, ctype))
+                self.seen(path, text)
+        except (http.client.HTTPException, OSError, ValueError, zlib.error):
+            pass
+        finally:
+            with self.lock:
+                ev = self.busy.pop(path, None)
+            if ev:
+                ev.set()
+
+    def asked(self, path):
+        """Браузер открывает задание (первый запрос страницы) — сразу берём остальную цепочку."""
+        m = TASKS_OF.fullmatch(path)
+        if not m:
+            return
+        topic, task = m.groups()
+        self.want([f"{EDU}/topics/{topic}/tasks/{task}", "/api/profile/v1/users/preferences"])
+        group = self.group.get(topic)
+        if group and self.kind.get(task) == "test":
+            self.want(self._attempts(group, topic, task))
+
+    @staticmethod
+    def _attempts(group, topic, task):
+        base = f"{EDU}/study-groups/{group}/topics/{topic}/tasks/{task}/test-attempts"
+        return [base + "?status=completed", base + "?status=started&status=created&view=full"]
+
+    def seen(self, path, text):
+        """Ответ платформы (браузеру или наперёд) — из него следующие звенья цепочки."""
+        m = TASKS_OF.fullmatch(path)
+        if m:
+            topic, task = m.groups()
+            try:
+                d = json.loads(text)
+                group = d["group"]["uuid"]
+                kind = next((t.get("type") for t in d.get("tasks") or [] if t.get("uuid") == task), None)
+            except (ValueError, KeyError, TypeError):
+                return
+            self.group[topic], self.kind[task] = group, kind
+            if kind == "test":
+                self.want(self._attempts(group, topic, task))
+            return
+        base = path.split("?")[0]
+        if ATTEMPTS.fullmatch(base) and "?" in path:
+            try:
+                items = json.loads(text)
+                uuids = [a["uuid"] for a in items[:2]] if isinstance(items, list) else []
+            except (ValueError, KeyError, TypeError):
+                return
+            self.want([f"{base}/{u}" for u in uuids])
+
+
+_ahead = Ahead()
+
+
 def proxy(h, version="0"):
     """Переслать запрос браузера на платформу и отдать ответ (h — BaseHTTPRequestHandler)."""
     if (h.headers.get("Upgrade") or "").lower() == "websocket":
@@ -519,6 +632,11 @@ def proxy(h, version="0"):
         got = _store.get(path) or _store.fetch(path)
         if got:
             return send_file(h, *got)
+    if method == "GET" and path.startswith("/api/"):
+        _ahead.asked(path)
+        hit = _ahead.take(path)
+        if hit:
+            return send(h, hit[0], "OK", hit[1], hit[2].encode("utf-8"))
     if method == "GET" and SWR.fullmatch(path) and (path.startswith("/api/") or "text/html" in (h.headers.get("Accept") or "")):
         hit = _swr.get(path)
         if hit:
@@ -554,6 +672,8 @@ def proxy(h, version="0"):
         text = data.decode(charset.group(1) if charset else "utf-8", "replace")
         text = rewrite(text)
         _store.warm(text)
+        if method == "GET" and resp.status == 200 and path.startswith("/api/"):
+            _ahead.seen(path, text)
         if method == "GET" and resp.status == 200 and SWR.fullmatch(path) and \
                 (path.startswith("/api/") or ctype.startswith("text/html")):
             _swr.put(path, (resp.status, out, text, ctype))
