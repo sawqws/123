@@ -260,8 +260,19 @@
       if (!m || m[0] === last) return;
       last = m[0];
       setTimeout(() => { if (last === m[0]) last = ''; }, 15000);
-      fetch(`/_hdp/ahead?t=${m[1]}&x=${m[2]}`, { credentials: 'same-origin', keepalive: true }).catch(() => {});
+      const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+      if (sw) sw.postMessage({ hdpx: 'task', t: m[1], x: m[2] });  // sw.js берёт всю цепочку одним ответом
+      else fetch(`/_hdp/ahead?t=${m[1]}&x=${m[2]}`, { credentials: 'same-origin', keepalive: true }).catch(() => {});
     };
+    // sw.js (данные задания одним ответом). Выключить: localStorage hdpx.noSW = 1 — снимается сам при следующем заходе
+    if (navigator.serviceWorker && location.protocol === 'https:') {
+      addEventListener('load', () => setTimeout(() => {
+        let off = false;
+        try { off = !!localStorage.getItem('hdpx.noSW'); } catch (e) { /* без хранилища — как обычно */ }
+        if (off) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(() => {});
+        else navigator.serviceWorker.register('/_hdp/sw.js', { scope: '/' }).catch(() => {});
+      }, 1500));
+    }
     addEventListener('pointerdown', intent, { capture: true, passive: true });
     // курсор (трекпад iPad, мышь): задержался на карточке 150 мс — тоже заранее; пробежал мимо — нет
     let hover = 0;
