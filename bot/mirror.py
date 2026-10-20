@@ -541,8 +541,8 @@ class Ahead:
     def want(self, paths):
         for path in paths:
             with self.lock:
-                if path in self.busy or path in self.mem:
-                    continue
+                if path in self.busy or (path in self.mem and time.time() - self.mem[path][0] < AHEAD_TTL):
+                    continue  # старое (дольше AHEAD_TTL) — качаем заново
                 self.busy[path] = threading.Event()
                 gen = self.gen
             threading.Thread(target=self._fetch, args=(path, gen), daemon=True).start()
@@ -585,9 +585,10 @@ class Ahead:
         if group and self.kind.get(task) == "test":
             self.want(self._attempts(group, topic, task))
 
-    def bundle(self, topic, task, wait=4.0):
+    def bundle(self, topic, task, wait=4.0, first_too=False):
         """Вся цепочка задания одним ответом (для sw.js): {путь: [статус, тип, текст]}. Ждёт, пока докачается.
-        Первый запрос страницы (задания темы) браузер берёт сам — его тут нет."""
+        Первое звено (задания темы) — только first_too (касание карточки: браузер его ещё не спросил),
+        иначе браузер уже берёт его сам."""
         first = f"{EDU}/topics/{topic}/tasks?taskUuid={task}"
         self.want([first])
         self.asked(first)  # задание и настройки — сразу, не дожидаясь первого звена
@@ -601,7 +602,7 @@ class Ahead:
             time.sleep(0.03)
         out = {}
         with self.lock:
-            for p in [p for p in self.mem if mine(p) and p != first]:
+            for p in [p for p in self.mem if mine(p) and (first_too or p != first)]:
                 at, val = self.mem.pop(p)
                 if time.time() - at < AHEAD_TTL:
                     out[p] = [val[0], val[3], val[2]]
