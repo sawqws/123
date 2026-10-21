@@ -307,13 +307,11 @@
       if (e.target.closest && e.target.closest('a[href*="/task/"]')) hover = setTimeout(() => intent(e), 150);
     }, { capture: true, passive: true });
   }
-  // Камера (Глеб 20.10: «чтобы я мог фоткать пробелом»): на странице задания с полем ответа — кнопка 📷 рядом со
-  // скрепкой платформы (или Пробел, когда курсор не в поле). Живая камера: Пробел / кнопка — снимок, он сразу
-  // прикрепляется к ответу через скрепку платформы (вместо окна выбора файла ей отдаём снимок); Enter / Esc — готово.
-  if (typeof document !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  // Камера (Глеб 20.10: «чтобы я мог фоткать пробелом»; 21.10: «системной камерой iPad, не своей»): на странице задания
+  // с полем ответа — кнопка 📷 слева от скрепки платформы или Пробел (курсор не в поле) — открывается камера iPad;
+  // снимок («Использовать фото») сразу прикрепляется к ответу через скрепку платформы.
+  if (typeof document !== 'undefined') {
     let pend = null, ours = false;  // снимок для следующего «выбора файла» платформы; ours — это наша подстановка
-    // Снимок камеры — сразу не больше MAX_SIDE (Глеб 20.10: «фотки долго грузятся»): платформе меньше работы.
-    const MAX_SIDE = 2400, JPEG_Q = 0.82;
     // фото из окна скрепки не трогаем: платформа сама уменьшает их до 1365 px перед загрузкой (проверено 20.10:
     // своё сжатие давало двойное и файл больше — 315 КБ против 271)
     const click0 = HTMLInputElement.prototype.click;
@@ -369,248 +367,26 @@
       setTimeout(feed, 0);  // не внутри её события выбора файла
     }
     addEventListener('change', onMulti, true);
-    // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла (платформа добавляет к нему
-    // «HDP_IMAGE_THUMB_») → по нему её заменить/удалить
-    const chip = name => [...document.querySelectorAll('[data-testid=imageAttachment]')].find(c => {
-      const i = c.querySelector('img'); return i && (i.alt === name || i.alt.endsWith('_' + name));
-    });
-    const unattach = (name, tries = 0) => {  // фото ещё грузится (карточки нет) — подождём её до 60 с
-      const c = chip(name);
-      if (c) { const x = c.querySelector('[class*="_close_"]'); if (x) x.click(); return; }
-      if (tries < 120) setTimeout(() => unattach(name, tries + 1), 500);
-    };
-    const loadImg = url => new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
-    const CSS = `
-      :host{all:initial}
-      .cam{position:fixed;inset:0;z-index:2147483600;background:#0b0b10;color:#fff;font:500 15px/1.3 -apple-system,system-ui,sans-serif;
-        opacity:0;transition:opacity .2s ease;-webkit-user-select:none;user-select:none}
-      .cam.on{opacity:1}
-      video{position:absolute;left:50%;top:calc(50% - 50px);transform:translate(-50%,-50%);max-width:100%;max-height:calc(100% - 170px);border-radius:16px;background:#000}
-      .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
-      .bar{position:absolute;left:0;right:0;bottom:0;height:140px;display:flex;align-items:center;justify-content:center}
-      .shutter{width:76px;height:76px;border-radius:50%;border:5px solid rgba(255,255,255,.92);background:#fff;background-clip:content-box;padding:4px;cursor:pointer;
-        transition:transform .12s ease}
-      .shutter:active{transform:scale(.9)}
-      .info{position:absolute;left:24px;bottom:58px;opacity:.7;font-size:14px}
-      .x{position:absolute;top:18px;right:18px;width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}
-      .thumb{position:absolute;right:24px;bottom:34px;width:72px;height:72px;border-radius:14px;overflow:visible;cursor:pointer;display:none;
-        border:0;padding:0;background:none}
-      .thumb.has{display:block}
-      .thumb img{width:72px;height:72px;object-fit:cover;border-radius:14px;border:2px solid rgba(255,255,255,.9);box-shadow:0 6px 20px rgba(0,0,0,.45);display:block}
-      .thumb.pop img{animation:pop .38s cubic-bezier(.2,.9,.25,1.25)}
-      @keyframes pop{from{transform:scale(.35) translate(-120px,-60px);opacity:.2}to{transform:none;opacity:1}}
-      .badge{position:absolute;top:-8px;right:-8px;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#6d68d8;color:#fff;font-size:13px;
-        display:grid;place-items:center;box-sizing:border-box}
-      .dot{position:absolute;left:-5px;bottom:-5px;width:12px;height:12px;border-radius:50%;background:#f5b942;border:2px solid #0b0b10}
-      .dot.ok{background:#3ecf7a}
-      .ed{position:absolute;inset:0;background:#0b0b10;display:none;flex-direction:column}
-      .ed.on{display:flex}
-      .stage{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;touch-action:none}
-      .stage img{max-width:calc(100% - 40px);max-height:calc(100% - 30px);border-radius:10px;transition:transform .25s ease}
-      .crop{position:absolute;border:2px solid #fff;box-shadow:0 0 0 9999px rgba(0,0,0,.55);display:none;touch-action:none}
-      .crop.on{display:block}
-      .crop i{position:absolute;width:26px;height:26px;border:4px solid #fff;box-sizing:border-box}
-      .crop i[data-h=nw]{left:-4px;top:-4px;border-right:0;border-bottom:0}.crop i[data-h=ne]{right:-4px;top:-4px;border-left:0;border-bottom:0}
-      .crop i[data-h=sw]{left:-4px;bottom:-4px;border-right:0;border-top:0}.crop i[data-h=se]{right:-4px;bottom:-4px;border-left:0;border-top:0}
-      .strip{display:flex;gap:8px;justify-content:center;padding:10px 12px 0;overflow-x:auto}
-      .strip img{width:52px;height:52px;object-fit:cover;border-radius:9px;opacity:.55;cursor:pointer;border:2px solid transparent}
-      .strip img.cur{opacity:1;border-color:#fff}
-      .tools{display:flex;gap:10px;justify-content:center;align-items:center;padding:14px 12px 26px;flex-wrap:wrap}
-      .tools button{height:44px;padding:0 16px;border-radius:22px;border:0;background:rgba(255,255,255,.12);color:#fff;font:500 15px -apple-system,system-ui,sans-serif;cursor:pointer}
-      .tools button.on{background:#fff;color:#111}
-      .tools .main{background:#6d68d8}
-      .tools .del{color:#ff8f8f}
-      .hint{text-align:center;opacity:.55;font-size:13px;padding-top:6px}`;
-    let host = null, ui = null, stream = null, shots = [], cur = -1;
-    const close = () => {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      stream = null;
-      if (host) { const h = host; ui.cam.classList.remove('on'); setTimeout(() => h.remove(), 200); }
-      host = ui = null;
-    };
-    const watchUpload = shot => {  // зелёная точка, когда карточка фото появилась у поля ответа
-      const t = setInterval(() => {
-        if (!ui || chip(shot.name)) { clearInterval(t); shot.up = true; if (ui) drawThumb(false); }
-      }, 400);
-      setTimeout(() => clearInterval(t), 120000);
-    };
-    const add = (blob, at) => {
-      const name = `photo_${Date.now()}.jpg`;
-      if (!attach(new File([blob], name, { type: 'image/jpeg' }))) { ui.info.textContent = 'Не прикрепилось — нажми скрепку'; return null; }
-      const shot = { name, blob, url: URL.createObjectURL(blob), up: false };
-      if (at == null) shots.push(shot); else shots.splice(at, 0, shot);
-      watchUpload(shot);
-      return shot;
-    };
-    const drawThumb = pop => {
-      const last = shots[shots.length - 1];
-      ui.thumb.classList.toggle('has', !!last);
-      if (!last) return;
-      ui.timg.src = last.url;
-      ui.badge.textContent = shots.length;
-      ui.dot.classList.toggle('ok', shots.every(s => s.up));
-      if (pop) { ui.thumb.classList.remove('pop'); void ui.thumb.offsetWidth; ui.thumb.classList.add('pop'); }
-    };
-    // ---- редактор: повернуть, обрезать, удалить; сохранить — фото у поля ответа заменяется новым ----
-    let rot = 0, cropOn = false, rect = null;
-    const edOpen = i => {
-      if (!shots.length) return;
-      cur = Math.max(0, Math.min(i, shots.length - 1));
-      rot = 0; cropOn = false; rect = null;
-      ui.eimg.style.transform = '';
-      ui.eimg.src = shots[cur].url;
-      ui.crop.classList.remove('on'); ui.bcrop.classList.remove('on');
-      ui.strip.replaceChildren(...shots.map((s, k) => { const im = document.createElement('img'); im.src = s.url; im.className = k === cur ? 'cur' : ''; im.onclick = () => edOpen(k); return im; }));
-      ui.ed.classList.add('on');
-    };
-    const edClose = () => { ui.ed.classList.remove('on'); cur = -1; drawThumb(false); };
-    const imgBox = () => {  // где на экране картинка (с учётом поворота)
-      const r = ui.eimg.getBoundingClientRect(), st = ui.stage.getBoundingClientRect();
-      return { x: r.left - st.left, y: r.top - st.top, w: r.width, h: r.height };
-    };
-    const placeCrop = () => { const c = ui.crop.style; c.left = rect.x + 'px'; c.top = rect.y + 'px'; c.width = rect.w + 'px'; c.height = rect.h + 'px'; };
-    const toggleCrop = () => {
-      cropOn = !cropOn;
-      ui.bcrop.classList.toggle('on', cropOn);
-      if (cropOn) { const b = imgBox(); rect = { x: b.x + b.w * 0.06, y: b.y + b.h * 0.06, w: b.w * 0.88, h: b.h * 0.88 }; placeCrop(); }
-      ui.crop.classList.toggle('on', cropOn);
-    };
-    const save = async () => {
-      const s = shots[cur];
-      if (!s) return;
-      if (!rot && !cropOn) return edClose();
-      const im = await loadImg(s.url);
-      const W = im.naturalWidth, H = im.naturalHeight, turn = rot % 180 !== 0;
-      const full = document.createElement('canvas');  // сначала поворот
-      full.width = turn ? H : W; full.height = turn ? W : H;
-      const g = full.getContext('2d');
-      g.translate(full.width / 2, full.height / 2); g.rotate(rot * Math.PI / 180); g.drawImage(im, -W / 2, -H / 2);
-      let out = full;
-      if (cropOn && rect) {  // потом обрезка: рамка на экране → пиксели повёрнутой картинки
-        const b = imgBox(), kx = full.width / b.w, ky = full.height / b.h;
-        const x = Math.max(0, (rect.x - b.x) * kx), y = Math.max(0, (rect.y - b.y) * ky);
-        const w = Math.min(full.width - x, rect.w * kx), h = Math.min(full.height - y, rect.h * ky);
-        out = document.createElement('canvas'); out.width = Math.round(w); out.height = Math.round(h);
-        out.getContext('2d').drawImage(full, x, y, w, h, 0, 0, out.width, out.height);
-      }
-      const blob = await new Promise(r => out.toBlob(r, 'image/jpeg', JPEG_Q));
-      if (!blob) return;
-      unattach(s.name);
-      shots.splice(cur, 1);
-      URL.revokeObjectURL(s.url);
-      const ns = add(blob, cur);
-      if (ns) edOpen(shots.indexOf(ns)); else edClose();
-      ui.info.textContent = 'Сохранено — фото у ответа заменено';
-    };
-    const del = () => {
-      const s = shots[cur];
-      if (!s) return;
-      unattach(s.name);
-      shots.splice(cur, 1);
-      URL.revokeObjectURL(s.url);
-      if (shots.length) edOpen(Math.min(cur, shots.length - 1)); else edClose();
-    };
-    // рамка обрезки: тянуть за углы или двигать целиком
-    let drag = null;
-    const onDown = e => {
-      if (!cropOn) return;
-      const h = e.target.dataset && e.target.dataset.h;
-      drag = { h: h || 'move', x: e.clientX, y: e.clientY, r: { ...rect } };
-      e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    };
-    const onMove = e => {
-      if (!drag) return;
-      const dx = e.clientX - drag.x, dy = e.clientY - drag.y, b = imgBox(), r = { ...drag.r }, MIN = 40;
-      if (drag.h === 'move') { r.x += dx; r.y += dy; }
-      if (drag.h.includes('w')) { r.x += dx; r.w -= dx; }
-      if (drag.h.includes('e')) r.w += dx;
-      if (drag.h.includes('n')) { r.y += dy; r.h -= dy; }
-      if (drag.h.includes('s')) r.h += dy;
-      r.w = Math.max(MIN, Math.min(r.w, b.w)); r.h = Math.max(MIN, Math.min(r.h, b.h));
-      r.x = Math.max(b.x, Math.min(r.x, b.x + b.w - r.w)); r.y = Math.max(b.y, Math.min(r.y, b.y + b.h - r.h));
-      rect = r; placeCrop();
-    };
-    const open = async () => {
-      if (host || !attachBtn()) return;
-      shots = []; cur = -1;
-      host = document.createElement('div');
-      host.id = 'hdpx-cam';
-      const root = host.attachShadow({ mode: 'closed' });  // своя «коробка»: тёмная тема платформы её не перекрашивает
-      root.innerHTML = `<style>${CSS}</style><div class="cam"><video playsinline muted autoplay></video><div class="flash"></div>
-        <div class="bar"><button class="shutter" aria-label="Снимок"></button></div><div class="info">Пробел — снимок · Enter — готово</div>
-        <button class="thumb" aria-label="Снимки — открыть"><img alt=""><span class="badge"></span><span class="dot"></span></button>
-        <button class="x" aria-label="Готово">✕</button>
-        <div class="ed"><div class="stage"><img alt=""><div class="crop"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div>
-          <div class="strip"></div><div class="hint">R — повернуть · C — обрезать · Enter — сохранить · Esc — к камере</div>
-          <div class="tools"><button class="back">‹ Камера</button><button class="rot">↻ Повернуть</button><button class="cropb">✂︎ Обрезать</button>
-          <button class="del">Удалить</button><button class="main save">Сохранить</button></div></div></div>`;
-      const q = sel => root.querySelector(sel);
-      ui = { cam: q('.cam'), video: q('video'), flash: q('.flash'), info: q('.info'), thumb: q('.thumb'), timg: q('.thumb img'), badge: q('.badge'),
-        dot: q('.dot'), ed: q('.ed'), stage: q('.stage'), eimg: q('.stage img'), crop: q('.crop'), strip: q('.strip'), bcrop: q('.cropb') };
-      document.body.append(host);
-      requestAnimationFrame(() => ui && ui.cam.classList.add('on'));
-      q('.x').onclick = close;
-      q('.shutter').onclick = () => shoot();
-      ui.thumb.onclick = () => edOpen(shots.length - 1);
-      q('.back').onclick = edClose;
-      q('.rot').onclick = () => root_rot();
-      ui.bcrop.onclick = toggleCrop;
-      q('.del').onclick = del;
-      q('.save').onclick = save;
-      ui.crop.addEventListener('pointerdown', onDown);
-      ui.stage.addEventListener('pointermove', onMove);
-      ui.stage.addEventListener('pointerup', () => { drag = null; });
-      ui.stage.addEventListener('pointercancel', () => { drag = null; });
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 4032 }, height: { ideal: 3024 } } });
-        if (!ui) { stream.getTracks().forEach(t => t.stop()); return; }
-        ui.video.srcObject = stream;
-      } catch (e) {
-        ui.info.textContent = 'Нет доступа к камере — разреши её для сайта в Safari';
-      }
-    };
-    const shoot = () => {
-      const v = ui && ui.video;
-      if (!v || !v.videoWidth || cur >= 0) return;
-      const c = document.createElement('canvas');
-      const k = Math.min(1, MAX_SIDE / Math.max(v.videoWidth, v.videoHeight));  // меньше файл — быстрее загрузка
-      c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
-      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-      const f = ui.flash;
-      f.style.transition = 'none'; f.style.opacity = '.85';
-      requestAnimationFrame(() => { f.style.transition = 'opacity .25s ease'; f.style.opacity = '0'; });
-      c.toBlob(b => { if (b && ui && add(b)) drawThumb(true); }, 'image/jpeg', JPEG_Q);
+    // системная камера: поле выбора файла с capture — Safari на iPad сразу открывает камеру (не галерею)
+    const open = () => {
+      if (!attachBtn()) return;
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment');
+      inp.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0';
+      inp.addEventListener('change', () => {
+        [...(inp.files || [])].forEach(attach);
+        inp.remove();
+      });
+      document.body.append(inp);
+      click0.call(inp);  // своё поле: мимо подстановки снимка
+      setTimeout(() => { if (inp.isConnected && !(inp.files || []).length) inp.remove(); }, 600000);
     };
     const typing = () => { const a = document.activeElement; return a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT|IFRAME)$/.test(a.tagName)); };
     addEventListener('keydown', e => {
-      if (host) {
-        const k = e.key, stop = () => { e.preventDefault(); e.stopPropagation(); };
-        if (cur >= 0) {  // редактор
-          if (k === 'Escape') { stop(); edClose(); } else if (k === 'Enter') { stop(); save(); }
-          else if (k === 'r' || k === 'R' || k === 'к' || k === 'К') { stop(); root_rot(); }
-          else if (k === 'c' || k === 'C' || k === 'с' || k === 'С') { stop(); toggleCrop(); }
-          else if (k === 'Delete' || k === 'Backspace') { stop(); del(); }
-          else if (k === 'ArrowLeft' || k === 'ArrowRight') { stop(); edOpen(cur + (k === 'ArrowLeft' ? -1 : 1)); }
-          else if (e.code === 'Space') stop();
-          return;
-        }
-        if (e.code === 'Space' || k === ' ') { stop(); if (!e.repeat) shoot(); }
-        else if (k === 'Enter' || k === 'Escape') { stop(); close(); }
-        return;
-      }
       if ((e.code === 'Space' || e.key === ' ') && !e.repeat && !e.altKey && !e.ctrlKey && !e.metaKey && !typing() && attachBtn()) {
         e.preventDefault(); e.stopPropagation(); open();
       }
     }, true);
-    const root_rot = () => {  // повёрнутая на 90° картинка должна влезть в экран — уменьшаем
-      rot = (rot + 90) % 360;
-      if (cropOn) toggleCrop();
-      const st = ui.stage.getBoundingClientRect(), w = ui.eimg.offsetWidth, h = ui.eimg.offsetHeight;
-      const k = rot % 180 ? Math.min(1, (st.width - 40) / h, (st.height - 30) / w) : 1;
-      ui.eimg.style.transform = `rotate(${rot}deg) scale(${k})`;
-    };
     // 📷 рядом со скрепкой платформы (своя кнопка поверх, вёрстку не трогает)
     const camBtn = () => {
       const a = attachBtn();
@@ -618,7 +394,7 @@
       if (!a || !a.getBoundingClientRect().width) { if (b) b.remove(); return; }
       if (!b) {
         b = document.createElement('button');
-        b.id = 'hdpx-camb'; b.type = 'button'; b.title = 'Камера · Пробел — снимок';
+        b.id = 'hdpx-camb'; b.type = 'button'; b.title = 'Камера iPad · Пробел';
         b.setAttribute('aria-label', 'Камера');
         b.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.4"/></svg>';
         b.addEventListener('click', open);
