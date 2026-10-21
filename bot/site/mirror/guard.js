@@ -331,8 +331,10 @@
     };
     const attachBtn = () => document.querySelector('[data-testid=attachButton]');
     // Платформа теряет фото, если их грузится несколько сразу (21.10: выбрал 3 — прикрепилось 1, на самой платформе
-    // тоже). Поэтому отдаём ей по одному: следующее — когда у поля ответа появилась карточка предыдущего (до 2 мин).
+    // тоже; по одному — все на месте). Поэтому отдаём ей по одному: следующее — когда предыдущее загрузилось, то есть
+    // у его карточки картинка уже с платформы (/store/…); сама карточка появляется сразу, ещё до загрузки. До 2 мин.
     const ATT = '[data-testid$="Attachment"]';
+    const loaded = () => [...document.querySelectorAll(ATT)].filter(c => { const i = c.querySelector('img'); return !i || /\/store\//.test(i.getAttribute('src') || ''); }).length;
     const queue = [];
     let feeding = false;
     const feed = () => {
@@ -340,11 +342,11 @@
       const b = attachBtn();
       if (!b) { queue.length = 0; return; }
       feeding = true;
-      const file = queue.shift(), before = document.querySelectorAll(ATT).length, t0 = Date.now();
+      const file = queue.shift(), before = loaded(), t0 = Date.now();
       pend = [file]; b.click();
       if (pend) { pend = null; feeding = false; return; }  // платформа не открыла выбор файла — не ждём
       const wait = setInterval(() => {
-        if (document.querySelectorAll(ATT).length > before || Date.now() - t0 > 120000) {
+        if (loaded() > before || Date.now() - t0 > 120000) {
           clearInterval(wait); feeding = false; setTimeout(feed, 300);
         }
       }, 250);
