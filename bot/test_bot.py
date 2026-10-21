@@ -19,6 +19,12 @@ import drafts  # noqa: E402
 import sitecheck  # noqa: E402
 import web  # noqa: E402
 
+# Журнал ошибок и «пульс» читает 🛡 Страж HDP: «ошибки» из тестов (boom, KeyError x) не должны попадать в живые файлы,
+# иначе Страж после каждого прогона тестов (/fix, глубокая проверка) зовёт чинить несуществующий баг.
+LIVE_JOURNAL, LIVE_HEARTBEAT = bot.JOURNAL, bot.HEARTBEAT
+_OUT = tempfile.mkdtemp(prefix="hdp-test-")
+bot.JOURNAL, bot.HEARTBEAT = os.path.join(_OUT, "journal.jsonl"), os.path.join(_OUT, "heartbeat")
+
 URL = "https://horodigital.ru/student/topic/11111111-1111-1111-1111-111111111111/task/22222222-2222-2222-2222-222222222222"
 TASK = "22222222-2222-2222-2222-222222222222"
 CHAT = 42
@@ -51,6 +57,7 @@ class BotTest(unittest.TestCase):
             mock.patch.object(bot, "SEND_DELAY", "0"),  # отправка «как человек» с задержкой — в своём тесте
             mock.patch.object(bot, "node", self.fake_node),
             mock.patch.object(bot, "INBOX", os.path.join(t, "inbox")),
+            mock.patch.object(bot, "GLEB_EXTRA", os.path.join(t, "fonts", "gleb_extra.npz")),  # не живой алфавит
             mock.patch.object(bot.media, "photo_path", self.fake_photo),  # без сети: фото и видео из Telegram
             mock.patch.object(bot.media, "video", self.fake_video),
         ]
@@ -1114,6 +1121,14 @@ class BotTest(unittest.TestCase):
         self.assertIsNone(bot.parse_time("через 99999 ч"))
         self.assertIsNotNone(bot.parse_time("через 2 ч"))
 
+    def test_tests_never_touch_live_journal(self):
+        """Нарочные сбои тестов (KeyError x, boom) Страж HDP читал из живого журнала и звал чинить несуществующий баг."""
+        live = os.path.dirname(LIVE_JOURNAL)
+        for path in (bot.JOURNAL, bot.HEARTBEAT):
+            self.assertNotEqual(os.path.dirname(path), live)
+        bot.journal("bug", "KeyError: 'x'")
+        self.assertTrue(os.path.exists(bot.JOURNAL))
+
     def test_crash_is_reported_not_silent(self):
         """Сбой в обработчике: крутилка у кнопки снимается, Глебу — «⚠️ Что-то сломалось», а не тишина."""
         calls, patch = self.all_calls()
@@ -1130,6 +1145,9 @@ class BotTest(unittest.TestCase):
             with mock.patch.object(bot.threading, "__excepthook__", lambda a: None):
                 bot.thread_crash(args)
             self.assertIn("фон упал", self.last()[0])
+        self.assertNotEqual(bot.JOURNAL, LIVE_JOURNAL)
+        with open(bot.JOURNAL, encoding="utf-8") as f:
+            self.assertIn("KeyError: 'x'", f.read())  # сбой записан — но в журнал тестов, не в живой
 
 
 class AppTest(BotTest):

@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const { open, close, loadTask, BASE, TMP } = require('./lib');
+const { matchPairs } = require('./matching');
 
 const args = process.argv.slice(2);
 const [url, ansFile] = args.filter(a => !a.startsWith('--'));
@@ -166,13 +167,8 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         if (got.join('\n') !== a.join('\n')) throw new Error(`Вопрос ${n}: порядок не совпал: ${got.join(' | ')}`);
         console.log(`В${n}: ${got.join(' → ')}`);
       } else if (q.type === 'singleMatching') {
-        // Пары: клик по левой карточке, затем по правой.
-        const card = t => view.locator('[data-testid=singleMatchingCard]').filter({ hasText: new RegExp('^\\s*' + esc(t) + '\\s*$') });
-        for (const [l, r] of a) {
-          if ((await card(l).count()) !== 1 || (await card(r).count()) !== 1) throw new Error(`Вопрос ${n}: нет карточки «${l}» или «${r}»`);
-          await card(l).click(); await page.waitForTimeout(400);
-          await card(r).click(); await page.waitForTimeout(600);
-        }
+        // Пары: клик по левой карточке, затем по правой; уже соединённые (досдача) не трогаем, чужие — переставляем.
+        await matchPairs(page, view, n, a);
         console.log(`В${n}: ${a.map(([l, r]) => `${l} = ${r}`).join(' | ')}`);
       } else if (q.type === 'grouping') {
         // Группы: клик по элементу, затем по группе.
