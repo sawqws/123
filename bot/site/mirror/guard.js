@@ -311,7 +311,7 @@
   // скрепкой платформы (или Пробел, когда курсор не в поле). Живая камера: Пробел / кнопка — снимок, он сразу
   // прикрепляется к ответу через скрепку платформы (вместо окна выбора файла ей отдаём снимок); Enter / Esc — готово.
   if (typeof document !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    let pend = null;  // снимок для следующего «выбора файла» платформы
+    let pend = null, ours = false;  // снимок для следующего «выбора файла» платформы; ours — это наша подстановка
     // Снимок камеры — сразу не больше MAX_SIDE (Глеб 20.10: «фотки долго грузятся»): платформе меньше работы.
     const MAX_SIDE = 2400, JPEG_Q = 0.82;
     // фото из окна скрепки не трогаем: платформа сама уменьшает их до 1365 px перед загрузкой (проверено 20.10:
@@ -323,14 +323,52 @@
         pend.forEach(f => dt.items.add(f));
         pend = null;
         this.files = dt.files;
-        this.dispatchEvent(new Event('input', { bubbles: true }));
-        this.dispatchEvent(new Event('change', { bubbles: true }));
+        ours = true;
+        try {
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        } finally { ours = false; }
         return;
+      }
+      if (this.type === 'file' && !this.__hdpxMulti) {  // поле выбора может быть и вне страницы — перехват на нём самом
+        this.__hdpxMulti = true;
+        this.addEventListener('change', onMulti, true);
       }
       return click0.apply(this, arguments);
     };
     const attachBtn = () => document.querySelector('[data-testid=attachButton]');
-    const attach = file => { const b = attachBtn(); if (!b) return false; pend = [file]; b.click(); if (pend) { pend = null; return false; } return true; };
+    // Платформа теряет фото, если их грузится несколько сразу (21.10: выбрал 3 — прикрепилось 1, на самой платформе
+    // тоже; по одному — все на месте). Поэтому отдаём ей по одному: следующее — когда предыдущее загрузилось, то есть
+    // у его карточки картинка уже с платформы (/store/…); сама карточка появляется сразу, ещё до загрузки. До 2 мин.
+    const ATT = '[data-testid$="Attachment"]';
+    const loaded = () => [...document.querySelectorAll(ATT)].filter(c => { const i = c.querySelector('img'); return !i || /\/store\//.test(i.getAttribute('src') || ''); }).length;
+    const queue = [];
+    let feeding = false;
+    const feed = () => {
+      if (feeding || !queue.length) return;
+      const b = attachBtn();
+      if (!b) { queue.length = 0; return; }
+      feeding = true;
+      const file = queue.shift(), before = loaded(), t0 = Date.now();
+      pend = [file]; b.click();
+      if (pend) { pend = null; feeding = false; return; }  // платформа не открыла выбор файла — не ждём
+      const wait = setInterval(() => {
+        if (loaded() > before || Date.now() - t0 > 120000) {
+          clearInterval(wait); feeding = false; setTimeout(feed, 3000);  // платформа ещё дописывает своё — как человек
+        }
+      }, 250);
+    };
+    const attach = file => { if (!attachBtn()) return false; queue.push(file); feed(); return true; };
+    // выбрал несколько файлов в окне скрепки — платформе по одному (нашу подстановку не трогаем)
+    function onMulti(e) {
+      const inp = e.target;
+      if (ours || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2 || inp.__hdpxSeen === e) return;
+      inp.__hdpxSeen = e;  // и на самом поле, и на window — один раз
+      e.stopImmediatePropagation();
+      [...inp.files].forEach(f => queue.push(f));
+      setTimeout(feed, 0);  // не внутри её события выбора файла
+    }
+    addEventListener('change', onMulti, true);
     // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла (платформа добавляет к нему
     // «HDP_IMAGE_THUMB_») → по нему её заменить/удалить
     const chip = name => [...document.querySelectorAll('[data-testid=imageAttachment]')].find(c => {
