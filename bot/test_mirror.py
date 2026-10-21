@@ -66,6 +66,9 @@ class Upstream(BaseHTTPRequestHandler):
         if self.path == "/student/assets/app.js":
             return self.answer(200, b"console.log('https://horodigital.ru')", "application/javascript",
                                [("Cache-Control", "public, max-age=31536000")])
+        if self.path == "/store/t/upload" and self.command == "POST":
+            return self.answer(200, b'[{"location": "https://horodigital.ru/store/t/' + b"c" * 32 + b'", "name": "IMG.jpg"}]',
+                               "application/json")
         if self.path.startswith("/store/t/"):
             Upstream.store = getattr(Upstream, "store", 0) + 1
             return self.answer(200, b"JPEGDATA", "image/jpeg", [("Cache-Control", "client,max-age=5356800")])
@@ -441,6 +444,21 @@ class MirrorTest(unittest.TestCase):
         code, h, body = self.req("GET", "/_hdp/sw.js", cookie=False)
         self.assertEqual((code, h.get("Service-Worker-Allowed"), h.get("Cache-Control")), (200, "/", "no-cache"))
         self.assertIn(b"/_hdp/bundle", body)
+
+    def test_uploaded_photo_is_its_own_thumbnail(self):
+        """Загруженное фото сразу отдаётся по его новому /store/t/<id> — не ждём, пока платформа сделает миниатюру."""
+        b = "----WebKitFormBoundaryX1"
+        body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"IMG.jpg\"\r\n"
+                f"Content-Type: image/jpeg\r\n\r\n").encode() + b"\xff\xd8JPEGDATA\xff\xd9" + f"\r\n--{b}--\r\n".encode()
+        code, _, resp = self.req("POST", "/store/t/upload", body=body,
+                                 headers={"Content-Type": f"multipart/form-data; boundary={b}", "Content-Length": str(len(body))})
+        self.assertEqual(code, 200)
+        self.assertIn(b"/store/t/" + b"c" * 32, resp)  # адрес переписан на зеркало
+        before = len(Upstream.seen)
+        code, h, img = self.req("GET", "/store/t/" + "c" * 32)
+        self.assertEqual((code, img, h.get("Content-Type")), (200, b"\xff\xd8JPEGDATA\xff\xd9", "image/jpeg"))
+        self.assertEqual(len(Upstream.seen), before)  # к платформе не ходили
+        self.assertIsNone(mirror.uploaded("multipart/form-data; boundary=x", b"--x\r\n", "[]"))  # без ссылки — ничего
 
     def test_i18n_cached_like_assets(self):
         self.assertTrue(mirror.ASSET.fullmatch("/student/i18n/ru/taskPage.json?v=prod-react@ddf9ecfc"))
