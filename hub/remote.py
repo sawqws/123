@@ -5,7 +5,7 @@
 usage:
   python3 hub/remote.py status                  боты и сервер
   python3 hub/remote.py logs coach-bot [строк]  последние строки логов
-  python3 hub/remote.py restart coach-bot       перезапуск
+  python3 hub/remote.py restart coach-bot       перезапуск (HDP, пока решает, — только с --force)
   python3 hub/remote.py sh "pm2 ls" [секунд]    команда на сервере (bash в /root/horo), вывод по мере работы
   python3 hub/remote.py say "текст"             написать Глебу через Главного
   python3 hub/remote.py update                  обновить всех ботов из main
@@ -68,7 +68,7 @@ def main(argv):
     elif cmd == "logs":
         print(call("logs", {"name": args[0], "lines": int(args[1]) if len(args) > 1 else 60})["out"])
     elif cmd == "restart":
-        print(call("restart", {"name": args[0], "why": why})["out"])
+        print(call("restart", {"name": args[0], "why": why, "force": "--force" in args[1:]})["out"])
     elif cmd == "say":
         call("say", {"text": " ".join(args)})
         print("отправлено")

@@ -476,6 +476,19 @@ class RemoteTest(Base):
         self.assertEqual(self.post("restart", {"name": "--update-env"}, key=k)[0], 400)  # имя бота — не флаг pm2
         self.assertEqual(self.post("logs", {"name": ""}, key=k)[0], 400)
 
+    def test_remote_restart_waits_for_busy_hdp(self):
+        """HDP решает задание — Claude его не перезапускает (обрыв, а два подряд — задание брошено); с force — можно."""
+        hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})
+        k = hub.setting("key")
+        with mock.patch.object(hub, "hdp_busy", return_value=1), mock.patch.object(hub, "sh", return_value=(0, "ok")) as sh:
+            code, body = self.post("restart", {"name": "horo-bot"}, key=k)
+            self.assertEqual(code, 200)
+            self.assertIn("не перезапускаю", body["out"])
+            sh.assert_not_called()
+            self.post("restart", {"name": "horo-bot", "force": True}, key=k)
+            self.post("restart", {"name": "coach-bot"}, key=k)
+            self.assertEqual([c.args[2] for c in sh.call_args_list], ["horo-bot", "coach-bot"])
+
     def test_remote_cli(self):
         hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})
         r = self.remote("status")
