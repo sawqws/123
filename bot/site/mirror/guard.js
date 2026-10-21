@@ -311,7 +311,7 @@
   // скрепкой платформы (или Пробел, когда курсор не в поле). Живая камера: Пробел / кнопка — снимок, он сразу
   // прикрепляется к ответу через скрепку платформы (вместо окна выбора файла ей отдаём снимок); Enter / Esc — готово.
   if (typeof document !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    let pend = null;  // снимок для следующего «выбора файла» платформы
+    let pend = null, ours = false;  // снимок для следующего «выбора файла» платформы; ours — это наша подстановка
     // Снимок камеры — сразу не больше MAX_SIDE (Глеб 20.10: «фотки долго грузятся»): платформе меньше работы.
     const MAX_SIDE = 2400, JPEG_Q = 0.82;
     // фото из окна скрепки не трогаем: платформа сама уменьшает их до 1365 px перед загрузкой (проверено 20.10:
@@ -323,8 +323,11 @@
         pend.forEach(f => dt.items.add(f));
         pend = null;
         this.files = dt.files;
-        this.dispatchEvent(new Event('input', { bubbles: true }));
-        this.dispatchEvent(new Event('change', { bubbles: true }));
+        ours = true;
+        try {
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        } finally { ours = false; }
         return;
       }
       if (this.type === 'file' && !this.__hdpxMulti) {  // поле выбора может быть и вне страницы — перехват на нём самом
@@ -356,10 +359,10 @@
       }, 250);
     };
     const attach = file => { if (!attachBtn()) return false; queue.push(file); feed(); return true; };
-    // выбрал несколько файлов в окне скрепки — платформе по одному (наша подстановка — не isTrusted, её не трогаем)
+    // выбрал несколько файлов в окне скрепки — платформе по одному (нашу подстановку не трогаем)
     function onMulti(e) {
       const inp = e.target;
-      if (!e.isTrusted || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2 || inp.__hdpxSeen === e) return;
+      if (ours || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2 || inp.__hdpxSeen === e) return;
       inp.__hdpxSeen = e;  // и на самом поле, и на window — один раз
       e.stopImmediatePropagation();
       [...inp.files].forEach(f => queue.push(f));
