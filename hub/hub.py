@@ -1732,6 +1732,11 @@ def remote_api(action, body):
         code, out = sh("pm2", "logs", str(body["name"]), "--nostream", "--lines", str(lines), "--raw", timeout=30)
         return {"code": code, "out": out[-100000:]}
     if action == "restart":
+        # HDP посреди решения: перезапуск обрывает задание, а два подряд — бот бросает его (21.10 так сорвалось
+        # «Незваный гость»). Claude перезапускает только свободного HDP; force — если правда надо сейчас.
+        if body["name"] == "horo-bot" and hdp_busy() and not body.get("force"):
+            return {"code": 1, "out": f"HDP сейчас решает или сдаёт ({hdp_busy()}) — не перезапускаю. "
+                                      "Подожди или: remote.py restart horo-bot --force"}
         code, out = sh("pm2", "restart", str(body["name"]), timeout=60)
         log_cmd(f"перезапуск {label(body['name'])}", str(body.get("why") or ""))
         return {"code": code, "out": out[-5000:]}
