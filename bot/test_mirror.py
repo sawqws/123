@@ -4,6 +4,7 @@
 
 import gzip
 import http.client
+import io
 import json
 import os
 import shutil
@@ -124,7 +125,7 @@ class MirrorTest(unittest.TestCase):
         web._cfg.update(token="t", owner=lambda: 1, routes={"/api/state": lambda b: {"bot": True}},
                         version="1", site_version="1", mirror_version="7", login_ask=lambda *a: self.asked.append(a))
         web._reqs.clear(), web._req_times.clear(), web._fails.clear()
-        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), web.Web)
+        self.srv = web.Server(("127.0.0.1", 0), web.Web)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.token = web.site_login(web.site_code())
 
@@ -459,6 +460,23 @@ class MirrorTest(unittest.TestCase):
         self.assertEqual((code, img, h.get("Content-Type")), (200, b"\xff\xd8JPEGDATA\xff\xd9", "image/jpeg"))
         self.assertEqual(len(Upstream.seen), before)  # к платформе не ходили
         self.assertIsNone(mirror.uploaded("multipart/form-data; boundary=x", b"--x\r\n", "[]"))  # без ссылки — ничего
+
+    def test_client_gone_is_not_an_error(self):
+        """Клиент ушёл посреди ответа (BrokenPipe) — тихо, без трейсбэка в pm2; настоящая ошибка — по-прежнему видна."""
+        def hit(exc):
+            err = io.StringIO()
+            with mock.patch.object(mirror, "_ahead", mock.Mock(bundle=mock.Mock(side_effect=exc))), \
+                    mock.patch.object(sys, "stderr", err):
+                c = http.client.HTTPConnection("127.0.0.1", self.srv.server_port, timeout=10)
+                c.request("GET", "/_hdp/bundle?t=T1xxxxxxx&x=X1xxxxxxx", headers={"Host": "hdp.1-2-3-4.sslip.io", "Cookie": f"hdp_site={self.token}"})
+                with self.assertRaises(http.client.RemoteDisconnected):
+                    c.getresponse()
+                c.close()
+                time.sleep(0.2)  # handle_error пишет в потоке сервера
+            return err.getvalue()
+        self.assertEqual(hit(BrokenPipeError(32, "Broken pipe")), "")
+        self.assertEqual(hit(ConnectionResetError(104, "reset")), "")
+        self.assertIn("ValueError", hit(ValueError("баг")))
 
     def test_i18n_cached_like_assets(self):
         self.assertTrue(mirror.ASSET.fullmatch("/student/i18n/ru/taskPage.json?v=prod-react@ddf9ecfc"))

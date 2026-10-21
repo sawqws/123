@@ -27,6 +27,7 @@ import secrets
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -518,8 +519,18 @@ class Web(BaseHTTPRequestHandler):
             self.reply(500, {"error": f"Ошибка сервера: {e}"})
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        """Клиент ушёл посреди ответа (закрыл вкладку, sw.js оборвал bundle) — не ошибка, без трейсбэка в pm2."""
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def serve():
-    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Web)
+    httpd = Server(("127.0.0.1", PORT), Web)
     httpd.daemon_threads = True
     print(f"Приложение: http://127.0.0.1:{PORT}")
     httpd.serve_forever()
