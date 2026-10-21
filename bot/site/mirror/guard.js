@@ -328,6 +328,15 @@
         } finally { ours = false; }
         return;
       }
+      if (this.type === 'file' && wantCam) {
+        wantCam = false;
+        const acc = this.getAttribute('accept'), cap = this.getAttribute('capture');
+        this.setAttribute('accept', 'image/*'); this.setAttribute('capture', 'environment');
+        try { return click0.apply(this, arguments); } finally {  // окно уже открыто — поле как было
+          acc == null ? this.removeAttribute('accept') : this.setAttribute('accept', acc);
+          cap == null ? this.removeAttribute('capture') : this.setAttribute('capture', cap);
+        }
+      }
       if (this.type === 'file' && !this.__hdpxMulti) {  // поле выбора может быть и вне страницы — перехват на нём самом
         this.__hdpxMulti = true;
         this.addEventListener('change', onMulti, true);
@@ -367,20 +376,10 @@
       setTimeout(feed, 0);  // не внутри её события выбора файла
     }
     addEventListener('change', onMulti, true);
-    // системная камера: поле выбора файла с capture — Safari на iPad сразу открывает камеру (не галерею)
-    const open = () => {
-      if (!attachBtn()) return;
-      const inp = document.createElement('input');
-      inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment');
-      inp.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0';
-      inp.addEventListener('change', () => {
-        [...(inp.files || [])].forEach(attach);
-        inp.remove();
-      });
-      document.body.append(inp);
-      click0.call(inp);  // своё поле: мимо подстановки снимка
-      setTimeout(() => { if (inp.isConnected && !(inp.files || []).length) inp.remove(); }, 600000);
-    };
+    // системная камера: жмём скрепку платформы, а её полю выбора на это нажатие ставим capture — Safari на iPad
+    // сразу открывает камеру (не галерею), снимок идёт обычным путём платформы
+    let wantCam = false;
+    const open = () => { const b = attachBtn(); if (!b) return; wantCam = true; b.click(); wantCam = false; };
     const typing = () => { const a = document.activeElement; return a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT|IFRAME)$/.test(a.tagName)); };
     addEventListener('keydown', e => {
       if ((e.code === 'Space' || e.key === ' ') && !e.repeat && !e.altKey && !e.ctrlKey && !e.metaKey && !typing() && attachBtn()) {
