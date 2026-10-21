@@ -46,9 +46,11 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
           page.locator('[data-testid=attachButton]').click(),
         ]);
         await chooser.setFiles([attach[i]]);
-        for (let k = 0; k < 60 && uploads <= before; k++) await page.waitForTimeout(500);
+        for (let k = 0; k < 240 && uploads <= before; k++) await page.waitForTimeout(500);  // платформа бывает медленной: до 2 мин на фото
         await page.waitForTimeout(2500);
       }
+      for (let k = 0; k < 240 && uploads < attach.length; k++) await page.waitForTimeout(500);  // «Ответить» до конца загрузки теряет файлы
+      await page.waitForTimeout(3000);
       await page.screenshot({ path: __dirname + '/tmp/attach.png' });
       if (uploads < attach.length) console.log('  предупреждение: загрузок видно', uploads, 'из', attach.length, '(см. horo/tmp/attach.png)');
     }
@@ -69,11 +71,15 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     const want = lines.join(' ').replace(/\s+/g, ' ').trim();
     if (typed !== want) throw new Error('В поле оказался не тот текст:\n' + typed.slice(0, 300));
     await page.getByRole('button', { name: 'Ответить' }).click();
-    await page.waitForTimeout(4000);
-    // проверяем, что ответ дошёл
-    const p = (await loadTask(page, url)).meta.progress;
-    const att = await api(page, `${EDU}/progress/${p.uuid}/detailed-answer-attempts`);
-    const last = att[att.length - 1];
+    // проверяем, что ответ дошёл: с файлами платформа бывает медленной (ответ появлялся через 10+ с, проверка ошибочно писала «0 из 7»)
+    let p, att, last;
+    for (let k = 0; k < 20; k++) {
+      await page.waitForTimeout(k ? 5000 : 4000);
+      p = (await loadTask(page, url)).meta.progress;
+      att = await api(page, `${EDU}/progress/${p.uuid}/detailed-answer-attempts`);
+      last = att[att.length - 1];
+      if (last && last.answer.attachments.length >= attach.length) break;
+    }
     console.log(`Статус: ${p.status.type}`);
     console.log('Отправлено:\n' + (last ? htmlToText(last.answer.text) : '(ответ не найден)'));
     if (last) console.log('Прикреплено файлов: ' + last.answer.attachments.length + (last.answer.attachments.length ? ' (' + last.answer.attachments.map(a => a.fileName).join(', ') + ')' : ''));
