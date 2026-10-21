@@ -331,8 +331,11 @@
     };
     const attachBtn = () => document.querySelector('[data-testid=attachButton]');
     const attach = file => { const b = attachBtn(); if (!b) return false; pend = [file]; b.click(); if (pend) { pend = null; return false; } return true; };
-    // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла → по нему её заменить/удалить
-    const chip = name => [...document.querySelectorAll('[data-testid=imageAttachment]')].find(c => { const i = c.querySelector('img'); return i && i.alt === name; });
+    // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла (платформа добавляет к нему
+    // «HDP_IMAGE_THUMB_») → по нему её заменить/удалить
+    const chip = name => [...document.querySelectorAll('[data-testid=imageAttachment]')].find(c => {
+      const i = c.querySelector('img'); return i && (i.alt === name || i.alt.endsWith('_' + name));
+    });
     const unattach = (name, tries = 0) => {  // фото ещё грузится (карточки нет) — подождём её до 60 с
       const c = chip(name);
       if (c) { const x = c.querySelector('[class*="_close_"]'); if (x) x.click(); return; }
