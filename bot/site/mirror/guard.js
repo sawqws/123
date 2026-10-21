@@ -330,7 +330,34 @@
       return click0.apply(this, arguments);
     };
     const attachBtn = () => document.querySelector('[data-testid=attachButton]');
-    const attach = file => { const b = attachBtn(); if (!b) return false; pend = [file]; b.click(); if (pend) { pend = null; return false; } return true; };
+    // Платформа теряет фото, если их грузится несколько сразу (21.10: выбрал 3 — прикрепилось 1, на самой платформе
+    // тоже). Поэтому отдаём ей по одному: следующее — когда у поля ответа появилась карточка предыдущего (до 2 мин).
+    const ATT = '[data-testid$="Attachment"]';
+    const queue = [];
+    let feeding = false;
+    const feed = () => {
+      if (feeding || !queue.length) return;
+      const b = attachBtn();
+      if (!b) { queue.length = 0; return; }
+      feeding = true;
+      const file = queue.shift(), before = document.querySelectorAll(ATT).length, t0 = Date.now();
+      pend = [file]; b.click();
+      if (pend) { pend = null; feeding = false; return; }  // платформа не открыла выбор файла — не ждём
+      const wait = setInterval(() => {
+        if (document.querySelectorAll(ATT).length > before || Date.now() - t0 > 120000) {
+          clearInterval(wait); feeding = false; setTimeout(feed, 300);
+        }
+      }, 250);
+    };
+    const attach = file => { if (!attachBtn()) return false; queue.push(file); feed(); return true; };
+    // выбрал несколько файлов в окне скрепки — платформе по одному
+    addEventListener('change', e => {  // наша подстановка (click выше) — не isTrusted, сюда не попадает
+      const inp = e.target;
+      if (!e.isTrusted || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2) return;
+      e.stopImmediatePropagation();
+      [...inp.files].forEach(f => queue.push(f));
+      feed();
+    }, true);
     // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла (платформа добавляет к нему
     // «HDP_IMAGE_THUMB_») → по нему её заменить/удалить
     const chip = name => [...document.querySelectorAll('[data-testid=imageAttachment]')].find(c => {
