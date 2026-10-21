@@ -327,6 +327,10 @@
         this.dispatchEvent(new Event('change', { bubbles: true }));
         return;
       }
+      if (this.type === 'file' && !this.__hdpxMulti) {  // поле выбора может быть и вне страницы — перехват на нём самом
+        this.__hdpxMulti = true;
+        this.addEventListener('change', onMulti, true);
+      }
       return click0.apply(this, arguments);
     };
     const attachBtn = () => document.querySelector('[data-testid=attachButton]');
@@ -352,14 +356,16 @@
       }, 250);
     };
     const attach = file => { if (!attachBtn()) return false; queue.push(file); feed(); return true; };
-    // выбрал несколько файлов в окне скрепки — платформе по одному
-    addEventListener('change', e => {  // наша подстановка (click выше) — не isTrusted, сюда не попадает
+    // выбрал несколько файлов в окне скрепки — платформе по одному (наша подстановка — не isTrusted, её не трогаем)
+    function onMulti(e) {
       const inp = e.target;
-      if (!e.isTrusted || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2) return;
+      if (!e.isTrusted || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2 || inp.__hdpxSeen === e) return;
+      inp.__hdpxSeen = e;  // и на самом поле, и на window — один раз
       e.stopImmediatePropagation();
       [...inp.files].forEach(f => queue.push(f));
       feed();
-    }, true);
+    }
+    addEventListener('change', onMulti, true);
     // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла (платформа добавляет к нему
     // «HDP_IMAGE_THUMB_») → по нему её заменить/удалить
     const chip = name => [...document.querySelectorAll('[data-testid=imageAttachment]')].find(c => {
