@@ -272,6 +272,19 @@ class Store:
             except (OSError, ValueError, zlib.error):
                 pass
 
+    def put(self, path, data, headers):
+        """Положить файл под путь (как скачанный): загруженное Глебом фото — сразу его миниатюра."""
+        if len(data) > FILE_MAX:
+            return
+        os.makedirs(self.dir, exist_ok=True)
+        f = self._file(path)
+        with open(f + ".part", "wb") as fh:
+            fh.write(data)
+        os.replace(f + ".part", f)
+        with open(f + ".json", "w") as fh:
+            json.dump({"size": len(data), "headers": headers}, fh)
+        self.trim()
+
     def warm(self, text, base=None):
         """Ссылки /store/… и файлы сайта из ответа платформы — скачать заранее, пока браузер до них не дошёл.
         base — папка файла, в котором нашлись имена (у скриптов сайта ссылки на соседей — просто «имя-хэш.js»)."""
@@ -404,6 +417,27 @@ def inject(html, version="0", bare=False):
 def rewrite(text):
     """Абсолютные адреса платформы → относительные (в JSON бывает с экранированными «\\/»)."""
     return ABS.sub("", text)
+
+
+UPLOAD = "/store/t/upload"
+
+
+def uploaded(ctype, body, text):
+    """Загрузка файла на платформу: (файл, тип, путь /store/t/<id> из ответа) — или None. Один файл в теле и одна
+    ссылка в ответе (Глеб 20.10: «фотки грузятся долго» — миниатюру платформа делает ещё 10+ с после загрузки)."""
+    m = re.search(r"boundary=\"?([^\";]+)", ctype or "")
+    ids = {x for x in STORE.findall(text or "") if x.startswith("/store/t/")}
+    if not m or not body or len(ids) != 1:
+        return None
+    files = []
+    for part in body.split(b"--" + m.group(1).encode()):
+        head, sep, data = part.partition(b"\r\n\r\n")
+        if sep and b"filename=" in head:
+            t = re.search(rb"(?i)content-type:\s*([\w.+/-]+)", head)
+            files.append((data[:-2] if data.endswith(b"\r\n") else data, t.group(1).decode() if t else ""))
+    if len(files) != 1 or not files[0][1].startswith("image/"):
+        return None
+    return files[0][0], files[0][1], ids.pop()
 
 
 def request(method, path, headers, body):
@@ -694,6 +728,10 @@ def proxy(h, version="0"):
         charset = re.search(r"charset=([\w-]+)", ctype)
         text = data.decode(charset.group(1) if charset else "utf-8", "replace")
         text = rewrite(text)
+        if method == "POST" and path.split("?")[0] == UPLOAD and resp.status in (200, 201):
+            got = uploaded(h.headers.get("Content-Type"), body, text)
+            if got:  # миниатюра нового файла — сразу из того, что Глеб загрузил, без ожидания платформы
+                _store.put(got[2], got[0], [("Content-Type", got[1]), ("Cache-Control", "private, max-age=5356800")])
         _store.warm(text)
         if method == "GET" and resp.status == 200 and path.startswith("/api/"):
             _ahead.seen(path, text)
