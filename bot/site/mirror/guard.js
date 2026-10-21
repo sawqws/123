@@ -351,7 +351,7 @@
       if (pend) { pend = null; feeding = false; return; }  // платформа не открыла выбор файла — не ждём
       const wait = setInterval(() => {
         if (loaded() > before || Date.now() - t0 > 120000) {
-          clearInterval(wait); feeding = false; setTimeout(feed, 300);
+          clearInterval(wait); feeding = false; setTimeout(feed, 3000);  // платформа ещё дописывает своё — как человек
         }
       }, 250);
     };
@@ -363,7 +363,7 @@
       inp.__hdpxSeen = e;  // и на самом поле, и на window — один раз
       e.stopImmediatePropagation();
       [...inp.files].forEach(f => queue.push(f));
-      feed();
+      setTimeout(feed, 0);  // не внутри её события выбора файла
     }
     addEventListener('change', onMulti, true);
     // карточка прикреплённого фото у поля ответа: подпись (alt) — имя нашего файла (платформа добавляет к нему
