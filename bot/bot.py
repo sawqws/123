@@ -3314,6 +3314,7 @@ def app_state(_=None):
     live = Live.active if Live.active in lives else (lives[-1] if lives else None)
     return {
         "busy": lock.locked(),  # заняты ВСЕ места — новое задание встанет в очередь
+        "mv": web._cfg.get("mirror_version", ""),  # версия кнопок сайта: открытая страница со старой обновит их сама
         "working": lock.busy() > 0 or bool(lives),  # что-то решается прямо сейчас (хоть одно задание)
         "live": live.state() if live else None,
         "others": max(0, len(lives) - 1),  # сколько ещё идёт рядом с показанным

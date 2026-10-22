@@ -13,6 +13,8 @@
 (() => {
   if (window.__hdpx || window.top !== window) return;
   window.__hdpx = true;
+  // версия этих кнопок (?v= у скрипта): бот выкатил новую — открытая страница меняет их сама, без перезагрузки
+  const MY_V = (/[?&]v=([^&]+)/.exec((document.currentScript || {}).src || '') || [])[1] || '';
 
   const BOT = 'HDP_DIGITALBOT';
   const ORIGIN = 'https://horodigital.ru';                 // бот принимает ссылки только на настоящий адрес
@@ -356,6 +358,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     try {
       const [st, run] = await Promise.all([api('/api/state'), api('/api/site/running')]);
       S.st = st;
+      if (st.mv && MY_V && st.mv !== MY_V && upgrade(st.mv)) return;
       S.running = new Set(run.running || []);
       S.busy = !!run.busy;
       const working = st.working || st.busy || S.running.size > 0;
@@ -401,6 +404,29 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     renderPanel();
   }
 
+  // Глеб 22.10: «вот сюда надо, чтобы картинки показывались» — на странице, открытой до выкатки, оставались старые
+  // кнопки (сайт платформы — одна страница, её не перезагружают). Теперь: версия на сервере новее — этот экземпляр
+  // уходит (S.dead: обработчики молчат, элементы убраны) и подгружает новый скрипт; открытая панель откроется снова.
+  function upgrade(v) {
+    if (S.dead || typing() || $('.hdpx-modal') || Object.keys(S.edits).length) return false;  // не сбивать ввод и вопрос
+    S.dead = S.off = true;
+    clearTimeout(S.timer); clearTimeout(S.prepTimer); clearTimeout(queued); queued = 0;
+    try { sessionStorage.setItem('hdpx.reopen', S.open ? S.tab : ''); } catch (e) { /* без хранилища — панель закрыта */ }
+    const old = $$('link[href*="/_hdp/overlay.css"]');
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = '/_hdp/overlay.css?v=' + v;
+    const js = document.createElement('script');
+    js.src = '/_hdp/overlay.js?v=' + v;
+    css.onload = css.onerror = () => {  // сначала новый вид, потом смена кнопок — без вспышки без стилей
+      for (const n of $$('[data-hdpx], body > .hdpx-vv')) n.remove();
+      for (const l of old) l.remove();
+      window.__hdpx = false;
+      document.head.append(js);
+    };
+    document.head.append(css);
+    return true;
+  }
+
   /* ---------- вкладка справа и панель ---------- */
   // Глеб 19.10: «выкл одной кнопкой и вкл одной кнопкой» — без вопросов
   // «⏻ Выключить всё» (Глеб 20.10: «слишком долго думает») — без перезагрузки: кнопки бота прячутся сразу
@@ -420,7 +446,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     window.__hdpxPlain();
   };
   window.__hdpxResume = () => {
-    if (!S.off) return;
+    if (!S.off || S.dead) return;
     S.off = false;
     document.documentElement.classList.remove('hdpx-off');
     pathNow = '';
@@ -806,7 +832,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       }
     } catch (e) { /* следующий опрос */ }
     renderPanel();
-    if ((S.open && S.tab === 'prep') || (S.prep && S.prep.running)) S.prepTimer = setTimeout(pollPrep, S.prep && S.prep.running ? 2500 : 10000);
+    if (!S.dead && ((S.open && S.tab === 'prep') || (S.prep && S.prep.running))) S.prepTimer = setTimeout(pollPrep, S.prep && S.prep.running ? 2500 : 10000);
   }
 
   function prepTab() {
@@ -1163,6 +1189,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
 
   /* ---------- клики ---------- */
   document.addEventListener('click', async e => {
+    if (S.dead) return;
     const a = e.target.closest('[data-a]');
     if (!a || !a.closest('[data-hdpx]')) {
       if (S.chooser && !e.target.closest('.hdpx-pop-wrap')) { S.chooser = false; update(); }
@@ -1347,6 +1374,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
 
   // правка черновика и «своё время» текстом
   document.addEventListener('input', e => {
+    if (S.dead) return;
     const ta = e.target.closest && e.target.closest('textarea[data-draft]');
     if (!ta) return;
     S.edits[ta.dataset.draft] = ta.value;
@@ -1358,6 +1386,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     }
   });
   document.addEventListener('submit', async e => {
+    if (S.dead) return;
     const f = e.target.closest && e.target.closest('.hdpx-timeform');
     if (!f) return;
     e.preventDefault();
@@ -1391,6 +1420,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     update();
     tick();
     pollPrep();
+    let reopen = '';
+    try { reopen = sessionStorage.getItem('hdpx.reopen') || ''; sessionStorage.removeItem('hdpx.reopen'); } catch (e) { /* нет */ }
+    if (reopen) openPanel(reopen);  // кнопки обновились сами — панель там же, где была
   }
   if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot);
 })();
