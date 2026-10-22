@@ -2041,7 +2041,13 @@ def _submit_draft(chat, d):
             drafts.write(d["task"], "")
         live = Live(chat, "Отправляю учителю", esc(d["title"]), progress=False)
         try:
-            ok, out = node("horo/answer.js", d["url"], drafts.text_path(d["task"]), *drafts.files(d["task"]), timeout=600)
+            args = (d["url"], drafts.text_path(d["task"]), *drafts.files(d["task"]))
+            # прошлая отправка ушла неполной (платформа прикрепила не все файлы) — свой непроверенный ответ сначала удалить
+            ok, out = node("horo/answer.js", *(("--replace",) if d.get("replace") else ()), *args, timeout=600)
+            if not ok and "--replace" in out:  # ушло не всё — сразу заменить своим полным ответом (22.10: «21. Lectura»)
+                live.step("Ответ ушёл неполным — заменяю полным")
+                set_draft({**d, "replace": True})
+                ok, out = node("horo/answer.js", "--replace", *args, timeout=600)
         finally:
             live.done()
         remember(d["title"], ok, "Отправлено учителю" if ok else plain(out), url=d["url"], kind="sent")
