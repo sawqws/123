@@ -1317,6 +1317,33 @@ def topic_closed(url):
     return until if datetime.datetime.now(MSK).date() > until else None
 
 
+def test_locked(url):
+    """Тест, который на сайте уже не начать: зачтён (новых попыток платформа не даёт, даже если не 100% и попытки
+    есть — Страж 22.10: «Закрепление» 8/9 зачтено, бот пошёл на вторую попытку, а у submit.js «Нет кнопки «Начать»»)
+    или попытки кончились. -> «зачтён» / «попытки закончились» или None (не тест, решаем как обычно, не узнали)."""
+    m = re.search(r"/topic/([\w-]+)/task/([\w-]+)", url)
+    if not m:
+        return None
+    try:
+        d = web.mirror.get_json(f"{web.mirror.EDU}/topics/{m.group(1)}/tasks?taskUuid={m.group(2)}")
+        me = next((t for t in ((d or {}).get("data") or {}).get("tasks") or [] if t.get("uuid") == m.group(2)), None)
+    except Exception:
+        return None
+    return test_lock_of(me)
+
+
+def test_lock_of(meta):
+    """То же по задаче из ответа платформы (`topics/…/tasks` или meta в task.json)."""
+    if not meta or meta.get("type") != "test":
+        return None
+    pr = meta.get("progress") or {}
+    if (pr.get("status") or {}).get("type") == "approved":
+        return "зачтён"
+    if (pr.get("grade") or {}).get("remainingAttemptsCount") == 0:
+        return "попытки закончились"
+    return None
+
+
 def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
     """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди.
     quiet — без карточки «В очереди» (пачка с сайта: десятки таких карточек — это 429 от Telegram)."""
@@ -1344,6 +1371,18 @@ def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
         remember(title, False, f"Срок темы прошёл: {note}", url=url)
         react(chat, mid, "🤷")
         send(chat, card("Срок темы прошёл", note=f"{esc(title)} — {note}", icon="⛔"), menu=True, raw_html=True)
+        mark_active(task, None)
+        return
+    locked = None if show else test_locked(url)
+    if locked:  # на сайте нет ни «Начать», ни «Попробовать ещё раз» — решать незачем, ответы посмотреть можно
+        with running_lock:
+            running.discard(task)
+        title = task_title(task) or "Тест"
+        remember(title, locked == "зачтён", f"Тест {locked}", url=url)
+        react(chat, mid, "👌" if locked == "зачтён" else "🤷")
+        send(chat, card(f"Тест уже {locked}" if locked == "зачтён" else "Попытки закончились",
+                        note=f"{esc(title)} — новую попытку сайт не даст", icon="✅" if locked == "зачтён" else "⛔"),
+             menu=True, raw_html=True)
         mark_active(task, None)
         return
     mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
@@ -1913,10 +1952,12 @@ def push_answers(task, url, since):
         if drafts.task_info(task)[0] != "test" or os.path.getmtime(a) < since - 1:
             return None
         with open(os.path.join(d, "task.json")) as f:
-            grade = ((json.load(f).get("meta") or {}).get("progress") or {}).get("grade") or {}
+            meta = json.load(f).get("meta") or {}
     except (OSError, ValueError):
         return None
-    left = grade.get("remainingAttemptsCount")
+    if test_lock_of({"type": "test", **meta}):  # зачтён — «Начать» на сайте нет, вносить некуда
+        return None
+    left = ((meta.get("progress") or {}).get("grade") or {}).get("remainingAttemptsCount")
     if left is not None and left <= 1:
         return None
     ok, out = node("horo/submit.js", url, a, "--defer", timeout=600)
@@ -2000,6 +2041,7 @@ def due_tests(now=None):
 
 
 TRIES = re.compile(r"^ПОПЫТКИ:\s*(\d+)\s*/\s*(\d+)", re.M)
+STATUS = re.compile(r"^СТАТУС:\s*(\w+)", re.M)
 
 
 def finish_test(task):
@@ -2030,18 +2072,20 @@ def _finish_test(task):
     m = TRIES.search(out)
     used, avail = (int(m.group(1)), int(m.group(2))) if m else (None, None)
     full = bool(score) and score[2] >= 100
+    passed = (STATUS.search(out) or [None, None])[1] == "approved"  # зачтён — пересдать сайт не даст
     if score:
         got, total, pct = score
         mark = "🏆" if full else "✅" if pct >= 70 else "📊"
         head = f"{mark} <b>{num(got)} / {num(total)}</b> · {pct}%" if total else f"{mark} <b>{pct}%</b>"
     else:
         head = "✅ <b>Тест сдан</b>"
-    note = " · ".join(x for x in (esc(title), f"попыток {used} из {avail}" if used else "") if x)
+    note = " · ".join(x for x in (esc(title), "зачтён" if passed and not full else "",
+                                  f"попыток {used} из {avail}" if used else "") if x)
     remember(title, True, f"Сдан{': ' + num(score[0]) + '/' + num(score[1]) if score and score[1] else ''}",
              score=score, url=t["url"])
     send(chat, f"{head}\n<i>{note}</i>", menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
     threading.Thread(target=refresh_overview, daemon=True).start()
-    if not score or full or not score[1] or used is None:
+    if not score or full or passed or not score[1] or used is None:
         return
     left = avail - used
     info = {"got": num(score[0]), "total": num(score[1]), "miss": num(score[1] - score[0]), "k": t.get("tries", 0) + 1}

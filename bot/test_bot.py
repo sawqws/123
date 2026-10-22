@@ -30,6 +30,7 @@ bot.JOURNAL, bot.HEARTBEAT = os.path.join(_OUT, "journal.jsonl"), os.path.join(_
 URL = "https://horodigital.ru/student/topic/11111111-1111-1111-1111-111111111111/task/22222222-2222-2222-2222-222222222222"
 TASK = "22222222-2222-2222-2222-222222222222"
 TOPIC_CLOSED = bot.topic_closed  # настоящая: в BotTest подменена (без сети)
+TEST_LOCKED = bot.test_locked    # то же
 CHAT = 42
 
 
@@ -64,6 +65,7 @@ class BotTest(unittest.TestCase):
             mock.patch.object(bot.media, "photo_path", self.fake_photo),  # без сети: фото и видео из Telegram
             mock.patch.object(bot.media, "video", self.fake_video),
             mock.patch.object(bot, "topic_closed", lambda url: None),  # без сети: срок темы — в своём тесте
+            mock.patch.object(bot, "test_locked", lambda url: None),   # без сети: зачтён ли тест — в своём тесте
         ]
         for p in self.patches:
             p.start()
@@ -2343,6 +2345,66 @@ class DeferTest(BotTest):
         self.due()
         self.assertEqual(len(self.prompts), n)
         self.assertIn(f"tretry:{TASK}", self.last()[1])
+
+    def test_passed_not_full_not_retried(self):
+        """Страж 22.10: «Закрепление» 8/9 — зачтено, попыток ещё 2; бот пошёл на вторую попытку, а у зачтённого теста
+        на сайте нет ни «Начать», ни «Попробовать ещё раз» — submit.js падал «Нет кнопки «Начать»». Зачтён — не пересдаёт."""
+        self.result = "БАЛЛЫ: 8/9\nПОПЫТКИ: 1/3\nСТАТУС: approved"
+        self.say(URL)
+        n = len(self.prompts)
+        self.due()
+        self.assertEqual(len(self.prompts), n)                     # второй попытки нет
+        self.assertFalse(any("делаю вторую попытку" in m for m, _ in self.msgs))
+        self.assertNotIn("tretry:", self.last()[1] or "")          # и кнопки «пересдать» тоже
+        self.assertNotIn(TASK, bot.load_settings().get("retry_offers") or {})
+        self.assertIn("8 / 9", self.last()[0])
+        self.assertIn("зачтён", self.last()[0])
+        self.result = "БАЛЛЫ: 8/9\nПОПЫТКИ: 1/3\nСТАТУС: failed"   # не зачтён — вторая попытка, как раньше
+        self.say(URL)
+        self.due()
+        self.assertTrue(any("делаю вторую попытку" in m for m, _ in self.msgs))
+
+    def test_locked_test_not_solved(self):
+        """Ссылка (или «пересдать») на зачтённый тест: Claude не запускается, ничего не вносится — сразу ответ."""
+        with mock.patch.object(bot, "test_locked", lambda url: "зачтён"):
+            bot.run_task(CHAT, URL, "")
+        self.assertEqual((self.prompts, self.nodes), ([], []))
+        self.assertIn("Тест уже зачтён", self.msgs[-1][0])
+        self.assertNotIn(TASK, bot.running)
+        self.assertNotIn(TASK, bot.load_settings().get("active") or {})
+        with mock.patch.object(bot, "test_locked", lambda url: "попытки закончились"):
+            bot.run_task(CHAT, URL, "")
+        self.assertIn("Попытки закончились", self.msgs[-1][0])
+        with mock.patch.object(bot, "test_locked", lambda url: "зачтён"):
+            bot.run_task(CHAT, URL, "", show=True)                 # «только ответы» — можно
+        self.assertTrue(self.prompts)
+
+    def test_test_locked_by_platform(self):
+        tid = bot.drafts.task_id(URL)
+        resp = lambda **t: {"data": {"tasks": [{"uuid": tid, "type": "test", **t}]}}
+        grade = lambda st, left: {"progress": {"status": {"type": st}, "grade": {"remainingAttemptsCount": left}}}
+        for r, want in ((resp(**grade("approved", 2)), "зачтён"), (resp(**grade("failed", 0)), "попытки закончились"),
+                        (resp(**grade("failed", 2)), None), (resp(**grade("appointed", 3)), None),
+                        ({"data": {"tasks": [{"uuid": tid, "type": "detailedAnswer", **grade("approved", 0)}]}}, None),
+                        (None, None)):                             # не узнали — решаем как обычно
+            with mock.patch.object(bot.web.mirror, "get_json", lambda path: r):
+                self.assertEqual(TEST_LOCKED(URL), want)
+
+    def test_passed_test_answers_not_pushed(self):
+        """Claude решил уже зачтённый тест и не внёс (кнопки «Начать» нет) — страховка тоже не лезет на сайт."""
+        with open(os.path.join(drafts.task_dir(TASK), "task.json"), "w") as f:
+            json.dump({"data": {"type": "test", "title": "Закрепление"},
+                       "meta": {"type": "test", "progress": {"status": {"type": "approved"},
+                                                            "grade": {"remainingAttemptsCount": 2}}}}, f)
+
+        def claude(prompt, tools, timeout=0, on_tool=None):
+            pathlib.Path(drafts.task_dir(TASK), "answers.json").write_text('{"1": "a"}')
+            return True, "Тест уже зачтён, новую попытку сайт не даёт"
+
+        with mock.patch.object(bot, "claude", claude):
+            self.say(URL)
+        self.assertEqual(self.nodes, [])
+        self.assertNotIn(TASK, bot.pending_tests())
 
     def test_last_attempt_only_by_button(self):
         self.result = "БАЛЛЫ: 15/17\nПОПЫТКИ: 2/3"
