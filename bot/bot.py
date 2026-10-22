@@ -271,6 +271,7 @@ def kb(*rows):
 HOLD = {}  # чат -> до какого времени Telegram просил не писать (429 «Too Many Requests», retry_after)
 HOLD_MAX = 60  # дольше одной паузы не ждём
 HOLD_TRIES = 4  # столько раз пробуем один запрос, пока Telegram отвечает 429
+NET_WAIT = (2, 5, 10, 20, 30)  # нет сети (Errno 101, обрыв до ответа) — повторы через столько секунд, ~1 мин всего
 GATES = {}  # чат -> замок: пока чат на паузе, запросы в него идут по одному
 GATES_LOCK = threading.Lock()
 
@@ -299,10 +300,14 @@ def retry_after(body):
 
 def tg(method, **params):
     """Запрос к Telegram. Слишком часто (429 — пачка автотестов: карточки, итоги) — ждём, сколько он сказал, и
-    повторяем: сообщение не теряется, задание не падает. Пока чат на паузе, другие запросы в него ждут в очереди."""
+    повторяем: сообщение не теряется, задание не падает. Пока чат на паузе, другие запросы в него ждут в очереди.
+    Сеть пропала до ответа (Network is unreachable, обрыв соединения — URLError: запрос до Telegram не дошёл,
+    дубля не будет) — повторяем через NET_WAIT, а не роняем задание на первой же карточке (Страж 22.10)."""
     data = urllib.parse.urlencode(params).encode()
     chat = str(params.get("chat_id", ""))
-    for n in range(HOLD_TRIES):
+    n = net = 0
+    while True:
+        wait = 0
         with gate(chat):
             time.sleep(min(hold_left(chat), HOLD_MAX))
             try:
@@ -315,8 +320,16 @@ def tg(method, **params):
                 pause = min(retry_after(body), HOLD_MAX)
                 HOLD[chat] = max(HOLD.get(chat, 0), time.time() + pause)
                 print(f"{method}: Telegram просит паузу {pause:g} с (429)")
-                if n == HOLD_TRIES - 1:
+                n += 1
+                if n == HOLD_TRIES:
                     raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body))
+            except urllib.error.URLError as e:
+                if net == len(NET_WAIT):
+                    raise
+                wait = NET_WAIT[net]
+                net += 1
+                print(f"{method}: нет связи с Telegram ({e.reason}) — повтор через {wait} с")
+        time.sleep(wait)  # вне очереди чата: пока ждём сеть, другие запросы в чат не стоят
 
 
 COLORS = [True]  # Telegram принимает цветные кнопки (поле style)? Один отказ — дальше без цветов

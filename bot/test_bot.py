@@ -913,6 +913,37 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot.Live, "items", cards[:1]):
             self.assertEqual(bot.Live.every(cards[0]), 3)
 
+    def test_network_unreachable_waits_and_retries(self):
+        """Сеть сервера мигнула (Страж 22.10: URLError [Errno 101] Network is unreachable на первой карточке
+        «Решаю задание» — задание упало): запрос ждёт и повторяется, карточка доходит; сети нет совсем — ошибка."""
+        import io, types, urllib.error
+        hits, sleeps, down = [], [], [2]
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(url, data=None, timeout=None):
+            hits.append(url)
+            if len(hits) <= down[0]:
+                raise urllib.error.URLError(OSError(101, "Network is unreachable"))
+            return Resp(b'{"ok":true,"result":{"message_id":9}}')
+        now = [1000.0]
+        clock = types.SimpleNamespace(time=lambda: now[0], sleep=lambda s: sleeps.append(s) or now.__setitem__(0, now[0] + s))
+        real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
+        with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
+                mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
+            self.assertEqual(bot.send(CHAT, "◐ <b>Решаю задание</b>", raw_html=True), 9)  # пришла после двух обрывов
+            self.assertEqual(len(hits), 3)
+            self.assertEqual([s for s in sleeps if s][:2], list(bot.NET_WAIT[:2]))
+            self.assertEqual(bot.hold_left(CHAT), 0)  # обрыв сети — не пауза чата от Telegram
+            hits.clear(), sleeps.clear()
+            down[0] = 99
+            with self.assertRaises(urllib.error.URLError):  # сети нет дольше минуты — ошибка дальше, как была
+                bot.tg("sendMessage", chat_id=CHAT, text="x")
+            self.assertEqual(len(hits), len(bot.NET_WAIT) + 1)
+            self.assertEqual([s for s in sleeps if s], list(bot.NET_WAIT))
+
     def test_too_many_requests_burst_queues(self):
         """6 автотестов сдались разом: итоги бьют в чат одновременно, Telegram отвечает 429. После паузы запросы
         идут по одному, а не все в одну секунду — каждый итог доходит, попытки не сгорают (Страж: 429 ×10)."""
