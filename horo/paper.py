@@ -40,17 +40,17 @@ MARGIN = (226, 106, 92)
 
 XH, DIG = 0.88, 0.95          # высота строчной и цифры, в клетках
 SUP = 0.8                     # степень
-GAP = 0.17                    # промежуток между знаками, в клетках (пишет свободно)
+GAP = 0.22                    # промежуток между знаками, в клетках (его медиана по 75 фото; Глеб 22.10: «слишком слитно»)
 # его рука по замерам 75 фото тетради (Глеб 22.10: «пока видно, что написано ИИ»), разброс — вдвое меньше
 # замеренного (Глеб 22.10: «убери неряшливость»):
-JIT_Y = 0.04       # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
+JIT_Y = 0.025      # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
 JIT_S = 0.055      # размер соседних букв: 0.78…1.24 друг от друга
 JIT_GAP = 0.05     # промежуток: медиана 0.22, бывает вплотную и до 0.5
-SLOPE = 0.6        # строка в целом чуть уходит вверх/вниз, °
-WAVE = 0.04        # и плывёт волной, клетки
+SLOPE = 0.0        # строка в целом чуть уходит вверх/вниз, °
+WAVE = 0.0         # и плывёт волной, клетки
 FRAC_GAP = 0.15    # от черты до числителя/знаменателя (у него почти вплотную)
 ROW_GAP = 0.12     # между строками решения (шаг строк дробей ≈ 2.6 клетки, не по линиям клетки)
-SPACE = 0.26                  # пробел (вокруг + − =)
+SPACE = 0.32                  # пробел (вокруг + − =)
 BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis', '=': 'axis', '−': 'axis', '·': 'axis', ':': 'colon'}
 
 STAMPS = {}
@@ -131,7 +131,7 @@ def _spots(s):
 
 
 def slips(sol, rnd, n=None):
-    """Вставляет в решение n (по умолчанию 1–3) случайных описок «#неверный#верный» — неверный знак, перечёркнутый,
+    """Вставляет в решение n (по умолчанию 2–3) случайных описок «#неверный#верный» — неверный знак, перечёркнутый,
     и сразу верный: в случайных номерах и местах, разными знаками, не больше одной на номер, условие не трогает."""
     strs = []                                   # (номер, путь до строки)
 
@@ -152,14 +152,18 @@ def slips(sol, rnd, n=None):
                 walk(ch, (j, c) if chunks is line else (j,), k)
     cand = [(k, path, i) for k, path in strs for i in _spots(_get(sol, k, path))]
     rnd.shuffle(cand)
-    want = n if n is not None else rnd.choice((1, 2, 2, 3))
+    want = n if n is not None else rnd.choice((2, 3, 3))
     done_k, done_ch, out = set(), set(), sol
     for k, path, i in cand:
         ch = _get(out, k, path)[i]
         if k in done_k or ch in done_ch:
             continue
         st = _get(out, k, path)
-        out = _put(out, k, path, st[:i] + '#' + SLIP[ch] + '#' + st[i:])
+        wrong = SLIP[ch]
+        nxt = st[i + 1:i + 2]
+        if nxt.isalnum() and rnd.random() < 0.5:   # иногда ошибся на два знака («3b» вместо «2b»)
+            wrong += nxt
+        out = _put(out, k, path, st[:i] + '#' + wrong + '#' + st[i:])
         done_k.add(k); done_ch.add(ch)
         if len(done_k) == want:
             break
@@ -189,8 +193,9 @@ def _put(sol, k, path, val):
 
 
 class Notebook:
-    def __init__(self, cols=30, rows=40, cell=40, seed=1, margin=4, right=0.8):
+    def __init__(self, cols=30, rows=40, cell=40, seed=1, margin=4, right=0.8, size=1.0):
         self.C, self.cols, self.rows = cell, cols, rows
+        self.size = size                            # знаки мельче клетки (у него 0.6…1.2 клетки), клетка — та же
         self.W, self.H = cols * cell, rows * cell
         self.ink = np.zeros((self.H, self.W), np.float32)
         self.rnd = random.Random(seed)
@@ -226,19 +231,20 @@ class Notebook:
         self._line((x0 + x1) / 2, cy, math.hypot(w * 1.04, h), ang)
 
     def _scribble(self, x0, x1, cy):
-        """Описка — как у него на фото: неверный знак перечёркнут 2–3 косыми штрихами «///» (его же линии),
-        каждый раз по-разному: число штрихов, наклон, длина, шаг."""
-        w = max(x1 - x0, 0.45 * self.C)
-        n = self.rnd.choice((2, 2, 3, 3, 4))
-        ang = self.rnd.uniform(52, 72)
-        h = self.C * self.rnd.uniform(0.95, 1.3)
-        L = h / math.sin(math.radians(ang))
-        step = w / max(1, n - 1) * self.rnd.uniform(0.55, 0.8)
-        xs = (x0 + x1) / 2 - step * (n - 1) / 2
-        for k in range(n):
-            self._line(xs + k * step + self.rnd.uniform(-0.05, 0.05) * self.C,
-                       cy + self.rnd.uniform(-0.08, 0.08) * self.C, L * self.rnd.uniform(0.88, 1.08),
-                       ang + self.rnd.uniform(-6, 6))
+        """Описка — как у него в сданных работах: неверное плотно заштриховано его настоящим зачёркиванием
+        (21 штамп с 75 фото, horo/live/paper_scribbles.json): берётся близкий по форме, каждый раз другой."""
+        w = max(x1 - x0, 0.5 * self.C) * self.rnd.uniform(1.4, 1.7) + 0.45 * self.C   # крупнее знака, как у него
+        h = self.C * self.rnd.uniform(1.45, 1.8) * self.size
+        opts = [a for a in STAMPS['scribble'] if (a > 0.3).mean() > 0.42] or STAMPS['scribble']   # плотные, как у него
+        near = sorted(range(len(opts)), key=lambda i: abs(math.log((opts[i].shape[1] / opts[i].shape[0]) / (w / h))))[:5]
+        i = self.rnd.choice([j for j in near if j != self._last.get('scribble')] or near)
+        self._last['scribble'] = i
+        a = opts[i]
+        im = Image.fromarray((a * 255).astype(np.uint8)).resize((max(2, round(w)), max(2, round(h))), Image.LANCZOS)
+        im = im.rotate(self.rnd.uniform(-6, 6), Image.BICUBIC, expand=True)
+        st = np.asarray(im, np.float32) / 255
+        st = np.clip(st / max(0.3, float(np.percentile(st[st > 0.15], 60))), 0, 1)   # густо, как он закрашивает
+        self._blit(st, int(round((x0 + x1) / 2 - st.shape[1] / 2)), int(round(cy - st.shape[0] / 2)))
 
     def _blit(self, a, x0, y0):
         h, w = a.shape
@@ -320,9 +326,10 @@ class Notebook:
             self._blit(st, int(round(x)), int(round(top + dy)))
         return draw, w
 
-    def _run(self, s, size=1.0, tall=None):
+    def _run(self, s, size=None, tall=None):
         """Строку — в список (dx, dy, рисование); возвращает (список, ширина).
         «~…~» — зачеркнуть косой линией (сократил), «#…#» — описка, закрашена его зачёркиванием."""
+        size = self.size if size is None else size * self.size
         C, x, out, marks = self.C, 0.0, [], []   # marks — зачёркивания, рисуются поверх букв
         toks = tokens(s)
         open_ = {}
@@ -335,7 +342,7 @@ class Notebook:
                 mark = self._strike if ch == '~' else self._scribble
                 marks.append((x0, 0, lambda X, b, w=x1 - x0, m=mark: m(X, X + w, b - 0.45 * C * size)))
                 if ch == '#':
-                    x += 0.25 * C
+                    x += 0.7 * C
                 continue
             sz = size * (SUP if sup else 1)
             t = tall if ch in '()' else None
@@ -500,7 +507,7 @@ class Notebook:
             for r in rows:
                 up = max(v[0] for _, _, v in r)
                 down = max(v[1] for _, _, v in r)
-                axis = self.y + (up + ROW_GAP + self.rnd.uniform(0, 0.25)) * C   # не по линиям клетки — как у него
+                axis = math.ceil((self.y + (up + 0.05) * C) / C) * C   # черта дроби — по линии клетки (Глеб: «плавает по строкам»)
                 k, A, ph = math.tan(math.radians(self.rnd.gauss(0, SLOPE / 2))), self.rnd.uniform(0, WAVE), self.rnd.uniform(0, 6.3)
                 x0r = self.left
                 self.drift = lambda X, k=k, A=A, ph=ph, x0r=x0r: k * (X - x0r) + A * C * math.sin((X - x0r) / (5 * C) + ph)

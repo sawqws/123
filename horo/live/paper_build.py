@@ -242,6 +242,17 @@ def main():
                                     '%s:%s' % (f[1:-4], '+'.join(map(str, i)) if isinstance(i, list) else i)))
         for ch, items in auto(d, c, peak).items():
             raw[ch] += [(a, a.shape[0] / cc, cc, '%s:%s%d' % (f[1:-4], ch, k)) for k, (a, cc) in enumerate(items)]
+    # его настоящие зачёркивания описок (штриховка поверх неверного) с 75 фото сданных работ — paper_scribbles.json
+    for k, it in enumerate(json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'paper_scribbles.json')))):
+        im = cv2.imread(os.path.join(SRC, it['file']))
+        fi = im.astype(np.int16)
+        bg = cv2.medianBlur(im, 61).astype(np.float32)
+        dd = (bg - im.astype(np.float32))[..., 2]
+        x, y, w, h = it['box']
+        m = ((dd > 40) & ((fi[..., 0] - fi[..., 2]) > 20))[y:y + h, x:x + w].astype(np.uint8)
+        m = cv2.dilate(m, np.ones((3, 3), np.uint8))
+        a = np.clip((dd[y:y + h, x:x + w] - 30) / 90, 0, 1) * m
+        raw['scribble'].append((a, h / it['cell'], it['cell'], 'x:%d' % k))
     arrs, meta, srcs = {}, [], []
     for ch, gs in raw.items():
         gs = [g for k, g in enumerate(gs) if k not in DROP.get(ch, [])]
