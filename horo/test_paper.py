@@ -25,6 +25,20 @@ class PaperTest(unittest.TestCase):
             p = nb.save(os.path.join(d, 't.jpg'))
             self.assertTrue(os.path.getsize(p) > 100000)
 
+    def test_only_his_signs(self):
+        for ch in 'abz=−·' :
+            self.assertIn(ch, paper.STAMPS, ch)
+        for k in ('bar', 'scribble'):
+            self.assertIn(k, paper.STAMPS)
+        self.assertFalse(hasattr(paper, 'LINE'))        # ничего не дорисовывается пером
+
+    def test_strike_and_slip(self):
+        nb = paper.Notebook(seed=2)
+        nb.solve(1, [['= #(b +# ', ('~(b − 5)~(b − 5)', '5~b~')]])
+        self.assertGreater(nb.ink.sum(), 500)
+        with self.assertRaises(KeyError):
+            paper.Notebook().solve(1, [['q']])
+
     def test_page_full(self):
         nb = paper.Notebook(seed=1)
         line = [[('x + 1', 'y')]]
