@@ -69,14 +69,37 @@ def _feat(L, m, img):
     return float(L[core > 0].mean()), float(np.percentile(dt[core > 0], 90)), float(1 - core.sum() / max(1, ink.sum()))
 
 
+def _clean(img, bgm, area):
+    """Стирает с пустой страницы случайные следы его ручки (точки, черточки) — клетку не трогает (она бледнее)."""
+    import cv2
+    d = (bgm - img.astype(np.float32))[..., 2]
+    ink = ((d > 55) & _blue(img) & (area > 0)).astype(np.uint8)
+    if not ink.any():
+        return img
+    ink = cv2.dilate(ink, np.ones((5, 5), np.uint8))
+    return cv2.inpaint(img, ink, 4, cv2.INPAINT_TELEA)
+
+
+UP = 2.5   # во сколько раз итоговое фото крупнее исходного (Глеб 22.10: «улучшай качество, убери размытость»)
+
+
+def _upscale(img):
+    """Фон крупнее без мыла и шума: Lanczos, лёгкое шумоподавление (шум камеры при увеличении — «грязь»)
+    и мягкая резкость — клетка и край листа остаются чёткими."""
+    import cv2
+    big = cv2.resize(img, None, fx=UP, fy=UP, interpolation=cv2.INTER_LANCZOS4)
+    big = cv2.fastNlMeansDenoisingColored(big, None, 4, 4, 7, 21)
+    soft = cv2.GaussianBlur(big, (0, 0), 1.6)
+    return cv2.addWeighted(big, 1.45, soft, -0.45, 0)
+
+
 def render(nb, i, path):
-    """Переносит чернила nb на фото фона i так, чтобы не отличить от его записей на этом же фото:
-    цвет ручки — по его кривой (pen), толщина, густота и мягкость края — подбираются, пока не совпадут с его
-    штрихами (Глеб 22.10: «чтобы было не отличить, что текст наложен, и цвет ручки как я пишу»)."""
+    """Переносит чернила nb на фото фона i так, чтобы не отличить от его записей на этом же фото
+    (Глеб 22.10: «чтобы было не отличить, что текст наложен, и цвет ручки как я пишу»): цвет ручки — по его
+    кривой (pen) с этого фото; фото — в UP раз крупнее, штрихи рисуются сразу в этом размере, край ровный."""
     import cv2
     b = BGS[i]
     img = cv2.imread(os.path.join(SRC, b['file']))
-    f = img.astype(np.float32)
     bgm = cv2.medianBlur(img, 61).astype(np.float32)
     q = np.float32(b['quad'])
     area = np.zeros(img.shape[:2], np.uint8)
@@ -85,47 +108,27 @@ def render(nb, i, path):
     if curve is None:                                         # своих записей на фото нет — синяя паста по умолчанию
         curve = (np.array([0, 0.3, 0.6, 0.8]), np.array([[1, 1, 1], [0.86, 0.74, 0.7], [0.62, 0.42, 0.4], [0.45, 0.24, 0.2]]), 0.8)
     xs, ys, Lmax = curve
-    Lhis = 1 - f[..., 2] / np.maximum(bgm[..., 2], 1)
-    his = _feat(Lhis, area == 0, img) or (0.55, 1.6, 0.45)
+    x0, y0, x1, y1 = b.get('crop') or (0, 0, img.shape[1], img.shape[0])
+    big = _upscale(_clean(img, bgm, area)[y0:y1, x0:x1])
+    f = big.astype(np.float32)
+    qb = (q - np.float32([x0, y0])) * UP
     cells = np.float32([[0, 0], [b['cols'], 0], [b['cols'], b['rows']], [0, b['rows']]])
-    Hc = cv2.getPerspectiveTransform(cells, q)
-    cpx = np.linalg.norm(q[1] - q[0]) / b['cols']          # клетка на фото, px
+    Hc = cv2.getPerspectiveTransform(cells, qb)
+    cpx = np.linalg.norm(qb[1] - qb[0]) / b['cols']          # клетка на итоговом фото, px
     k = cpx / nb.C
+    ink = cv2.resize(nb.ink, None, fx=k, fy=k, interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
     S = np.float32([[1 / (nb.C * k), 0, 0], [0, 1 / (nb.C * k), 0], [0, 0, 1]])
+    a = cv2.warpPerspective(np.clip(ink, 0, 1), Hc @ S, (big.shape[1], big.shape[0]), flags=cv2.INTER_CUBIC)
+    a = cv2.GaussianBlur(np.clip(a, 0, 1), (0, 0), 0.55)      # чуть мягкости, как у камеры, без мыла
     rng = np.random.default_rng(nb.rnd.randrange(1 << 30))
-    grain = rng.normal(0, 1, img.shape[:2]).astype(np.float32)
-    warped = {}
-
-    def comp(r, gain, sig):
-        if r not in warped:
-            se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * abs(r) + 1, 2 * abs(r) + 1))
-            ink = nb.ink if not r else (cv2.dilate(nb.ink, se) if r > 0 else cv2.erode(nb.ink, se))   # r < 0 — тоньше
-            ink = cv2.resize(ink, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
-            warped[r] = cv2.warpPerspective(ink, Hc @ S, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR)
-        a = cv2.GaussianBlur(warped[r], (0, 0), sig)          # мягкость камеры, как у его штрихов на этом фото
-        L = np.clip(a * gain, 0, 1) * Lmax
-        L = np.clip(L * (1 + 0.06 * grain), 0, Lmax)           # паста ложится неровно, плюс шум камеры
-        ratio = np.stack([np.interp(L, xs, ys[:, c]) for c in range(3)], -1)
-        out = np.clip(f * ratio, 0, 255).astype(np.uint8)
-        return out, L
-
-    best = None
-    for r in range(0, 4):              # толще — буквы слипаются в кляксы; тоньше — рвутся
-        for gain in (1.25, 1.5, 1.8):     # бледнее — выходит серая «копия», не паста
-            for sig in (0.35, 0.45):        # сильнее — видно, что размыто
-                out, L = comp(r, gain, sig)
-                st = _feat(L, area > 0, out)
-                if not st:
-                    continue
-                # толщина на маленьком фото меряется грубо (целые px) — весит меньше густоты и края
-                err = max(0.0, his[0] - st[0]) / 0.1 + max(0.0, st[0] - his[0] - 0.12) / 0.1 + abs(st[1] - his[1]) / 2.0 + abs(st[2] - his[2]) / 0.15 + 0.3 * (sig > 0.5)
-                if best is None or err < best[0]:
-                    best = (err, out, (r, gain, sig, st, his))
-    out = best[1]
-    if os.environ.get('PAPER_DEBUG'):
-        print('render', b['file'], 'r, gain, blur, мои, его:', best[2])
-    if b.get('crop'):
-        x0, y0, x1, y1 = b['crop']
-        out = out[y0:y1, x0:x1]
-    cv2.imwrite(path, out, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    grain = cv2.GaussianBlur(rng.normal(0, 1, a.shape).astype(np.float32), (0, 0), 1.2)
+    L = np.clip(a * 1.15, 0, 1) * Lmax
+    L = np.clip(L * (1 + 0.05 * grain), 0, Lmax)             # паста ложится чуть неровно
+    ratio = np.stack([np.interp(L, xs, ys[:, c]) for c in range(3)], -1)
+    # под пастой — бумага без клетки: иначе на каждом пересечении с линией клетки черта темнее («бусины»)
+    paper = cv2.medianBlur(big, 9).astype(np.float32)
+    w = np.clip(L / max(Lmax, 1e-6) * 2.5, 0, 1)[..., None]
+    under = f * (1 - w) + paper * w
+    out = np.clip(under * ratio, 0, 255).astype(np.uint8)
+    cv2.imwrite(path, out, [cv2.IMWRITE_JPEG_QUALITY, 94])
     return path

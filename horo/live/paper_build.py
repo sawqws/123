@@ -8,7 +8,7 @@ import json, os, sys, collections
 import cv2
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paper_samples import SEL, SIGNS, MESS, DROP
+from paper_samples import SEL, SIGNS, MESS, DROP, BAD
 from paper_samples2 import SEL2
 
 SEL = {**SEL, **SEL2}   # + 13 его фото алгебры с сайта (notebook_7..19)
@@ -18,6 +18,7 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fonts', 'g
 REF = 40   # клетка банка, px (paper.REF)
 TARGET = {'x': .88, 'c': .82, 'm': .86, 't': .98, 'y': 1.7, '+': .86, '№': 1.5, 'Лист': 2.0, '0': .92,
           'a': .86, 'z': .86, 'b': 1.45, 'b!': 1.45}
+TARGET['y'] = 1.55   # хвост y короче (было 1.7): не достаёт до черты дроби, числитель не висит высоко
 KEEP = {'(', ')', '=', '−', '·', 'bar', 'scribble'}   # эти — в его размере, без приведения к классу
 DIG = .95
 
@@ -91,6 +92,51 @@ def clean(a, c):
     return a * (1 - kill)
 
 
+SOLO = {'=', '−', '·', 'bar', 'scribble', '№', 'Лист', 'b!', '8!'}
+
+
+def strip(a, c):
+    """Убирает отдельные плоские обрывки у верха и низа знака (кусок черты дроби, минус соседа)."""
+    m = (a > 0.2).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
+    if n <= 2:
+        return a
+    main = 1 + int(np.argmax(st[1:, 4]))
+    h = a.shape[0]
+    for i in range(1, n):
+        x, y, w, hh, ar = st[i]
+        if i == main:
+            continue
+        flat = w > 2.2 * hh and hh < 0.25 * c
+        edge = y + hh < 0.35 * h or y > 0.65 * h
+        tiny = ar < 0.04 * st[main, 4]
+        speck = ar < 0.15 * st[main, 4] and edge   # точка у верха/низа — обрывок черты
+        if (flat and edge) or tiny or speck:
+            a = a * (lab != i)
+    return a
+
+
+def smooth_bar(a):
+    """Его черта без «бусин»: где линию пересекала клетка, на фото она толще — после резкости это точки.
+    Ход линии (изгиб, наклон, концы) — его, а толщина и густота по длине — ровные, как у шариковой ручки."""
+    h, w = a.shape
+    ys = np.arange(h)[:, None]
+    mass = a.sum(0)
+    cy = (a * ys).sum(0) / np.maximum(mass, 1e-6)
+    on = mass > 0.3
+    if on.sum() < 5:
+        return a
+    xs = np.arange(w)
+    cy = np.interp(xs, xs[on], cy[on])
+    cy = np.convolve(np.pad(cy, 6, mode='edge'), np.ones(13) / 13, 'valid')
+    th = float(np.median(mass[on]))                      # толщина линии, px (масса столбца при густоте 1)
+    sig = max(0.6, th / 2.5)
+    out = np.exp(-0.5 * ((ys - cy[None]) / sig) ** 2)
+    out = out / out.sum(0, keepdims=True) * th
+    taper = np.clip(np.minimum(xs - xs[on].min(), xs[on].max() - xs) / 3 + 0.4, 0, 1)
+    return np.clip(out * taper[None] * on.astype(float).cumsum().clip(0, 1)[None], 0, 1).astype(np.float32)
+
+
 def cut(d, lab, peak, rs, M=3, f=None):
     """Чернила куска (или нескольких — «=») по его маске, 0..1."""
     x0, y0 = max(0, min(r['x'] for r in rs) - M), max(0, min(r['y'] for r in rs) - M)
@@ -140,16 +186,37 @@ def main():
                 for i in ids:
                     rs = [comps[j] for j in i] if isinstance(i, list) else [comps[i]]
                     a = cut(d, lab, peak, rs, f=f)
-                    raw[ch].append((a, (max(r['y'] + r['h'] for r in rs) - min(r['y'] for r in rs)) / c, c))
+                    raw[ch].append((a, (max(r['y'] + r['h'] for r in rs) - min(r['y'] for r in rs)) / c, c,
+                                    '%s:%s' % (f[1:-4], '+'.join(map(str, i)) if isinstance(i, list) else i)))
         for ch, items in auto(d, c, peak).items():
-            raw[ch] += [(a, a.shape[0] / cc, cc) for a, cc in items]
-    arrs, meta = {}, []
+            raw[ch] += [(a, a.shape[0] / cc, cc, '%s:%s%d' % (f[1:-4], ch, k)) for k, (a, cc) in enumerate(items)]
+    arrs, meta, srcs = {}, [], []
     for ch, gs in raw.items():
         gs = [g for k, g in enumerate(gs) if k not in DROP.get(ch, [])]
-        med = np.median([h for _, h, _ in gs])
-        for a, h, c in gs:
+        med = np.median([g[1] for g in gs])
+        for a, h, c, src in gs:
+            if src in BAD:
+                continue
             if ch not in KEEP and abs(h / med - 1) > 0.22:
                 continue
+            if ch in '()':                # у скобки — только она сама: мелкие отдельные точки рядом прочь
+                m = (a > 0.2).astype(np.uint8)
+                n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
+                if n > 2:
+                    big = st[1:, 4].max()
+                    for i in range(1, n):
+                        if st[i, 4] < 0.12 * big:
+                            a = a * (lab != i)
+            if ch not in SOLO:
+                a = strip(a, c)
+            elif ch == 'bar':             # у черты — только сама линия: бугорки букв, касавшихся её, после резкости — точки
+                m = (a > 0.2).astype(np.uint8)
+                n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
+                if n > 2:
+                    a = a * (lab == 1 + int(np.argmax(st[1:, 4])))
+                prof = (a > 0.3).sum(0)
+                med = np.median(prof[prof > 0]) if (prof > 0).any() else 0
+                a = a * (np.abs(np.arange(a.shape[0])[:, None] - (a * np.arange(a.shape[0])[:, None]).sum(0) / np.maximum(a.sum(0), 1e-6)) <= med * 0.9 + 1)
             ys, xs = np.nonzero(a > 0.15)
             if not len(ys):
                 continue
@@ -162,12 +229,20 @@ def main():
                 continue
             s = REF / c
             if ch not in KEEP:
-                s *= (TARGET.get(ch, DIG) * REF / (a.shape[0] * s)) ** 0.6
+                s *= (TARGET.get(ch, DIG) * REF / (a.shape[0] * s))   # к высоте класса полностью: степени с фото не мельчат
             a2 = np.clip(cv2.resize(a.astype(np.float32), None, fx=s, fy=s,
                                     interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC), 0, 1)
-            arrs['g%d' % len(meta)] = (a2 * 255).astype(np.uint8)
+            g = (a2 * 255).astype(np.uint8)
+            if ch == 'bar':
+                th = (a2 > 0.3).sum(0)
+                if th.sum() / a2.shape[1] > 6.0 or np.percentile(th, 98) > 2.2 * max(1, np.median(th)):
+                    continue              # жирные или с утолщением — выходят «маркером»/кляксой
+                g = (smooth_bar(a2) * 255).astype(np.uint8)
+            arrs['g%d' % len(meta)] = g
             meta.append(ch)
+            srcs.append(src)
     arrs['meta'] = np.frombuffer(json.dumps(meta, ensure_ascii=False).encode(), np.uint8)
+    arrs['src'] = np.frombuffer(json.dumps(srcs).encode(), np.uint8)   # откуда штамп: «фото:кусок»
     np.savez_compressed(OUT, **arrs)
     print(len(meta), 'знаков:', dict(collections.Counter(meta)))
 

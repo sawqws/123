@@ -41,13 +41,14 @@ MARGIN = (226, 106, 92)
 XH, DIG = 0.88, 0.95          # высота строчной и цифры, в клетках
 SUP = 0.68                    # степень
 GAP = 0.17                    # промежуток между знаками, в клетках (пишет свободно)
-# его рука по замерам 75 фото тетради (Глеб 22.10: «пока видно, что написано ИИ»):
-JIT_Y = 0.07       # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
-JIT_S = 0.09       # размер соседних букв: 0.78…1.24 друг от друга
-JIT_GAP = 0.08     # промежуток: медиана 0.22, бывает вплотную и до 0.5
-SLOPE = 1.3        # строка в целом чуть уходит вверх/вниз, °
-WAVE = 0.1         # и плывёт волной, клетки
-FRAC_GAP = 0.08    # от черты до числителя/знаменателя (у него почти вплотную)
+# его рука по замерам 75 фото тетради (Глеб 22.10: «пока видно, что написано ИИ»), разброс — вдвое меньше
+# замеренного (Глеб 22.10: «убери неряшливость»):
+JIT_Y = 0.04       # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
+JIT_S = 0.055      # размер соседних букв: 0.78…1.24 друг от друга
+JIT_GAP = 0.05     # промежуток: медиана 0.22, бывает вплотную и до 0.5
+SLOPE = 0.6        # строка в целом чуть уходит вверх/вниз, °
+WAVE = 0.04        # и плывёт волной, клетки
+FRAC_GAP = 0.15    # от черты до числителя/знаменателя (у него почти вплотную)
 ROW_GAP = 0.12     # между строками решения (шаг строк дробей ≈ 2.6 клетки, не по линиям клетки)
 SPACE = 0.26                  # пробел (вокруг + − =)
 BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis', '=': 'axis', '−': 'axis', '·': 'axis', ':': 'colon'}
@@ -58,9 +59,33 @@ if os.path.exists(BANK_FILE):
     for _i, _ch in enumerate(json.loads(bytes(_z['meta']).decode())):
         STAMPS.setdefault(_ch, []).append(_z['g%d' % _i].astype(np.float32) / 255)
 
-PAREN = 1.3         # высота обычной скобки, в клетках
+
+def _round_paren(a, ch):
+    """Скобка изогнута и без «засечек» на концах — иначе в строке читается как [ ]."""
+    m = a > 0.35
+    h = a.shape[0]
+    xs = []
+    for lo, hi in ((0, .15), (.42, .58), (.85, 1)):
+        ys, x = np.nonzero(m[int(lo * h):max(int(lo * h) + 1, int(hi * h))])
+        xs.append(x.mean() if len(x) else np.nan)
+    bow = ((xs[0] + xs[2]) / 2 - xs[1]) * (1 if ch == '(' else -1) / h
+    top = max(m[:max(1, int(.08 * h))].sum(1).max(), m[min(h - 1, int(.92 * h)):].sum(1).max())
+    return bow > 0.06 and top < 1.7 * max(1, np.median(m[int(.3 * h):int(.7 * h)].sum(1)))
+
+
+for _ch in '()':
+    if _ch in STAMPS:
+        STAMPS[_ch] = [a for a in STAMPS[_ch] if _round_paren(a, _ch)] or STAMPS[_ch]
+
+PAREN = 1.12        # высота обычной скобки, в клетках
 TALL = 1.75         # скобки выше этого (в клетках) — его высокие скобки у дробей
 ALIAS = {'-': '−'}
+
+
+def crisp(a, lo=0.14, hi=0.55):
+    """Мутный край штриха (образцы сняты с фото по ~20 px на клетку) → ровный край шариковой ручки."""
+    t = np.clip((a - lo) / (hi - lo), 0, 1)
+    return t * t * (3 - 2 * t)
 
 
 def tokens(s):
@@ -108,21 +133,24 @@ class Notebook:
         body = st[st > 0.15]
         if body.size > 20:              # та же густота пасты, что у букв
             st = np.clip(st / max(0.35, float(np.percentile(body, 80))), 0, 1)
+        st = crisp(st)
         self._blit(st, int(round(cx - st.shape[1] / 2)), int(round(cy - st.shape[0] / 2)))
 
     def _strike(self, x0, x1, cy):
         """Сокращение: косая линия через множитель снизу слева вверх направо, как у него."""
         w = x1 - x0
-        h = min(1.6 * self.C, max(0.9 * self.C, 0.5 * w)) * self.rnd.uniform(0.9, 1.1)   # круче, как у него
+        h = min(1.15 * self.C, max(0.75 * self.C, 0.5 * w)) * self.rnd.uniform(0.92, 1.08)   # косо, как у него, но в своей строке
         ang = math.degrees(math.atan2(h, w))
-        self._line((x0 + x1) / 2, cy, math.hypot(w * 1.12, h), ang)
+        self._line((x0 + x1) / 2, cy, math.hypot(w * 1.04, h), ang)
 
     def _scribble(self, x0, x1, cy):
         """Описка: его зачёркивание с фото, растянутое на написанное."""
-        a = self.rnd.choice(STAMPS['scribble'])
+        opts = sorted(STAMPS['scribble'], key=lambda a: float(a.mean()))
+        a = self.rnd.choice(opts[:2])           # его штриховое зачёркивание, не закрашенная клякса
         w = max(x1 - x0, 0.6 * self.C) * 1.1
         h = self.C * 1.25
         st = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).resize((round(w), round(h)), Image.LANCZOS), np.float32) / 255
+        st = crisp(np.clip(st / max(0.35, float(np.percentile(st[st > 0.15], 80))), 0, 1))
         self._blit(st, int(round((x0 + x1) / 2 - w / 2)), int(round(cy - h / 2)))
 
     def _blit(self, a, x0, y0):
@@ -154,12 +182,13 @@ class Notebook:
         s = (height * self.C / a.shape[0] if height else scale * self.C / REF) * (1 + j)
         im = Image.fromarray((a * 255).astype(np.uint8))
         im = im.resize((max(1, round(a.shape[1] * s)), max(1, round(a.shape[0] * s))), Image.LANCZOS)
-        im = im.rotate(self.rnd.uniform(-3, 3), Image.BICUBIC, expand=True)
+        im = im.rotate(self.rnd.uniform(-1.5, 1.5), Image.BICUBIC, expand=True)
         out = np.asarray(im, np.float32) / 255
         if ch not in ('scribble',):     # образцы с бледных фото — до одной густоты пасты (одна ручка на листе)
             body = out[out > 0.15]
             if body.size > 20:
                 out = np.clip(out / max(0.35, float(np.percentile(body, 80))), 0, 1)
+            out = crisp(out)
         ys, xs = np.nonzero(out > 0.12)
         return out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
 
@@ -244,7 +273,7 @@ class Notebook:
             elif ch in '()':
                 up, down = max(up, 0.45 + PAREN / 2), max(down, PAREN / 2 - 0.45)
             elif ch == 'y':
-                down = max(down, 0.82)
+                down = max(down, 0.95)        # хвост y (1.55 − 0.88 клетки) не цепляет черту дроби
             elif ch.isdigit() or ch == 't':
                 up = max(up, DIG + 0.03)
         return up, down
