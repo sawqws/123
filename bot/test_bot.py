@@ -195,6 +195,25 @@ class BotTest(unittest.TestCase):
         self.assertEqual(self.nodes[-1][0], "horo/answer.js")
         self.assertIsNone(bot.draft())
 
+    def test_partial_answer_replaced_right_away(self):
+        """22.10 «21. Lectura»: платформа прикрепила 1 картинку из 2 — ответ ушёл неполным; бот сразу заменяет его полным."""
+        self.say(URL)
+        calls = []
+
+        def node(*args, timeout=0, prog="node"):
+            calls.append(args)
+            if "--replace" not in args:
+                return False, "⚠️ Не получилось: Прикрепилось файлов 1 из 2 — ответ неполный, отправь заново с --replace"
+            return True, "Отправлено"
+
+        with mock.patch.object(bot, "node", node):
+            bot.on_callback({"id": "1", "data": f"now:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertEqual([c[0] for c in calls], ["horo/answer.js", "horo/answer.js"])
+        self.assertEqual(calls[1][1], "--replace")
+        self.assertEqual(calls[1][2:], calls[0][1:])
+        self.assertIsNone(bot.draft(TASK))                  # отправлено — черновик закрыт
+        self.assertIn("Отправлено учителю", self.last()[0])
+
     def test_send_now_and_hold(self):
         self.say(URL)
         with mock.patch.object(bot, "SEND_DELAY", "4-12"):
