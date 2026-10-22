@@ -913,6 +913,42 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot.Live, "items", cards[:1]):
             self.assertEqual(bot.Live.every(cards[0]), 3)
 
+    def test_too_many_requests_burst_queues(self):
+        """6 автотестов сдались разом: итоги бьют в чат одновременно, Telegram отвечает 429. После паузы запросы
+        идут по одному, а не все в одну секунду — каждый итог доходит, попытки не сгорают (Страж: 429 ×10)."""
+        import io, urllib.error
+        srv = {"until": 0.0, "lock": threading.Lock(), "ok": 0}
+        body = b'{"ok":false,"error_code":429,"parameters":{"retry_after":0.05}}'
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(url, data=None, timeout=None):  # Telegram: не чаще одного сообщения в 0,02 с, иначе 429
+            with srv["lock"]:
+                now = time.time()
+                if now < srv["until"]:
+                    raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(body))
+                srv["until"], srv["ok"] = now + 0.02, srv["ok"] + 1
+            return Resp(b'{"ok":true,"result":{"message_id":5}}')
+        real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
+        errors = []
+
+        def one():
+            try:
+                bot.tg("sendMessage", chat_id=CHAT, text="🏆")
+            except urllib.error.HTTPError as e:
+                errors.append(e.code)
+        with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
+                mock.patch.object(bot, "GATES", {}), mock.patch.object(bot, "tg", real_tg):
+            threads = [REAL_THREAD(target=one) for _ in range(6)]  # Thread в тестах синхронный
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        self.assertEqual(errors, [])
+        self.assertEqual(srv["ok"], 6)
+
     def test_planner_install(self):
         tok = "8800000000:AAH" + "x" * 32
         runs = []

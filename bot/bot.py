@@ -19,6 +19,7 @@
 Видео и кружки: речь — как голосовое, кадры — как фото.
 """
 import base64
+import contextlib
 import datetime
 import html
 import io
@@ -270,11 +271,22 @@ def kb(*rows):
 HOLD = {}  # чат -> до какого времени Telegram просил не писать (429 «Too Many Requests», retry_after)
 HOLD_MAX = 60  # дольше одной паузы не ждём
 HOLD_TRIES = 4  # столько раз пробуем один запрос, пока Telegram отвечает 429
+GATES = {}  # чат -> замок: пока чат на паузе, запросы в него идут по одному
+GATES_LOCK = threading.Lock()
 
 
 def hold_left(chat):
     """Сколько секунд ещё ждать, прежде чем писать в этот чат (Telegram ответил 429)."""
     return max(0.0, HOLD.get(str(chat), 0) - time.time())
+
+
+def gate(chat):
+    """Очередь в чат на паузе: после 429 запросы (итоги нескольких автотестов) просыпаются не разом — иначе
+    все снова бьют в Telegram в одну секунду, снова получают 429 и сгорают все попытки."""
+    if not chat or not hold_left(chat):
+        return contextlib.nullcontext()
+    with GATES_LOCK:
+        return GATES.setdefault(chat, threading.Lock())
 
 
 def retry_after(body):
@@ -287,23 +299,24 @@ def retry_after(body):
 
 def tg(method, **params):
     """Запрос к Telegram. Слишком часто (429 — пачка автотестов: карточки, итоги) — ждём, сколько он сказал, и
-    повторяем: сообщение не теряется, задание не падает. Пока чат на паузе, другие запросы в него тоже ждут."""
+    повторяем: сообщение не теряется, задание не падает. Пока чат на паузе, другие запросы в него ждут в очереди."""
     data = urllib.parse.urlencode(params).encode()
     chat = str(params.get("chat_id", ""))
     for n in range(HOLD_TRIES):
-        time.sleep(min(hold_left(chat), HOLD_MAX))
-        try:
-            with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
-                return json.load(r)
-        except urllib.error.HTTPError as e:
-            if e.code != 429:
-                raise
-            body = e.read() or b""
-            pause = min(retry_after(body), HOLD_MAX)
-            HOLD[chat] = max(HOLD.get(chat, 0), time.time() + pause)
-            print(f"{method}: Telegram просит паузу {pause:g} с (429)")
-            if n == HOLD_TRIES - 1:
-                raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body))
+        with gate(chat):
+            time.sleep(min(hold_left(chat), HOLD_MAX))
+            try:
+                with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                body = e.read() or b""
+                pause = min(retry_after(body), HOLD_MAX)
+                HOLD[chat] = max(HOLD.get(chat, 0), time.time() + pause)
+                print(f"{method}: Telegram просит паузу {pause:g} с (429)")
+                if n == HOLD_TRIES - 1:
+                    raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body))
 
 
 COLORS = [True]  # Telegram принимает цветные кнопки (поле style)? Один отказ — дальше без цветов
