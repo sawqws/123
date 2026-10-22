@@ -24,17 +24,13 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + ' �
 
 // Все темы ученика (и прошедшие, и текущие) — для выбора предмета и «что прошли».
 // Список тем отдаёт у темы не все задания (нет по желанию и старших уровней: 22.10 — 52 теста в 22 темах), поэтому
-// у тем, которые ещё принимают ответы (срок + дни доработок не прошли), задания берутся из самой темы — как на её странице.
-const openTopic = (sp, today) => {
-  if (!sp || !sp.deadlineDate) return true;
-  const d = new Date(sp.deadlineDate.slice(0, 10) + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() + (sp.extraDeadlineDays || 0));
-  return d.toISOString().slice(0, 10) >= today && (!sp.startDate || sp.startDate.slice(0, 10) <= today);
-};
+// задания каждой начавшейся темы берутся из самой темы — как на её странице. И у прошедших тем: после срока платформа
+// закрывает только задания уровня 3.0 и выше, а уровни 1.0–2.0 принимает (22.10: проверено на 12 заданиях).
+const begun = (sp, today) => !sp || !sp.startDate || sp.startDate.slice(0, 10) <= today;
 
 async function fullTasks(page, list) {
   const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);  // по Москве, как платформа
-  const want = list.filter(tp => openTopic(tp.studyPeriod, today));
+  const want = list.filter(tp => begun(tp.studyPeriod, today));
   for (let i = 0; i < want.length; i += 6) {  // по 6 запросов сразу
     await Promise.all(want.slice(i, i + 6).map(async tp => {
       try {

@@ -1209,8 +1209,9 @@ def task_title(task):
 
 def topic_closed(url):
     """Дата, до которой тема принимала ответы, если срок доработок прошёл (срок темы + дни доработок), иначе None.
-    Только для тестов: письменные ответы (detailedAnswer) платформа принимает и после срока (22.10: «Социальный опыт»,
-    «Персональные данные» ушли на проверку через неделю после срока). Не удалось узнать — None: решаем как обычно."""
+    Закрываются только задания уровня 3.0 и выше: уровни 1.0–2.0 платформа принимает и после срока — и тесты, и
+    письменные, в любом статусе (22.10, проверено на 12 заданиях: «8. Cuaderno p.45 ej.4» 8/8, «Социальный опыт» на
+    проверке; уровень 3 — «отправка решений невозможна»). Не удалось узнать — None: решаем как обычно."""
     m = re.search(r"/topic/([\w-]+)/task/([\w-]+)", url)
     if not m:
         return None
@@ -1219,7 +1220,7 @@ def topic_closed(url):
         data = (d or {}).get("data") or {}
         sp = data.get("studyPeriod") or {}
         me = next((t for t in data.get("tasks") or [] if t.get("uuid") == m.group(2)), None)
-        if me and me.get("type") != "test":
+        if me and me.get("levelId") is not None and me["levelId"] <= 2:
             return None
         if not sp.get("deadlineDate") or sp.get("extraDeadlineDays") is None:
             return None
