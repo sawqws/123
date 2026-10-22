@@ -474,6 +474,9 @@ class BotTest(unittest.TestCase):
         self.assertIn(f"node horo/shot.js {URL} horo/tmp/{TASK}/shot.png", p)
         self.assertIn("prev*.jpg", p)
         self.assertIn("ТОЛЬКО то, что просит", p)
+        # языки (Глеб 22.10): ответы — прямо на картинке страницы учебника, не текстом учителю
+        self.assertIn(f"Pic('horo/tmp/{TASK}/imgN.png')", p)
+        self.assertIn("ПРЯМО НА ЭТУ КАРТИНКУ", p)
 
     def test_handwriting_is_rechecked_for_grade8(self):
         self.assertIn("8 класса", bot.prompt_for(URL, "", False))  # решать методами 8 класса
