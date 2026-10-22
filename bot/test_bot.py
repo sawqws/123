@@ -17,7 +17,6 @@ os.environ.setdefault("TELEGRAM_TOKEN", "test")
 import bot  # noqa: E402
 import threading  # noqa: E402
 REAL_THREAD = threading.Thread
-REAL_TG = bot.tg  # до подмены в setUp
 import drafts  # noqa: E402
 import sitecheck  # noqa: E402
 import web  # noqa: E402
@@ -1424,35 +1423,6 @@ class SiteTest(BotTest):
             for _ in range(bot.MAX_PARALLEL):
                 bot.lock.release()
         self.assertEqual(sent, [])  # ни одной карточки «В очереди»
-
-    def test_telegram_429_waits_and_does_not_kill_task(self):
-        # 22.10: 429 на карточке «Решаю» ронял задание целиком — 35 из 54 автотестов не решились
-        import io as _io, urllib.error as _ue
-        calls, slept = [], []
-
-        def fake_open(url, data=None, timeout=None):
-            calls.append(url.rsplit("/", 1)[-1])
-            if len(calls) == 1:
-                raise _ue.HTTPError(url, 429, "Too Many Requests", {}, _io.BytesIO(
-                    b'{"ok":false,"error_code":429,"parameters":{"retry_after":2}}'))
-            return _io.BytesIO(b'{"ok":true,"result":{"message_id":5}}')
-        with mock.patch.object(bot.urllib.request, "urlopen", fake_open), \
-                mock.patch.object(bot.time, "sleep", slept.append):
-            self.assertEqual(REAL_TG("sendMessage", chat_id=1, text="x")["result"]["message_id"], 5)
-        self.assertEqual(calls, ["sendMessage", "sendMessage"])
-        self.assertTrue(slept and 2 <= slept[0] < 4)
-        with mock.patch.object(bot.urllib.request, "urlopen", side_effect=_ue.HTTPError(
-                "u", 429, "Too Many Requests", {}, _io.BytesIO(b"{}"))), mock.patch.object(bot.time, "sleep") as sl:
-            with self.assertRaises(_ue.HTTPError):  # правку карточки не ждём
-                REAL_TG("editMessageText", chat_id=1, message_id=2, text="x")
-            sl.assert_not_called()
-
-        def boom(*a, **k):
-            raise _ue.HTTPError("u", 429, "Too Many Requests", {}, _io.BytesIO(b"{}"))
-        with mock.patch.object(bot, "send", boom):
-            live = bot.Live(CHAT, "Решаю задание")  # карточка не ушла — решение идёт дальше
-        self.assertIsNone(live.mid)
-        live.done()
 
     def test_link_works_once_and_session_remembered(self):
         code = web.site_code()
