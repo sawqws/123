@@ -391,3 +391,16 @@ html.hdpx-off .hdpx-vv, html.hdpx-off [data-hdpx] { display: none !important; }
 /* тема, срок которой прошёл (платформа больше не принимает ответы) */
 .hdpx-closed { margin: 10px 0 0 !important; padding: 8px 12px; border-radius: 10px; background: var(--hdpx-orange-bg);
   color: var(--hdpx-ink); font-size: 14px; line-height: 18px; }
+
+/* готовый ответ на картинке — крупно, на всю ширину карточки (Глеб 22.10: «скрин на видном месте») */
+.hdpx-shots { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.hdpx-shot { position: relative; display: block; width: 100%; padding: 0; border: 1px solid var(--hdpx-line); border-radius: 12px;
+  overflow: hidden; background: #fff; cursor: zoom-in; transition: transform .2s, box-shadow .2s; }
+.hdpx-shot:hover { box-shadow: var(--hdpx-shadow); }
+.hdpx-shot:active { transform: scale(.99); }
+.hdpx-shot img { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; background: #fff; }
+.hdpx-shot-n { position: absolute; right: 8px; bottom: 8px; padding: 2px 8px; border-radius: 10px; background: rgba(39, 32, 93, .72);
+  color: #fff; font: 500 12px/18px var(--hdpx-font); }
+.hdpx-shot-wait { display: flex; align-items: center; justify-content: center; gap: 8px; height: 140px; color: var(--hdpx-grey);
+  font-size: 14px; background: var(--hdpx-bg2); cursor: default; }
+.hdpx-addtext { margin-top: 8px; padding: 0 4px; color: var(--hdpx-primary); }

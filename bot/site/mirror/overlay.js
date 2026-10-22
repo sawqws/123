@@ -31,7 +31,7 @@
   const S = {
     authed: null, st: null, running: new Set(), busy: false, wasWorking: false, timer: 0,
     open: false, tab: store.get('tab', 'now'), wait: null, exams: null, examsLvl: store.get('examsLvl', 'all'),
-settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edits: {},
+settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edits: {}, textOpen: {}, filesLoading: new Set(),
     prepSubjects: null, prep: null, prepSubj: '', prepSel: null, prepMin: store.get('prepMin', 5), prepTz: '',
     prepView: 'form', prepOpen: new Set(), prepTimer: 0, topics: {}, seen: store.get('seen', 0),
     chooser: false, lastDraftKeys: '', hideTab: store.get('hideTab', false), ctxKey: '',
@@ -630,10 +630,26 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       ${l.url && !onlyUrl ? `<a class="hdpx-link" href="${esc(local(l.url))}" data-a="go">Открыть задание</a>` : ''}</div>`;
   }
 
+  // картинки черновика — сами, один раз на каждый набор (n — сколько файлов; переделали — набор новый)
+  async function loadFiles(task, n) {
+    const key = task + ':' + n;
+    if (S.filesLoading.has(key)) return;
+    S.filesLoading.add(key);
+    try {
+      const r = await api('/api/site/draft/files', { task });
+      S.files[task] = { n, list: r.files || [] };
+      renderPanel();  // печатают в поле — дорисуется после
+    } catch (e) { setTimeout(() => S.filesLoading.delete(key), 15000); }  // не вышло — попробуем позже
+  }
+
   function draftCard(d) {
     const label = S.settings ? S.settings.label : '';
     const edited = S.edits[d.task] != null && S.edits[d.task] !== d.text;
-    const files = S.files[d.task];
+    // Глеб 22.10: «сделанный скрин — на видном месте, а не в картинках»: картинки грузятся сами и стоят крупно сверху
+    const files = S.files[d.task] && S.files[d.task].n === d.files ? S.files[d.task].list : null;
+    if (d.files && !files) loadFiles(d.task, d.files);
+    const pics = d.files > 0 && !d.text && !edited;   // ответ целиком на картинках — поле текста не нужно
+    const textOpen = !pics || S.textOpen[d.task];
     const tOpen = S.timeOpen === d.task;
     const times = S.times[d.task] || [];
     let status = '';
@@ -646,13 +662,14 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return `<div class="hdpx-card hdpx-draft" data-key="d-${esc(d.task)}" data-task="${esc(d.task)}">
       <div class="hdpx-row"><span>✍️</span><b class="hdpx-grow">${esc(d.title)}</b>
         ${d.url ? `<a class="hdpx-iconbtn hdpx-iconbtn-s" href="${esc(local(d.url))}" data-a="go" title="Открыть задание" aria-label="Открыть задание">${I.out}</a>` : ''}</div>
-      <p class="hdpx-small hdpx-muted">Черновик ответа учителю — поправь текст, бот запомнит правки</p>
+      <p class="hdpx-small hdpx-muted">${pics ? 'Так ответ уйдёт учителю — нажми на картинку, чтобы рассмотреть' : 'Черновик ответа учителю — поправь текст, бот запомнит правки'}</p>
       ${status}
-      <textarea class="hdpx-ta" data-draft="${esc(d.task)}" rows="5" placeholder="Ответ — на картинках, без текста">${esc(d.text)}</textarea>
-      ${d.files ? (files ? `<div class="hdpx-thumbs">${files.map((f, i) => (f.data
-        ? `<button class="hdpx-thumb" data-a="img" data-task="${esc(d.task)}" data-i="${i}"><img src="${esc(f.data)}" alt="${esc(f.name)}"></button>`
+      ${d.files ? (files ? `<div class="hdpx-shots">${files.map((f, i) => (f.data
+        ? `<button class="hdpx-shot" data-a="img" data-task="${esc(d.task)}" data-i="${i}" aria-label="Открыть картинку ${i + 1}"><img src="${esc(f.data)}" alt="${esc(f.name)}" loading="lazy">${files.length > 1 ? `<span class="hdpx-shot-n">${i + 1} / ${files.length}</span>` : ''}</button>`
         : `<span class="hdpx-thumb hdpx-thumb-file">📄 ${esc(f.name)}</span>`)).join('')}</div>`
-        : `<button class="hdpx-btn hdpx-s hdpx-outline" data-a="files" data-task="${esc(d.task)}">🖼 Картинки (${d.files})</button>`) : ''}
+        : `<div class="hdpx-shots"><div class="hdpx-shot hdpx-shot-wait">${spin}<span>Загружаю картинку…</span></div></div>`) : ''}
+      ${textOpen ? `<textarea class="hdpx-ta" data-draft="${esc(d.task)}" rows="${pics ? 3 : 5}" placeholder="Текст учителю (необязательно)">${esc(d.text)}</textarea>`
+        : `<button class="hdpx-btn hdpx-s hdpx-ghost hdpx-addtext" data-a="addtext" data-task="${esc(d.task)}">＋ Текст учителю</button>`}
       ${edited ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-s hdpx-outline" data-a="save" data-task="${esc(d.task)}">💾 Сохранить правку</button></div>` : ''}
       ${d.sending ? '' : `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="send" data-m="send" data-task="${esc(d.task)}">✅ Отправить учителю</button></div>
       ${label ? `<p class="hdpx-small hdpx-muted hdpx-tc">по настройке: ${label === 'сразу' ? 'сразу' : 'через ' + esc(label)}</p>` : ''}
@@ -1268,13 +1285,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         if (r) { S.st = r; delete S.edits[d.task]; toast('Черновик удалён'); loadWait(true); update(); }
         break;
       }
-      case 'files': {
-        const r = await busy(a, () => api('/api/site/draft/files', { task: d.task }));
-        if (r) { S.files[d.task] = r.files; renderPanel(true); }
-        break;
-      }
+      case 'addtext': S.textOpen[d.task] = true; renderPanel(true); { const ta = $(`textarea[data-draft="${d.task}"]`); if (ta) ta.focus(); } break;
       case 'img': {
-        const f = (S.files[d.task] || [])[Number(d.i)];
+        const f = ((S.files[d.task] || {}).list || [])[Number(d.i)];
         if (f && f.data) lightbox(f.data, f.name);
         break;
       }
