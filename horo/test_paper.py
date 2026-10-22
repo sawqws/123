@@ -39,6 +39,20 @@ class PaperTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             paper.Notebook().solve(1, [['q']])
 
+    def test_slips_random(self):
+        import random
+        sol = [(2, [[[('z^2 + 6z + 9', 'z^3 + 27')], ['= ', ('(z + 3)^2', '3(z + 3)')], ['= ', ('1', '3')]]]),
+               (4, [[[('b − 1', '2')], ['= ', ('b − 1', '2b + 4')]]])]
+        seen = set()
+        for seed in range(8):
+            out = paper.slips(sol, random.Random(seed))
+            self.assertEqual(out[0][1][0][0], sol[0][1][0][0])          # условие не тронуто
+            seen.add(repr(out))
+            nb = paper.Notebook(seed=seed)
+            for n, lines in out:
+                nb.solve(n, lines)
+        self.assertGreater(len(seen), 3)                                    # каждый раз по-разному
+
     def test_page_full(self):
         nb = paper.Notebook(seed=1)
         line = [[('x + 1', 'y')]]

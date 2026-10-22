@@ -106,6 +106,88 @@ def tokens(s):
     return out
 
 
+# похожий неверный знак для описки (Глеб 22.10: «сделай ошибки — неправильно написал, рандомно, не зацикленно»)
+SLIP = {'2': '3', '3': '2', '5': '6', '6': '5', '8': '6', '4': '1', '1': '7', '9': '8', '0': '6',
+        'a': 'c', 'c': 'a', 'b': '6', 'x': 'y', 'y': 'x', 'z': '2', 'm': 'a',
+        '+': '−', '−': '+'}
+
+
+def _spots(s):
+    """Места в строке, где можно ошибиться: обычный знак из SLIP, не в степени и не в зачёркнутом «~…~»."""
+    out, i, strike = [], 0, False
+    while i < len(s):
+        ch = s[i]
+        if ch == '~':
+            strike = not strike
+        elif ch == '#':
+            return []                          # описка уже есть
+        elif ch == '^':
+            i = s.index('}', i) + 1 if s[i + 1:i + 2] == '{' else i + 2
+            continue
+        elif ch in SLIP and not strike:
+            out.append(i)
+        i += 1
+    return out
+
+
+def slips(sol, rnd, n=None):
+    """Вставляет в решение n (по умолчанию 1–3) случайных описок «#неверный#верный» — неверный знак, перечёркнутый,
+    и сразу верный: в случайных номерах и местах, разными знаками, не больше одной на номер, условие не трогает."""
+    strs = []                                   # (номер, путь до строки)
+
+    def walk(obj, path, k):
+        if isinstance(obj, str):
+            strs.append((k, path))
+        elif isinstance(obj, (list, tuple)):
+            for j, it in enumerate(obj):
+                walk(it, path + (j,), k)
+
+    for k, (num, lines) in enumerate(sol):
+        first = lines[0][0] if lines and isinstance(lines[0][0], list) else lines[0]   # условие — не трогать
+        for j, line in enumerate(lines):
+            chunks = line if line and isinstance(line[0], list) else [line]
+            for c, ch in enumerate(chunks):
+                if ch is first:
+                    continue
+                walk(ch, (j, c) if chunks is line else (j,), k)
+    cand = [(k, path, i) for k, path in strs for i in _spots(_get(sol, k, path))]
+    rnd.shuffle(cand)
+    want = n if n is not None else rnd.choice((1, 2, 2, 3))
+    done_k, done_ch, out = set(), set(), sol
+    for k, path, i in cand:
+        ch = _get(out, k, path)[i]
+        if k in done_k or ch in done_ch:
+            continue
+        st = _get(out, k, path)
+        out = _put(out, k, path, st[:i] + '#' + SLIP[ch] + '#' + st[i:])
+        done_k.add(k); done_ch.add(ch)
+        if len(done_k) == want:
+            break
+    return out
+
+
+def _get(sol, k, path):
+    obj = sol[k][1]
+    for p in path:
+        obj = obj[p]
+    return obj
+
+
+def _put(sol, k, path, val):
+    """Новое решение, где по пути path стоит val (дроби — кортежи, их пересобираем)."""
+    def rep(obj, path):
+        if not path:
+            return val
+        p = path[0]
+        items = list(obj)
+        items[p] = rep(obj[p], path[1:])
+        return tuple(items) if isinstance(obj, tuple) else items
+    sol = list(sol)
+    num, lines = sol[k]
+    sol[k] = (num, rep(lines, path))
+    return sol
+
+
 class Notebook:
     def __init__(self, cols=30, rows=40, cell=40, seed=1, margin=4, right=0.8):
         self.C, self.cols, self.rows = cell, cols, rows
@@ -144,14 +226,19 @@ class Notebook:
         self._line((x0 + x1) / 2, cy, math.hypot(w * 1.04, h), ang)
 
     def _scribble(self, x0, x1, cy):
-        """Описка: его зачёркивание с фото, растянутое на написанное."""
-        opts = sorted(STAMPS['scribble'], key=lambda a: float(a.mean()))
-        a = self.rnd.choice(opts[:2])           # его штриховое зачёркивание, не закрашенная клякса
-        w = max(x1 - x0, 0.6 * self.C) * 1.1
-        h = self.C * 1.25
-        st = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).resize((round(w), round(h)), Image.LANCZOS), np.float32) / 255
-        st = crisp(np.clip(st / max(0.35, float(np.percentile(st[st > 0.15], 80))), 0, 1))
-        self._blit(st, int(round((x0 + x1) / 2 - w / 2)), int(round(cy - h / 2)))
+        """Описка — как у него на фото: неверный знак перечёркнут 2–3 косыми штрихами «///» (его же линии),
+        каждый раз по-разному: число штрихов, наклон, длина, шаг."""
+        w = max(x1 - x0, 0.45 * self.C)
+        n = self.rnd.choice((2, 2, 3, 3, 4))
+        ang = self.rnd.uniform(52, 72)
+        h = self.C * self.rnd.uniform(0.95, 1.3)
+        L = h / math.sin(math.radians(ang))
+        step = w / max(1, n - 1) * self.rnd.uniform(0.55, 0.8)
+        xs = (x0 + x1) / 2 - step * (n - 1) / 2
+        for k in range(n):
+            self._line(xs + k * step + self.rnd.uniform(-0.05, 0.05) * self.C,
+                       cy + self.rnd.uniform(-0.08, 0.08) * self.C, L * self.rnd.uniform(0.88, 1.08),
+                       ang + self.rnd.uniform(-6, 6))
 
     def _blit(self, a, x0, y0):
         h, w = a.shape
