@@ -40,7 +40,9 @@ MARGIN = (226, 106, 92)
 
 XH, DIG = 0.88, 0.95          # высота строчной и цифры, в клетках
 SUP = 0.8                     # степень
-GAP = 0.22                    # промежуток между знаками, в клетках (его медиана по 75 фото; Глеб 22.10: «слишком слитно»)
+GAP = 0.13                    # промежуток у знаков + − = и пробелов, в клетках (его медиана по 75 фото)
+GAP_IN = 0.0                  # внутри члена («3mn», «(x − 2y)^2»): у него буквы почти вплотную (Глеб 22.10: «шрифт поменять»)
+SLANT = (0.12, 0.22)          # его буквы наклонены вправо на 7–12° (сравнение с его записью на том же фото)
 # его рука по замерам 75 фото тетради (Глеб 22.10: «пока видно, что написано ИИ»), разброс — вдвое меньше
 # замеренного (Глеб 22.10: «убери неряшливость»):
 JIT_Y = 0.025      # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
@@ -50,7 +52,7 @@ SLOPE = 0.0        # строка в целом чуть уходит вверх
 WAVE = 0.0         # и плывёт волной, клетки
 FRAC_GAP = 0.15    # от черты до числителя/знаменателя (у него почти вплотную)
 ROW_GAP = 0.12     # между строками решения (шаг строк дробей ≈ 2.6 клетки, не по линиям клетки)
-SPACE = 0.32                  # пробел (вокруг + − =)
+SPACE = 0.16                  # пробел (вокруг + − =)
 BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis', '=': 'axis', '−': 'axis', '·': 'axis', ':': 'colon'}
 
 STAMPS = {}
@@ -199,6 +201,7 @@ class Notebook:
         self.W, self.H = cols * cell, rows * cell
         self.ink = np.zeros((self.H, self.W), np.float32)
         self.rnd = random.Random(seed)
+        self.slant = self.rnd.uniform(*SLANT)       # наклон букв вправо (tg), один на лист
         self.left = (margin + 0.8) * cell          # пишет сразу за красной линией полей
         self.right = self.W - right * cell
         self.drift = None                           # плывущая строка: y-сдвиг от x, задаёт solve
@@ -276,6 +279,10 @@ class Notebook:
         im = Image.fromarray((a * 255).astype(np.uint8))
         im = im.resize((max(1, round(a.shape[1] * s)), max(1, round(a.shape[0] * s))), Image.LANCZOS)
         im = im.rotate(self.rnd.uniform(-1.5, 1.5), Image.BICUBIC, expand=True)
+        if self.slant and ch not in ('scribble', 'bar'):   # его наклон вправо — один на лист, чуть гуляет
+            k = self.slant + self.rnd.uniform(-0.03, 0.03)
+            pad = int(abs(k) * im.height) + 2
+            im = im.transform((im.width + pad, im.height), Image.AFFINE, (1, k, -pad if k > 0 else 0, 0, 1, 0), Image.BICUBIC)
         out = np.asarray(im, np.float32) / 255
         if ch not in ('scribble',):     # образцы с бледных фото — до одной густоты пасты (одна ручка на листе)
             body = out[out > 0.15]
@@ -351,7 +358,9 @@ class Notebook:
                 x -= 0.02 * C
             if draw:
                 out.append((x, -0.55 * C * size if sup else 0, draw))
-            g = max(-0.04, min(0.4, self.rnd.gauss(GAP, JIT_GAP)))
+            nxt = toks[k + 1][0] if k + 1 < len(toks) else ' '
+            tight = ch not in ' +−-=·:' and nxt not in ' +−-=·:'   # внутри члена «3mn», «(x»: у него вплотную
+            g = max(-0.04, min(0.4, self.rnd.gauss(GAP_IN if tight else GAP, JIT_GAP * (0.5 if tight else 1))))
             x += w + g * C * (SUP if sup else 1)
         return out + marks, x
 
