@@ -2109,6 +2109,16 @@ class DeferTest(BotTest):
         self.assertEqual(self.nodes, [])
         self.assertNotIn(TASK, bot.pending_tests())
 
+    def test_pending_test_not_solved_again(self):
+        """Решён и ждёт сдачи по таймеру — повторный запуск (кнопка «Все автотесты») не решает его заново."""
+        self.say(URL)
+        n = len(self.prompts)
+        self.assertIn(TASK, bot.app_state()["tests"])               # сайт знает, что его брать не надо
+        bot.run_task(CHAT, URL, "")
+        self.assertEqual(len(self.prompts), n)                     # Claude второй раз не запускался
+        self.assertIn("Этот тест уже решён", self.msgs[-1][0])
+        self.assertNotIn(TASK, bot.running)
+
     def test_human_off_submits_right_away(self):
         bot.set_human(False)
         self.say(URL)
