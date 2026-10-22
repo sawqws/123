@@ -1540,6 +1540,16 @@ class SiteTest(BotTest):
                 bot.lock.release()
         self.assertEqual(sent, [])  # ни одной карточки «В очереди»
 
+    def test_live_card_waits_for_telegram_pause_not_task(self):
+        # Telegram на паузе (429) — карточку не шлём сразу, решение идёт без ожидания
+        sent = []
+        with mock.patch.object(bot, "HOLD", {str(CHAT): __import__("time").time() + 60}), \
+                mock.patch.object(bot, "send", lambda *a, **k: sent.append(a) or 7):
+            live = bot.Live(CHAT, "Решаю задание")
+            self.assertIsNone(live.mid)
+            self.assertEqual(sent, [])
+            live.done()
+
     def test_live_card_not_sent_does_not_kill_task(self):
         # 22.10: 429 на карточке «Решаю» ронял задание целиком — 35 из 54 автотестов не решились
         def boom(*a, **k):
