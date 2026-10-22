@@ -2067,6 +2067,48 @@ class DeferTest(BotTest):
         self.assertIn("17 / 17", self.last()[0])
         self.assertIn("попыток 1 из 3", self.last()[0])
 
+    def test_answers_not_entered_by_claude_bot_enters_them(self):
+        """22.10: Claude записал answers.json, но submit.js ему не разрешили (другая форма команды) — бот вносит сам."""
+        def claude(prompt, tools, timeout=0, on_tool=None):
+            self.prompts.append(prompt)
+            self.tools = tools
+            pathlib.Path(drafts.task_dir(TASK), "answers.json").write_text('{"1": "a"}')
+            return True, "Ответы готовы, но на сайт я их не внёс: запуск дважды упёрся в запрос разрешения."
+
+        def node(*args, timeout=0, prog="node"):
+            self.nodes.append(args)
+            if args[:1] == ("horo/submit.js",) and "--defer" in args:   # внесли ответы, тест не сдан
+                pathlib.Path(drafts.task_dir(TASK), "defer.json").write_text(json.dumps(
+                    {"url": URL, "answers": args[2], "N": 3, "at": time.time() * 1000}))
+                return True, "Ответы внесены"
+            return True, self.result
+
+        with mock.patch.object(bot, "claude", claude), mock.patch.object(bot, "node", node):
+            self.say(URL)
+        ans = os.path.join(drafts.task_dir(TASK), "answers.json")
+        self.assertEqual(self.nodes[0], ("horo/submit.js", URL, ans, "--defer"))
+        self.assertIn(TASK, bot.pending_tests())                  # сдаст по таймеру, как обычно
+        text = next(m for m, _ in self.msgs if "Тест решён" in m)
+        self.assertNotIn("не внёс", text)
+        self.assertIn(f"Bash(HORO_DEFER=1 node horo/*)", self.tools)   # и такая форма команды разрешена
+        self.assertIn(f"Bash(node {bot.REPO}/horo/*)", self.tools)
+        self.assertIn("без `HORO_DEFER=…` впереди", self.prompts[0])
+
+    def test_last_attempt_answers_not_pushed(self):
+        """Последняя попытка: Claude мог намеренно не вносить (ответ неоднозначный) — бот не вносит за него."""
+        with open(os.path.join(drafts.task_dir(TASK), "task.json"), "w") as f:
+            json.dump({"data": {"type": "test", "title": "Тест: клетка"},
+                       "meta": {"progress": {"grade": {"remainingAttemptsCount": 1}}}}, f)
+
+        def claude(prompt, tools, timeout=0, on_tool=None):
+            pathlib.Path(drafts.task_dir(TASK), "answers.json").write_text('{"1": "a"}')
+            return True, "Вопрос 2 неоднозначный: варианты А или Б"
+
+        with mock.patch.object(bot, "claude", claude):
+            self.say(URL)
+        self.assertEqual(self.nodes, [])
+        self.assertNotIn(TASK, bot.pending_tests())
+
     def test_human_off_submits_right_away(self):
         bot.set_human(False)
         self.say(URL)

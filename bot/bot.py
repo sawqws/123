@@ -964,7 +964,11 @@ def run_script(chat, *args):
         lock.release()
 
 
-SOLVE_TOOLS = ["Bash(node horo/*)", "Bash(python3 horo/*)", "Bash(pdftoppm *)", "Bash(pdftotext *)", "Read", "Write", "Edit"]
+# Claude пишет команду по-разному: `node horo/…`, с полным путём, с `HORO_DEFER=1` впереди — все варианты разрешены,
+# иначе в режиме -p запуск молча запрещается и тест остаётся решённым, но не внесённым (22.10: «1.1 Гринёв», «4.15»)
+SOLVE_TOOLS = ["Bash(node horo/*)", "Bash(python3 horo/*)", f"Bash(node {REPO}/horo/*)", f"Bash(python3 {REPO}/horo/*)",
+               "Bash(HORO_DEFER=1 node horo/*)", f"Bash(HORO_DEFER=1 node {REPO}/horo/*)",
+               "Bash(pdftoppm *)", "Bash(pdftotext *)", "Read", "Write", "Edit"]
 
 
 # Доработка: учитель вернул задание и написал, что доделать («Решить № 3-4»). Глеб хочет, чтобы бот сам понял,
@@ -1061,7 +1065,9 @@ def prompt_for(url, text, show, retry=None):
         "Только реши и покажи ответы, на сайт НЕ отправляй (шаг 3 не делать)."
         if only_show
         else "Реши и внеси ответы (шаг 3): submit.js внесёт их, но тест НЕ сдаст — его сдаст бот позже сам, "
-        "строку БАЛЛЫ не пиши. Если ответ неоднозначный, а попытка последняя, submit.js не запускай, а напиши варианты."
+        "строку БАЛЛЫ не пиши. Запускай ровно `node horo/submit.js <ссылка> horo/tmp/<задание>/answers.json` — без `cd`, "
+        "без `HORO_DEFER=…` впереди (уже задано) и без `&&`/`;`: другие формы команды запрещены. "
+        "Если ответ неоднозначный, а попытка последняя, submit.js не запускай, а напиши варианты."
     )
     task = drafts.task_id(url)
     d = f"horo/tmp/{task}"
@@ -1297,6 +1303,10 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
             send(chat, err(out, esc(title)), menu=True, raw_html=True)
             return
         pend = None if show else defer_of(task, t0)
+        if ok and not show and not pend and not re.search(r"покажи|не отправляй|только ответ", text, re.I):
+            pend = push_answers(task, url, t0)
+            if pend:  # Claude ответы не внёс — внёс бот; его «не внёс» Глебу не показываем
+                out = "Ответы внесены на сайт."
         if pend:  # тест: ответы внесены, сдаст бот по таймеру
             remember(title or "Тест", True, parse_score(out)[1], url=url, secs=time.time() - t0)
             react(chat, mid, "👌")
@@ -1765,6 +1775,29 @@ def send_waiting(chat, mid=None):
 # submit.js под Claude (HORO_DEFER) вносит ответы и не сдаёт → defer.json; бот сдаёт сам по таймеру (--continue-only:
 # новую попытку при этом не начать). Не 100% — Claude перепроверяет каждый вопрос (RETRY) и вносит вторую попытку,
 # если после неё останется запасная; последнюю — только по кнопке Глеба.
+
+def push_answers(task, url, since):
+    """Страховка: Claude решил тест и записал answers.json, но не внёс ответы (команду не пустило, оборвался) —
+    вносим сами тем же submit.js --defer. Не трогаем, если попытка последняя (там Claude мог намеренно не вносить).
+    -> то же, что defer_of, или None."""
+    d = drafts.task_dir(task)
+    a = os.path.join(d, "answers.json")
+    try:
+        if drafts.task_info(task)[0] != "test" or os.path.getmtime(a) < since - 1:
+            return None
+        with open(os.path.join(d, "task.json")) as f:
+            grade = ((json.load(f).get("meta") or {}).get("progress") or {}).get("grade") or {}
+    except (OSError, ValueError):
+        return None
+    left = grade.get("remainingAttemptsCount")
+    if left is not None and left <= 1:
+        return None
+    ok, out = node("horo/submit.js", url, a, "--defer", timeout=600)
+    if not ok:
+        journal("script", "submit.js --defer (страховка) не внёс ответы", out)
+        return None
+    return defer_of(task, since)
+
 
 def defer_of(task, since):
     """Ответы теста внесены, но не сдан (этим решением)? -> {url, answers, N, at} или None."""
@@ -2524,7 +2557,7 @@ def run_all(chat, tests):
                 ok, out = solve(t["url"], on_tool=lambda name, inp: (lambda st: st and live.step(st[0], (i + st[1]) / n))(step_of(name, inp)))
                 score, body = parse_score(out) if ok else (None, out)
                 title = esc(t["title"] or f"Тест {i + 1}")
-                pend = defer_of(live.task, t1) if ok and live.task else None
+                pend = (defer_of(live.task, t1) or push_answers(live.task, t["url"], t1)) if ok and live.task else None
                 if pend:  # ответы внесены — сдаст по таймеру, баллы придут отдельным сообщением
                     at = schedule_test(chat, live.task, pend, t["title"] or f"Тест {i + 1}", silent=True)
                     rows.append(f"🧪 {title} — сдам в {datetime.datetime.fromtimestamp(at, MSK):%H:%M}")
