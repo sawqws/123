@@ -267,10 +267,34 @@ def kb(*rows):
 
 # ---------- Telegram ----------
 
+# 429 «Too Many Requests» — подождать, сколько просит Telegram, и повторить. 22.10: пачка из 54 автотестов — карточки
+# «Решаю» десятками сразу, Telegram ответил 429, и 35 заданий упали ещё до решения. Правки, «печатает» и реакции не
+# ждём — они не важны и шлются часто.
+NO_WAIT = ("edit", "sendChatAction", "setMessageReaction", "answerCallbackQuery", "getUpdates")
+
+
+def retry_after(body):
+    try:
+        return float((json.loads(body).get("parameters") or {}).get("retry_after") or 0) or None
+    except Exception:
+        m = re.search(r"retry after (\d+)", body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body))
+        return float(m.group(1)) if m else None
+
+
 def tg(method, **params):
     data = urllib.parse.urlencode(params).encode()
-    with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
-        return json.load(r)
+    for k in range(4):
+        try:
+            with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or k == 3 or method.startswith(NO_WAIT):
+                raise
+            body = e.read() if hasattr(e, "read") else b""
+            wait = retry_after(body) or 3
+            if wait > 60:  # надолго закрыли — не держим поток
+                raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body or b""))
+            time.sleep(wait + random.uniform(0.2, 1.5))
 
 
 COLORS = [True]  # Telegram принимает цветные кнопки (поле style)? Один отказ — дальше без цветов
@@ -494,7 +518,11 @@ class Live:
         self.lock = threading.Lock()  # правка (тикер и шаги Claude) не должна обгонять удаление карточки
         Live.active = self  # приложение показывает ту же работу, что и карточка в чате
         Live.items.append(self)
-        self.mid = send(chat, self.render(), raw_html=True)
+        try:
+            self.mid = send(chat, self.render(), raw_html=True)
+        except Exception as e:  # карточка не ушла (429, сеть) — работа идёт и без неё, результат придёт отдельно
+            print("Live:", e)
+            self.mid = None
         quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
 
@@ -1973,7 +2001,10 @@ def _finish_test(task):
     note = " · ".join(x for x in (esc(title), f"попыток {used} из {avail}" if used else "") if x)
     remember(title, True, f"Сдан{': ' + num(score[0]) + '/' + num(score[1]) if score and score[1] else ''}",
              score=score, url=t["url"])
-    send(chat, f"{head}\n<i>{note}</i>", menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
+    try:  # баллы не дошли (429, сеть) — тест всё равно сдан, вторая попытка всё равно нужна
+        send(chat, f"{head}\n<i>{note}</i>", menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
+    except Exception as e:
+        print("баллы теста:", e)
     threading.Thread(target=refresh_overview, daemon=True).start()
     if not score or full or not score[1] or used is None:
         return
@@ -1985,9 +2016,12 @@ def _finish_test(task):
     except OSError:
         pass
     if t.get("tries", 0) == 0 and left >= 2:
-        send(chat, card("Не 100% — делаю вторую попытку", note=f"Перепроверю каждый вопрос и найду ошибку · после неё "
-                        f"останется ещё {left - 1}", icon="🔁"), raw_html=True)
         threading.Thread(target=run_task, args=(chat, t["url"], "", False, None, info), daemon=True).start()
+        try:
+            send(chat, card("Не 100% — делаю вторую попытку", note=f"Перепроверю каждый вопрос и найду ошибку · после "
+                            f"неё останется ещё {left - 1}", icon="🔁"), raw_html=True)
+        except Exception as e:
+            print("вторая попытка:", e)
     elif left >= 1:
         set_offer(task, {**info, "url": t["url"], "title": title})
         why = "осталась последняя попытка" if left == 1 else "вторую уже делал"
