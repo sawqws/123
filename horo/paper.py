@@ -3,9 +3,10 @@
 Учитель часто просит «выполнить в тетради» — тогда нужен не тёмный лист iPad (sheet.py), а фото листа в клетку:
 синяя шариковая ручка, красные поля, лист лежит на столе.
 - Буквы и цифры — его настоящие, вырезаны с фото его тетради (`horo/fonts/gleb_paper.npz`, собирает
-  `horo/live/paper_build.py` с фото в Brain `raw/images/notebook_*.jpg`): x y c m t 0–9 + ( ) №, «Лист».
-  Чего на фото нет (a b z, знаки − = · :) — его буквы из ровной азбуки (`hand.NORM`) или знаки, нарисованные пером
-  той же толщины (штрих 0.095 клетки, как у него).
+  `horo/live/paper_build.py` с фото в Brain `raw/images/notebook_*.jpg`): a b c m t x y z 0–9 + − = · ( ) №, «Лист»,
+  черты дробей, зачёркивания. Ничего не дорисовывается (Глеб 22.10: «точь-в-точь, без твоих выдумок»): нет знака — ошибка.
+- Как он: сокращаемое зачёркивает косой линией (его же черта дроби, повёрнутая) — «~(z + 3)~»;
+  описку закрашивает своим зачёркиванием и пишет дальше — «#2z#».
 - Размер как у него в тетради: строчная ≈ 0.88 клетки, цифры 0.95, y с хвостом 1.7; черта дроби — по линии клетки,
   числитель в клетке над ней, знаменатель — под ней; степень — 0.6 размера, у верха буквы.
 - Рука живая: каждый раз другой образец буквы, чуть гуляют размер, наклон, строка и промежутки.
@@ -31,7 +32,6 @@ from PIL import Image, ImageDraw, ImageFilter
 _here = os.path.dirname(os.path.abspath(__file__))
 BANK_FILE = os.path.join(_here, 'fonts', 'gleb_paper.npz')
 REF = 40          # клетка, в которой лежат штампы банка, px
-PEN = 0.095       # толщина его штриха, в клетках
 INK_DARK = np.array([26, 30, 72], np.float32)     # синяя паста на фото: густо
 INK_LIGHT = np.array([92, 104, 178], np.float32)  # и там, где ручка едва касалась
 PAPER = (226, 229, 233)
@@ -42,7 +42,7 @@ XH, DIG = 0.88, 0.95          # высота строчной и цифры, в 
 SUP = 0.68                    # степень
 GAP = 0.17                    # промежуток между знаками, в клетках (пишет свободно)
 SPACE = 0.26                  # пробел (вокруг + − =)
-BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis'}
+BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis', '=': 'axis', '−': 'axis', '·': 'axis', ':': 'colon'}
 
 STAMPS = {}
 if os.path.exists(BANK_FILE):
@@ -50,41 +50,9 @@ if os.path.exists(BANK_FILE):
     for _i, _ch in enumerate(json.loads(bytes(_z['meta']).decode())):
         STAMPS.setdefault(_ch, []).append(_z['g%d' % _i].astype(np.float32) / 255)
 
-# знаки, которых нет на фото, — пером (в клетках: x вправо, y вверх от строки)
-LINE = {
-    '−': ([[(0.05, 0.42), (0.62, 0.45)]], 0.67),
-    '-': ([[(0.05, 0.42), (0.62, 0.45)]], 0.67),
-    '=': ([[(0.05, 0.56), (0.62, 0.58)], [(0.06, 0.28), (0.63, 0.30)]], 0.68),
-    '·': ([[(0.08, 0.43), (0.13, 0.47), (0.1, 0.42)]], 0.24),
-    ':': ([[(0.08, 0.65), (0.13, 0.69), (0.1, 0.64)], [(0.08, 0.2), (0.13, 0.24), (0.1, 0.19)]], 0.24),
-    ',': ([[(0.12, 0.08), (0.04, -0.2)]], 0.2),
-    '.': ([[(0.1, 0.04), (0.12, 0.06)]], 0.2),
-}
-# a b z на фото тетради нет: формы — как он пишет (b с прямой палочкой, чтобы не путалась с 6)
-LINE.update({
-    'a': ([[(0.52, 0.62), (0.32, 0.8), (0.1, 0.62), (0.05, 0.3), (0.18, 0.04), (0.4, 0.08), (0.53, 0.35)],
-           [(0.55, 0.82), (0.52, 0.4), (0.56, 0.08), (0.68, 0.02)]], 0.72),
-    'b': ([[(0.16, 1.38), (0.12, 0.8), (0.1, 0.04)],
-           [(0.11, 0.42), (0.3, 0.72), (0.52, 0.66), (0.6, 0.36), (0.45, 0.06), (0.22, 0.02), (0.1, 0.1)]], 0.68),
-    'z': ([[(0.06, 0.66), (0.22, 0.76), (0.58, 0.74), (0.28, 0.38), (0.05, 0.04), (0.34, 0.08), (0.66, 0.02)]], 0.72),
-})
-INK_PEN = 0.62      # густота пасты у знаков пером — как у его настоящих букв на фото
 PAREN = 1.3         # высота обычной скобки, в клетках
-
-
-def _spline(P, n=8):
-    """Сглаживает ломаную (Катмулл — Ром), чтобы знаки пером не были угловатыми."""
-    if len(P) < 3:
-        return P
-    Q = [P[0]] + list(P) + [P[-1]]
-    out = []
-    for i in range(1, len(Q) - 2):
-        p0, p1, p2, p3 = Q[i - 1], Q[i], Q[i + 1], Q[i + 2]
-        for k in range(n):
-            t = k / n
-            out.append(tuple(0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t * t
-                                    + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t ** 3) for j in (0, 1)))
-    return out + [P[-1]]
+TALL = 1.75         # скобки выше этого (в клетках) — его высокие скобки у дробей
+ALIAS = {'-': '−'}
 
 
 def tokens(s):
@@ -117,28 +85,33 @@ class Notebook:
         self.y = 1.2 * cell                         # низ последней написанной строки, px
         self._last = {}
 
-    # ---------- перо и штампы ----------
-    def _pen(self, pts, x, base, size=1.0, w=PEN):
-        """Штрих пером: pts — в клетках (y вверх от строки)."""
-        C, ss = self.C, 3
-        P = _spline([(x + px * C * size, base - py * C * size) for px, py in pts])
-        dense = [P[0]]
-        for a, b in zip(P, P[1:]):
-            n = max(2, int(math.hypot(b[0] - a[0], b[1] - a[1]) / 0.7))
-            dense += [(a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n) for t in range(1, n + 1)]
-        xs, ys = [p[0] for p in dense], [p[1] for p in dense]
-        r = w * C / 2 * (0.85 + 0.3 * self.rnd.random())
-        x0, y0 = int(min(xs) - r - 3), int(min(ys) - r - 3)
-        x1, y1 = int(max(xs) + r + 3), int(max(ys) + r + 3)
-        im = Image.new('L', ((x1 - x0) * ss, (y1 - y0) * ss))
-        d = ImageDraw.Draw(im)
-        ph = self.rnd.random() * 6
-        for k, (px, py) in enumerate(dense):
-            rr = r * (0.9 + 0.12 * math.sin(k / 9 + ph)) * ss   # нажим чуть гуляет
-            cx, cy = (px - x0) * ss, (py - y0) * ss
-            d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=int(255 * INK_PEN))
-        a = np.asarray(im.resize((x1 - x0, y1 - y0), Image.LANCZOS), np.float32) / 255
-        self._blit(a, x0, y0)
+    # ---------- его штампы ----------
+    def _line(self, cx, cy, length, angle=0.0):
+        """Его прямая линия пером (черта дроби с фото) длиной length px, повернутая на angle°, центр (cx, cy)."""
+        opts = STAMPS['bar']
+        want = length / self.C * REF
+        cand = sorted(range(len(opts)), key=lambda i: abs(opts[i].shape[1] - want))[:6]
+        a = opts[self.rnd.choice(cand)]
+        k = self.C / REF
+        im = Image.fromarray((a * 255).astype(np.uint8)).resize((max(2, round(length)), max(2, round(a.shape[0] * k))), Image.LANCZOS)
+        im = im.rotate(angle + self.rnd.uniform(-1.2, 1.2), Image.BICUBIC, expand=True)
+        st = np.asarray(im, np.float32) / 255
+        self._blit(st, int(round(cx - st.shape[1] / 2)), int(round(cy - st.shape[0] / 2)))
+
+    def _strike(self, x0, x1, cy):
+        """Сокращение: косая линия через множитель снизу слева вверх направо, как у него."""
+        w = x1 - x0
+        h = min(1.6 * self.C, max(0.9 * self.C, 0.5 * w)) * self.rnd.uniform(0.9, 1.1)   # круче, как у него
+        ang = math.degrees(math.atan2(h, w))
+        self._line((x0 + x1) / 2, cy, math.hypot(w * 1.12, h), ang)
+
+    def _scribble(self, x0, x1, cy):
+        """Описка: его зачёркивание с фото, растянутое на написанное."""
+        a = self.rnd.choice(STAMPS['scribble'])
+        w = max(x1 - x0, 0.6 * self.C) * 1.1
+        h = self.C * 1.25
+        st = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).resize((round(w), round(h)), Image.LANCZOS), np.float32) / 255
+        self._blit(st, int(round((x0 + x1) / 2 - w / 2)), int(round(cy - h / 2)))
 
     def _blit(self, a, x0, y0):
         h, w = a.shape
@@ -150,10 +123,10 @@ class Notebook:
         cur = self.ink[Y0:Y1, X0:X1]
         self.ink[Y0:Y1, X0:X1] = 1 - (1 - cur) * (1 - sub)
 
-    def _stamp(self, ch, scale, height=None):
+    def _stamp(self, ch, scale, height=None, opts=None):
         """Случайный его образец знака (не тот же, что в прошлый раз), чуть повернутый и масштабированный;
         height — нужная высота в клетках (высокая скобка у дроби)."""
-        opts = STAMPS[ch]
+        opts = opts or STAMPS[ch]
         i = self.rnd.randrange(len(opts))
         if len(opts) > 1 and i == self._last.get(ch):
             i = (i + 1) % len(opts)
@@ -173,21 +146,26 @@ class Notebook:
         C = self.C
         if ch == ' ':
             return None, SPACE * C * size
-        if ch in LINE:
-            st, w = LINE[ch]
-            jit = [[(px + self.rnd.uniform(-0.02, 0.02), py + self.rnd.uniform(-0.02, 0.02)) for px, py in s] for s in st]
-            return (lambda x, b: [self._pen(s, x, b, size) for s in jit]), w * C * size
-        if ch not in STAMPS:
-            raise KeyError(f'нет знака {ch!r} в почерке тетради')
+        ch = ALIAS.get(ch, ch)
         kind = BASE.get(ch, 'base')
-        if kind == 'paren' and tall:
-            # высокая скобка у дроби — дугой его пера (растянутые штампы выходили квадратными «[»)
-            h, k = tall / 2, (1 if ch == '(' else -1)
-            xs = [0.34, 0.13, 0.07, 0.11, 0.33] if ch == '(' else [0.06, 0.27, 0.33, 0.29, 0.08]
-            j = [self.rnd.uniform(-0.03, 0.03) for _ in xs]
-            pts = [(x + d, 0.45 + y) for x, d, y in zip(xs, j, (h, h / 2, 0, -h / 2, -h))]
-            return (lambda x, b: self._pen(pts, x, b)), 0.42 * C
-        st = self._stamp(ch, size, PAREN * size if kind == 'paren' else None)
+        if kind == 'colon':                       # «:» — две его точки одна над другой
+            d1, d2 = self._stamp('·', size), self._stamp('·', size)
+            w = max(d1.shape[1], d2.shape[1])
+
+            def colon(x, b):
+                self._blit(d1, int(x), int(b - 0.68 * C * size - d1.shape[0] / 2))
+                self._blit(d2, int(x), int(b - 0.22 * C * size - d2.shape[0] / 2))
+            return colon, w
+        if ch not in STAMPS:
+            raise KeyError(f'нет знака {ch!r} в почерке тетради — нужен его образец с фото')
+        if kind == 'paren' and tall:              # его высокие скобки у дробей (с фото), до нужной высоты
+            opts = [a for a in STAMPS[ch] if a.shape[0] / REF >= TALL] or STAMPS[ch]
+            st = self._stamp(ch, 1, tall, opts)
+            h, w = st.shape
+            return (lambda x, b: self._blit(st, int(round(x)), int(round(b - 0.45 * C - h / 2)))), w
+        tall = None
+        opts = [a for a in STAMPS[ch] if a.shape[0] / REF < TALL] if kind == 'paren' else None
+        st = self._stamp(ch, size, PAREN * size if kind == 'paren' else None, opts)
         h, w = st.shape
         dy = self.rnd.uniform(-0.04, 0.04) * C
 
@@ -204,10 +182,22 @@ class Notebook:
         return draw, w
 
     def _run(self, s, size=1.0, tall=None):
-        """Строку — в список (dx, dy, рисование); возвращает (список, ширина)."""
-        C, x, out = self.C, 0.0, []
+        """Строку — в список (dx, dy, рисование); возвращает (список, ширина).
+        «~…~» — зачеркнуть косой линией (сократил), «#…#» — описка, закрашена его зачёркиванием."""
+        C, x, out, marks = self.C, 0.0, [], []   # marks — зачёркивания, рисуются поверх букв
         toks = tokens(s)
+        open_ = {}
         for k, (ch, sup) in enumerate(toks):
+            if ch in '~#':
+                if ch not in open_:
+                    open_[ch] = x
+                    continue
+                x0, x1 = open_.pop(ch), x - GAP * C
+                mark = self._strike if ch == '~' else self._scribble
+                marks.append((x0, 0, lambda X, b, w=x1 - x0, m=mark: m(X, X + w, b - 0.45 * C * size)))
+                if ch == '#':
+                    x += 0.25 * C
+                continue
             sz = size * (SUP if sup else 1)
             t = tall if ch in '()' else None
             draw, w = self._glyph(ch, sz, t)
@@ -216,7 +206,7 @@ class Notebook:
             if draw:
                 out.append((x, -0.55 * C * size if sup else 0, draw))
             x += w + (GAP + self.rnd.uniform(-0.03, 0.04)) * C * (SUP if sup else 1)
-        return out, x
+        return out + marks, x
 
     @staticmethod
     def _ext(s):
@@ -226,7 +216,7 @@ class Notebook:
             if sup:
                 up = max(up, 0.55 + SUP * DIG)
             elif ch == 'b':
-                up = max(up, 1.4)
+                up = max(up, 1.5)
             elif ch in '()':
                 up, down = max(up, 0.45 + PAREN / 2), max(down, PAREN / 2 - 0.45)
             elif ch == 'y':
@@ -297,11 +287,8 @@ class Notebook:
             else:
                 n, wn, d, wd, bw = data[:5]
                 xb = x0 + x
-                # черта: по линии клетки, чуть вкось и с прогибом, как от руки
-                y1, y2 = self.rnd.uniform(-0.05, 0.05), self.rnd.uniform(-0.07, 0.03)
-                mid = self.rnd.uniform(-0.03, 0.03)
-                L = bw / C
-                self._pen([(0, y1), (L / 2, (y1 + y2) / 2 + mid), (L, y2)], xb, axis - 0.02 * C)
+                # черта — его линия с фото, по линии клетки
+                self._line(xb + bw / 2, axis - 0.02 * C + self.rnd.uniform(-0.04, 0.04) * C, bw)
                 # числитель — над чертой с зазором по хвостам (y, скобки), знаменатель — под ней по верху букв
                 nb = axis - (0.14 + self._ext(data[5])[1]) * C
                 db = axis + (0.16 + self._ext(data[6])[0]) * C
