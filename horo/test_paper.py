@@ -52,5 +52,18 @@ class PaperTest(unittest.TestCase):
             nb.solve(1, [[('x + ' * 40 + 'x', '2')]])
 
 
+
+class PaperBgTest(unittest.TestCase):
+    def test_on_photo(self):
+        import paperbg
+        if not os.path.exists(os.path.join(paperbg.SRC, paperbg.BGS[0]['file'])):
+            self.skipTest('нет фото фона (Brain raw/images)')
+        nb = paperbg.sheet(0, seed=3)
+        nb.solve(2, [[('z^2 + 6z + 9', 'z^3 + 27'), ' = ', ('1', '3')]])
+        with tempfile.TemporaryDirectory() as d:
+            p = paperbg.render(nb, 0, os.path.join(d, 'p.jpg'))
+            self.assertTrue(os.path.getsize(p) > 50000)
+
+
 if __name__ == '__main__':
     unittest.main()
