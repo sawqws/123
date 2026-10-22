@@ -2052,6 +2052,8 @@ def _submit_draft(chat, d):
             live.done()
         remember(d["title"], ok, "Отправлено учителю" if ok else plain(out), url=d["url"], kind="sent")
         if not ok:
+            # могло уйти частично (часть файлов) — следующая отправка сначала уберёт свой непроверенный ответ
+            set_draft({**(draft(d["task"]) or d), "replace": True})
             send(chat, err(out, "Не отправилось. Черновик остался — можно нажать ещё раз"), markup=draft_kb(d["task"]),
                  raw_html=True)
             return
