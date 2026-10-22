@@ -15,7 +15,8 @@ echo "== 1/6 Обновление системы и пакеты"
 apt-get update
 $APT upgrade
 $APT install curl git ca-certificates tzdata python3 python3-pip poppler-utils \
-  python3-numpy python3-scipy python3-pil python3-skimage   # почерк (horo/hand.py, horo/alphabet.py), листы PDF
+  python3-numpy python3-scipy python3-pil python3-skimage \
+  python3-docx python3-openpyxl unzip   # почерк (horo/hand.py, horo/alphabet.py), листы PDF, файлы заданий (Word/Excel)
 # из обычного apt приходит слишком старый Node.js — ставим 22
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
   $APT remove nodejs npm libnode-dev >/dev/null 2>&1 || true

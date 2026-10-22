@@ -957,9 +957,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       acts = `<a class="hdpx-btn hdpx-s hdpx-outline" href="https://t.me/${BOT}?start=site" target="_blank" rel="noopener">Открыть бота</a>`;
     } else if (!t) {
       hint = `<span class="hdpx-tb-hint">${spin} Смотрю задание…</span>`;
-    } else if (closedOf(p.topic)) {
-      hint = `<span class="hdpx-tb-hint">⛔ Срок темы прошёл ${esc(dm(closedOf(p.topic)))} — платформа больше не принимает ответы${isTest(t) ? ', могу показать ответы' : ''}</span>`;
-      if (isTest(t)) acts = '<button class="hdpx-btn hdpx-s hdpx-outline" data-a="solve" data-m="show">👁 Ответы</button>';
+    } else if (closedOf(p.topic) && isTest(t)) {  // 22.10: после срока закрыты только тесты, письменные ответы платформа принимает
+      hint = `<span class="hdpx-tb-hint">⛔ Срок темы прошёл ${esc(dm(closedOf(p.topic)))} — тест платформа больше не примет, могу показать ответы</span>`;
+      acts = '<button class="hdpx-btn hdpx-s hdpx-outline" data-a="solve" data-m="show">👁 Ответы</button>';
     } else if (isTest(t)) {
       const noTries = t.left === 0;
       hint = `<span class="hdpx-tb-hint">${t.status === 'approved' ? 'Тест зачтён — могу показать ответы' : noTries ? 'Попытки закончились — могу показать ответы'
@@ -1020,7 +1020,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const row = t => {
       let acts;
       if (S.running.has(t.uuid)) acts = `<span class="hdpx-chip-w">${spin}решаю</span>`;
-      else if (closed) acts = isTest(t) ? `<button class="hdpx-mb" data-a="mini" data-m="show" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Только ответы">👁</button>` : '';
+      else if (closed && isTest(t)) acts = `<button class="hdpx-mb" data-a="mini" data-m="show" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Только ответы">👁</button>`;
       else if (isTest(t)) acts = (done(t) || t.left === 0 ? '' : `<button class="hdpx-mb" data-a="mini" data-m="do" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Решить и сдать">⚡</button>`)
         + `<button class="hdpx-mb" data-a="mini" data-m="show" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Только ответы">👁</button>`;
       else acts = t.status === 'approved' ? '' : `<button class="hdpx-mb" data-a="mini" data-m="write" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Написать ответ">✍️</button>`;
@@ -1030,7 +1030,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return `<div class="hdpx-card hdpx-here"><p class="hdpx-h3">📚 Эта тема${title ? ` · ${esc(title)}` : ''}</p>
       <p class="hdpx-small hdpx-muted">📖 Подготовь меня по теме</p>
       <div class="hdpx-chips">${[[1, '⚡ 1 мин'], [5, '📝 5 мин'], [10, '📚 10 мин']].map(([m, a]) => `<button class="hdpx-chip" data-a="tprep" data-m="${m}">${a}</button>`).join('')}</div>
-      ${closed ? `<p class="hdpx-closed">⛔ Срок темы прошёл ${esc(dm(closed))} — платформа больше не принимает ответы</p>` : ''}
+      ${closed ? `<p class="hdpx-closed">⛔ Срок темы прошёл ${esc(dm(closed))} — тесты больше не принимаются, письменные ответы — можно</p>` : ''}
       ${autos.length ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="tauto">⚡ Автотесты темы (${autos.length})</button></div>` : ''}
       ${open.length ? `<p class="hdpx-small hdpx-muted hdpx-sec">Не сдано: ${open.length}</p>${open.map(row).join('')}` : '<p class="hdpx-small hdpx-muted">Обязательное в теме сдано</p>'}
       ${tasks.length > open.length ? `<details class="hdpx-more"><summary class="hdpx-small hdpx-muted">Остальные задания (${tasks.length - open.length})</summary>${tasks.filter(t => !open.includes(t)).map(row).join('')}</details>` : ''}</div>`;
@@ -1132,7 +1132,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       const all = subs ? subs.reduce((k, x) => k + x.tasks.length, 0) : 0;
       const more = all > autos;  // в других темах есть ещё
       return open + `<button class="hdpx-ab-btn" data-a="openhere" title="Подготовь меня" aria-label="Подготовь меня">${more ? '📖' : '📖 Подготовь меня'}</button>`
-        + (closedOf(p.topic) ? '<span class="hdpx-ab-txt"><span>⛔ Срок<span class="hdpx-ab-long"> темы</span> прошёл</span></span>' : '')
+        + (closedOf(p.topic) ? '<span class="hdpx-ab-txt"><span>⛔ Срок<span class="hdpx-ab-long"> тестов</span> прошёл</span></span>' : '')
         + (autos ? `<button class="hdpx-ab-btn${more ? '' : ' hdpx-ab-main'}" data-a="tauto">⚡ ${more ? 'Тема' : 'Автотесты'} (${autos})</button>` : '')
         + (more ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall"><span>⚡ Все<span class="hdpx-ab-long"> автотесты</span> (${all})</span></button>` : '')
         + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
@@ -1146,7 +1146,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     }
     const draft = (st.drafts || []).find(d => d.task === p.task);
     if (draft) return open + `<button class="hdpx-ab-btn hdpx-ab-main" data-a="draft" data-task="${esc(p.task)}">✍️ Черновик готов${draft.send_at ? ` · ${hhmm(draft.send_at)}` : ''}</button>`;
-    if (closedOf(p.topic)) return open + (isTest(t) ? '<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button>' : '') + '<span class="hdpx-ab-txt">⛔ Срок темы прошёл</span>';
+    if (closedOf(p.topic) && isTest(t)) return open + '<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button><span class="hdpx-ab-txt">⛔ Срок прошёл</span>';
     if (isTest(t)) {
       const over = done(t) || t.left === 0;
       return open + `<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button>`

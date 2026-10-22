@@ -5,6 +5,29 @@ const fs = require('fs');
 const path = require('path');
 const { open, close, api, download, loadTask, htmlToText, images, TMP, EDU } = require('./lib');
 
+// что Claude может посмотреть в файле: страницы PDF картинками (до 12), текст документа
+function fileView(file, ext) {
+  const { execFileSync } = require('child_process');
+  const base = file.replace(/\.\w+$/, '');
+  try {
+    if (ext === 'pdf') {
+      execFileSync('pdftoppm', ['-r', '110', '-png', '-l', '12', file, base], { timeout: 120000 });
+      const dir = path.dirname(file), pre = path.basename(base) + '-';
+      return fs.readdirSync(dir).filter(x => x.startsWith(pre) && x.endsWith('.png')).sort().map(x => 'страница: ' + path.join(dir, x));
+    }
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) return ['картинка: ' + file];
+    if (['docx', 'xlsx', 'pptx'].includes(ext)) {  // это zip: текст — из XML внутри, без лишних зависимостей
+      const parts = { docx: 'word/document.xml', pptx: 'ppt/slides/slide*.xml', xlsx: 'xl/sharedStrings.xml' }[ext];
+      const xml = execFileSync('unzip', ['-p', file, parts], { timeout: 60000, maxBuffer: 50e6 }).toString();
+      const text = xml.replace(/<\/(w:p|a:p|si)>/g, '\n').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim();
+      fs.writeFileSync(base + '.txt', text);
+      return [`текст файла: ${base}.txt (${text.length} симв.)`];
+    }
+  } catch (e) { return [`(не открылся: ${e.message.split('\n')[0]})`]; }
+  return [];
+}
+
 (async () => {
   const url = process.argv[2];
   const s = await open();
@@ -35,7 +58,20 @@ const { open, close, api, download, loadTask, htmlToText, images, TMP, EDU } = r
     if (d.type === 'test') console.log(`ЗАЧЁТ: ${m.thresholdScoreValue}/${m.maximumScoreValue} (${d.percentageToPass}%) | попыток: ${g.usedAttemptsCount}/${d.availableAttempts}`);
     const dh = d.description && d.description.htmlText;
     if (dh) { console.log('УСЛОВИЕ:\n' + htmlToText(dh)); (await saveImages(dh)).forEach(x => console.log('  ' + x)); }
-    for (const f of d.files || []) console.log('ФАЙЛ:', f.fileName || JSON.stringify(f));
+    // Файлы задания (вкладка «Файлы»: рабочий лист PDF, картинка, документ) — качаем, PDF режем на страницы-картинки,
+    // из docx/xlsx/pptx достаём текст: Claude сам решает, отвечать текстом, на картинке или вернуть заполненный файл.
+    let fileN = 0;
+    for (const f of d.files || []) {
+      const name = f.uploadFileName || f.fileName || '';
+      const src = f.location || f.url || f.original;
+      const ext = ((name.match(/\.(\w{2,5})$/) || [])[1] || (/pdf/.test(f.contentType || '') ? 'pdf' : /png/.test(f.contentType || '') ? 'png'
+        : /jpe?g/.test(f.contentType || '') ? 'jpg' : 'bin')).toLowerCase();
+      if (!src) { console.log('ФАЙЛ:', name || JSON.stringify(f)); continue; }
+      const out = path.join(dir, `file${++fileN}.${ext}`);
+      try { await download(s.page, src, out); } catch (e) { console.log(`ФАЙЛ: ${name} — не скачался (${e.message})`); continue; }
+      console.log(`ФАЙЛ: ${name} → ${out}`);
+      for (const line of fileView(out, ext)) console.log('  ' + line);
+    }
 
     (d.questions || []).forEach((q, i) => (q._n = i + 1));
     for (const q of d.questions || []) {

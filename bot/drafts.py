@@ -20,6 +20,8 @@ STYLE_DIR = os.path.join(TMP, "style")
 STYLE = os.path.join(STYLE_DIR, "style.md")
 EDITS = os.path.join(STYLE_DIR, "edits.jsonl")
 IMAGE = re.compile(r"\.(png|jpe?g|webp|gif|pdf)$", re.I)
+# что можно приложить к ответу учителю: картинки, PDF и заполненный файл задания (Глеб 22.10: «когда сам файл»)
+ATTACH = re.compile(r"\.(png|jpe?g|webp|gif|pdf|docx?|xlsx?|pptx?|odt|ods|odp|txt)$", re.I)
 
 
 def task_id(url):
@@ -53,7 +55,7 @@ def files(task):
     d = files_dir(task)
     if not os.path.isdir(d):
         return []
-    return [os.path.join(d, f) for f in sorted(os.listdir(d)) if IMAGE.search(f)]
+    return [os.path.join(d, f) for f in sorted(os.listdir(d)) if ATTACH.search(f)]
 
 
 def read(task):

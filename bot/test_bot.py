@@ -500,6 +500,18 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot, "GLEB_EXTRA", __file__):
             self.assertNotIn("заполни алфавит", bot.prompt_for(URL, "", False))
 
+    def test_answer_form_prompt_and_files(self):
+        # Глеб 22.10: бот сам выбирает — текстом, на скрине, со страниц файла или сам файл
+        p = bot.prompt_for(URL, "", False)
+        for key in ("1) ТЕКСТОМ", "2) НА СКРИНЕ", "3) С ФАЙЛА", "4) САМ ФАЙЛ", "ФОРМА:", f"horo/tmp/{TASK}/draft_files/"):
+            self.assertIn(key, p)
+        d = bot.drafts.files_dir(TASK)
+        os.makedirs(d, exist_ok=True)
+        for n in ("1_page.jpg", "2_лист.pdf", "3_таблица.xlsx", "4_доклад.docx", "draw.py", "x.json"):
+            open(os.path.join(d, n), "w").close()
+        self.assertEqual([os.path.basename(f) for f in bot.drafts.files(TASK)],
+                         ["1_page.jpg", "2_лист.pdf", "3_таблица.xlsx", "4_доклад.docx"])  # заполненный файл тоже уходит учителю
+
     def test_rework_prompt(self):
         # доработка: прошлые файлы ответа, только то, что просит учитель; скрин — только ответы, решение — на листе
         p = bot.prompt_for(URL, "", False)
@@ -2350,6 +2362,13 @@ class MirrorTest(BotTest):
             self.assertIsNone(TOPIC_CLOSED(URL))                 # последний день доработок — ещё принимает
         with mock.patch.object(bot.web.mirror, "get_json", lambda path: None):
             self.assertIsNone(TOPIC_CLOSED(URL))                 # не узнали — решаем как обычно
+        tid = bot.drafts.task_id(URL)
+        late = lambda kind: {"data": {"studyPeriod": {"deadlineDate": iso(today - bot.datetime.timedelta(days=30)), "extraDeadlineDays": 7},
+                                      "tasks": [{"uuid": tid, "type": kind}]}}
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: late("detailedAnswer")):
+            self.assertIsNone(TOPIC_CLOSED(URL))                 # письменный ответ платформа принимает и после срока
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: late("test")):
+            self.assertIsNotNone(TOPIC_CLOSED(URL))              # тест — нет
 
     def test_send_modes(self):
         self.make_draft()
