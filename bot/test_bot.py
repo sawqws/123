@@ -1540,6 +1540,35 @@ class SiteTest(BotTest):
                 bot.lock.release()
         self.assertEqual(sent, [])  # ни одной карточки «В очереди»
 
+    def test_claude_limit_reset_time(self):
+        import datetime as dt
+        now = dt.datetime(2026, 10, 22, 13, 16, tzinfo=dt.timezone.utc).timestamp()
+        at = lambda t: dt.datetime.fromtimestamp(bot.limit_reset(t, now), dt.timezone.utc)
+        self.assertEqual(at("You've hit your session limit · resets 2pm (UTC)").strftime("%d %H:%M"), "22 14:00")
+        self.assertEqual(at("resets 1:30pm (UTC)").strftime("%d %H:%M"), "22 13:30")
+        self.assertEqual(at("resets 1pm (UTC)").strftime("%d %H:%M"), "23 13:00")  # уже прошло — завтра
+        self.assertEqual(at("resets 5pm (Europe/Moscow)").strftime("%d %H:%M"), "22 14:00")
+        self.assertEqual(at("resets Oct 24, 5am (UTC)").strftime("%d %H:%M"), "24 05:00")
+        self.assertAlmostEqual(bot.limit_reset("что-то другое", now), now + 3600)
+
+    def test_claude_limit_queue_waits_and_retries(self):
+        # 22.10: лимит подписки — 29 автотестов получили «лимит» за 2 минуты; теперь задание ждёт сброса и решается
+        bot.save_settings({"owner": CHAT})
+        runs, sent = [], []
+
+        def fake_run(*a):
+            runs.append(a)
+            bot.lock.release()
+            if len(runs) == 1:
+                bot.LIMIT["until"] = __import__("time").time() + 0.3
+                return bot.LIMIT_MSG
+        with mock.patch.object(bot, "_run_task", fake_run), mock.patch.object(bot, "topic_closed", lambda u: None), \
+                mock.patch.object(bot, "test_locked", lambda u: None), mock.patch.object(bot, "LIMIT", {"until": 0.0, "told": 0.0}), \
+                mock.patch.object(bot, "send", lambda *a, **k: sent.append(a)):
+            bot.run_task(CHAT, URL, "", quiet=True)
+        self.assertEqual(len(runs), 2)  # после сброса — решено снова
+        self.assertEqual(bot.lock.busy(), 0)
+
     def test_live_card_waits_for_telegram_pause_not_task(self):
         # Telegram на паузе (429) — карточку не шлём сразу, решение идёт без ожидания
         sent = []
