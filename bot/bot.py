@@ -971,6 +971,46 @@ def py(*args, timeout=300):
     return node(*args, timeout=timeout, prog="python3")
 
 
+# Лимит подписки Claude (22.10: «You've hit your session limit · resets 2pm (UTC)» — 29 автотестов из очереди
+# получили «лимит» за две минуты). Теперь очередь ждёт сброса и решает дальше сама.
+LIMIT = {"until": 0.0, "told": 0.0}
+LIMIT_MSG = "⏸ Лимит Claude"
+RESET = re.compile(r"resets\s+(?:([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)"
+                   r"(?:\s*\(([^)]+)\))?", re.I)
+
+
+def limit_reset(text, now=None):
+    """Когда лимит сбросится (epoch): «resets 2pm (UTC)», «resets 2:30pm (Europe/Moscow)», «resets Oct 23, 5am».
+    Не разобрал — через час."""
+    now = now or time.time()
+    m = RESET.search(text or "")
+    if not m:
+        return now + 3600
+    mon, day, hh, mm, ap, tz = m.groups()
+    try:
+        zone = ZoneInfo((tz or "UTC").strip())
+    except Exception:
+        zone = ZoneInfo("UTC")
+    h = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
+    base = datetime.datetime.fromtimestamp(now, zone)
+    at = base.replace(hour=h, minute=int(mm or 0), second=0, microsecond=0)
+    if mon and day:
+        try:
+            month = datetime.datetime.strptime(mon, "%b").month
+            at = at.replace(month=month, day=int(day))
+        except ValueError:
+            pass
+    while at.timestamp() <= now:
+        at += datetime.timedelta(days=1)
+    return at.timestamp() + 30
+
+
+def wait_limit():
+    """Лимит Claude исчерпан — ждать сброса, не занимая места в очереди."""
+    while LIMIT["until"] > time.time():
+        time.sleep(min(LIMIT["until"] - time.time(), 300) + 1)
+
+
 def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
     """Запуск Claude Code без диалога: (успех, текст ответа). on_tool(имя, параметры) зовётся на каждый
     вызов инструмента — по нему живая карточка показывает, что Claude сейчас делает."""
@@ -1027,6 +1067,9 @@ def claude(prompt, tools, timeout=TIMEOUT, on_tool=None):
         low = log.lower()
         if any(w in low for w in ("login", "api key", "401", "unauthorized", "authenticat")):
             return False, "⚠️ Claude на сервере не вошёл в аккаунт. Напиши мне (Claude Code), я войду заново."
+        if "usage_limit" in low or "hit your" in low:  # лимит подписки — очередь подождёт сброса и продолжит сама
+            LIMIT["until"] = max(LIMIT["until"], limit_reset(log))
+            return False, LIMIT_MSG
         if any(w in low for w in ("rate limit", "usage limit", "limit reached", "429", "overloaded")):
             return False, "⚠️ У Claude закончился лимит или он перегружен. Попробуй через час."
         return False, "⚠️ Claude не справился с заданием. Попробуй ещё раз."
@@ -1419,13 +1462,17 @@ def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
         return
     mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
     try:
-        if not lock.acquire(blocking=False):
-            if not quiet:
-                react(chat, mid, "🤔")
-                send(chat, card("В очереди", note=f"Уже решаю {lock.busy()} — начну это, как только одно закончу",
-                                icon="⏳"), raw_html=True)
-            lock.acquire()
-        _run_task(chat, url, text, show, mid, task, retry)
+        for _ in range(3):  # лимит Claude — ждём сброса и решаем снова (не больше 3 раз)
+            wait_limit()
+            if not lock.acquire(blocking=False):
+                if not quiet:
+                    react(chat, mid, "🤔")
+                    send(chat, card("В очереди", note=f"Уже решаю {lock.busy()} — начну это, как только одно закончу",
+                                    icon="⏳"), raw_html=True)
+                    quiet = True
+                lock.acquire()
+            if _run_task(chat, url, text, show, mid, task, retry) != LIMIT_MSG:
+                break
     finally:
         with running_lock:
             running.discard(task)
@@ -1495,6 +1542,13 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
                             "Заполни 4 листа — и пришли ссылку на задание снова.", icon="✍️"),
                  markup=kb([("✍️ Заполнить алфавит", "m:hand", "primary")]), raw_html=True)
             return
+        if not ok and out == LIMIT_MSG:  # очередь ждёт сброса лимита — одно сообщение на весь перерыв
+            if LIMIT["told"] != LIMIT["until"]:
+                LIMIT["told"] = LIMIT["until"]
+                when = datetime.datetime.fromtimestamp(LIMIT["until"], MSK)
+                send(chat, card("Лимит Claude", note=f"Продолжу сам в {when:%H:%M} — задания ждут в очереди", icon="⏸"),
+                     raw_html=True)
+            return LIMIT_MSG
         if not ok:
             react(chat, mid, "🤔")
             remember(title or "Задание", False, plain(out), url=url, show=show, secs=time.time() - t0)
