@@ -68,6 +68,20 @@ class PaperTest(unittest.TestCase):
 
 
 class PaperBgTest(unittest.TestCase):
+    def test_plan_random_bgs(self):
+        import paperbg, random
+        if not all(os.path.exists(os.path.join(paperbg.SRC, paperbg.BGS[i]['file'])) for i in paperbg.pool()):
+            self.skipTest('нет фото фонов (Brain raw/images)')
+        sol = [(n, [[('x + 1', 'y')], ['= ', ('1', '2')]]) for n in range(1, 9)]
+
+        def fill(nb, todo, first):
+            while todo and nb.fits(*todo[0]):
+                nb.solve(*todo.pop(0))
+        a = [i for i, _ in paperbg.plan(sol, random.Random(1), fill)]
+        b = [i for i, _ in paperbg.plan(sol, random.Random(2), fill)]
+        self.assertEqual(len(set(a)), len(a))          # без повторов кадра
+        self.assertNotEqual(a, b)                      # каждый раз другие фоны
+
     def test_on_photo(self):
         import paperbg
         if not os.path.exists(os.path.join(paperbg.SRC, paperbg.BGS[0]['file'])):
