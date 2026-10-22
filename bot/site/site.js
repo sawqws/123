@@ -625,7 +625,7 @@
     const tp = topic(uuid);
     if (!tp) { toast('Темы уже нет в данных — нажми ↻', 'err'); return; }
     const autos = tp.tasks.filter(t => t.type === 'test' && !['approved', 'reviewing'].includes(t.status) && t.req !== false);
-    if (!autos.length || !confirm(`Сдать ${tasksWord(autos.length)} с автопроверкой в теме «${tp.title}»?\nБот решает до 3 сразу, остальные — в очереди.`)) return;
+    if (!autos.length || !confirm(`Сдать ${tasksWord(autos.length)} с автопроверкой в теме «${tp.title}»?\nБот решает до 6 сразу, остальные — в очереди.`)) return;
     let started = 0;
     await busy(btn, async () => {  // ошибка на одном тесте — busy покажет её; запущенные до неё уже идут
       for (const t of autos) {

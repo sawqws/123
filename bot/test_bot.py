@@ -2470,5 +2470,31 @@ class MirrorTest(BotTest):
         self.assertEqual(foreign, set(), "в overlay.css только свои классы hdpx-")
 
 
+class SlotsTest(unittest.TestCase):
+    """Глеб 22.10: «больше 3 автотестов» — 3 места всегда, сверх них (до 6) — пока свободной памяти хватает."""
+
+    def test_extra_slots_only_with_free_memory(self):
+        mem = {"mb": 2000}
+        s = bot.Slots(6, 3, 500, free=lambda: mem["mb"])
+        self.assertTrue(all(s.acquire(blocking=False) for _ in range(6)))   # памяти много — все 6
+        self.assertFalse(s.acquire(blocking=False))                          # больше 6 — никогда
+        self.assertTrue(s.locked())
+        for _ in range(6):
+            s.release()
+        mem["mb"] = 300                                                        # памяти мало — только 3 базовых
+        self.assertTrue(all(s.acquire(blocking=False) for _ in range(3)))
+        self.assertFalse(s.acquire(blocking=False))
+        self.assertTrue(s.locked())
+        mem["mb"] = 900                                                        # освободилась — пускает ещё
+        self.assertFalse(s.locked())
+        self.assertTrue(s.acquire(blocking=False))
+        self.assertEqual(s.busy(), 4)
+
+    def test_defaults(self):
+        self.assertEqual((bot.lock.n, bot.lock.base), (bot.MAX_PARALLEL, bot.BASE_PARALLEL))
+        self.assertGreater(bot.mem_free_mb(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
