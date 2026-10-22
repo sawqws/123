@@ -15,6 +15,11 @@
   window.__hdpx = true;
   // версия этих кнопок (?v= у скрипта): бот выкатил новую — открытая страница меняет их сама, без перезагрузки
   const MY_V = (/[?&]v=([^&]+)/.exec((document.currentScript || {}).src || '') || [])[1] || '';
+  const guardStale = () => {
+    const g = document.querySelector('script[src*="/_hdp/guard.js"]');
+    const v = g && (/[?&]v=([^&]+)/.exec(g.src) || [])[1];
+    return !!(MY_V && v && v !== MY_V);
+  };
 
   const BOT = 'HDP_DIGITALBOT';
   const ORIGIN = 'https://horodigital.ru';                 // бот принимает ссылки только на настоящий адрес
@@ -1164,6 +1169,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     // страница чатов: свой вид (overlay.css, html.hdpx-chat) — полный список с именами и на iPad
     document.documentElement.classList.toggle('hdpx-chat', location.pathname.startsWith('/student/chat'));
     if (location.pathname !== pathNow) {  // сменилась страница SPA
+      // guard.js (загрузка фото, камера) старее этих кнопок — он грузится только с самой страницей: на переходе
+      // между страницами загрузить её заново, так незаметнее всего (после выкатки, один раз)
+      if (pathNow && guardStale() && !Object.keys(S.edits).length) { location.reload(); return; }
       pathNow = location.pathname;
       S.routeAt = Date.now();
       S.chooser = false;

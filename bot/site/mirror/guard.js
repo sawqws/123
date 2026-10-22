@@ -349,30 +349,94 @@
     // у его карточки картинка уже с платформы (/store/…); сама карточка появляется сразу, ещё до загрузки. До 2 мин.
     const ATT = '[data-testid$="Attachment"]';
     const loaded = () => [...document.querySelectorAll(ATT)].filter(c => { const i = c.querySelector('img'); return !i || /\/store\//.test(i.getAttribute('src') || ''); }).length;
-    const queue = [];
+    // Глеб 22.10: «добавляю сразу несколько скринов — показывается один, второй только потом». Платформе по-прежнему
+    // по одному, но все выбранные фото сразу видны в полоске «Загружаю фото» над полем ответа: ✓ загружено,
+    // крутилка — грузится, ⏳ — ждёт очереди (её можно убрать ✕), ⚠ — не дождались. Всё загрузилось — полоска уходит.
+    const queue = [];   // [{file, it}] — ждут; it — карточка в полоске
+    const items = [];   // все карточки текущей пачки
     let feeding = false;
+    const TRAY = 'hdpx-upq';
+    const trayCss = 'position:fixed;z-index:2147482000;display:flex;flex-direction:column;gap:8px;padding:10px 12px 12px;' +
+      'border-radius:14px;background:#fff;box-shadow:0 6px 24px rgba(39,32,93,.18);border:1px solid #e3e2ee;' +
+      'font:500 13px/18px Inter,system-ui,sans-serif;color:#27205d;max-width:min(560px,calc(100vw - 24px));transition:opacity .25s,transform .25s';
+    const render = () => {
+      let t = document.getElementById(TRAY);
+      if (!items.length) { if (t) t.remove(); return; }
+      if (!t) {
+        t = document.createElement('div');
+        t.id = TRAY; t.setAttribute('role', 'status'); t.setAttribute('aria-live', 'polite');
+        t.addEventListener('click', e => {
+          const x = e.target.closest('[data-drop]');
+          if (!x) return;
+          const k = queue.findIndex(q => q.it.id === x.dataset.drop);
+          if (k >= 0) { const [q] = queue.splice(k, 1); items.splice(items.indexOf(q.it), 1); URL.revokeObjectURL(q.it.url); render(); }
+        });
+        document.body.append(t);
+        place();
+      }
+      const done = items.filter(i => i.st === 'done').length;
+      const head = done === items.length ? `✓ Загружено фото: ${done}` : `Загружаю фото: ${done} из ${items.length}`;
+      const badge = i => i.st === 'done' ? '<span style="position:absolute;right:3px;bottom:3px;width:18px;height:18px;border-radius:9px;background:#006a46;color:#fff;display:grid;place-items:center;font-size:12px">✓</span>'
+        : i.st === 'up' ? '<span style="position:absolute;inset:0;display:grid;place-items:center;background:rgba(255,255,255,.55)"><span style="width:20px;height:20px;border-radius:50%;border:2.5px solid #dedcf0;border-top-color:#5854a4;animation:hdpxupspin .8s linear infinite"></span></span>'
+        : i.st === 'fail' ? '<span style="position:absolute;inset:0;display:grid;place-items:center;background:rgba(250,227,221,.8);font-size:18px">⚠</span>'
+        : `<span style="position:absolute;inset:0;background:rgba(255,255,255,.45)"></span><span style="position:absolute;left:3px;bottom:3px;font-size:11px">⏳</span>` +
+          `<button type="button" data-drop="${i.id}" aria-label="Не прикреплять" style="position:absolute;right:2px;top:2px;width:20px;height:20px;border:0;border-radius:10px;background:rgba(39,32,93,.7);color:#fff;font-size:12px;line-height:20px;padding:0;cursor:pointer">✕</button>`;
+      const html = `<style>@keyframes hdpxupspin{to{transform:rotate(360deg)}}</style><div>${head}</div>` +
+        `<div style="display:flex;gap:8px;flex-wrap:wrap">${items.map(i => `<span style="position:relative;width:64px;height:64px;border-radius:10px;overflow:hidden;background:#f6f6f9;flex:0 0 auto">` +
+          `<img src="${i.url}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">${badge(i)}</span>`).join('')}</div>`;
+      if (t.__html !== html) { t.innerHTML = html; t.__html = html; }
+    };
+    // над полем ответа платформы (как её собственные карточки вложений), по левому краю поля
+    const place = () => {
+      const t = document.getElementById(TRAY);
+      if (!t) return;
+      const box = document.querySelector('[data-testid=messageInput]') || attachBtn();
+      const r = box && box.getBoundingClientRect();
+      const st = trayCss + (r && r.width ? `;left:${Math.max(12, Math.round(r.left))}px;bottom:${Math.round(innerHeight - r.top + 8)}px` : ';right:12px;bottom:12px');
+      if (t.style.cssText !== st) t.style.cssText = st;
+    };
+    let gone = 0;
+    const finish = () => {  // вся пачка загрузилась — полоска плавно уходит
+      if (queue.length || feeding || !items.length || items.some(i => i.st === 'up' || i.st === 'wait')) return;
+      clearTimeout(gone);
+      gone = setTimeout(() => {
+        const t = document.getElementById(TRAY);
+        if (t) { t.style.opacity = '0'; t.style.transform = 'translateY(6px)'; }
+        setTimeout(() => { items.splice(0).forEach(i => URL.revokeObjectURL(i.url)); render(); }, 260);
+      }, items.some(i => i.st === 'fail') ? 6000 : 1800);
+    };
     const feed = () => {
-      if (feeding || !queue.length) return;
+      if (feeding || !queue.length) return finish();
       const b = attachBtn();
-      if (!b) { queue.length = 0; return; }
+      if (!b) { queue.splice(0).forEach(q => { q.it.st = 'fail'; }); render(); return finish(); }
       feeding = true;
-      const file = queue.shift(), before = loaded(), t0 = Date.now();
+      const { file, it } = queue.shift(), before = loaded(), t0 = Date.now();
+      it.st = 'up'; render();
       pend = [file]; b.click();
-      if (pend) { pend = null; feeding = false; return; }  // платформа не открыла выбор файла — не ждём
+      if (pend) { pend = null; feeding = false; it.st = 'fail'; render(); return finish(); }  // платформа не открыла выбор файла
       const wait = setInterval(() => {
-        if (loaded() > before || Date.now() - t0 > 120000) {
-          clearInterval(wait); feeding = false; setTimeout(feed, 3000);  // платформа ещё дописывает своё — как человек
+        const ok = loaded() > before;
+        if (ok || Date.now() - t0 > 120000) {
+          clearInterval(wait); feeding = false; it.st = ok ? 'done' : 'fail'; render();
+          setTimeout(feed, queue.length ? 3000 : 0);  // платформа ещё дописывает своё — как человек
         }
       }, 250);
     };
-    const attach = file => { if (!attachBtn()) return false; queue.push(file); feed(); return true; };
-    // выбрал несколько файлов в окне скрепки — платформе по одному (нашу подстановку не трогаем)
+    let seq = 0;
+    // выбрал несколько файлов в окне скрепки — платформе по одному (нашу подстановку не трогаем), все видны сразу
     function onMulti(e) {
       const inp = e.target;
       if (ours || !inp || inp.type !== 'file' || !inp.files || inp.files.length < 2 || inp.__hdpxSeen === e) return;
       inp.__hdpxSeen = e;  // и на самом поле, и на window — один раз
       e.stopImmediatePropagation();
-      [...inp.files].forEach(f => queue.push(f));
+      clearTimeout(gone);
+      if (!queue.length && !feeding) items.splice(0).forEach(i => URL.revokeObjectURL(i.url));  // прошлая пачка уже загружена
+      [...inp.files].forEach(file => {
+        const it = { id: 'u' + (++seq), url: URL.createObjectURL(file), st: 'wait' };
+        items.push(it);
+        queue.push({ file, it });
+      });
+      render();
       setTimeout(feed, 0);  // не внутри её события выбора файла
     }
     addEventListener('change', onMulti, true);
@@ -404,8 +468,8 @@
         `height:${Math.round(ar.height)}px;display:grid;place-items:center;border:0;background:transparent;color:${getComputedStyle(a).color};cursor:pointer;padding:0`;
       if (b.style.cssText !== st) b.style.cssText = st;
     };
-    setInterval(camBtn, 700);
-    addEventListener('resize', camBtn);
+    setInterval(() => { camBtn(); place(); }, 700);
+    addEventListener('resize', () => { camBtn(); place(); });
   }
   const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
   if (d && d.get) {
