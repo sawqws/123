@@ -40,6 +40,31 @@ def sheet(i, seed=1, page=0):
                     margin=p.get('margin', -0.3), right=p.get('right', 0.35), size=p.get('size', 1.0))
 
 
+def pool():
+    """Фоны для работы: кадры целиком (разворот/страница на столе, как он снимает) — без старых обрезанных."""
+    return [i for i, b in enumerate(BGS) if 'pages' in b and not b.get('crop')]
+
+
+def plan(sol, rnd, fits):
+    """Раскладывает номера по случайным фонам (Глеб 22.10: «бери все фоны из моих работ и на рандом добавляй»):
+    кадры в случайном порядке, без повторов, на каждый — сколько влезет. fits(i, page, nb) -> Notebook с номерами.
+    Возвращает [(фон, [Notebook по страницам])]."""
+    order = pool()
+    rnd.shuffle(order)
+    todo, shots = list(sol), []
+    for i in order:
+        nbs = []
+        for pg in range(len(pages(i))):
+            nb = sheet(i, seed=rnd.randrange(1 << 20), page=pg)
+            fits(nb, todo, not shots and pg == 0)
+            nbs.append(nb)
+        if any(nb.y > 1.5 * nb.C for nb in nbs):
+            shots.append((i, nbs))
+        if not todo:
+            return shots
+    raise ValueError('фонов не хватило — не влезли номера %s' % [n for n, _ in todo])
+
+
 def _blue(img):
     """Синяя паста: синий канал заметно выше красного (тени, края тетради, стол — серые)."""
     f = img.astype(np.int16)
