@@ -17,7 +17,6 @@ os.environ.setdefault("TELEGRAM_TOKEN", "test")
 import bot  # noqa: E402
 import threading  # noqa: E402
 REAL_THREAD = threading.Thread
-REAL_TG = bot.tg  # до подмены в setUp
 import drafts  # noqa: E402
 import sitecheck  # noqa: E402
 import web  # noqa: E402
@@ -31,6 +30,7 @@ bot.JOURNAL, bot.HEARTBEAT = os.path.join(_OUT, "journal.jsonl"), os.path.join(_
 URL = "https://horodigital.ru/student/topic/11111111-1111-1111-1111-111111111111/task/22222222-2222-2222-2222-222222222222"
 TASK = "22222222-2222-2222-2222-222222222222"
 TOPIC_CLOSED = bot.topic_closed  # настоящая: в BotTest подменена (без сети)
+TEST_LOCKED = bot.test_locked    # то же
 CHAT = 42
 
 
@@ -65,6 +65,7 @@ class BotTest(unittest.TestCase):
             mock.patch.object(bot.media, "photo_path", self.fake_photo),  # без сети: фото и видео из Telegram
             mock.patch.object(bot.media, "video", self.fake_video),
             mock.patch.object(bot, "topic_closed", lambda url: None),  # без сети: срок темы — в своём тесте
+            mock.patch.object(bot, "test_locked", lambda url: None),   # без сети: зачтён ли тест — в своём тесте
         ]
         for p in self.patches:
             p.start()
@@ -869,6 +870,120 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot, "tg", html_error), self.assertRaises(urllib.error.HTTPError):
             bot.call("sendMessage", text="<b>", reply_markup=bot.draft_kb(TASK))  # не про кнопки — ошибка дальше
 
+    def test_too_many_requests_waits_and_retries(self):
+        """429 от Telegram (пачка автотестов): ждём retry_after и повторяем — итог теста и карточка не теряются;
+        пока чат на паузе, карточки не правятся и «печатает…» не шлётся; несколько карточек тикают реже."""
+        import io, types, urllib.error
+        body = b'{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 7","parameters":{"retry_after":7}}'
+        hits, sleeps, always = [], [], [False]
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(url, data=None, timeout=None):
+            hits.append(url)
+            if always[0] or len(hits) < 3:
+                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(body))
+            return Resp(b'{"ok":true,"result":{"message_id":5}}')
+        now = [1000.0]
+        clock = types.SimpleNamespace(time=lambda: now[0], sleep=lambda s: sleeps.append(s) or now.__setitem__(0, now[0] + s))
+        real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
+        with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
+                mock.patch.object(bot, "SLOW", {}), mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
+            self.assertEqual(bot.send(CHAT, "🏆 <b>10 / 10</b>", raw_html=True), 5)
+            self.assertEqual(len(hits), 3)
+            self.assertEqual([s for s in sleeps if s], [7, 7])  # ровно столько, сколько сказал Telegram
+            hits.clear()
+            always[0] = True
+            with self.assertRaises(urllib.error.HTTPError) as e:  # не проходит совсем — ошибка с телом, как была
+                bot.tg("sendMessage", chat_id=CHAT, text="x")
+            self.assertEqual(e.exception.code, 429)
+            self.assertEqual(len(hits), bot.HOLD_TRIES)
+            self.assertIn(b"retry after", e.exception.read())
+            self.assertGreater(bot.hold_left(CHAT), 0)
+            self.assertEqual(bot.hold_left(CHAT + 1), 0)  # пауза — только для этого чата
+            calls = []
+            live = types.SimpleNamespace(chat=CHAT, stop=threading.Event(), lock=threading.Lock(), sub_fn=None, sub="",
+                                         render=lambda: "x")
+            with mock.patch.object(bot, "tg", lambda m, **p: calls.append(m)):
+                bot.Live.refresh(live)
+            self.assertEqual(calls, [])  # на паузе карточку не правим — следующий тик покажет свежее
+        cards = [types.SimpleNamespace(chat=CHAT) for _ in range(6)]
+        with mock.patch.object(bot.Live, "items", cards):
+            self.assertEqual(bot.Live.every(cards[0]), 18)  # 6 карточек вместе — правка раз в 3 с
+        with mock.patch.object(bot.Live, "items", cards[:1]):
+            self.assertEqual(bot.Live.every(cards[0]), 3)
+
+    def test_network_unreachable_waits_and_retries(self):
+        """Сеть сервера мигнула (Страж 22.10: URLError [Errno 101] Network is unreachable на первой карточке
+        «Решаю задание» — задание упало): запрос ждёт и повторяется, карточка доходит; сети нет совсем — ошибка."""
+        import io, types, urllib.error
+        hits, sleeps, down = [], [], [2]
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(url, data=None, timeout=None):
+            hits.append(url)
+            if len(hits) <= down[0]:
+                raise urllib.error.URLError(OSError(101, "Network is unreachable"))
+            return Resp(b'{"ok":true,"result":{"message_id":9}}')
+        now = [1000.0]
+        clock = types.SimpleNamespace(time=lambda: now[0], sleep=lambda s: sleeps.append(s) or now.__setitem__(0, now[0] + s))
+        real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
+        with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
+                mock.patch.object(bot, "SLOW", {}), mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
+            self.assertEqual(bot.send(CHAT, "◐ <b>Решаю задание</b>", raw_html=True), 9)  # пришла после двух обрывов
+            self.assertEqual(len(hits), 3)
+            self.assertEqual([s for s in sleeps if s][:2], list(bot.NET_WAIT[:2]))
+            self.assertEqual(bot.hold_left(CHAT), 0)  # обрыв сети — не пауза чата от Telegram
+            hits.clear(), sleeps.clear()
+            down[0] = 99
+            with self.assertRaises(urllib.error.URLError):  # сети нет дольше минуты — ошибка дальше, как была
+                bot.tg("sendMessage", chat_id=CHAT, text="x")
+            self.assertEqual(len(hits), len(bot.NET_WAIT) + 1)
+            self.assertEqual([s for s in sleeps if s], list(bot.NET_WAIT))
+
+    def test_too_many_requests_burst_queues(self):
+        """6 автотестов сдались разом: итоги бьют в чат одновременно, Telegram отвечает 429. После паузы запросы
+        идут по одному, а не все в одну секунду — каждый итог доходит, попытки не сгорают (Страж: 429 ×10)."""
+        import io, urllib.error
+        srv = {"until": 0.0, "lock": threading.Lock(), "ok": 0}
+        body = b'{"ok":false,"error_code":429,"parameters":{"retry_after":0.05}}'
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(url, data=None, timeout=None):  # Telegram: не чаще одного сообщения в 0,02 с, иначе 429
+            if not url.endswith("/sendMessage"):  # тикеры живых карточек из соседних тестов — не в счёт
+                return Resp(b'{"ok":true,"result":true}')
+            with srv["lock"]:
+                now = time.time()
+                if now < srv["until"]:
+                    raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(body))
+                srv["until"], srv["ok"] = now + 0.02, srv["ok"] + 1
+            return Resp(b'{"ok":true,"result":{"message_id":5}}')
+        real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
+        errors = []
+
+        def one():
+            try:
+                bot.tg("sendMessage", chat_id=CHAT, text="🏆")
+            except urllib.error.HTTPError as e:
+                errors.append(e.code)
+        with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
+                mock.patch.object(bot, "GATES", {}), mock.patch.object(bot, "SLOW", {}), mock.patch.object(bot, "tg", real_tg):
+            threads = [REAL_THREAD(target=one) for _ in range(6)]  # Thread в тестах синхронный
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        self.assertEqual(errors, [])
+        self.assertEqual(srv["ok"], 6)
+
     def test_planner_install(self):
         tok = "8800000000:AAH" + "x" * 32
         runs = []
@@ -1425,32 +1540,12 @@ class SiteTest(BotTest):
                 bot.lock.release()
         self.assertEqual(sent, [])  # ни одной карточки «В очереди»
 
-    def test_telegram_429_waits_and_does_not_kill_task(self):
+    def test_live_card_not_sent_does_not_kill_task(self):
         # 22.10: 429 на карточке «Решаю» ронял задание целиком — 35 из 54 автотестов не решились
-        import io as _io, urllib.error as _ue
-        calls, slept = [], []
-
-        def fake_open(url, data=None, timeout=None):
-            calls.append(url.rsplit("/", 1)[-1])
-            if len(calls) == 1:
-                raise _ue.HTTPError(url, 429, "Too Many Requests", {}, _io.BytesIO(
-                    b'{"ok":false,"error_code":429,"parameters":{"retry_after":2}}'))
-            return _io.BytesIO(b'{"ok":true,"result":{"message_id":5}}')
-        with mock.patch.object(bot.urllib.request, "urlopen", fake_open), \
-                mock.patch.object(bot.time, "sleep", slept.append):
-            self.assertEqual(REAL_TG("sendMessage", chat_id=1, text="x")["result"]["message_id"], 5)
-        self.assertEqual(calls, ["sendMessage", "sendMessage"])
-        self.assertTrue(slept and 2 <= slept[0] < 4)
-        with mock.patch.object(bot.urllib.request, "urlopen", side_effect=_ue.HTTPError(
-                "u", 429, "Too Many Requests", {}, _io.BytesIO(b"{}"))), mock.patch.object(bot.time, "sleep") as sl:
-            with self.assertRaises(_ue.HTTPError):  # правку карточки не ждём
-                REAL_TG("editMessageText", chat_id=1, message_id=2, text="x")
-            sl.assert_not_called()
-
         def boom(*a, **k):
-            raise _ue.HTTPError("u", 429, "Too Many Requests", {}, _io.BytesIO(b"{}"))
+            raise bot.urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)
         with mock.patch.object(bot, "send", boom):
-            live = bot.Live(CHAT, "Решаю задание")  # карточка не ушла — решение идёт дальше
+            live = bot.Live(CHAT, "Решаю задание")
         self.assertIsNone(live.mid)
         live.done()
 
@@ -2261,6 +2356,66 @@ class DeferTest(BotTest):
         self.due()
         self.assertEqual(len(self.prompts), n)
         self.assertIn(f"tretry:{TASK}", self.last()[1])
+
+    def test_passed_not_full_not_retried(self):
+        """Страж 22.10: «Закрепление» 8/9 — зачтено, попыток ещё 2; бот пошёл на вторую попытку, а у зачтённого теста
+        на сайте нет ни «Начать», ни «Попробовать ещё раз» — submit.js падал «Нет кнопки «Начать»». Зачтён — не пересдаёт."""
+        self.result = "БАЛЛЫ: 8/9\nПОПЫТКИ: 1/3\nСТАТУС: approved"
+        self.say(URL)
+        n = len(self.prompts)
+        self.due()
+        self.assertEqual(len(self.prompts), n)                     # второй попытки нет
+        self.assertFalse(any("делаю вторую попытку" in m for m, _ in self.msgs))
+        self.assertNotIn("tretry:", self.last()[1] or "")          # и кнопки «пересдать» тоже
+        self.assertNotIn(TASK, bot.load_settings().get("retry_offers") or {})
+        self.assertIn("8 / 9", self.last()[0])
+        self.assertIn("зачтён", self.last()[0])
+        self.result = "БАЛЛЫ: 8/9\nПОПЫТКИ: 1/3\nСТАТУС: failed"   # не зачтён — вторая попытка, как раньше
+        self.say(URL)
+        self.due()
+        self.assertTrue(any("делаю вторую попытку" in m for m, _ in self.msgs))
+
+    def test_locked_test_not_solved(self):
+        """Ссылка (или «пересдать») на зачтённый тест: Claude не запускается, ничего не вносится — сразу ответ."""
+        with mock.patch.object(bot, "test_locked", lambda url: "зачтён"):
+            bot.run_task(CHAT, URL, "")
+        self.assertEqual((self.prompts, self.nodes), ([], []))
+        self.assertIn("Тест уже зачтён", self.msgs[-1][0])
+        self.assertNotIn(TASK, bot.running)
+        self.assertNotIn(TASK, bot.load_settings().get("active") or {})
+        with mock.patch.object(bot, "test_locked", lambda url: "попытки закончились"):
+            bot.run_task(CHAT, URL, "")
+        self.assertIn("Попытки закончились", self.msgs[-1][0])
+        with mock.patch.object(bot, "test_locked", lambda url: "зачтён"):
+            bot.run_task(CHAT, URL, "", show=True)                 # «только ответы» — можно
+        self.assertTrue(self.prompts)
+
+    def test_test_locked_by_platform(self):
+        tid = bot.drafts.task_id(URL)
+        resp = lambda **t: {"data": {"tasks": [{"uuid": tid, "type": "test", **t}]}}
+        grade = lambda st, left: {"progress": {"status": {"type": st}, "grade": {"remainingAttemptsCount": left}}}
+        for r, want in ((resp(**grade("approved", 2)), "зачтён"), (resp(**grade("failed", 0)), "попытки закончились"),
+                        (resp(**grade("failed", 2)), None), (resp(**grade("appointed", 3)), None),
+                        ({"data": {"tasks": [{"uuid": tid, "type": "detailedAnswer", **grade("approved", 0)}]}}, None),
+                        (None, None)):                             # не узнали — решаем как обычно
+            with mock.patch.object(bot.web.mirror, "get_json", lambda path: r):
+                self.assertEqual(TEST_LOCKED(URL), want)
+
+    def test_passed_test_answers_not_pushed(self):
+        """Claude решил уже зачтённый тест и не внёс (кнопки «Начать» нет) — страховка тоже не лезет на сайт."""
+        with open(os.path.join(drafts.task_dir(TASK), "task.json"), "w") as f:
+            json.dump({"data": {"type": "test", "title": "Закрепление"},
+                       "meta": {"type": "test", "progress": {"status": {"type": "approved"},
+                                                            "grade": {"remainingAttemptsCount": 2}}}}, f)
+
+        def claude(prompt, tools, timeout=0, on_tool=None):
+            pathlib.Path(drafts.task_dir(TASK), "answers.json").write_text('{"1": "a"}')
+            return True, "Тест уже зачтён, новую попытку сайт не даёт"
+
+        with mock.patch.object(bot, "claude", claude):
+            self.say(URL)
+        self.assertEqual(self.nodes, [])
+        self.assertNotIn(TASK, bot.pending_tests())
 
     def test_last_attempt_only_by_button(self):
         self.result = "БАЛЛЫ: 15/17\nПОПЫТКИ: 2/3"

@@ -92,7 +92,7 @@ function fileView(file, ext) {
       }
       const opts = q.options || q.answers || q.variants;
       if (Array.isArray(opts)) for (const [k, o] of opts.entries()) {
-        const im = o.description && o.description.image && o.description.image.location;
+        const im = (o.description && o.description.image && o.description.image.location) || (o.image && o.image.location);
         const txt = htmlToText(o.text || (o.description && o.description.text) || (o.header && o.header.htmlText) || '');
         // Вариант-картинка без текста: сохраняем, в answers.json для него — uuid.
         if (im && !txt) {

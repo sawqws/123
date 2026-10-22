@@ -19,6 +19,7 @@
 Видео и кружки: речь — как голосовое, кадры — как фото.
 """
 import base64
+import contextlib
 import datetime
 import html
 import io
@@ -267,34 +268,76 @@ def kb(*rows):
 
 # ---------- Telegram ----------
 
-# 429 «Too Many Requests» — подождать, сколько просит Telegram, и повторить. 22.10: пачка из 54 автотестов — карточки
-# «Решаю» десятками сразу, Telegram ответил 429, и 35 заданий упали ещё до решения. Правки, «печатает» и реакции не
-# ждём — они не важны и шлются часто.
-NO_WAIT = ("edit", "sendChatAction", "setMessageReaction", "answerCallbackQuery", "getUpdates")
+HOLD = {}  # чат -> до какого времени Telegram просил не писать (429 «Too Many Requests», retry_after)
+HOLD_MAX = 60  # дольше одной паузы не ждём
+HOLD_TRIES = 4  # столько раз пробуем один запрос, пока Telegram отвечает 429
+NET_WAIT = (2, 5, 10, 20, 30)  # нет сети (Errno 101, обрыв до ответа) — повторы через столько секунд, ~1 мин всего
+SLOW = {}  # чат -> (до когда, интервал): после 429 запросы в чат идут не вплотную друг к другу, а через интервал —
+# иначе после паузы каждый удачный запрос тут же влекёт 429 у следующего (22.10: тест на 6 итогов падал через раз)
+GATES = {}  # чат -> замок: пока чат на паузе, запросы в него идут по одному
+GATES_LOCK = threading.Lock()
+
+
+def hold_left(chat):
+    """Сколько секунд ещё ждать, прежде чем писать в этот чат (Telegram ответил 429)."""
+    return max(0.0, HOLD.get(str(chat), 0) - time.time())
+
+
+def gate(chat):
+    """Очередь в чат: после 429 запросы (итоги нескольких автотестов) просыпаются не разом — иначе все снова бьют
+    в Telegram в одну секунду, снова получают 429 и сгорают все попытки. Очередь всегда, а не только на паузе:
+    запрос, проверивший паузу до чужого 429, иначе шёл вне очереди и снова получал 429 (22.10)."""
+    if not chat:
+        return contextlib.nullcontext()
+    with GATES_LOCK:
+        return GATES.setdefault(chat, threading.Lock())
 
 
 def retry_after(body):
+    """Пауза из ответа 429: {"parameters": {"retry_after": N}}; нет — 3 с."""
     try:
-        return float((json.loads(body).get("parameters") or {}).get("retry_after") or 0) or None
-    except Exception:
-        m = re.search(r"retry after (\d+)", body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body))
-        return float(m.group(1)) if m else None
+        return float(json.loads(body)["parameters"]["retry_after"])
+    except (ValueError, TypeError, KeyError):
+        return 3.0
 
 
 def tg(method, **params):
+    """Запрос к Telegram. Слишком часто (429 — пачка автотестов: карточки, итоги) — ждём, сколько он сказал, и
+    повторяем: сообщение не теряется, задание не падает. Пока чат на паузе, другие запросы в него ждут в очереди.
+    Сеть пропала до ответа (Network is unreachable, обрыв соединения — URLError: запрос до Telegram не дошёл,
+    дубля не будет) — повторяем через NET_WAIT, а не роняем задание на первой же карточке (Страж 22.10)."""
     data = urllib.parse.urlencode(params).encode()
-    for k in range(4):
-        try:
-            with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
-                return json.load(r)
-        except urllib.error.HTTPError as e:
-            if e.code != 429 or k == 3 or method.startswith(NO_WAIT):
-                raise
-            body = e.read() if hasattr(e, "read") else b""
-            wait = retry_after(body) or 3
-            if wait > 60:  # надолго закрыли — не держим поток
-                raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body or b""))
-            time.sleep(wait + random.uniform(0.2, 1.5))
+    chat = str(params.get("chat_id", ""))
+    n = net = 0
+    while True:
+        wait = 0
+        with gate(chat):
+            time.sleep(min(hold_left(chat), HOLD_MAX))
+            try:
+                with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
+                    res = json.load(r)
+                slow = SLOW.get(chat)
+                if slow and slow[0] > time.time():  # чат недавно был на паузе — следующий запрос не вплотную
+                    HOLD[chat] = max(HOLD.get(chat, 0), time.time() + slow[1])
+                return res
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                body = e.read() or b""
+                pause = min(retry_after(body), HOLD_MAX)
+                HOLD[chat] = max(HOLD.get(chat, 0), time.time() + pause)
+                SLOW[chat] = (time.time() + HOLD_MAX, min(pause, 1.0))
+                print(f"{method}: Telegram просит паузу {pause:g} с (429)")
+                n += 1
+                if n == HOLD_TRIES:
+                    raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body))
+            except urllib.error.URLError as e:
+                if net == len(NET_WAIT):
+                    raise
+                wait = NET_WAIT[net]
+                net += 1
+                print(f"{method}: нет связи с Telegram ({e.reason}) — повтор через {wait} с")
+        time.sleep(wait)  # вне очереди чата: пока ждём сеть, другие запросы в чат не стоят
 
 
 COLORS = [True]  # Telegram принимает цветные кнопки (поле style)? Один отказ — дальше без цветов
@@ -520,8 +563,8 @@ class Live:
         Live.items.append(self)
         try:
             self.mid = send(chat, self.render(), raw_html=True)
-        except Exception as e:  # карточка не ушла (429, сеть) — работа идёт и без неё, результат придёт отдельно
-            print("Live:", e)
+        except Exception as e:  # 22.10: карточка не ушла (429 после всех повторов, сеть) — решение идёт и без неё,
+            print("Live:", e)   # результат придёт отдельным сообщением; раньше так падали задания целиком
             self.mid = None
         quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
@@ -591,16 +634,23 @@ class Live:
         with self.lock:
             if self.stop.is_set():  # работа закончена, карточка удалена или удаляется
                 return
+            if hold_left(self.chat):  # Telegram просит паузу — правку пропускаем, следующий тик покажет всё свежее
+                return
             if self.sub_fn and not self.sub:
                 self.sub = self.sub_fn() or ""
             edit(self.chat, self.mid, self.render(), resend=False)
 
     def loop(self):
-        while not self.stop.wait(3):
+        while not self.stop.wait(self.every()):
             self.tick += 1
             self.refresh()
-            if self.tick % 2 == 0:
+            if self.tick % 2 == 0 and Live.active is self and not hold_left(self.chat):  # «печатает…» — одна на чат
                 quiet("sendChatAction", chat_id=self.chat, action="typing")
+
+    def every(self):
+        """Тик карточки: 3 с, а при нескольких карточках в чате — реже, чтобы вместе не больше правки в 3 с
+        (6 автотестов сразу правили чат дважды в секунду — Telegram отвечал 429)."""
+        return 3 * max(1, sum(1 for x in list(Live.items) if x.chat == self.chat))
 
     def done(self):
         self.stop.set()
@@ -1279,6 +1329,33 @@ def topic_closed(url):
     return until if datetime.datetime.now(MSK).date() > until else None
 
 
+def test_locked(url):
+    """Тест, который на сайте уже не начать: зачтён (новых попыток платформа не даёт, даже если не 100% и попытки
+    есть — Страж 22.10: «Закрепление» 8/9 зачтено, бот пошёл на вторую попытку, а у submit.js «Нет кнопки «Начать»»)
+    или попытки кончились. -> «зачтён» / «попытки закончились» или None (не тест, решаем как обычно, не узнали)."""
+    m = re.search(r"/topic/([\w-]+)/task/([\w-]+)", url)
+    if not m:
+        return None
+    try:
+        d = web.mirror.get_json(f"{web.mirror.EDU}/topics/{m.group(1)}/tasks?taskUuid={m.group(2)}")
+        me = next((t for t in ((d or {}).get("data") or {}).get("tasks") or [] if t.get("uuid") == m.group(2)), None)
+    except Exception:
+        return None
+    return test_lock_of(me)
+
+
+def test_lock_of(meta):
+    """То же по задаче из ответа платформы (`topics/…/tasks` или meta в task.json)."""
+    if not meta or meta.get("type") != "test":
+        return None
+    pr = meta.get("progress") or {}
+    if (pr.get("status") or {}).get("type") == "approved":
+        return "зачтён"
+    if (pr.get("grade") or {}).get("remainingAttemptsCount") == 0:
+        return "попытки закончились"
+    return None
+
+
 def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
     """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди.
     quiet — без карточки «В очереди» (пачка с сайта: десятки таких карточек — это 429 от Telegram)."""
@@ -1306,6 +1383,18 @@ def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
         remember(title, False, f"Срок темы прошёл: {note}", url=url)
         react(chat, mid, "🤷")
         send(chat, card("Срок темы прошёл", note=f"{esc(title)} — {note}", icon="⛔"), menu=True, raw_html=True)
+        mark_active(task, None)
+        return
+    locked = None if show else test_locked(url)
+    if locked:  # на сайте нет ни «Начать», ни «Попробовать ещё раз» — решать незачем, ответы посмотреть можно
+        with running_lock:
+            running.discard(task)
+        title = task_title(task) or "Тест"
+        remember(title, locked == "зачтён", f"Тест {locked}", url=url)
+        react(chat, mid, "👌" if locked == "зачтён" else "🤷")
+        send(chat, card(f"Тест уже {locked}" if locked == "зачтён" else "Попытки закончились",
+                        note=f"{esc(title)} — новую попытку сайт не даст", icon="✅" if locked == "зачтён" else "⛔"),
+             menu=True, raw_html=True)
         mark_active(task, None)
         return
     mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
@@ -1875,10 +1964,12 @@ def push_answers(task, url, since):
         if drafts.task_info(task)[0] != "test" or os.path.getmtime(a) < since - 1:
             return None
         with open(os.path.join(d, "task.json")) as f:
-            grade = ((json.load(f).get("meta") or {}).get("progress") or {}).get("grade") or {}
+            meta = json.load(f).get("meta") or {}
     except (OSError, ValueError):
         return None
-    left = grade.get("remainingAttemptsCount")
+    if test_lock_of({"type": "test", **meta}):  # зачтён — «Начать» на сайте нет, вносить некуда
+        return None
+    left = ((meta.get("progress") or {}).get("grade") or {}).get("remainingAttemptsCount")
     if left is not None and left <= 1:
         return None
     ok, out = node("horo/submit.js", url, a, "--defer", timeout=600)
@@ -1962,6 +2053,7 @@ def due_tests(now=None):
 
 
 TRIES = re.compile(r"^ПОПЫТКИ:\s*(\d+)\s*/\s*(\d+)", re.M)
+STATUS = re.compile(r"^СТАТУС:\s*(\w+)", re.M)
 
 
 def finish_test(task):
@@ -1992,21 +2084,20 @@ def _finish_test(task):
     m = TRIES.search(out)
     used, avail = (int(m.group(1)), int(m.group(2))) if m else (None, None)
     full = bool(score) and score[2] >= 100
+    passed = (STATUS.search(out) or [None, None])[1] == "approved"  # зачтён — пересдать сайт не даст
     if score:
         got, total, pct = score
         mark = "🏆" if full else "✅" if pct >= 70 else "📊"
         head = f"{mark} <b>{num(got)} / {num(total)}</b> · {pct}%" if total else f"{mark} <b>{pct}%</b>"
     else:
         head = "✅ <b>Тест сдан</b>"
-    note = " · ".join(x for x in (esc(title), f"попыток {used} из {avail}" if used else "") if x)
+    note = " · ".join(x for x in (esc(title), "зачтён" if passed and not full else "",
+                                  f"попыток {used} из {avail}" if used else "") if x)
     remember(title, True, f"Сдан{': ' + num(score[0]) + '/' + num(score[1]) if score and score[1] else ''}",
              score=score, url=t["url"])
-    try:  # баллы не дошли (429, сеть) — тест всё равно сдан, вторая попытка всё равно нужна
-        send(chat, f"{head}\n<i>{note}</i>", menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
-    except Exception as e:
-        print("баллы теста:", e)
+    send(chat, f"{head}\n<i>{note}</i>", menu=True, raw_html=True, effect=EFFECT_CONFETTI if full else None)
     threading.Thread(target=refresh_overview, daemon=True).start()
-    if not score or full or not score[1] or used is None:
+    if not score or full or passed or not score[1] or used is None:
         return
     left = avail - used
     info = {"got": num(score[0]), "total": num(score[1]), "miss": num(score[1] - score[0]), "k": t.get("tries", 0) + 1}
@@ -2016,12 +2107,9 @@ def _finish_test(task):
     except OSError:
         pass
     if t.get("tries", 0) == 0 and left >= 2:
+        send(chat, card("Не 100% — делаю вторую попытку", note=f"Перепроверю каждый вопрос и найду ошибку · после неё "
+                        f"останется ещё {left - 1}", icon="🔁"), raw_html=True)
         threading.Thread(target=run_task, args=(chat, t["url"], "", False, None, info), daemon=True).start()
-        try:
-            send(chat, card("Не 100% — делаю вторую попытку", note=f"Перепроверю каждый вопрос и найду ошибку · после "
-                            f"неё останется ещё {left - 1}", icon="🔁"), raw_html=True)
-        except Exception as e:
-            print("вторая попытка:", e)
     elif left >= 1:
         set_offer(task, {**info, "url": t["url"], "title": title})
         why = "осталась последняя попытка" if left == 1 else "вторую уже делал"

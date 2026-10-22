@@ -5,13 +5,21 @@
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CARD = '[data-testid=singleMatchingCard], [data-testid=chosenSingleMatchingCard]';
 const key = (x, y) => [x, y].sort().join('\n');
+// Карточка-картинка без текста: <img src="/store/p/…">, в ответе — этот src (submit.js подставляет его вместо uuid).
+const IMG = /^\/store\//;
 
-// Пары на странице: соседи каждой линии singleMatchingLinkLine.
+// Пары на странице: соседи каждой линии singleMatchingLinkLine (у карточки-картинки — src картинки).
 const pairsOf = view => view.locator('[data-testid=singleMatchingLinkLine]').evaluateAll(ls => ls.map(l =>
-  [l.previousElementSibling, l.nextElementSibling].map(e => (e ? e.innerText : '').trim())));
+  [l.previousElementSibling, l.nextElementSibling].map(e => {
+    const txt = (e ? e.innerText : '').trim();
+    const img = e && e.querySelector('img');
+    return txt || (img ? img.getAttribute('src') : '');
+  })));
 
 async function matchPairs(page, view, n, a, pause = 1) {
-  const card = t => view.locator(CARD).filter({ hasText: new RegExp('^\\s*' + esc(t) + '\\s*$') });
+  const card = t => IMG.test(t)
+    ? view.locator(CARD).filter({ has: page.locator(`img[src="${t}"]`) })
+    : view.locator(CARD).filter({ hasText: new RegExp('^\\s*' + esc(t) + '\\s*$') });
   for (const [l, r] of a) {
     if ((await pairsOf(view)).some(([x, y]) => key(x, y) === key(l, r))) continue;
     if ((await card(l).count()) !== 1 || (await card(r).count()) !== 1) throw new Error(`Вопрос ${n}: нет карточки «${l}» или «${r}»`);
