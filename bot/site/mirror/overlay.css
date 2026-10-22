@@ -330,6 +330,7 @@
 .hdpx-ab-txt svg { width: 18px; height: 18px; }
 .hdpx-narrow .hdpx-actionbar { gap: 6px; }
 .hdpx-narrow .hdpx-ab-btn { padding: 0 11px; font-size: 14px; }
+.hdpx-narrow .hdpx-ab-long { display: none; }
 
 /* Чаты (Глеб 19.10: «плохо сделаны чаты»): на вертикальном экране (iPad, окно Split View) платформа сворачивает
    список чатов в кружки без имён (@media (orientation: portrait) → _chatSmall, ширина колонки 5.25rem). Где места
