@@ -41,7 +41,14 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     }
     await page.locator('[data-testid=messageInput]').first().click();
     const ed = page.locator('[contenteditable=true].mce-content-body').first();
-    await ed.waitFor({ timeout: 30000 });
+    // редактор (TinyMCE) платформа грузит отдельно и бывает долго (22.10: 4 ответа подряд — 30 с не хватило): ещё клик и ждём дольше
+    if (!(await ed.waitFor({ timeout: 30000 }).then(() => true, () => false))) {
+      await page.screenshot({ path: __dirname + '/tmp/editor.png' }).catch(() => {});
+      await page.locator('[data-testid=messageInput]').first().click().catch(() => {});
+      await ed.waitFor({ timeout: 90000 }).catch(() => {
+        throw new Error('Сайт не открыл редактор ответа — платформа тормозит, попробуй ещё раз через пару минут (horo/tmp/editor.png)');
+      });
+    }
     if (attach.length) {
       // Файлы — по одному: если выбрать сразу несколько, сайт иногда теряет часть (из трёх держался только второй и третий).
       let uploads = 0;

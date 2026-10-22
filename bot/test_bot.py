@@ -2363,12 +2363,12 @@ class MirrorTest(BotTest):
         with mock.patch.object(bot.web.mirror, "get_json", lambda path: None):
             self.assertIsNone(TOPIC_CLOSED(URL))                 # не узнали — решаем как обычно
         tid = bot.drafts.task_id(URL)
-        late = lambda kind: {"data": {"studyPeriod": {"deadlineDate": iso(today - bot.datetime.timedelta(days=30)), "extraDeadlineDays": 7},
-                                      "tasks": [{"uuid": tid, "type": kind}]}}
-        with mock.patch.object(bot.web.mirror, "get_json", lambda path: late("detailedAnswer")):
-            self.assertIsNone(TOPIC_CLOSED(URL))                 # письменный ответ платформа принимает и после срока
-        with mock.patch.object(bot.web.mirror, "get_json", lambda path: late("test")):
-            self.assertIsNotNone(TOPIC_CLOSED(URL))              # тест — нет
+        late = lambda lvl: {"data": {"studyPeriod": {"deadlineDate": iso(today - bot.datetime.timedelta(days=30)), "extraDeadlineDays": 7},
+                                     "tasks": [{"uuid": tid, "type": "test", "levelId": lvl}]}}
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: late(2)):
+            self.assertIsNone(TOPIC_CLOSED(URL))                 # уровень 2.0 платформа принимает и после срока
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: late(3)):
+            self.assertIsNotNone(TOPIC_CLOSED(URL))              # 3.0 и выше — нет
 
     def test_send_modes(self):
         self.make_draft()
