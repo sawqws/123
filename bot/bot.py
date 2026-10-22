@@ -267,10 +267,43 @@ def kb(*rows):
 
 # ---------- Telegram ----------
 
+HOLD = {}  # чат -> до какого времени Telegram просил не писать (429 «Too Many Requests», retry_after)
+HOLD_MAX = 60  # дольше одной паузы не ждём
+HOLD_TRIES = 4  # столько раз пробуем один запрос, пока Telegram отвечает 429
+
+
+def hold_left(chat):
+    """Сколько секунд ещё ждать, прежде чем писать в этот чат (Telegram ответил 429)."""
+    return max(0.0, HOLD.get(str(chat), 0) - time.time())
+
+
+def retry_after(body):
+    """Пауза из ответа 429: {"parameters": {"retry_after": N}}; нет — 3 с."""
+    try:
+        return float(json.loads(body)["parameters"]["retry_after"])
+    except (ValueError, TypeError, KeyError):
+        return 3.0
+
+
 def tg(method, **params):
+    """Запрос к Telegram. Слишком часто (429 — пачка автотестов: карточки, итоги) — ждём, сколько он сказал, и
+    повторяем: сообщение не теряется, задание не падает. Пока чат на паузе, другие запросы в него тоже ждут."""
     data = urllib.parse.urlencode(params).encode()
-    with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
-        return json.load(r)
+    chat = str(params.get("chat_id", ""))
+    for n in range(HOLD_TRIES):
+        time.sleep(min(hold_left(chat), HOLD_MAX))
+        try:
+            with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise
+            body = e.read() or b""
+            pause = min(retry_after(body), HOLD_MAX)
+            HOLD[chat] = max(HOLD.get(chat, 0), time.time() + pause)
+            print(f"{method}: Telegram просит паузу {pause:g} с (429)")
+            if n == HOLD_TRIES - 1:
+                raise urllib.error.HTTPError(e.url, e.code, e.msg, e.hdrs, io.BytesIO(body))
 
 
 COLORS = [True]  # Telegram принимает цветные кнопки (поле style)? Один отказ — дальше без цветов
@@ -563,16 +596,23 @@ class Live:
         with self.lock:
             if self.stop.is_set():  # работа закончена, карточка удалена или удаляется
                 return
+            if hold_left(self.chat):  # Telegram просит паузу — правку пропускаем, следующий тик покажет всё свежее
+                return
             if self.sub_fn and not self.sub:
                 self.sub = self.sub_fn() or ""
             edit(self.chat, self.mid, self.render(), resend=False)
 
     def loop(self):
-        while not self.stop.wait(3):
+        while not self.stop.wait(self.every()):
             self.tick += 1
             self.refresh()
-            if self.tick % 2 == 0:
+            if self.tick % 2 == 0 and Live.active is self and not hold_left(self.chat):  # «печатает…» — одна на чат
                 quiet("sendChatAction", chat_id=self.chat, action="typing")
+
+    def every(self):
+        """Тик карточки: 3 с, а при нескольких карточках в чате — реже, чтобы вместе не больше правки в 3 с
+        (6 автотестов сразу правили чат дважды в секунду — Telegram отвечал 429)."""
+        return 3 * max(1, sum(1 for x in list(Live.items) if x.chat == self.chat))
 
     def done(self):
         self.stop.set()

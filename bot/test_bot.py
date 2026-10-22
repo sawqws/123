@@ -868,6 +868,51 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot, "tg", html_error), self.assertRaises(urllib.error.HTTPError):
             bot.call("sendMessage", text="<b>", reply_markup=bot.draft_kb(TASK))  # не про кнопки — ошибка дальше
 
+    def test_too_many_requests_waits_and_retries(self):
+        """429 от Telegram (пачка автотестов): ждём retry_after и повторяем — итог теста и карточка не теряются;
+        пока чат на паузе, карточки не правятся и «печатает…» не шлётся; несколько карточек тикают реже."""
+        import io, types, urllib.error
+        body = b'{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 7","parameters":{"retry_after":7}}'
+        hits, sleeps, always = [], [], [False]
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(url, data=None, timeout=None):
+            hits.append(url)
+            if always[0] or len(hits) < 3:
+                raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(body))
+            return Resp(b'{"ok":true,"result":{"message_id":5}}')
+        now = [1000.0]
+        clock = types.SimpleNamespace(time=lambda: now[0], sleep=lambda s: sleeps.append(s) or now.__setitem__(0, now[0] + s))
+        real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
+        with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
+                mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
+            self.assertEqual(bot.send(CHAT, "🏆 <b>10 / 10</b>", raw_html=True), 5)
+            self.assertEqual(len(hits), 3)
+            self.assertEqual([s for s in sleeps if s], [7, 7])  # ровно столько, сколько сказал Telegram
+            hits.clear()
+            always[0] = True
+            with self.assertRaises(urllib.error.HTTPError) as e:  # не проходит совсем — ошибка с телом, как была
+                bot.tg("sendMessage", chat_id=CHAT, text="x")
+            self.assertEqual(e.exception.code, 429)
+            self.assertEqual(len(hits), bot.HOLD_TRIES)
+            self.assertIn(b"retry after", e.exception.read())
+            self.assertGreater(bot.hold_left(CHAT), 0)
+            self.assertEqual(bot.hold_left(CHAT + 1), 0)  # пауза — только для этого чата
+            calls = []
+            live = types.SimpleNamespace(chat=CHAT, stop=threading.Event(), lock=threading.Lock(), sub_fn=None, sub="",
+                                         render=lambda: "x")
+            with mock.patch.object(bot, "tg", lambda m, **p: calls.append(m)):
+                bot.Live.refresh(live)
+            self.assertEqual(calls, [])  # на паузе карточку не правим — следующий тик покажет свежее
+        cards = [types.SimpleNamespace(chat=CHAT) for _ in range(6)]
+        with mock.patch.object(bot.Live, "items", cards):
+            self.assertEqual(bot.Live.every(cards[0]), 18)  # 6 карточек вместе — правка раз в 3 с
+        with mock.patch.object(bot.Live, "items", cards[:1]):
+            self.assertEqual(bot.Live.every(cards[0]), 3)
+
     def test_planner_install(self):
         tok = "8800000000:AAH" + "x" * 32
         runs = []

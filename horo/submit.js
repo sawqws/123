@@ -14,7 +14,7 @@
 //   singleSelection: "3": "текст варианта"         (точно как в fetch.js)
 //   multipleSelection: "4": ["вариант A", "вариант C"]   (вариант-картинка без текста — его uuid)
 //   sequence:        "5": ["первый", "второй", ...]  (тексты вариантов в нужном порядке)
-//   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]
+//   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]   (карточка-картинка без текста — её uuid)
 //   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать)
 const fs = require('fs');
 const path = require('path');
@@ -168,7 +168,9 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         console.log(`В${n}: ${got.join(' → ')}`);
       } else if (q.type === 'singleMatching') {
         // Пары: клик по левой карточке, затем по правой; уже соединённые (досдача) не трогаем, чужие — переставляем.
-        await matchPairs(page, view, n, a);
+        // Карточка-картинка без текста задаётся uuid варианта — на странице ищем её по src картинки.
+        const img = w => { const o = q.options.find(o => o.uuid === w); return o && !o.text && o.image ? o.image.location : w; };
+        await matchPairs(page, view, n, a.map(p => p.map(img)));
         console.log(`В${n}: ${a.map(([l, r]) => `${l} = ${r}`).join(' | ')}`);
       } else if (q.type === 'grouping') {
         // Группы: клик по элементу, затем по группе.
