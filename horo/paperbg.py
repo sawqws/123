@@ -24,9 +24,20 @@ SRC = os.environ.get('PAPER_BG', '/home/user/Brain/raw/images')
 BGS = json.load(open(BG_FILE))
 
 
-def sheet(i, seed=1):
+def pages(i):
+    """Страницы фона i: [{quad, cols, rows, margin, right}] — у разворота две (левая, правая), у старых фонов одна."""
     b = BGS[i]
-    return Notebook(cols=b['cols'], rows=b['rows'], seed=seed, margin=-0.3, right=0.35)
+    if 'pages' in b:
+        return b['pages']
+    return [{'quad': b['quad'], 'cols': b['cols'], 'rows': b['rows']}]
+
+
+def sheet(i, seed=1, page=0):
+    """Notebook размером с пустую страницу page фона i."""
+    p = pages(i)[page]
+    sc = p.get('scale', 1.0)    # > 1 — пишет мельче клетки (у него размер гуляет 0.6…1.2 клетки), влезает больше
+    return Notebook(cols=round(p['cols'] * sc), rows=round(p['rows'] * sc), seed=seed + 101 * page,
+                    margin=p.get('margin', -0.3), right=p.get('right', 0.35))
 
 
 def _blue(img):
@@ -102,47 +113,65 @@ def _look(img, bgm, mask):
 UP = 1   # итоговое фото — в родном размере его фото (Глеб 22.10: при 2.5× с шумодавом и резкостью «фон видно ИИ»)
 
 
-def render(nb, i, path):
-    """Переносит чернила nb на фото фона i так, чтобы не отличить от его записей на этом же фото
-    (Глеб 22.10: «чтобы было не отличить, что текст наложен, и цвет ручки как я пишу»): цвет ручки — по его
-    кривой (pen) с этого фото; фото — в UP раз крупнее, штрихи рисуются сразу в этом размере, край ровный."""
+def render(nbs, i, path):
+    """Переносит чернила на фото фона i так, чтобы не отличить от его записей (Глеб 22.10: «чтобы было не отличить,
+    что текст наложен, и цвет ручки как я пишу»; «обрезанная фотка выдаёт — фон как у меня обычно»).
+    nbs — Notebook или список по страницам фона (None — страница пустая). Кадр — целиком, как он снимает
+    (разворот на столе), если у фона не задан crop. Цвет ручки — кривая (pen) с его штрихов на этом фото
+    (у разворота со стёртой записью — с исходного фото, `ink_from`); толщина, тёмный тон и шум подбираются под них."""
     import cv2
     b = BGS[i]
+    if not isinstance(nbs, (list, tuple)):
+        nbs = [nbs]
     img = cv2.imread(os.path.join(SRC, b['file']))
     bgm = cv2.medianBlur(img, 61).astype(np.float32)
-    q = np.float32(b['quad'])
     area = np.zeros(img.shape[:2], np.uint8)
-    cv2.fillConvexPoly(area, q.astype(np.int32), 1)
-    curve = pen(img, bgm, area == 0)
+    for p in pages(i):
+        cv2.fillConvexPoly(area, np.int32(p['quad']), 1)
+    ref = cv2.imread(os.path.join(SRC, b['ink_from'])) if b.get('ink_from') else img   # где его штрихи
+    rbg = cv2.medianBlur(ref, 61).astype(np.float32)
+    if b.get('ink_from'):        # его прежняя запись на исходном фото (до того, как её закрыли клеткой)
+        rm = np.zeros(area.shape, np.uint8)
+        for p in b.get('ink_pages', []):
+            cv2.fillConvexPoly(rm, np.int32(p), 1)
+        rmask = rm > 0
+    else:
+        rmask = area == 0
+    curve = pen(ref, rbg, rmask)
     if curve is None:                                         # своих записей на фото нет — синяя паста по умолчанию
         curve = (np.array([0, 0.3, 0.6, 0.8]), np.array([[1, 1, 1], [0.86, 0.74, 0.7], [0.62, 0.42, 0.4], [0.45, 0.24, 0.2]]), 0.8)
     xs, ys, Lmax = curve
     x0, y0, x1, y1 = b.get('crop') or (0, 0, img.shape[1], img.shape[0])
-    big = _clean(img, bgm, area)[y0:y1, x0:x1]               # фон — как есть, без увеличения и фильтров
+    big = (_clean(img, bgm, area) if not b.get('ink_from') else img)[y0:y1, x0:x1]   # фон — как есть, без фильтров
     f = big.astype(np.float32)
-    qb = (q - np.float32([x0, y0])) * UP
-    cells = np.float32([[0, 0], [b['cols'], 0], [b['cols'], b['rows']], [0, b['rows']]])
-    Hc = cv2.getPerspectiveTransform(cells, qb)
-    cpx = np.linalg.norm(qb[1] - qb[0]) / b['cols']          # клетка на итоговом фото, px
-    k = cpx / nb.C
-    # перенос: сначала в 4 раза крупнее фото (ровные края), потом вниз до фото — как оптика камеры
-    SS = 4
-    S = np.float32([[1 / (nb.C * k * SS), 0, 0], [0, 1 / (nb.C * k * SS), 0], [0, 0, 1]])
+    SS = 4   # перенос: сначала в 4 раза крупнее фото (ровные края), потом вниз до фото — как оптика камеры
     Up = np.float32([[SS, 0, 0], [0, SS, 0], [0, 0, 1]])
+    hi = np.zeros((big.shape[0] * SS, big.shape[1] * SS), np.float32)
+    seed = 1
+    for nb, p in zip(nbs, pages(i)):
+        if nb is None:
+            continue
+        seed = nb.rnd.randrange(1 << 30)
+        qb = np.float32(p['quad']) - np.float32([x0, y0])
+        cells = np.float32([[0, 0], [nb.cols, 0], [nb.cols, nb.rows], [0, nb.rows]])   # лист nb — на всю страницу
+        Hc = cv2.getPerspectiveTransform(cells, qb)
+        k = np.linalg.norm(qb[1] - qb[0]) / nb.cols / nb.C   # клетка фото / клетка листа
+        S = np.float32([[1 / (nb.C * k * SS), 0, 0], [0, 1 / (nb.C * k * SS), 0], [0, 0, 1]])
+        ink = cv2.resize(nb.ink, None, fx=k * SS, fy=k * SS, interpolation=cv2.INTER_AREA if k * SS < 1 else cv2.INTER_CUBIC)
+        hi = np.maximum(hi, cv2.warpPerspective(np.clip(ink, 0, 1), Up @ Hc @ S, (hi.shape[1], hi.shape[0]), flags=cv2.INTER_LINEAR))
     warped = {}
 
     def ink_at(thin):
         """Чернила на фото; thin — насколько тоньше линия (у него в разные дни разная ручка)."""
         if thin not in warped:
-            ink = cv2.resize(nb.ink, None, fx=k * SS, fy=k * SS, interpolation=cv2.INTER_AREA if k * SS < 1 else cv2.INTER_CUBIC)
-            a = cv2.warpPerspective(np.clip(ink, 0, 1), Up @ Hc @ S, (big.shape[1] * SS, big.shape[0] * SS), flags=cv2.INTER_LINEAR)
+            a = hi
             if thin:   # тоньше на thin/SS px фото: размытие + порог по краю, форма штриха сохраняется
                 a = np.clip((cv2.GaussianBlur(a, (0, 0), 1.0) - 0.12 * thin) / (1 - 0.12 * thin), 0, 1)
             warped[thin] = np.clip(cv2.resize(a, (big.shape[1], big.shape[0]), interpolation=cv2.INTER_AREA), 0, 1)
         return warped[thin]
 
     paper = cv2.medianBlur(big, 9).astype(np.float32)
-    rng = np.random.default_rng(nb.rnd.randrange(1 << 30))
+    rng = np.random.default_rng(seed)
     nz = cv2.GaussianBlur(rng.normal(0, 1, big.shape[:2]).astype(np.float32), (0, 0), 0.7)
     nz = nz / max(1e-6, nz.std())
 
@@ -156,8 +185,8 @@ def render(nb, i, path):
         o = o + (nz * noise * np.clip(L / max(Lmax, 1e-6), 0, 1))[..., None] * np.array([1.0, 0.9, 0.9], np.float32)
         return np.clip(o, 0, 255).astype(np.uint8)
 
-    # подбор под его штрихи вне пустой страницы на этом же фото: толщина, тёмный тон, шум
-    his = _look(img, bgm, area == 0)
+    # подбор под его штрихи на этом же фото: толщина, тёмный тон, шум
+    his = _look(ref, rbg, rmask)
     where = cv2.dilate((ink_at(0) > 0.02).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
     best = None
     for thin in (0, 1, 2, 3, 4):
@@ -167,7 +196,8 @@ def render(nb, i, path):
                 st = _look(o, cv2.medianBlur(o, 61).astype(np.float32), where)
                 if not st or not his:
                     continue
-                err = abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.25 + 0.5 * blur
+                # утоньшение съедает мелкие степени — только если без него никак
+                err = abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.25 + 0.5 * blur + 0.6 * thin
                 if best is None or err < best[0]:
                     best = (err, (thin, gain, blur), st)
     if best:
