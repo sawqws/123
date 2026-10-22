@@ -313,12 +313,14 @@
 .hdpx-more summary { cursor: pointer; padding: 6px 0; }
 
 /* Кнопки бота внизу страницы (плавающая полоса над родной нижней панелью, вёрстку не сдвигает) */
-.hdpx-actionbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; display: flex; align-items: center; gap: 8px;
+/* по центру через left/right + margin auto (было left: 50% — полосе доставалась половина ширины, кнопки сжимались и текст
+   вылезал за рамки, Глеб 22.10) */
+.hdpx-actionbar { position: absolute; left: 12px; right: 12px; margin: 0 auto; width: max-content; bottom: 16px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px;
   max-width: calc(100% - 24px); padding: 6px; border-radius: 14px; background: var(--hdpx-white); border: 1px solid var(--hdpx-violet-bg);
   box-shadow: 0 8px 28px rgba(39, 32, 93, .18); font-family: inherit; }
 .hdpx-ab-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 14px; border-radius: 10px;
   border: 1px solid var(--hdpx-primary); background: var(--hdpx-white); color: var(--hdpx-primary); font-family: inherit; font-size: 15px; font-weight: 500; line-height: 1;
-  white-space: nowrap; cursor: pointer; min-width: 0; }
+  white-space: nowrap; cursor: pointer; min-width: 0; flex: 0 0 auto; }
 .hdpx-ab-btn:hover { background: var(--hdpx-bg2); }
 .hdpx-ab-main { background: var(--hdpx-primary); color: #fff; }
 .hdpx-ab-main:hover { background: var(--hdpx-primary); filter: brightness(1.08); }
@@ -326,11 +328,14 @@
 .hdpx-ab-ico { display: inline-grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; padding: 0; border-radius: 10px; border: 0;
   background: var(--hdpx-violet-bg); color: var(--hdpx-primary); cursor: pointer; }
 .hdpx-ab-ico svg { width: 22px; height: 22px; }
-.hdpx-ab-txt { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--hdpx-ink); font-size: 14px; }
+.hdpx-ab-txt { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--hdpx-ink); font-size: 14px; white-space: nowrap; flex: 0 0 auto; }
 .hdpx-ab-txt svg { width: 18px; height: 18px; }
 .hdpx-narrow .hdpx-actionbar { gap: 6px; }
 .hdpx-narrow .hdpx-ab-btn { padding: 0 11px; font-size: 14px; }
 .hdpx-narrow .hdpx-ab-long { display: none; }
+.hdpx-ab-short { display: none; }
+.hdpx-narrow .hdpx-ab-short { display: inline; }
+.hdpx-btn-wrap { white-space: normal; height: auto; min-height: 40px; line-height: 20px; padding-top: 9px; padding-bottom: 9px; text-align: center; }
 
 /* Чаты (Глеб 19.10: «плохо сделаны чаты»): на вертикальном экране (iPad, окно Split View) платформа сворачивает
    список чатов в кружки без имён (@media (orientation: portrait) → _chatSmall, ширина колонки 5.25rem). Где места
@@ -349,7 +354,7 @@ html.hdpx-chat .hdpx-tab:hover, html.hdpx-chat .hdpx-pwr:hover, html.hdpx-chat .
 
 /* набор текста в поле платформы: плавающая полоса и вкладки бота плавно уезжают (не висят над заданием) */
 .hdpx-actionbar { transition: opacity .2s ease, transform .2s ease; }
-html.hdpx-typing .hdpx-actionbar { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+html.hdpx-typing .hdpx-actionbar { opacity: 0; transform: translateY(12px); pointer-events: none; }
 html.hdpx-typing .hdpx-tab, html.hdpx-typing .hdpx-pwr { opacity: 0; pointer-events: none; transition: opacity .2s; }
 
 /* «⏻ Выключить всё» без перезагрузки (overlay.js plainOff): всё бота спрятано, страница — чистая платформа */
@@ -405,3 +410,6 @@ html.hdpx-off .hdpx-vv, html.hdpx-off [data-hdpx] { display: none !important; }
 .hdpx-shot-wait { display: flex; align-items: center; justify-content: center; gap: 8px; height: 140px; color: var(--hdpx-grey);
   font-size: 14px; background: var(--hdpx-bg2); cursor: default; }
 .hdpx-addtext { margin-top: 8px; padding: 0 4px; color: var(--hdpx-primary); }
+
+.hdpx-acts-col { flex-direction: column; align-items: stretch; }
+.hdpx-acts-col .hdpx-btn { width: 100%; }
