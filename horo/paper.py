@@ -105,6 +105,9 @@ class Notebook:
         im = Image.fromarray((a * 255).astype(np.uint8)).resize((max(2, round(length)), max(2, round(a.shape[0] * k))), Image.LANCZOS)
         im = im.rotate(angle + self.rnd.uniform(-1.2, 1.2), Image.BICUBIC, expand=True)
         st = np.asarray(im, np.float32) / 255
+        body = st[st > 0.15]
+        if body.size > 20:              # та же густота пасты, что у букв
+            st = np.clip(st / max(0.35, float(np.percentile(body, 80))), 0, 1)
         self._blit(st, int(round(cx - st.shape[1] / 2)), int(round(cy - st.shape[0] / 2)))
 
     def _strike(self, x0, x1, cy):
@@ -153,6 +156,10 @@ class Notebook:
         im = im.resize((max(1, round(a.shape[1] * s)), max(1, round(a.shape[0] * s))), Image.LANCZOS)
         im = im.rotate(self.rnd.uniform(-3, 3), Image.BICUBIC, expand=True)
         out = np.asarray(im, np.float32) / 255
+        if ch not in ('scribble',):     # образцы с бледных фото — до одной густоты пасты (одна ручка на листе)
+            body = out[out > 0.15]
+            if body.size > 20:
+                out = np.clip(out / max(0.35, float(np.percentile(body, 80))), 0, 1)
         ys, xs = np.nonzero(out > 0.12)
         return out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
 

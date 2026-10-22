@@ -9,6 +9,9 @@ import cv2
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paper_samples import SEL, SIGNS, MESS, DROP
+from paper_samples2 import SEL2
+
+SEL = {**SEL, **SEL2}   # + 13 его фото алгебры с сайта (notebook_7..19)
 
 SRC = os.environ.get('PAPER_SRC', '.')
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fonts', 'gleb_paper.npz')
@@ -31,8 +34,13 @@ def cell(d):
     return int(np.argmax(ac[18:60]) + 18)
 
 
+_BLUE = {}   # f -> где на фото синяя паста (клетка серо-голубая и бледная — её в штамп не берём)
+
+
 def pieces(f):
     im = cv2.imread(photo(f))
+    fi = im.astype(np.int16)
+    _BLUE[f] = (fi[..., 0] - fi[..., 2]) > 20
     bg = cv2.medianBlur(im, 61).astype(np.float32)
     d = (bg - im.astype(np.float32))[..., 2]
     c = cell(d)
@@ -59,27 +67,31 @@ def tiles(f, d, lab, comps, T=70, cols=20):
     cv2.imwrite(f[:-4] + '_tiles.png', sh)
 
 
-CLEAN = set('ab')   # у букв под/над ними бывает кусок черты дроби — отрезается
+CLEAN = set('ab4y')
+NOBAR = set('abcmxy0134689+')   # с куском черты у верха или низа — образец не берём (их хватает)
 
 
-def clean(a):
-    """Срезает с краёв буквы прилипшую черту: строку, где чернила идут почти через всю ширину."""
-    h, w = a.shape
-    for rows in (range(h - 1, int(h * 0.8), -1), range(0, int(h * 0.2))):
-        cut_at = None
-        for y in rows:
-            if (a[y] > 0.3).mean() > 0.85:   # черта идёт через весь кусок, верх буквы — нет
-                cut_at = y
-        if cut_at is not None:
-            if rows.step == -1:
-                a = a[:max(1, cut_at - 2)]
-            else:
-                a = a[cut_at + 3:]
-            h = a.shape[0]
-    return a
+def barred(a, c):
+    m = (a > 0.25).astype(np.uint8)
+    run = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(0.6 * c)), 1)))
+    h = a.shape[0]
+    return bool(run[:int(h * 0.25)].any() or run[int(h * 0.75):].any())   # у букв под/над ними бывает кусок черты дроби — отрезается
 
 
-def cut(d, lab, peak, rs, M=3):
+def clean(a, c):
+    """Срезает с буквы прилипший кусок черты дроби: длинный ровный горизонтальный штрих у её верха или низа
+    (у a b 4 8 x y своих таких нет; c — клетка на фото, px)."""
+    m = (a > 0.25).astype(np.uint8)
+    run = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (max(3, int(0.65 * c)), 1)))
+    h = a.shape[0]
+    band = np.zeros_like(m)
+    band[:int(h * 0.3)] = 1
+    band[int(h * 0.7):] = 1
+    kill = cv2.dilate(run * band, np.ones((3, 3), np.uint8))
+    return a * (1 - kill)
+
+
+def cut(d, lab, peak, rs, M=3, f=None):
     """Чернила куска (или нескольких — «=») по его маске, 0..1."""
     x0, y0 = max(0, min(r['x'] for r in rs) - M), max(0, min(r['y'] for r in rs) - M)
     x1, y1 = max(r['x'] + r['w'] for r in rs) + M, max(r['y'] + r['h'] for r in rs) + M
@@ -87,7 +99,10 @@ def cut(d, lab, peak, rs, M=3):
     for r in rs:
         m |= (lab[y0:y1, x0:x1] == r['lab']).astype(np.uint8)
     m = cv2.dilate(m, np.ones((5, 5), np.uint8))
-    return np.clip((d[y0:y1, x0:x1] - 22) / (peak - 22), 0, 1) * m
+    if f in _BLUE:   # кусочки клеток внутри маски: бледные и не синие — прочь
+        sub = d[y0:y1, x0:x1]
+        m = m * (_BLUE[f][y0:y1, x0:x1] | (sub > 70)).astype(np.uint8)
+    return np.clip((d[y0:y1, x0:x1] - 32) / (peak - 32), 0, 1) * m   # бледнее — это уже клетка
 
 
 def auto(d, c, peak):
@@ -124,7 +139,7 @@ def main():
             for ch, ids in group.items():
                 for i in ids:
                     rs = [comps[j] for j in i] if isinstance(i, list) else [comps[i]]
-                    a = cut(d, lab, peak, rs)
+                    a = cut(d, lab, peak, rs, f=f)
                     raw[ch].append((a, (max(r['y'] + r['h'] for r in rs) - min(r['y'] for r in rs)) / c, c))
         for ch, items in auto(d, c, peak).items():
             raw[ch] += [(a, a.shape[0] / cc, cc) for a, cc in items]
@@ -140,9 +155,11 @@ def main():
                 continue
             a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
             if ch in CLEAN:
-                a = clean(a)
+                a = clean(a, c)
                 ys, xs = np.nonzero(a > 0.15)
                 a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+            if ch in NOBAR and barred(a, c):
+                continue
             s = REF / c
             if ch not in KEEP:
                 s *= (TARGET.get(ch, DIG) * REF / (a.shape[0] * s)) ** 0.6
