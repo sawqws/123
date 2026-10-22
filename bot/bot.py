@@ -561,12 +561,10 @@ class Live:
         self.lock = threading.Lock()  # правка (тикер и шаги Claude) не должна обгонять удаление карточки
         Live.active = self  # приложение показывает ту же работу, что и карточка в чате
         Live.items.append(self)
-        try:
-            self.mid = send(chat, self.render(), raw_html=True)
-        except Exception as e:  # 22.10: карточка не ушла (429 после всех повторов, сеть) — решение идёт и без неё,
-            print("Live:", e)   # результат придёт отдельным сообщением; раньше так падали задания целиком
-            self.mid = None
-        quiet("sendChatAction", chat_id=chat, action="typing")
+        self.mid = None
+        if not hold_left(chat):  # Telegram на паузе (429, до минуты) — карточку пришлёт тикер, решение не ждёт
+            self.post()          # (22.10: 33 автотеста стояли, пока Telegram не разрешит карточку «Решаю»)
+            quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
 
     def submitting(self):
@@ -640,9 +638,27 @@ class Live:
                 self.sub = self.sub_fn() or ""
             edit(self.chat, self.mid, self.render(), resend=False)
 
+    def post(self):
+        """Прислать карточку. Не ушла (429 после всех повторов, сеть) — работа идёт и без неё; раньше так падали
+        задания целиком (22.10: 35 из 54 автотестов)."""
+        try:
+            mid = send(self.chat, self.render(), raw_html=True)
+        except Exception as e:
+            print("Live:", e)
+            return
+        with self.lock:
+            if not self.stop.is_set():
+                self.mid = mid
+                return
+        delete(self.chat, mid)  # работа кончилась, пока карточка ждала Telegram, — убрать её
+
     def loop(self):
         while not self.stop.wait(self.every()):
             self.tick += 1
+            if self.mid is None:
+                if not hold_left(self.chat):
+                    self.post()
+                continue
             self.refresh()
             if self.tick % 2 == 0 and Live.active is self and not hold_left(self.chat):  # «печатает…» — одна на чат
                 quiet("sendChatAction", chat_id=self.chat, action="typing")
@@ -659,7 +675,11 @@ class Live:
         if Live.active is self:  # параллельно идут несколько заданий — показываем самое свежее из оставшихся
             Live.active = Live.items[-1] if Live.items else None
         with self.lock:
-            delete(self.chat, self.mid)
+            mid, self.mid = self.mid, None
+        if mid and hold_left(self.chat):  # Telegram на паузе — удалим в фоне, решавший не ждёт его
+            REAL_THREAD(target=delete, args=(self.chat, mid), daemon=True).start()
+        elif mid:
+            delete(self.chat, mid)
 
     def state(self):
         """Для приложения: то же, что на карточке, без HTML."""
