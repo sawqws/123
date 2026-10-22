@@ -214,6 +214,23 @@ class BotTest(unittest.TestCase):
         self.assertIsNone(bot.draft(TASK))                  # отправлено — черновик закрыт
         self.assertIn("Отправлено учителю", self.last()[0])
 
+    def test_failed_send_next_time_replaces(self):
+        """Не отправилось (поле не открылось) — могло уйти частично; следующее нажатие идёт с --replace."""
+        self.say(URL)
+        calls = []
+
+        def node(*args, timeout=0, prog="node"):
+            calls.append(args)
+            return (True, "Отправлено") if len(calls) > 1 else (False, "⚠️ Сайт долго не отвечает")
+
+        with mock.patch.object(bot, "node", node):
+            bot.on_callback({"id": "1", "data": f"now:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+            self.assertTrue(bot.draft(TASK)["replace"])
+            bot.on_callback({"id": "2", "data": f"now:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
+        self.assertNotIn("--replace", calls[0])
+        self.assertEqual(calls[1][1], "--replace")
+        self.assertIsNone(bot.draft(TASK))
+
     def test_send_now_and_hold(self):
         self.say(URL)
         with mock.patch.object(bot, "SEND_DELAY", "4-12"):
