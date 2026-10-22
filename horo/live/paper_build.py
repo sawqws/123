@@ -137,6 +137,58 @@ def smooth_bar(a):
     return np.clip(out * taper[None] * on.astype(float).cumsum().clip(0, 1)[None], 0, 1).astype(np.float32)
 
 
+PEN_R = 1.75        # полутолщина его линии, px при клетке REF=40 (замер: штрих ≈ 0.09 клетки)
+RESTROKE_SKIP = {'scribble', 'bar', 'Лист', '·'}
+
+
+def _prune(sk, n):
+    """Обрезает у скелета «усики» короче n px (на изгибах толстого штриха скелет даёт отростки), не укорачивая
+    настоящие концы линий: срезаем концы n раз, потом отращиваем назад только от оставшихся концов."""
+    from scipy import ndimage
+    k = np.ones((3, 3)); k[1, 1] = 0
+    cur = sk.copy()
+    for _ in range(n):
+        nb = ndimage.convolve(cur.astype(np.uint8), k, mode='constant')
+        ends = cur & (nb == 1)
+        if not ends.any():
+            break
+        cur[ends] = False
+    if not cur.any():
+        return sk
+    nb = ndimage.convolve(cur.astype(np.uint8), k, mode='constant')
+    grow = cur & (nb == 1)
+    rest = sk & ~cur
+    for _ in range(n + 1):
+        new = ndimage.binary_dilation(grow, np.ones((3, 3))) & rest & ~grow
+        if not new.any():
+            break
+        grow |= new
+    return cur | grow
+
+
+def restroke(a, r=PEN_R, up=4, keep=0.12, thr=0.35):
+    """Его знак — заново одной ровной линией по середине его штриха (Глеб 22.10: «выглядит как будто грязно»):
+    образцы с разных фото разной толщины, с рваным краем и пятнами; форма — его, линия — как у шариковой ручки."""
+    from skimage.morphology import skeletonize
+    from scipy import ndimage
+    h, w = a.shape
+    pad = int(r * 2 + 3)
+    A = np.pad(a, pad)
+    big = cv2.resize(A, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
+    big = cv2.GaussianBlur(big, (0, 0), up * 0.6)
+    m = big > thr
+    lab, n = ndimage.label(m, structure=np.ones((3, 3)))
+    if n == 0:
+        return a
+    sizes = ndimage.sum(m, lab, range(1, n + 1))
+    m = np.isin(lab, 1 + np.nonzero(sizes >= keep * sizes.max())[0])   # точки и обрывки рядом — прочь
+    sk = _prune(skeletonize(m), int(r * up * 2.2))
+    dist = ndimage.distance_transform_edt(~sk) / up
+    alpha = np.clip((r + 0.5 - dist) / 1.0, 0, 1).astype(np.float32)
+    out = cv2.resize(alpha, (A.shape[1], A.shape[0]), interpolation=cv2.INTER_AREA)
+    return np.clip(out, 0, 1)
+
+
 def cut(d, lab, peak, rs, M=3, f=None):
     """Чернила куска (или нескольких — «=») по его маске, 0..1."""
     x0, y0 = max(0, min(r['x'] for r in rs) - M), max(0, min(r['y'] for r in rs) - M)
@@ -232,6 +284,11 @@ def main():
                 s *= (TARGET.get(ch, DIG) * REF / (a.shape[0] * s))   # к высоте класса полностью: степени с фото не мельчат
             a2 = np.clip(cv2.resize(a.astype(np.float32), None, fx=s, fy=s,
                                     interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC), 0, 1)
+            if ch not in RESTROKE_SKIP and not os.environ.get('PAPER_RAW'):
+                thin = ch in '+=−'   # у «+» и «=» штрихи раздельные и бледнее — порог ниже, обрывки не выкидывать
+                a2 = restroke(a2, keep=0.03 if thin else 0.12, thr=0.2 if thin else 0.35)
+                ys2, xs2 = np.nonzero(a2 > 0.1)
+                a2 = a2[ys2.min():ys2.max() + 1, xs2.min():xs2.max() + 1]
             g = (a2 * 255).astype(np.uint8)
             if ch == 'bar':
                 th = (a2 > 0.3).sum(0)
