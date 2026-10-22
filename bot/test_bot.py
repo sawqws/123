@@ -27,6 +27,7 @@ bot.JOURNAL, bot.HEARTBEAT = os.path.join(_OUT, "journal.jsonl"), os.path.join(_
 
 URL = "https://horodigital.ru/student/topic/11111111-1111-1111-1111-111111111111/task/22222222-2222-2222-2222-222222222222"
 TASK = "22222222-2222-2222-2222-222222222222"
+TOPIC_CLOSED = bot.topic_closed  # настоящая: в BotTest подменена (без сети)
 CHAT = 42
 
 
@@ -60,6 +61,7 @@ class BotTest(unittest.TestCase):
             mock.patch.object(bot, "GLEB_EXTRA", os.path.join(t, "fonts", "gleb_extra.npz")),  # не живой алфавит
             mock.patch.object(bot.media, "photo_path", self.fake_photo),  # без сети: фото и видео из Telegram
             mock.patch.object(bot.media, "video", self.fake_video),
+            mock.patch.object(bot, "topic_closed", lambda url: None),  # без сети: срок темы — в своём тесте
         ]
         for p in self.patches:
             p.start()
@@ -2201,10 +2203,62 @@ class MirrorTest(BotTest):
         when = bot.datetime.datetime.fromtimestamp(now + 2 * 3600 + 5 * 60, bot.MSK)
         self.assertEqual(w["timed"][0]["hhmm"], f"{when:%H:%M}")
         self.assertEqual([x["task"] for x in w["held"]], ["t2"])
-        self.assertEqual(w["work"], [{"task": TASK, "title": "Конспект §5", "url": URL}])
+        self.assertEqual(w["work"], [{"task": TASK, "title": "Конспект §5", "url": URL, "subj": "", "icon": "📘",
+                                      "state": "queue", "place": 1}])
         self.assertEqual(w["sending"], [])
         self.assertIn("sending", bot.app_state()["drafts"][0])          # у черновиков в /api/state — таймер и отправка
         self.assertEqual(bot.app_state()["drafts"][0]["send_at"], now + 2 * 3600 + 5 * 60)
+
+    def test_work_titles_subject_live_and_queue_order(self):
+        """«В работе»: идущее — с шагом и долей, ожидающие — по очереди; название и предмет — из списка тем,
+        пока Claude ещё не открыл задание (раньше было просто «Задание»)."""
+        a, b, c = "a" * 8 + "-1111-1111-1111-" + "1" * 12, "b" * 8 + "-1111-1111-1111-" + "1" * 12, "c" * 8 + "-1111-1111-1111-" + "1" * 12
+        with open(bot.OVERVIEW, "w") as f:
+            json.dump({"at": 1, "tasks": [], "topics": [{"uuid": "tp", "subj": "Испанский язык", "icon": "🇪🇸", "tasks": [
+                {"uuid": x, "title": f"Тест {x[0]}", "type": "test"} for x in (a, b, c)]}]}, f)
+        bot.save_settings({**bot.load_settings(), "active": {a: {"url": "", "since": 30}, b: {"url": "", "since": 10},
+                                                              c: {"url": "", "since": 20}}})
+        live = mock.Mock(task=c)
+        live.state.return_value = {"step": "Ввожу ответы", "frac": 0.5, "secs": 61}
+        with bot.running_lock:
+            bot.running.update({a, b, c})
+        try:
+            with mock.patch.object(bot.Live, "items", [live]):
+                w = bot.app_site_wait()["work"]
+        finally:
+            with bot.running_lock:
+                bot.running.difference_update({a, b, c})
+        self.assertEqual([(x["task"], x["state"], x.get("place")) for x in w], [(c, "live", None), (b, "queue", 1), (a, "queue", 2)])
+        self.assertEqual(w[0]["title"], "Тест c")
+        self.assertEqual((w[0]["step"], w[0]["frac"], w[0]["secs"]), ("Ввожу ответы", 0.5, 61))
+        self.assertEqual((w[1]["subj"], w[1]["icon"]), ("Испанский язык", "🇪🇸"))
+        self.assertEqual(w[1]["url"], f"https://horodigital.ru/student/topic/tp/task/{b}")
+
+    def test_closed_topic_not_solved(self):
+        """Срок темы + дни доработок прошли: платформа не примет ответ — бот не решает, а сразу говорит почему."""
+        until = bot.datetime.date(2026, 10, 9)
+        with mock.patch.object(bot, "topic_closed", lambda url: until):
+            bot.run_task(CHAT, URL, "")
+        self.assertEqual(self.prompts, [])                       # Claude не запускался
+        self.assertIn("Срок темы прошёл", self.msgs[-1][0])
+        self.assertIn("09.10", self.msgs[-1][0])
+        self.assertNotIn(TASK, bot.running)
+        self.assertNotIn(TASK, bot.load_settings().get("active") or {})
+        self.assertFalse(bot.LAST["ok"])
+        with mock.patch.object(bot, "topic_closed", lambda url: until):
+            bot.run_task(CHAT, URL, "", show=True)               # «только ответы» — можно и после срока
+        self.assertTrue(self.prompts)
+
+    def test_topic_closed_by_deadline_and_extra_days(self):
+        data = lambda dl, extra: {"data": {"studyPeriod": {"deadlineDate": dl, "extraDeadlineDays": extra}}}
+        today = bot.datetime.datetime.now(bot.MSK).date()
+        iso = lambda d: d.isoformat()
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: data(iso(today - bot.datetime.timedelta(days=8)), 7)):
+            self.assertEqual(TOPIC_CLOSED(URL), today - bot.datetime.timedelta(days=1))
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: data(iso(today - bot.datetime.timedelta(days=7)), 7)):
+            self.assertIsNone(TOPIC_CLOSED(URL))                 # последний день доработок — ещё принимает
+        with mock.patch.object(bot.web.mirror, "get_json", lambda path: None):
+            self.assertIsNone(TOPIC_CLOSED(URL))                 # не узнали — решаем как обычно
 
     def test_send_modes(self):
         self.make_draft()

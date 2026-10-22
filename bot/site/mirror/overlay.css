@@ -353,3 +353,41 @@ html.hdpx-typing .hdpx-tab, html.hdpx-typing .hdpx-pwr { opacity: 0; pointer-eve
 
 /* «⏻ Выключить всё» без перезагрузки (overlay.js plainOff): всё бота спрятано, страница — чистая платформа */
 html.hdpx-off .hdpx-vv, html.hdpx-off [data-hdpx] { display: none !important; }
+
+/* ---------- «В работе»: что решается и очередь (Глеб 22.10: «плохо сделано — красивее и понятнее») ---------- */
+.hdpx-work { padding-bottom: 8px; }
+.hdpx-whead { gap: 6px; margin-bottom: 6px; }
+.hdpx-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px;
+  background: var(--hdpx-violet-bg); color: var(--hdpx-primary); font: 500 12px/1 var(--hdpx-font); white-space: nowrap; }
+.hdpx-pill .hdpx-spin { width: 11px; height: 11px; border-width: 2px; }
+.hdpx-pill-q { background: var(--hdpx-bg2); color: var(--hdpx-grey); }
+.hdpx-wi { display: flex; align-items: center; gap: 12px; margin: 0 -8px; padding: 10px 8px; border-radius: 12px;
+  color: var(--hdpx-ink); text-decoration: none; transition: background .2s; }
+.hdpx-wi + .hdpx-wi { border-top: 1px solid var(--hdpx-line); }
+.hdpx-wi:hover { background: var(--hdpx-bg2); }
+.hdpx-wico { flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+  background: var(--hdpx-bg2); font-size: 18px; line-height: 1; }
+.hdpx-wtxt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hdpx-wtxt b { font-weight: 500; font-size: 15px; line-height: 19px; color: var(--hdpx-ink); overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.hdpx-wtxt small { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 16px; color: var(--hdpx-grey);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hdpx-wtxt small .hdpx-spin { width: 11px; height: 11px; border-width: 2px; }
+.hdpx-wtime { flex: 0 0 auto; text-align: right; font: 500 12px/16px var(--hdpx-font); color: var(--hdpx-grey); font-variant-numeric: tabular-nums; }
+.hdpx-bar-thin { height: 4px; margin-top: 4px; border-radius: 2px; }
+.hdpx-wsec { margin: 10px 0 2px !important; font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--hdpx-grey); }
+.hdpx-wi-q { padding: 8px; }
+.hdpx-wi-q .hdpx-wtxt b { font-weight: 400; -webkit-line-clamp: 1; }
+.hdpx-wnum { flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 28px; border-radius: 8px;
+  border: 1px dashed var(--hdpx-line); color: var(--hdpx-grey); font: 500 13px/1 var(--hdpx-font); }
+.hdpx-work .hdpx-more > summary { padding: 8px 0 4px; }
+
+/* ⚡ Автотесты по предметам */
+.hdpx-arow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--hdpx-line); }
+.hdpx-row + .hdpx-arow { margin-top: 8px; }
+.hdpx-arow .hdpx-btn { flex: 0 0 auto; }
+
+/* тема, срок которой прошёл (платформа больше не принимает ответы) */
+.hdpx-closed { margin: 10px 0 0 !important; padding: 8px 12px; border-radius: 10px; background: var(--hdpx-orange-bg);
+  color: var(--hdpx-ink); font-size: 14px; line-height: 18px; }

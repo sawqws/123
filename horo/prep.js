@@ -33,6 +33,7 @@ async function topics(page, disc) {
       title: (tp.title || '').trim(),
       start: tp.studyPeriod.startDate,
       deadline: tp.studyPeriod.deadlineDate,
+      extra: tp.studyPeriod.extraDeadlineDays ?? null,  // дни доработок после срока: потом платформа ответы не принимает
       achieved: tp.achievedLevel,  // итоговый уровень темы (для сайта)
       tasks: tp.tasks.filter(t => !t.hidden).sort((a, b) => (a.order || 0) - (b.order || 0))
         .map(t => {

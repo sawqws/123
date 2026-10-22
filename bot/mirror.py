@@ -454,6 +454,25 @@ def request(method, path, headers, body):
     raise OSError("нет связи с платформой")
 
 
+def get_json(path):
+    """GET к API платформы сессией бота → разобранный JSON или None (нет входа, ошибка, не JSON)."""
+    headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*",
+               "Accept-Encoding": "gzip"}
+    ck = _jar.header()
+    if ck:
+        headers["Cookie"] = ck
+    try:
+        conn, resp = request("GET", path, headers, None)
+        data = resp.read()
+        _pool.put(conn)
+        if resp.status != 200 or not (resp.headers.get("Content-Type") or "").lower().startswith("application/json"):
+            return None
+        _jar.update(resp.headers.get_all("Set-Cookie") or [])
+        return json.loads(decode(data, resp.headers.get("Content-Encoding")))
+    except (http.client.HTTPException, OSError, ValueError, zlib.error):
+        return None
+
+
 # ---------- «сразу из памяти, обновить в фоне» ----------
 # Каркас страницы (HTML одинаковый для всех /student/…) и редко меняющиеся ответы API (настройки школы, модули,
 # подсказки, документы на подпись — до 2,6 с у платформы) отдаются сразу из памяти, а свежие тут же берутся в фоне:

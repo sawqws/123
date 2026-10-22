@@ -117,19 +117,20 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         const r = await fetch(`${EDU}/topics/${topic}/tasks`, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
         if (!r.ok) throw new Error(String(r.status));
         const d = (await r.json()).data || {};
-        return { title: (d.title || '').trim(), tasks: (d.tasks || []).filter(t => !t.hidden).map(norm) };
+        const sp = d.studyPeriod || {};
+        return { title: (d.title || '').trim(), tasks: (d.tasks || []).filter(t => !t.hidden).map(norm), closed: closedTill(sp.deadlineDate, sp.extraDeadlineDays) };
       } catch (e) {
         try {  // запасной путь: данные бота (overview.json)
           const ov = S.ov || (await api('/api/overview')).data;
           S.ov = ov || S.ov;
           const tp = ((ov || {}).topics || []).find(x => x.uuid === topic);
-          return tp ? { title: tp.title, tasks: tp.tasks.map(norm) } : { title: '', tasks: [] };
+          return tp ? { title: tp.title, tasks: tp.tasks.map(norm), closed: closedTill(tp.deadline, tp.extra) } : { title: '', tasks: [] };
         } catch (x) { return { title: '', tasks: [] }; }
       }
     })();
     S.topics[topic] = { ...(c || {}), loading: job.then(r => r.tasks) };
     const r = await job;
-    S.topics[topic] = { at: Date.now(), tasks: r.tasks, title: r.title };
+    S.topics[topic] = { at: Date.now(), tasks: r.tasks, title: r.title, closed: r.closed || null };
     update();
     return r.tasks;
   }
@@ -137,7 +138,19 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   const taskOf = (topic, task) => (cachedTasks(topic) || []).find(t => t.uuid === task);
   const isTest = t => t && t.type === 'test';
   const done = t => t && ['approved', 'reviewing'].includes(t.status);
-  const autoOk = t => isTest(t) && !done(t) && t.req !== false && t.left !== 0;
+  // Глеб 22.10: «автотесты» — все несданные тесты темы (и обязательные, и по желанию), пока есть попытки и тема открыта
+  const autoOk = t => isTest(t) && ['appointed', 'reworking', 'failed'].includes(t.status) && t.left !== 0;
+  // срок темы + дни доработок прошли — платформа пишет «Прошел срок доработок…, отправка решений невозможна»
+  const todayMsk = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+  function closedTill(deadline, extra) {
+    if (!deadline || extra == null) return null;  // не знаем — считаем открытой
+    const d = new Date(String(deadline).slice(0, 10) + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + Number(extra));
+    const until = d.toISOString().slice(0, 10);
+    return todayMsk() > until ? until : null;
+  }
+  const closedOf = topic => (S.topics[topic] || {}).closed || null;
+  const topicAutos = topic => (closedOf(topic) ? [] : (cachedTasks(topic) || []).filter(autoOk).filter(t => !S.running.has(t.uuid)));
 
   /* ---------- где мы ---------- */
   function where() {
@@ -381,7 +394,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   }
 
   async function loadOv() {
+    if (S.ovLoading) return;
+    S.ovLoading = true;
     try { const r = await api('/api/overview'); if (r.data) S.ov = r.data; } catch (e) { /* без счётчика */ }
+    setTimeout(() => { S.ovLoading = false; }, S.ov ? 0 : 15000);  // не вышло — не долбить бота на каждой перерисовке
     renderPanel();
   }
 
@@ -523,6 +539,63 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   }
 
   /* --- Сейчас --- */
+  // Глеб 22.10: «В работе и в очереди плохо сделано» — одна карточка: что решается (предмет, шаг, полоска, время)
+  // и очередь по порядку с номерами; названия и предмет известны и до того, как бот открыл задание (site_work).
+  function workCard() {
+    const w = S.wait && S.wait.work;
+    if (!w || !w.length) return '';
+    const st = S.st || {};
+    const live = w.filter(x => x.state === 'live'), queue = w.filter(x => x.state !== 'live');
+    const name = x => esc(x.title || 'Задание');
+    const href = x => (x.url ? ` href="${esc(local(x.url))}" data-a="go"` : '');
+    const liveRow = x => `<a class="hdpx-wi"${href(x)}><span class="hdpx-wico">${esc(x.icon || '📘')}</span>
+      <span class="hdpx-wtxt"><b>${name(x)}</b><small>${x.step ? `${spin}${esc(x.step)}` : `${spin}Начинаю`}</small>
+      <span class="hdpx-bar hdpx-bar-thin${x.frac == null ? ' hdpx-bar-ind' : ''}"><i style="width:${Math.round((x.frac || 0) * 100)}%"></i></span></span>
+      <span class="hdpx-wtime">${x.frac != null ? `${Math.round(x.frac * 100)}%<br>` : ''}${mmss(x.secs || 0)}</span></a>`;
+    const qRow = x => `<a class="hdpx-wi hdpx-wi-q"${href(x)}><span class="hdpx-wnum">${x.place || ''}</span>
+      <span class="hdpx-wtxt"><b>${name(x)}</b><small>${esc(x.icon || '')} ${esc(x.subj || 'в очереди')}</small></span></a>`;
+    const SHOW = 4;
+    // рядом идёт не задание (подготовка, проверка) — его карточка отдельно, как раньше
+    const other = st.live && !live.length ? liveCard() : '';
+    return other + `<div class="hdpx-card hdpx-work" data-key="work">
+      <div class="hdpx-row hdpx-whead"><b class="hdpx-h3 hdpx-grow">В работе</b>
+        ${live.length ? `<span class="hdpx-pill">${spin}решаю ${live.length}</span>` : ''}
+        ${queue.length ? `<span class="hdpx-pill hdpx-pill-q">в очереди ${queue.length}</span>` : ''}</div>
+      ${live.map(liveRow).join('')}
+      ${queue.length ? `<p class="hdpx-wsec">Очередь · по порядку</p>${queue.slice(0, SHOW).map(qRow).join('')}
+        ${queue.length > SHOW ? `<details class="hdpx-more" data-k="wq"><summary class="hdpx-small hdpx-muted">Ещё ${queue.length - SHOW} в очереди</summary>${queue.slice(SHOW).map(qRow).join('')}</details>` : ''}` : ''}
+    </div>`;
+  }
+
+  // ⚡ Автотесты по всем темам (overview: темы и задания всех предметов), по предметам. Глеб 22.10: запуск в одном
+  // предмете не прячет кнопку в других предметах и темах — каждый предмет считается сам, запущенное просто вычитается.
+  function allAutos() {
+    if (!S.ov || !S.ov.topics) return null;
+    const by = new Map();
+    for (const tp of S.ov.topics) {
+      if (closedTill(tp.deadline, tp.extra != null ? tp.extra : 0)) continue;  // старые данные без дней доработок — по сроку темы
+      for (const t of (tp.tasks || []).map(norm)) {
+        if (!autoOk(t) || S.running.has(t.uuid)) continue;
+        if (!by.has(tp.subj)) by.set(tp.subj, { subj: tp.subj, icon: tp.icon || '📘', tasks: [] });
+        by.get(tp.subj).tasks.push({ ...t, topic: tp.uuid });
+      }
+    }
+    return [...by.values()].sort((a, b) => b.tasks.length - a.tasks.length);
+  }
+
+  function autosCard() {
+    const subs = allAutos();
+    if (!subs && !S.ovLoading) loadOv();
+    const n = subs ? subs.reduce((k, x) => k + x.tasks.length, 0) : 0;
+    const body = !subs ? `<p class="hdpx-small hdpx-muted">${spin} Считаю тесты…</p>`
+      : !n ? '<p class="hdpx-small hdpx-muted">Новых тестов с автопроверкой нет</p>'
+      : subs.map(x => `<div class="hdpx-arow"><span class="hdpx-wico">${esc(x.icon)}</span><span class="hdpx-grow hdpx-wtxt"><b>${esc(x.subj)}</b>
+          <small>${x.tasks.length} ${word(x.tasks.length, 'тест', 'теста', 'тестов')}</small></span>
+          <button class="hdpx-btn hdpx-s hdpx-outline" data-a="sauto" data-v="${esc(x.subj)}">⚡ Сдать</button></div>`).join('')
+        + (subs.length > 1 ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="aall">⚡ Сдать все (${n})</button></div>` : '');
+    return `<div class="hdpx-card" data-key="autos"><div class="hdpx-row"><b class="hdpx-grow">⚡ Автотесты</b>${n ? `<span class="hdpx-count">${n}</span>` : ''}</div>${body}</div>`;
+  }
+
   function liveCard() {
     const st = S.st || {};
     const out = [];
@@ -607,15 +680,12 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   function nowTab() {
     const st = S.st;
     if (!st) return `<div class="hdpx-card hdpx-center">${spin}<p class="hdpx-p hdpx-muted">Связываюсь с ботом…</p></div>`;
-    const parts = [hereCard(), liveCard(), lastCard()];
+    const parts = [hereCard(), S.wait && S.wait.work && S.wait.work.length ? workCard() : liveCard(), lastCard()];
     const drafts = st.drafts || [];
     const queued = drafts.filter(d => d.send_at || d.sending), ready = drafts.filter(d => !d.send_at && !d.sending);
     if (queued.length) parts.push(`<p class="hdpx-h3 hdpx-sec" data-key="sec-q">Уйдут учителю <span class="hdpx-count">${queued.length}</span></p>` + queued.map(queuedCard).join(''));
     if (ready.length) parts.push(`<p class="hdpx-h3 hdpx-sec" data-key="sec-d">Черновики учителю <span class="hdpx-count">${ready.length}</span></p>` + ready.map(draftCard).join(''));
-    const autos = S.ov ? (S.ov.tasks || []).filter(t => t.auto && ['appointed', 'reworking'].includes(t.rawStatus)).length : null;
-    parts.push(`<div class="hdpx-card"><div class="hdpx-row"><b class="hdpx-grow">⚡ Автотесты</b>${autos == null ? `<span class="hdpx-muted hdpx-small">${spin}</span>` : ''}</div>
-      <p class="hdpx-small hdpx-muted">${autos ? `Новых тестов с автопроверкой: ${autos}. Бот решит и сдаст их — до 3 сразу, остальные в очереди.` : autos === 0 ? 'Новых тестов с автопроверкой нет' : 'Считаю тесты…'}</p>
-      ${autos ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="auto" data-n="${autos}">⚡ Сдать все автотесты (${autos})</button></div>` : ''}</div>`);
+    parts.push(autosCard());
     if (!st.live && !S.running.size && !drafts.length) {
       if (where().kind === 'other') parts.push('<p class="hdpx-small hdpx-muted hdpx-tc">Открой задание или тему — здесь появятся их кнопки</p>');
     }
@@ -837,6 +907,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       acts = `<a class="hdpx-btn hdpx-s hdpx-outline" href="https://t.me/${BOT}?start=site" target="_blank" rel="noopener">Открыть бота</a>`;
     } else if (!t) {
       hint = `<span class="hdpx-tb-hint">${spin} Смотрю задание…</span>`;
+    } else if (closedOf(p.topic)) {
+      hint = `<span class="hdpx-tb-hint">⛔ Срок темы прошёл ${esc(dm(closedOf(p.topic)))} — платформа больше не принимает ответы${isTest(t) ? ', могу показать ответы' : ''}</span>`;
+      if (isTest(t)) acts = '<button class="hdpx-btn hdpx-s hdpx-outline" data-a="solve" data-m="show">👁 Ответы</button>';
     } else if (isTest(t)) {
       const noTries = t.left === 0;
       hint = `<span class="hdpx-tb-hint">${t.status === 'approved' ? 'Тест зачтён — могу показать ответы' : noTries ? 'Попытки закончились — могу показать ответы'
@@ -891,11 +964,13 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     topicTasks(p.topic);
     const tasks = cachedTasks(p.topic);
     if (!tasks) return `<div class="hdpx-card hdpx-center">${spin}<p class="hdpx-p hdpx-muted">Смотрю тему…</p></div>`;
-    const autos = tasks.filter(autoOk).filter(t => !S.running.has(t.uuid));
+    const autos = topicAutos(p.topic);
+    const closed = closedOf(p.topic);
     const title = (S.topics[p.topic] || {}).title || '';
     const row = t => {
       let acts;
       if (S.running.has(t.uuid)) acts = `<span class="hdpx-chip-w">${spin}решаю</span>`;
+      else if (closed) acts = isTest(t) ? `<button class="hdpx-mb" data-a="mini" data-m="show" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Только ответы">👁</button>` : '';
       else if (isTest(t)) acts = (done(t) || t.left === 0 ? '' : `<button class="hdpx-mb" data-a="mini" data-m="do" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Решить и сдать">⚡</button>`)
         + `<button class="hdpx-mb" data-a="mini" data-m="show" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Только ответы">👁</button>`;
       else acts = t.status === 'approved' ? '' : `<button class="hdpx-mb" data-a="mini" data-m="write" data-topic="${esc(p.topic)}" data-task="${esc(t.uuid)}" title="Написать ответ">✍️</button>`;
@@ -905,6 +980,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return `<div class="hdpx-card hdpx-here"><p class="hdpx-h3">📚 Эта тема${title ? ` · ${esc(title)}` : ''}</p>
       <p class="hdpx-small hdpx-muted">📖 Подготовь меня по теме</p>
       <div class="hdpx-chips">${[[1, '⚡ 1 мин'], [5, '📝 5 мин'], [10, '📚 10 мин']].map(([m, a]) => `<button class="hdpx-chip" data-a="tprep" data-m="${m}">${a}</button>`).join('')}</div>
+      ${closed ? `<p class="hdpx-closed">⛔ Срок темы прошёл ${esc(dm(closed))} — платформа больше не принимает ответы</p>` : ''}
       ${autos.length ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="tauto">⚡ Автотесты темы (${autos.length})</button></div>` : ''}
       ${open.length ? `<p class="hdpx-small hdpx-muted hdpx-sec">Не сдано: ${open.length}</p>${open.map(row).join('')}` : '<p class="hdpx-small hdpx-muted">Обязательное в теме сдано</p>'}
       ${tasks.length > open.length ? `<details class="hdpx-more"><summary class="hdpx-small hdpx-muted">Остальные задания (${tasks.length - open.length})</summary>${tasks.filter(t => !open.includes(t)).map(row).join('')}</details>` : ''}</div>`;
@@ -919,20 +995,30 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   }
 
   async function topicAuto(btn, topic) {
-    const tasks = (await topicTasks(topic, true)).filter(autoOk).filter(t => !S.running.has(t.uuid));
-    if (!tasks.length) { toast('Несданных тестов с автопроверкой в теме нет'); return; }
+    await topicTasks(topic, true);
+    const tasks = topicAutos(topic);
+    if (!tasks.length) { toast(closedOf(topic) ? 'Срок темы прошёл — платформа не примет ответы' : 'Несданных тестов с автопроверкой в теме нет'); return; }
+    await runAutos(btn, tasks.map(t => ({ ...t, topic })));
+  }
+
+  // запуск пачки тестов: по одному /api/solve — до 3 сразу, остальные в очереди бота
+  async function runAutos(btn, tasks, head) {
+    const opt = tasks.filter(t => t.req === false).length;
     const ok = await ask({
-      title: `Сдать ${tasksWord(tasks.length)} с автопроверкой?`,
-      text: tasks.map(t => '• ' + t.title).slice(0, 8).join('\n') + (tasks.length > 8 ? `\n… и ещё ${tasks.length - 8}` : '') + '\n\nБот решит и отправит их на HDP — до 3 сразу, остальные в очереди. Каждый тест тратит попытку.',
+      title: head || `Сдать ${tasksWord(tasks.length)} с автопроверкой?`,
+      text: tasks.map(t => `• ${t.title}${t.req === false ? ' · по желанию' : ''}`).slice(0, 8).join('\n') + (tasks.length > 8 ? `\n… и ещё ${tasks.length - 8}` : '')
+        + `\n\n${opt && opt < tasks.length ? `Обязательных ${tasks.length - opt}, по желанию ${opt}. ` : ''}Бот решит и отправит их на HDP — до 3 сразу, остальные в очереди. Каждый тест тратит попытку.`,
       ok: '⚡ Сдать все',
     });
     if (!ok) return;
     let started = 0;
     await busy(btn, async () => {  // ошибка на одном тесте — покажем; запущенные до неё уже идут
       for (const t of tasks) {
-        await api('/api/solve', { url: taskUrl(topic, t.uuid) });
+        if (S.running.has(t.uuid)) continue;
+        await api('/api/solve', { url: taskUrl(t.topic, t.uuid) });
         S.running.add(t.uuid);
         started++;
+        update();  // кнопки в других темах и предметах пересчитываются сразу
       }
     });
     if (started) toast(started === tasks.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат' : `Запустил ${started} из ${tasks.length}`);
@@ -979,9 +1065,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     if (p.kind === 'topic') {
       const tasks = cachedTasks(p.topic);
       if (!tasks) return '';
-      const autos = tasks.filter(autoOk).filter(t => !S.running.has(t.uuid)).length;
+      const autos = topicAutos(p.topic).length;
       const work = tasks.filter(t => S.running.has(t.uuid)).length;
       return open + `<button class="hdpx-ab-btn" data-a="openhere">📖 Подготовь меня</button>`
+        + (closedOf(p.topic) ? '<span class="hdpx-ab-txt">⛔ Срок темы прошёл</span>' : '')
         + (autos ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="tauto">⚡ Автотесты (${autos})</button>` : '')
         + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
     }
@@ -994,6 +1081,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     }
     const draft = (st.drafts || []).find(d => d.task === p.task);
     if (draft) return open + `<button class="hdpx-ab-btn hdpx-ab-main" data-a="draft" data-task="${esc(p.task)}">✍️ Черновик готов${draft.send_at ? ` · ${hhmm(draft.send_at)}` : ''}</button>`;
+    if (closedOf(p.topic)) return open + (isTest(t) ? '<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button>' : '') + '<span class="hdpx-ab-txt">⛔ Срок темы прошёл</span>';
     if (isTest(t)) {
       const over = done(t) || t.left === 0;
       return open + `<button class="hdpx-ab-btn" data-a="solve" data-m="show">👁 Ответы</button>`
@@ -1190,10 +1278,12 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         if (f && f.data) lightbox(f.data, f.name);
         break;
       }
-      case 'auto': {
-        if (!(await ask({ title: `Сдать все автотесты (${d.n})?`, text: 'Бот решит и отправит на HDP новые тесты с автопроверкой — до 3 сразу, остальные в очереди. Каждый тест тратит попытку.', ok: '⚡ Сдать все' }))) return;
-        const r = await busy(a, () => api('/api/auto', {}));
-        if (r) { toast(`Запустил: ${tasksWord(r.n)} — результат придёт сюда и в чат`); setTimeout(tick, 800); }
+      case 'sauto': case 'aall': {
+        const subs = allAutos() || [];
+        const pick = act === 'aall' ? subs : subs.filter(x => x.subj === d.v);
+        const tasks = pick.flatMap(x => x.tasks);
+        if (!tasks.length) { toast('Новых тестов с автопроверкой нет'); break; }
+        await runAutos(a, tasks, act === 'aall' ? `Сдать все автотесты (${tasks.length})?` : `${pick[0].icon} ${pick[0].subj}: сдать ${tasksWord(tasks.length)}?`);
         break;
       }
       case 'exlvl': S.examsLvl = d.v; store.set('examsLvl', d.v); renderPanel(true); break;

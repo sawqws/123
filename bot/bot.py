@@ -1150,6 +1150,37 @@ def result_card(out, title="", secs=0, show=False):
     return "\n".join(lines), full
 
 
+def task_meta(task):
+    """Задание из списка тем (overview.json): название, предмет, тема — известны и до того, как Claude открыл задание."""
+    for tp in (overview() or {}).get("topics") or []:
+        for t in tp.get("tasks") or []:
+            if t.get("uuid") == task:
+                return {"title": t.get("title") or "", "subj": tp.get("subj") or "", "icon": tp.get("icon") or "📘",
+                        "topic": tp.get("uuid") or "", "type": t.get("type") or ""}
+    return {}
+
+
+def task_title(task):
+    return drafts.task_info(task)[1] or task_meta(task).get("title", "")
+
+
+def topic_closed(url):
+    """Дата, до которой тема принимала ответы, если срок доработок прошёл (срок темы + дни доработок), иначе None.
+    Не удалось узнать — None: решаем как обычно."""
+    m = re.search(r"/topic/([\w-]+)/task/([\w-]+)", url)
+    if not m:
+        return None
+    try:
+        d = web.mirror.get_json(f"{web.mirror.EDU}/topics/{m.group(1)}/tasks?taskUuid={m.group(2)}")
+        sp = ((d or {}).get("data") or {}).get("studyPeriod") or {}
+        if not sp.get("deadlineDate") or sp.get("extraDeadlineDays") is None:
+            return None
+        until = datetime.date.fromisoformat(sp["deadlineDate"]) + datetime.timedelta(days=int(sp["extraDeadlineDays"]))
+    except Exception:
+        return None
+    return until if datetime.datetime.now(MSK).date() > until else None
+
+
 def run_task(chat, url, text, show=False, mid=None, retry=None):
     """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди."""
     task = drafts.task_id(url)
@@ -1158,6 +1189,17 @@ def run_task(chat, url, text, show=False, mid=None, retry=None):
             send(chat, card("Это задание уже решаю", note="Результат придёт сюда", icon="⏳"), raw_html=True)
             return
         running.add(task)
+    until = None if show else topic_closed(url)
+    if until:  # платформа не примет: «Прошёл срок доработок после окончания темы, отправка решений невозможна»
+        with running_lock:
+            running.discard(task)
+        title = task_title(task) or "Задание"
+        note = f"сдавать можно было до {until:%d.%m} — платформа больше не принимает ответы"
+        remember(title, False, f"Срок темы прошёл: {note}", url=url)
+        react(chat, mid, "🤷")
+        send(chat, card("Срок темы прошёл", note=f"{esc(title)} — {note}", icon="⛔"), menu=True, raw_html=True)
+        mark_active(task, None)
+        return
     mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
     try:
         if not lock.acquire(blocking=False):
@@ -1214,8 +1256,8 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
         react(chat, mid, "👀")
         drafts.clear(task)
         live = Live(chat, "Смотрю ответы" if show else "Вторая попытка: перепроверяю" if retry else "Решаю задание",
-                    esc(drafts.task_info(task)[1]),
-                    sub_fn=lambda: esc(drafts.task_info(task)[1]))
+                    esc(task_title(task)),
+                    sub_fn=lambda: esc(task_title(task)))
         live.task = task
         live.step("Запускаю Claude", 0.05)
         try:
@@ -3783,6 +3825,31 @@ def site_when(at, now):
     return {"at": int(at), "left": left, "hhmm": f"{when:%H:%M}", "when": f"{day}в {when:%H:%M}", "soon": soon}
 
 
+def site_work(work):
+    """В работе и в очереди: что решается (шаг, доля, время) и что ждёт места — по порядку, с названием и предметом."""
+    lives = {x.task: x for x in list(Live.items) if x.task}
+    since = {t: a.get("since") or 0 for t, a in (load_settings().get("active") or {}).items()}
+    out = []
+    for t in sorted(work, key=lambda t: (t not in lives, since.get(t, 0))):
+        meta = task_meta(t)
+        url = site_task_url(t) or (f"https://horodigital.ru/student/topic/{meta['topic']}/task/{t}" if meta else "")
+        item = {"task": t, "title": task_title(t) or "Задание", "url": url, "subj": meta.get("subj", ""),
+                "icon": meta.get("icon", "📘")}
+        live = lives.get(t)
+        if live:
+            st = live.state()
+            item.update(state="live", step=st["step"], frac=st["frac"], secs=st["secs"])
+        else:
+            item["state"] = "queue"
+        out.append(item)
+    n = 0
+    for item in out:
+        if item["state"] == "queue":
+            n += 1
+            item["place"] = n
+    return out
+
+
 def app_site_wait(_=None, now=None):
     """⏳ Ожидание для сайта: по таймеру (во сколько и через сколько), отправляются сейчас, ждут «Отправить», в работе."""
     now = now or time.time()
@@ -3790,7 +3857,7 @@ def app_site_wait(_=None, now=None):
     brief = lambda d: {"task": d["task"], "title": d["title"], "url": d["url"]}
     return {"timed": [{**brief(d), **site_when(d["send_at"], now)} for d in timed],
             "sending": [brief(d) for d in sending], "held": [brief(d) for d in held],
-            "work": [{"task": t, "title": drafts.task_info(t)[1] or "Задание", "url": site_task_url(t)} for t in work],
+            "work": site_work(work),
             "busy": lock.locked(), "delay": delay_label()}
 
 
