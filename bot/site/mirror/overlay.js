@@ -232,17 +232,19 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return e;
   }
 
-  function ask({ title, text = '', ok = 'Да', cancel = 'Отмена', danger = false }) {
+  function ask({ title, text = '', ok = 'Да', cancel = 'Отмена', danger = false, alt = '' }) {  // alt — третья кнопка → 'alt'
     return new Promise(res => {
       const m = el('div', 'hdpx-modal', `<div class="hdpx-dialog" role="dialog" aria-modal="true">
         <p class="hdpx-h2">${esc(title)}</p>${text ? `<p class="hdpx-p">${esc(text)}</p>` : ''}
-        <div class="hdpx-acts hdpx-acts-end"><button class="hdpx-btn hdpx-outline" data-v="0">${esc(cancel)}</button>
-        <button class="hdpx-btn ${danger ? 'hdpx-danger' : 'hdpx-primary'}" data-v="1">${esc(ok)}</button></div></div>`);
+        ${alt ? `<div class="hdpx-acts hdpx-acts-col"><button class="hdpx-btn hdpx-primary" data-v="1">${esc(ok)}</button>
+          <button class="hdpx-btn hdpx-outline" data-v="2">${esc(alt)}</button><button class="hdpx-btn hdpx-ghost" data-v="0">${esc(cancel)}</button></div>`
+        : `<div class="hdpx-acts hdpx-acts-end"><button class="hdpx-btn hdpx-outline" data-v="0">${esc(cancel)}</button>
+        <button class="hdpx-btn ${danger ? 'hdpx-danger' : 'hdpx-primary'}" data-v="1">${esc(ok)}</button></div>`}</div>`);
       const finish = v => { m.remove(); document.removeEventListener('keydown', key, true); res(v); };
       const key = e => { if (e.key === 'Escape') { e.stopPropagation(); finish(false); } };
       m.addEventListener('click', e => {
         const b = e.target.closest('[data-v]');
-        if (b) finish(b.dataset.v === '1');
+        if (b) finish(b.dataset.v === '1' ? true : b.dataset.v === '2' ? 'alt' : false);
         else if (e.target === m) finish(false);
       });
       document.addEventListener('keydown', key, true);
@@ -602,6 +604,15 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
 
   // ⚡ Автотесты по всем темам (overview: темы и задания всех предметов), по предметам. Глеб 22.10: запуск в одном
   // предмете не прячет кнопку в других предметах и темах — каждый предмет считается сам, запущенное просто вычитается.
+  // «7 обяз. + 52 по желанию»: tasks — тесты с req (true — обязательный); short — для узкой полосы
+  function autoLabel(tasks, short) {
+    const must = tasks.filter(t => t.req !== false).length, opt = tasks.length - must;
+    if (!opt) return `⚡ Все автотесты (${must})`;
+    if (!must) return short ? `⚡ По желанию (${opt})` : `⚡ Автотесты по желанию (${opt})`;
+    return short ? `⚡ ${must} обяз. + ${opt}` : `⚡ Автотесты: ${must} обяз. + ${opt} по желанию`;
+  }
+  const allTasks = subs => (subs || []).flatMap(x => x.tasks);
+
   function allAutos() {
     if (!S.ov || !S.ov.topics) return null;
     const by = new Map();
@@ -622,9 +633,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const n = subs ? subs.reduce((k, x) => k + x.tasks.length, 0) : 0;
     const body = !subs ? `<p class="hdpx-small hdpx-muted">${spin} Считаю тесты…</p>`
       : !n ? '<p class="hdpx-small hdpx-muted">Новых тестов с автопроверкой нет</p>'
-      : `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="aall">⚡ Все автотесты по всем предметам (${n})</button></div>`
+      : `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow hdpx-btn-wrap" data-a="aall">${esc(autoLabel(allTasks(subs)))}</button></div>`
         + subs.map(x => `<div class="hdpx-arow"><span class="hdpx-wico">${esc(x.icon)}</span><span class="hdpx-grow hdpx-wtxt"><b>${esc(x.subj)}</b>
-          <small>${x.tasks.length} ${word(x.tasks.length, 'тест', 'теста', 'тестов')}</small></span>
+          <small>${(m => [m && `${m} обяз.`, x.tasks.length - m && `${x.tasks.length - m} по желанию`].filter(Boolean).join(' · '))(x.tasks.filter(t => t.req !== false).length)}</small></span>
           <button class="hdpx-btn hdpx-s hdpx-outline" data-a="sauto" data-v="${esc(x.subj)}">⚡ Сдать</button></div>`).join('');
     return `<div class="hdpx-card" data-key="autos"><div class="hdpx-row"><b class="hdpx-grow">⚡ Автотесты</b>${n ? `<span class="hdpx-count">${n}</span>` : ''}</div>${body}</div>`;
   }
@@ -1053,14 +1064,21 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
 
   // запуск пачки тестов: по одному /api/solve — до 3 сразу, остальные в очереди бота
   async function runAutos(btn, tasks, head) {
-    const opt = tasks.filter(t => t.req === false).length;
+    // сначала обязательные (Глеб 22.10: «это обяз или не обяз») — и можно сдать только их
+    const must = tasks.filter(t => t.req !== false), opt = tasks.filter(t => t.req === false);
+    tasks = [...must, ...opt];
+    const both = must.length && opt.length;
+    const list = (arr, tag) => arr.slice(0, 6).map(t => `• ${t.title}${tag}`).join('\n') + (arr.length > 6 ? `\n… и ещё ${arr.length - 6}` : '');
     const ok = await ask({
       title: head || `Сдать ${tasksWord(tasks.length)} с автопроверкой?`,
-      text: tasks.map(t => `• ${t.title}${t.req === false ? ' · по желанию' : ''}`).slice(0, 8).join('\n') + (tasks.length > 8 ? `\n… и ещё ${tasks.length - 8}` : '')
-        + `\n\n${opt && opt < tasks.length ? `Обязательных ${tasks.length - opt}, по желанию ${opt}. ` : ''}Бот решит и отправит их на HDP — до 3 сразу, остальные в очереди. Каждый тест тратит попытку.`,
-      ok: '⚡ Сдать все',
+      text: (both ? `Обязательные — ${must.length}:\n${list(must, '')}\n\nПо желанию — ${opt.length}:\n${list(opt, '')}`
+        : list(tasks, opt.length ? ' · по желанию' : ''))
+        + '\n\nБот решит и отправит их на HDP — до 3 сразу, остальные в очереди. Каждый тест тратит попытку.',
+      ok: both ? `⚡ Все — и по желанию (${tasks.length})` : '⚡ Сдать все',
+      alt: both ? `Только обязательные (${must.length})` : '',  // по желанию — для уровня выше, не для зачёта
     });
     if (!ok) return;
+    if (ok === 'alt') tasks = must;
     let started = 0;
     await busy(btn, async () => {  // ошибка на одном тесте — покажем; запущенные до неё уже идут
       for (const t of tasks) {
@@ -1109,6 +1127,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return Math.min(inset, Math.round(vh / 3));
   }
 
+  // в полосе: полная подпись, на узком экране (.hdpx-narrow) — короткая
+  const abLabel = tasks => `<span class="hdpx-ab-long">${esc(autoLabel(tasks))}</span><span class="hdpx-ab-short">${esc(autoLabel(tasks, true))}</span>`;
+
   function barHtml(p) {
     if (S.authed === false) return `<span class="hdpx-ab-txt">${I.bot} Нужен вход — напиши боту /site</span>`;
     const open = `<button class="hdpx-ab-ico" data-a="openhere" aria-label="Панель бота" title="Панель бота">${I.bot}</button>`;
@@ -1118,7 +1139,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       const n = subs.reduce((k, x) => k + x.tasks.length, 0);
       const work = S.running.size;
       if (!n && !work) return '';
-      return open + (n ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall">⚡ Все автотесты (${n})</button>` : '')
+      return open + (n ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall">${abLabel(allTasks(subs))}</button>` : '')
         + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
     }
     if (p.kind === 'topic') {
@@ -1134,7 +1155,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       return open + `<button class="hdpx-ab-btn" data-a="openhere" title="Подготовь меня" aria-label="Подготовь меня">${more ? '📖' : '📖 Подготовь меня'}</button>`
         + (closedOf(p.topic) ? '<span class="hdpx-ab-txt"><span>⛔ Срок<span class="hdpx-ab-long"> тестов</span> прошёл</span></span>' : '')
         + (autos ? `<button class="hdpx-ab-btn${more ? '' : ' hdpx-ab-main'}" data-a="tauto">⚡ ${more ? 'Тема' : 'Автотесты'} (${autos})</button>` : '')
-        + (more ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall"><span>⚡ Все<span class="hdpx-ab-long"> автотесты</span> (${all})</span></button>` : '')
+        + (more ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall">${abLabel(allTasks(subs))}</button>` : '')
         + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
     }
     const t = taskOf(p.topic, p.task) || (cachedTasks(p.topic) ? guessTask(p) : null);
@@ -1352,7 +1373,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
         const fresh = new Set(topics.flatMap(tp => topicAutos(tp).map(t => t.uuid)));
         const tasks = pick.flatMap(x => x.tasks).filter(t => fresh.has(t.uuid));
         if (!tasks.length) { toast('Новых тестов с автопроверкой нет'); break; }
-        await runAutos(a, tasks, act === 'aall' ? `Сдать все автотесты (${tasks.length})?` : `${pick[0].icon} ${pick[0].subj}: сдать ${tasksWord(tasks.length)}?`);
+        await runAutos(a, tasks, act === 'aall' ? 'Автотесты по всем предметам' : `${pick[0].icon} ${pick[0].subj}: сдать ${tasksWord(tasks.length)}?`);
         break;
       }
       case 'exlvl': S.examsLvl = d.v; store.set('examsLvl', d.v); renderPanel(true); break;
