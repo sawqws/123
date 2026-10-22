@@ -37,7 +37,7 @@ def sheet(i, seed=1, page=0):
     p = pages(i)[page]
     sc = p.get('scale', 1.0)    # > 1 — пишет мельче клетки (у него размер гуляет 0.6…1.2 клетки), влезает больше
     return Notebook(cols=round(p['cols'] * sc), rows=round(p['rows'] * sc), seed=seed + 101 * page,
-                    margin=p.get('margin', -0.3), right=p.get('right', 0.35))
+                    margin=p.get('margin', -0.3), right=p.get('right', 0.35), size=p.get('size', 1.0))
 
 
 def _blue(img):
