@@ -1062,7 +1062,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     await runAutos(btn, tasks.map(t => ({ ...t, topic })));
   }
 
-  // запуск пачки тестов: по одному /api/solve — до 3 сразу, остальные в очереди бота
+  // запуск пачки тестов: по одному /api/solve — до 6 сразу (сколько потянет память сервера), остальные в очереди бота
   async function runAutos(btn, tasks, head) {
     // сначала обязательные (Глеб 22.10: «это обяз или не обяз») — и можно сдать только их
     const must = tasks.filter(t => t.req !== false), opt = tasks.filter(t => t.req === false);
@@ -1073,7 +1073,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       title: head || `Сдать ${tasksWord(tasks.length)} с автопроверкой?`,
       text: (both ? `Обязательные — ${must.length}:\n${list(must, '')}\n\nПо желанию — ${opt.length}:\n${list(opt, '')}`
         : list(tasks, opt.length ? ' · по желанию' : ''))
-        + '\n\nБот решит и отправит их на HDP — до 3 сразу, остальные в очереди. Каждый тест тратит попытку.',
+        + '\n\nБот решит и отправит их на HDP — до 6 сразу, остальные в очереди. Каждый тест тратит попытку.',
       ok: both ? `⚡ Все — и по желанию (${tasks.length})` : '⚡ Сдать все',
       alt: both ? `Только обязательные (${must.length})` : '',  // по желанию — для уровня выше, не для зачёта
     });

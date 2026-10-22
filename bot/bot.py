@@ -67,21 +67,42 @@ HEARTBEAT = os.path.join(REPO, "horo", "tmp", "heartbeat")
 JOURNAL_MAX = 512 * 1024
 journal_lock = threading.Lock()
 
-MAX_PARALLEL = int(os.environ.get("HDP_PARALLEL") or 3)  # сколько заданий решать одновременно (память сервера 2 ГБ)
+# Глеб 22.10: «чтобы бот на сайте мог делать больше 3 автотестов». Сервер — 2 ГБ и 1 ядро, одно решение (Claude + браузер)
+# берёт ~300–450 МБ: 3 места есть всегда, следующие (до MAX_PARALLEL) — только пока свободной памяти хватает ещё на одно
+MAX_PARALLEL = int(os.environ.get("HDP_PARALLEL") or 6)       # сколько заданий решать одновременно — не больше
+BASE_PARALLEL = min(MAX_PARALLEL, int(os.environ.get("HDP_PARALLEL_BASE") or 3))  # столько — всегда
+MEM_NEED = int(os.environ.get("HDP_MEM_NEED") or 500)         # МБ свободной памяти на ещё одно решение сверх BASE
+
+
+def mem_free_mb():
+    """MemAvailable из /proc/meminfo, МБ (не Linux — «памяти хватает»)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 1 << 20
 
 
 class Slots:
-    """Как Lock, но пускает до n дел сразу. locked() — все места заняты."""
+    """Как Lock, но пускает до n дел сразу: base — всегда, сверх base — пока хватает свободной памяти.
+    locked() — новое дело сейчас встанет в очередь."""
 
-    def __init__(self, n):
-        self.n, self.used, self.cond = n, 0, threading.Condition()
+    def __init__(self, n, base=None, need=0, free=mem_free_mb):
+        self.n, self.base, self.need, self.free = n, n if base is None else base, need, free
+        self.used, self.cond = 0, threading.Condition()
+
+    def _full(self):
+        return self.used >= self.n or (self.used >= self.base and self.free() < self.need)
 
     def acquire(self, blocking=True):
         with self.cond:
-            while self.used >= self.n:
+            while self._full():
                 if not blocking:
                     return False
-                self.cond.wait()
+                self.cond.wait(5)  # память освобождается и без release (закончилась проверка, сдача теста)
             self.used += 1
             return True
 
@@ -92,14 +113,14 @@ class Slots:
 
     def locked(self):
         with self.cond:
-            return self.used >= self.n
+            return self._full()
 
     def busy(self):
         with self.cond:
             return self.used
 
 
-lock = Slots(MAX_PARALLEL)
+lock = Slots(MAX_PARALLEL, BASE_PARALLEL, MEM_NEED)
 running = set()  # задания, которые решаются прямо сейчас (одно и то же дважды не запускаем)
 running_lock = threading.Lock()
 settings_lock = threading.RLock()  # настройки правят параллельные задания
@@ -1261,7 +1282,7 @@ def run_task(chat, url, text, show=False, mid=None, retry=None):
     try:
         if not lock.acquire(blocking=False):
             react(chat, mid, "🤔")
-            send(chat, card("В очереди", note=f"Уже решаю {MAX_PARALLEL} — начну это, как только одно закончу",
+            send(chat, card("В очереди", note=f"Уже решаю {lock.busy()} — начну это, как только одно закончу",
                             icon="⏳"), raw_html=True)
             lock.acquire()
         _run_task(chat, url, text, show, mid, task, retry)
@@ -2057,7 +2078,7 @@ def submit_draft(chat, task=None):
 
 def _submit_draft(chat, d):
     if not lock.acquire(blocking=False):  # все места заняты решением — отправим, как только одно освободится
-        send(chat, card("Отправлю чуть позже", note=f"{esc(d['title'])} — сейчас решаю {MAX_PARALLEL} задания, "
+        send(chat, card("Отправлю чуть позже", note=f"{esc(d['title'])} — сейчас решаю {lock.busy()}, "
                                                     "отправлю, как только одно закончу", icon="⏳"), raw_html=True)
         lock.acquire()
     try:
@@ -3288,7 +3309,7 @@ def handle(msg):
         return
     show = mode.pop(chat, None) == "show"
     if len(links) > 1:
-        send(chat, card(f"Беру {len(links)} задания", note=f"До {MAX_PARALLEL} решаю сразу, остальные — следом. "
+        send(chat, card(f"Беру {len(links)} задания", note=f"До {MAX_PARALLEL} решаю сразу (сколько потянет сервер), остальные — следом. "
                         "Черновики учителю придут каждый своей карточкой, править можно любой", icon="📚"), raw_html=True)
     for u in links:
         threading.Thread(target=run_task, args=(chat, u, text if len(links) == 1 else "", show, msg.get("message_id")),
@@ -3391,7 +3412,7 @@ def app_me(_):
 
 def busy_check():
     if lock.locked():
-        raise ValueError(f"Сейчас решаю {MAX_PARALLEL} задания — подожди, пока одно закончу")
+        raise ValueError(f"Сейчас решаю {lock.busy()} — подожди, пока одно закончу")
 
 
 def app_solve(b):
