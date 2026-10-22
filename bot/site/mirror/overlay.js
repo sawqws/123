@@ -1083,15 +1083,13 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     if (!ok) return;
     if (ok === 'alt') tasks = must;
     let started = 0;
-    await busy(btn, async () => {  // ошибка на одном тесте — покажем; запущенные до неё уже идут
-      for (const t of tasks) {
-        if (S.running.has(t.uuid)) continue;
-        await api('/api/solve', { url: taskUrl(t.topic, t.uuid) });
-        S.running.add(t.uuid);
-        started++;
-        update();  // кнопки в других темах и предметах пересчитываются сразу
-      }
-    });
+    // 22.10: всю пачку — одним запросом (по одному: под нагрузкой один запрос не дошёл — остальные не запустились)
+    const todo = tasks.filter(t => !S.running.has(t.uuid));
+    const r = todo.length && await busy(btn, () => api('/api/solve', { urls: todo.map(t => taskUrl(t.topic, t.uuid)) }));
+    if (r) {
+      for (const t of todo) S.running.add(t.uuid);
+      started = r.n || todo.length;
+    }
     if (started) toast(started === tasks.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат' : `Запустил ${started} из ${tasks.length}`);
     update();
     setTimeout(tick, 800);

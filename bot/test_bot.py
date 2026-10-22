@@ -15,6 +15,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 os.environ.setdefault("TELEGRAM_TOKEN", "test")
 import bot  # noqa: E402
+import threading  # noqa: E402
+REAL_THREAD = threading.Thread
 import drafts  # noqa: E402
 import sitecheck  # noqa: E402
 import web  # noqa: E402
@@ -1393,6 +1395,34 @@ class SiteTest(BotTest):
         with mock.patch.object(bot.threading, "Thread") as th:
             bot.app_solve({"url": url, "wish": "кратко"})
         self.assertEqual(th.call_args.kwargs["args"][2], "кратко")
+
+    def test_solve_batch_one_request(self):
+        # «⚡ Все автотесты» с сайта: вся пачка одним запросом, без карточки «В очереди» на каждый тест
+        bot.save_settings({"owner": CHAT})
+        u2 = URL.replace(TASK, "0" * 8 + TASK[8:])
+        with mock.patch.object(bot.threading, "Thread") as th:
+            self.assertEqual(bot.app_solve({"urls": [URL, "мусор", u2, URL]}), {"ok": True, "n": 2})
+        self.assertEqual([c.kwargs["args"][1] for c in th.call_args_list], [URL, u2])
+        self.assertTrue(all(c.kwargs["args"][6] is True for c in th.call_args_list))  # quiet
+        with self.assertRaises(ValueError):
+            bot.app_solve({"urls": ["https://example.com"]})
+        for _ in range(bot.MAX_PARALLEL):
+            bot.lock.acquire()
+        sent = []
+        try:
+            with mock.patch.object(bot, "send", lambda *a, **k: sent.append(a)), \
+                    mock.patch.object(bot, "_run_task", lambda *a: None):
+                t = REAL_THREAD(target=bot.run_task, args=(CHAT, URL, ""), kwargs={"quiet": True})
+                t.start()
+                time.sleep(0.3)
+                self.assertTrue(t.is_alive())  # ждёт места в очереди
+                bot.lock.release()
+                t.join(5)
+                self.assertFalse(t.is_alive())
+        finally:
+            for _ in range(bot.MAX_PARALLEL):
+                bot.lock.release()
+        self.assertEqual(sent, [])  # ни одной карточки «В очереди»
 
     def test_link_works_once_and_session_remembered(self):
         code = web.site_code()
