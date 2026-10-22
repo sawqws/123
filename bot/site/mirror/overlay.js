@@ -152,7 +152,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     return todayMsk() > until ? until : null;
   }
   const closedOf = topic => (S.topics[topic] || {}).closed || null;
-  const topicAutos = topic => (closedOf(topic) ? [] : (cachedTasks(topic) || []).filter(autoOk).filter(t => !S.running.has(t.uuid)));
+  // решается или уже решён и ждёт сдачи по таймеру (S.st.tests) — в автотесты не берём, иначе лишняя попытка
+  const busyTask = uuid => S.running.has(uuid) || ((S.st && S.st.tests) || []).includes(uuid);
+  const topicAutos = topic => (closedOf(topic) ? [] : (cachedTasks(topic) || []).filter(autoOk).filter(t => !busyTask(t.uuid)));
 
   /* ---------- где мы ---------- */
   function where() {
@@ -401,7 +403,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     S.ovLoading = true;
     try { const r = await api('/api/overview'); if (r.data) S.ov = r.data; } catch (e) { /* без счётчика */ }
     setTimeout(() => { S.ovLoading = false; }, S.ov ? 0 : 15000);  // не вышло — не долбить бота на каждой перерисовке
-    renderPanel();
+    update();
   }
 
   // Глеб 22.10: «вот сюда надо, чтобы картинки показывались» — на странице, открытой до выкатки, оставались старые
@@ -601,7 +603,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     for (const tp of S.ov.topics) {
       if (closedTill(tp.deadline, tp.extra != null ? tp.extra : 0)) continue;  // старые данные без дней доработок — по сроку темы
       for (const t of (tp.tasks || []).map(norm)) {
-        if (!autoOk(t) || S.running.has(t.uuid)) continue;
+        if (!autoOk(t) || busyTask(t.uuid)) continue;
         if (!by.has(tp.subj)) by.set(tp.subj, { subj: tp.subj, icon: tp.icon || '📘', tasks: [] });
         by.get(tp.subj).tasks.push({ ...t, topic: tp.uuid });
       }
@@ -615,10 +617,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const n = subs ? subs.reduce((k, x) => k + x.tasks.length, 0) : 0;
     const body = !subs ? `<p class="hdpx-small hdpx-muted">${spin} Считаю тесты…</p>`
       : !n ? '<p class="hdpx-small hdpx-muted">Новых тестов с автопроверкой нет</p>'
-      : subs.map(x => `<div class="hdpx-arow"><span class="hdpx-wico">${esc(x.icon)}</span><span class="hdpx-grow hdpx-wtxt"><b>${esc(x.subj)}</b>
+      : `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="aall">⚡ Все автотесты по всем предметам (${n})</button></div>`
+        + subs.map(x => `<div class="hdpx-arow"><span class="hdpx-wico">${esc(x.icon)}</span><span class="hdpx-grow hdpx-wtxt"><b>${esc(x.subj)}</b>
           <small>${x.tasks.length} ${word(x.tasks.length, 'тест', 'теста', 'тестов')}</small></span>
-          <button class="hdpx-btn hdpx-s hdpx-outline" data-a="sauto" data-v="${esc(x.subj)}">⚡ Сдать</button></div>`).join('')
-        + (subs.length > 1 ? `<div class="hdpx-acts"><button class="hdpx-btn hdpx-primary hdpx-grow" data-a="aall">⚡ Сдать все (${n})</button></div>` : '');
+          <button class="hdpx-btn hdpx-s hdpx-outline" data-a="sauto" data-v="${esc(x.subj)}">⚡ Сдать</button></div>`).join('');
     return `<div class="hdpx-card" data-key="autos"><div class="hdpx-row"><b class="hdpx-grow">⚡ Автотесты</b>${n ? `<span class="hdpx-count">${n}</span>` : ''}</div>${body}</div>`;
   }
 
@@ -1105,6 +1107,15 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   function barHtml(p) {
     if (S.authed === false) return `<span class="hdpx-ab-txt">${I.bot} Нужен вход — напиши боту /site</span>`;
     const open = `<button class="hdpx-ab-ico" data-a="openhere" aria-label="Панель бота" title="Панель бота">${I.bot}</button>`;
+    if (p.kind === 'other') {  // Глеб 22.10: «добавь кнопку сделать все автотесты по всем предметам»
+      const subs = allAutos();
+      if (!subs) { if (!S.ovLoading) loadOv(); return ''; }
+      const n = subs.reduce((k, x) => k + x.tasks.length, 0);
+      const work = S.running.size;
+      if (!n && !work) return '';
+      return open + (n ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall">⚡ Все автотесты (${n})</button>` : '')
+        + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
+    }
     if (p.kind === 'topic') {
       const tasks = cachedTasks(p.topic);
       if (!tasks) return '';
@@ -1138,7 +1149,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   function ensureBar() {
     let bar = $('.hdpx-actionbar');
     const p = where();
-    const html = S.hideTab || S.open || p.kind === 'other' ? '' : barHtml(p);
+    const html = S.hideTab || S.open || (p.kind === 'other' && location.pathname.startsWith('/student/chat')) ? '' : barHtml(p);
     if (!html) { if (bar) bar.remove(); return; }
     if (!bar) { bar = el('div', 'hdpx-actionbar'); bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'HDP-бот'); layer().append(bar); }
     swap(bar, html);
@@ -1321,7 +1332,11 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       case 'sauto': case 'aall': {
         const subs = allAutos() || [];
         const pick = act === 'aall' ? subs : subs.filter(x => x.subj === d.v);
-        const tasks = pick.flatMap(x => x.tasks);
+        // данные бота могут отставать на минуту — статус каждого теста сверяем с платформой прямо сейчас
+        const topics = [...new Set(pick.flatMap(x => x.tasks.map(t => t.topic)))];
+        await busy(a, () => Promise.all(topics.map(tp => topicTasks(tp, true))));
+        const fresh = new Set(topics.flatMap(tp => topicAutos(tp).map(t => t.uuid)));
+        const tasks = pick.flatMap(x => x.tasks).filter(t => fresh.has(t.uuid));
         if (!tasks.length) { toast('Новых тестов с автопроверкой нет'); break; }
         await runAutos(a, tasks, act === 'aall' ? `Сдать все автотесты (${tasks.length})?` : `${pick[0].icon} ${pick[0].subj}: сдать ${tasksWord(tasks.length)}?`);
         break;

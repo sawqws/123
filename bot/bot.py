@@ -1209,6 +1209,15 @@ def run_task(chat, url, text, show=False, mid=None, retry=None):
             send(chat, card("Это задание уже решаю", note="Результат придёт сюда", icon="⏳"), raw_html=True)
             return
         running.add(task)
+    pend = None if show else pending_tests().get(task)
+    if pend and pend.get("at"):  # уже решён и ждёт сдачи по таймеру — второй раз не решаем (лишняя попытка);
+        # сдать не вышло («Не сдал тест», at=None) — Глеб присылает ссылку снова: решаем заново
+        with running_lock:
+            running.discard(task)
+        when = datetime.datetime.fromtimestamp(pend.get("at") or time.time(), MSK)
+        send(chat, card("Этот тест уже решён", note=f"{esc(pend.get('title') or 'Тест')} — сдам в {when:%H:%M}", icon="🧪"),
+             markup=test_kb(task), raw_html=True)
+        return
     until = None if show else topic_closed(url)
     if until:  # платформа не примет: «Прошёл срок доработок после окончания темы, отправка решений невозможна»
         with running_lock:
@@ -3314,7 +3323,8 @@ def app_state(_=None):
     live = Live.active if Live.active in lives else (lives[-1] if lives else None)
     return {
         "busy": lock.locked(),  # заняты ВСЕ места — новое задание встанет в очередь
-        "mv": web._cfg.get("mirror_version", ""),  # версия кнопок сайта: открытая страница со старой обновит их сама
+        "mv": web._cfg.get("mirror_version", ""),
+        "tests": [k for k, t in pending_tests().items() if t.get("at")],  # ждут сдачи по таймеру — сайт их не берёт  # версия кнопок сайта: открытая страница со старой обновит их сама
         "working": lock.busy() > 0 or bool(lives),  # что-то решается прямо сейчас (хоть одно задание)
         "live": live.state() if live else None,
         "others": max(0, len(lives) - 1),  # сколько ещё идёт рядом с показанным
