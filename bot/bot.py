@@ -1251,8 +1251,9 @@ def topic_closed(url):
     return until if datetime.datetime.now(MSK).date() > until else None
 
 
-def run_task(chat, url, text, show=False, mid=None, retry=None):
-    """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди."""
+def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
+    """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди.
+    quiet — без карточки «В очереди» (пачка с сайта: десятки таких карточек — это 429 от Telegram)."""
     task = drafts.task_id(url)
     with running_lock:
         if task in running:
@@ -1282,9 +1283,10 @@ def run_task(chat, url, text, show=False, mid=None, retry=None):
     mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
     try:
         if not lock.acquire(blocking=False):
-            react(chat, mid, "🤔")
-            send(chat, card("В очереди", note=f"Уже решаю {lock.busy()} — начну это, как только одно закончу",
-                            icon="⏳"), raw_html=True)
+            if not quiet:
+                react(chat, mid, "🤔")
+                send(chat, card("В очереди", note=f"Уже решаю {lock.busy()} — начну это, как только одно закончу",
+                                icon="⏳"), raw_html=True)
             lock.acquire()
         _run_task(chat, url, text, show, mid, task, retry)
     finally:
@@ -3417,6 +3419,14 @@ def busy_check():
 
 
 def app_solve(b):
+    if isinstance(b.get("urls"), list):  # «⚡ Все автотесты» с сайта — пачка одним запросом (22.10: по одному сайт
+        # слал 70 запросов подряд, под нагрузкой один не дошёл — и остальные так и не запустились)
+        links = list(dict.fromkeys(m.group(0) for m in (LINK.search(str(u)) for u in b["urls"][:200]) if m))
+        if not links:
+            raise ValueError("Нет ссылок на задания HDP")
+        for url in links:
+            threading.Thread(target=run_task, args=(owner(), url, "", False, None, None, True), daemon=True).start()  # quiet
+        return {"ok": True, "n": len(links)}
     m = LINK.search(str(b.get("url") or ""))
     if not m:
         raise ValueError("Это не ссылка на задание HDP")
