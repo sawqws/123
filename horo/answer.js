@@ -18,7 +18,14 @@ const lines = fs.readFileSync(file, 'utf8').split('\n').map(s => s.trimEnd()).fi
     if (t.data.type !== 'detailedAnswer') throw new Error('Это не задание с проверкой учителем, а ' + t.data.type);
     await page.goto(parseUrl(url).taskUrl, { waitUntil: 'networkidle', timeout: 60000 });
     await page.waitForTimeout(2000);
-    await page.locator('[data-testid=messageInput]').first().waitFor({ timeout: 30000 });
+    // платформа бывает медленной (22.10: «21. Lectura» — поле не появилось за 30 с): ещё раз открыть страницу и подождать дольше
+    const input = page.locator('[data-testid=messageInput]').first();
+    if (!(await input.waitFor({ timeout: 30000 }).then(() => true, () => false))) {
+      await page.reload({ waitUntil: 'networkidle', timeout: 90000 }).catch(() => {});
+      await input.waitFor({ timeout: 60000 }).catch(() => {
+        throw new Error('Сайт не показал поле ответа — платформа тормозит, попробуй отправить ещё раз через пару минут');
+      });
+    }
     if (replace) {
       const dels = page.locator('[data-testid=deleteAnswerButton]');
       const before = await dels.count();
