@@ -23,8 +23,31 @@ const clean = s => htmlToText(latex(s)).replace(/\[img\]/g, '').replace(/[ \t]+\
 const cut = (s, n) => (s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + ' …' : s);
 
 // Все темы ученика (и прошедшие, и текущие) — для выбора предмета и «что прошли».
+// Список тем отдаёт у темы не все задания (нет по желанию и старших уровней: 22.10 — 52 теста в 22 темах), поэтому
+// у тем, которые ещё принимают ответы (срок + дни доработок не прошли), задания берутся из самой темы — как на её странице.
+const openTopic = (sp, today) => {
+  if (!sp || !sp.deadlineDate) return true;
+  const d = new Date(sp.deadlineDate.slice(0, 10) + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + (sp.extraDeadlineDays || 0));
+  return d.toISOString().slice(0, 10) >= today && (!sp.startDate || sp.startDate.slice(0, 10) <= today);
+};
+
+async function fullTasks(page, list) {
+  const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);  // по Москве, как платформа
+  const want = list.filter(tp => openTopic(tp.studyPeriod, today));
+  for (let i = 0; i < want.length; i += 6) {  // по 6 запросов сразу
+    await Promise.all(want.slice(i, i + 6).map(async tp => {
+      try {
+        const d = await api(page, `${EDU}/topics/${tp.uuid}/tasks`);
+        if (d && Array.isArray(d.tasks) && d.tasks.length >= tp.tasks.length) tp.tasks = d.tasks;
+      } catch (e) { /* не вышло — остаётся список из перечня тем */ }
+    }));
+  }
+  return list;
+}
+
 async function topics(page, disc) {
-  return (await api(page, TOPICS)).map(tp => {
+  return (await fullTasks(page, await api(page, TOPICS))).map(tp => {
     const subj = disc[tp.disciplineId] || String(tp.disciplineId);
     return {
       uuid: tp.uuid,

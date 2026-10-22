@@ -1121,9 +1121,15 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       if (!tasks) return '';
       const autos = topicAutos(p.topic).length;
       const work = tasks.filter(t => S.running.has(t.uuid)).length;
-      return open + `<button class="hdpx-ab-btn" data-a="openhere">📖 Подготовь меня</button>`
-        + (closedOf(p.topic) ? '<span class="hdpx-ab-txt">⛔ Срок темы прошёл</span>' : '')
-        + (autos ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="tauto">⚡ Автотесты (${autos})</button>` : '')
+      // Глеб 22.10: «не вижу кнопки сдать все автотесты по всем предметам» — и в теме тоже
+      const subs = allAutos();
+      if (!subs && !S.ovLoading) loadOv();
+      const all = subs ? subs.reduce((k, x) => k + x.tasks.length, 0) : 0;
+      const more = all > autos;  // в других темах есть ещё
+      return open + `<button class="hdpx-ab-btn" data-a="openhere" title="Подготовь меня" aria-label="Подготовь меня">${more ? '📖' : '📖 Подготовь меня'}</button>`
+        + (closedOf(p.topic) ? '<span class="hdpx-ab-txt"><span>⛔ Срок<span class="hdpx-ab-long"> темы</span> прошёл</span></span>' : '')
+        + (autos ? `<button class="hdpx-ab-btn${more ? '' : ' hdpx-ab-main'}" data-a="tauto">⚡ ${more ? 'Тема' : 'Автотесты'} (${autos})</button>` : '')
+        + (more ? `<button class="hdpx-ab-btn hdpx-ab-main" data-a="aall"><span>⚡ Все<span class="hdpx-ab-long"> автотесты</span> (${all})</span></button>` : '')
         + (work ? `<button class="hdpx-ab-btn" data-a="openhere">${spin} Решаю: ${work}</button>` : '');
     }
     const t = taskOf(p.topic, p.task) || (cachedTasks(p.topic) ? guessTask(p) : null);
