@@ -272,6 +272,8 @@ HOLD = {}  # чат -> до какого времени Telegram просил н
 HOLD_MAX = 60  # дольше одной паузы не ждём
 HOLD_TRIES = 4  # столько раз пробуем один запрос, пока Telegram отвечает 429
 NET_WAIT = (2, 5, 10, 20, 30)  # нет сети (Errno 101, обрыв до ответа) — повторы через столько секунд, ~1 мин всего
+SLOW = {}  # чат -> (до когда, интервал): после 429 запросы в чат идут не вплотную друг к другу, а через интервал —
+# иначе после паузы каждый удачный запрос тут же влекёт 429 у следующего (22.10: тест на 6 итогов падал через раз)
 GATES = {}  # чат -> замок: пока чат на паузе, запросы в него идут по одному
 GATES_LOCK = threading.Lock()
 
@@ -282,9 +284,10 @@ def hold_left(chat):
 
 
 def gate(chat):
-    """Очередь в чат на паузе: после 429 запросы (итоги нескольких автотестов) просыпаются не разом — иначе
-    все снова бьют в Telegram в одну секунду, снова получают 429 и сгорают все попытки."""
-    if not chat or not hold_left(chat):
+    """Очередь в чат: после 429 запросы (итоги нескольких автотестов) просыпаются не разом — иначе все снова бьют
+    в Telegram в одну секунду, снова получают 429 и сгорают все попытки. Очередь всегда, а не только на паузе:
+    запрос, проверивший паузу до чужого 429, иначе шёл вне очереди и снова получал 429 (22.10)."""
+    if not chat:
         return contextlib.nullcontext()
     with GATES_LOCK:
         return GATES.setdefault(chat, threading.Lock())
@@ -312,13 +315,18 @@ def tg(method, **params):
             time.sleep(min(hold_left(chat), HOLD_MAX))
             try:
                 with urllib.request.urlopen(API + method, data=data, timeout=70) as r:
-                    return json.load(r)
+                    res = json.load(r)
+                slow = SLOW.get(chat)
+                if slow and slow[0] > time.time():  # чат недавно был на паузе — следующий запрос не вплотную
+                    HOLD[chat] = max(HOLD.get(chat, 0), time.time() + slow[1])
+                return res
             except urllib.error.HTTPError as e:
                 if e.code != 429:
                     raise
                 body = e.read() or b""
                 pause = min(retry_after(body), HOLD_MAX)
                 HOLD[chat] = max(HOLD.get(chat, 0), time.time() + pause)
+                SLOW[chat] = (time.time() + HOLD_MAX, min(pause, 1.0))
                 print(f"{method}: Telegram просит паузу {pause:g} с (429)")
                 n += 1
                 if n == HOLD_TRIES:
@@ -553,7 +561,11 @@ class Live:
         self.lock = threading.Lock()  # правка (тикер и шаги Claude) не должна обгонять удаление карточки
         Live.active = self  # приложение показывает ту же работу, что и карточка в чате
         Live.items.append(self)
-        self.mid = send(chat, self.render(), raw_html=True)
+        try:
+            self.mid = send(chat, self.render(), raw_html=True)
+        except Exception as e:  # 22.10: карточка не ушла (429 после всех повторов, сеть) — решение идёт и без неё,
+            print("Live:", e)   # результат придёт отдельным сообщением; раньше так падали задания целиком
+            self.mid = None
         quiet("sendChatAction", chat_id=chat, action="typing")
         REAL_THREAD(target=self.loop, daemon=True).start()
 

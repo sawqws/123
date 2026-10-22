@@ -890,7 +890,7 @@ class BotTest(unittest.TestCase):
         clock = types.SimpleNamespace(time=lambda: now[0], sleep=lambda s: sleeps.append(s) or now.__setitem__(0, now[0] + s))
         real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
         with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
-                mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
+                mock.patch.object(bot, "SLOW", {}), mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
             self.assertEqual(bot.send(CHAT, "🏆 <b>10 / 10</b>", raw_html=True), 5)
             self.assertEqual(len(hits), 3)
             self.assertEqual([s for s in sleeps if s], [7, 7])  # ровно столько, сколько сказал Telegram
@@ -934,7 +934,7 @@ class BotTest(unittest.TestCase):
         clock = types.SimpleNamespace(time=lambda: now[0], sleep=lambda s: sleeps.append(s) or now.__setitem__(0, now[0] + s))
         real_tg = next(p.temp_original for p in self.patches if p.attribute == "tg")
         with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
-                mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
+                mock.patch.object(bot, "SLOW", {}), mock.patch.object(bot, "tg", real_tg), mock.patch.object(bot, "time", clock):
             self.assertEqual(bot.send(CHAT, "◐ <b>Решаю задание</b>", raw_html=True), 9)  # пришла после двух обрывов
             self.assertEqual(len(hits), 3)
             self.assertEqual([s for s in sleeps if s][:2], list(bot.NET_WAIT[:2]))
@@ -958,6 +958,8 @@ class BotTest(unittest.TestCase):
             def __exit__(self, *a): pass
 
         def urlopen(url, data=None, timeout=None):  # Telegram: не чаще одного сообщения в 0,02 с, иначе 429
+            if not url.endswith("/sendMessage"):  # тикеры живых карточек из соседних тестов — не в счёт
+                return Resp(b'{"ok":true,"result":true}')
             with srv["lock"]:
                 now = time.time()
                 if now < srv["until"]:
@@ -973,7 +975,7 @@ class BotTest(unittest.TestCase):
             except urllib.error.HTTPError as e:
                 errors.append(e.code)
         with mock.patch.object(bot.urllib.request, "urlopen", urlopen), mock.patch.object(bot, "HOLD", {}), \
-                mock.patch.object(bot, "GATES", {}), mock.patch.object(bot, "tg", real_tg):
+                mock.patch.object(bot, "GATES", {}), mock.patch.object(bot, "SLOW", {}), mock.patch.object(bot, "tg", real_tg):
             threads = [REAL_THREAD(target=one) for _ in range(6)]  # Thread в тестах синхронный
             for t in threads:
                 t.start()
@@ -1537,6 +1539,15 @@ class SiteTest(BotTest):
             for _ in range(bot.MAX_PARALLEL):
                 bot.lock.release()
         self.assertEqual(sent, [])  # ни одной карточки «В очереди»
+
+    def test_live_card_not_sent_does_not_kill_task(self):
+        # 22.10: 429 на карточке «Решаю» ронял задание целиком — 35 из 54 автотестов не решились
+        def boom(*a, **k):
+            raise bot.urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)
+        with mock.patch.object(bot, "send", boom):
+            live = bot.Live(CHAT, "Решаю задание")
+        self.assertIsNone(live.mid)
+        live.done()
 
     def test_link_works_once_and_session_remembered(self):
         code = web.site_code()
