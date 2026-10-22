@@ -190,8 +190,11 @@ def render(nbs, i, path):
         """Чернила на фото; thin — насколько тоньше линия (у него в разные дни разная ручка)."""
         if thin not in warped:
             a = hi
-            if thin:   # тоньше на thin/SS px фото: размытие + порог по краю, форма штриха сохраняется
+            if thin > 0:   # тоньше на thin/SS px фото: размытие + порог по краю, форма штриха сохраняется
                 a = np.clip((cv2.GaussianBlur(a, (0, 0), 1.0) - 0.12 * thin) / (1 - 0.12 * thin), 0, 1)
+            elif thin < 0:   # толще: у него ручка бывает жирнее (давит сильнее)
+                se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * -thin + 1, 2 * -thin + 1))
+                a = cv2.dilate(a, se)
             warped[thin] = np.clip(cv2.resize(a, (big.shape[1], big.shape[0]), interpolation=cv2.INTER_AREA), 0, 1)
         return warped[thin]
 
@@ -214,7 +217,7 @@ def render(nbs, i, path):
     his = _look(ref, rbg, rmask)
     where = cv2.dilate((ink_at(0) > 0.02).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
     best = None
-    for thin in (0, 1, 2, 3, 4):
+    for thin in (-3, -2, -1, 0, 1, 2, 3, 4):
         for gain in ((1.0, 1.3, 1.7, 2.2) if not thin else (1.6, 2.0, 2.5)):   # тонкая линия — густая, не серая
             for blur in (0.45, 0.65, 0.9):
                 o = comp(thin, gain, blur, 10.0)
@@ -222,7 +225,7 @@ def render(nbs, i, path):
                 if not st or not his:
                     continue
                 # утоньшение съедает мелкие степени — только если без него никак
-                err = abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.25 + 0.5 * blur + 0.6 * thin
+                err = abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.25 + 0.5 * blur + 0.6 * max(0, thin)
                 if best is None or err < best[0]:
                     best = (err, (thin, gain, blur), st)
     if best:
