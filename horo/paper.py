@@ -41,6 +41,14 @@ MARGIN = (226, 106, 92)
 XH, DIG = 0.88, 0.95          # высота строчной и цифры, в клетках
 SUP = 0.68                    # степень
 GAP = 0.17                    # промежуток между знаками, в клетках (пишет свободно)
+# его рука по замерам 75 фото тетради (Глеб 22.10: «пока видно, что написано ИИ»):
+JIT_Y = 0.07       # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
+JIT_S = 0.09       # размер соседних букв: 0.78…1.24 друг от друга
+JIT_GAP = 0.08     # промежуток: медиана 0.22, бывает вплотную и до 0.5
+SLOPE = 1.3        # строка в целом чуть уходит вверх/вниз, °
+WAVE = 0.1         # и плывёт волной, клетки
+FRAC_GAP = 0.08    # от черты до числителя/знаменателя (у него почти вплотную)
+ROW_GAP = 0.12     # между строками решения (шаг строк дробей ≈ 2.6 клетки, не по линиям клетки)
 SPACE = 0.26                  # пробел (вокруг + − =)
 BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis', '=': 'axis', '−': 'axis', '·': 'axis', ':': 'colon'}
 
@@ -74,13 +82,14 @@ def tokens(s):
 
 
 class Notebook:
-    def __init__(self, cols=30, rows=40, cell=40, seed=1, margin=4):
+    def __init__(self, cols=30, rows=40, cell=40, seed=1, margin=4, right=0.8):
         self.C, self.cols, self.rows = cell, cols, rows
         self.W, self.H = cols * cell, rows * cell
         self.ink = np.zeros((self.H, self.W), np.float32)
         self.rnd = random.Random(seed)
         self.left = (margin + 0.8) * cell          # пишет сразу за красной линией полей
-        self.right = self.W - 0.8 * cell
+        self.right = self.W - right * cell
+        self.drift = None                           # плывущая строка: y-сдвиг от x, задаёт solve
         self.margin = margin
         self.y = 1.2 * cell                         # низ последней написанной строки, px
         self._last = {}
@@ -96,6 +105,9 @@ class Notebook:
         im = Image.fromarray((a * 255).astype(np.uint8)).resize((max(2, round(length)), max(2, round(a.shape[0] * k))), Image.LANCZOS)
         im = im.rotate(angle + self.rnd.uniform(-1.2, 1.2), Image.BICUBIC, expand=True)
         st = np.asarray(im, np.float32) / 255
+        body = st[st > 0.15]
+        if body.size > 20:              # та же густота пасты, что у букв
+            st = np.clip(st / max(0.35, float(np.percentile(body, 80))), 0, 1)
         self._blit(st, int(round(cx - st.shape[1] / 2)), int(round(cy - st.shape[0] / 2)))
 
     def _strike(self, x0, x1, cy):
@@ -119,6 +131,12 @@ class Notebook:
         X1, Y1 = min(self.W, x0 + w), min(self.H, y0 + h)
         if X1 <= X0 or Y1 <= Y0:
             return
+        if self.drift:
+            dy = int(round(self.drift(x0 + w / 2)))
+            y0 += dy
+            Y0, Y1 = max(0, y0), min(self.H, y0 + h)
+            if Y1 <= Y0:
+                return
         sub = a[Y0 - y0:Y1 - y0, X0 - x0:X1 - x0]
         cur = self.ink[Y0:Y1, X0:X1]
         self.ink[Y0:Y1, X0:X1] = 1 - (1 - cur) * (1 - sub)
@@ -132,11 +150,16 @@ class Notebook:
             i = (i + 1) % len(opts)
         self._last[ch] = i
         a = opts[i]
-        s = (height * self.C / a.shape[0] if height else scale * self.C / REF) * (1 + self.rnd.uniform(-0.05, 0.05))
+        j = max(-2 * JIT_S, min(2 * JIT_S, self.rnd.gauss(0, JIT_S)))
+        s = (height * self.C / a.shape[0] if height else scale * self.C / REF) * (1 + j)
         im = Image.fromarray((a * 255).astype(np.uint8))
         im = im.resize((max(1, round(a.shape[1] * s)), max(1, round(a.shape[0] * s))), Image.LANCZOS)
         im = im.rotate(self.rnd.uniform(-3, 3), Image.BICUBIC, expand=True)
         out = np.asarray(im, np.float32) / 255
+        if ch not in ('scribble',):     # образцы с бледных фото — до одной густоты пасты (одна ручка на листе)
+            body = out[out > 0.15]
+            if body.size > 20:
+                out = np.clip(out / max(0.35, float(np.percentile(body, 80))), 0, 1)
         ys, xs = np.nonzero(out > 0.12)
         return out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
 
@@ -167,7 +190,7 @@ class Notebook:
         opts = [a for a in STAMPS[ch] if a.shape[0] / REF < TALL] if kind == 'paren' else None
         st = self._stamp(ch, size, PAREN * size if kind == 'paren' else None, opts)
         h, w = st.shape
-        dy = self.rnd.uniform(-0.04, 0.04) * C
+        dy = max(-2 * JIT_Y, min(2 * JIT_Y, self.rnd.gauss(0, JIT_Y))) * C
 
         def draw(x, b):
             if kind == 'desc':
@@ -205,7 +228,8 @@ class Notebook:
                 x -= 0.02 * C
             if draw:
                 out.append((x, -0.55 * C * size if sup else 0, draw))
-            x += w + (GAP + self.rnd.uniform(-0.03, 0.04)) * C * (SUP if sup else 1)
+            g = max(-0.04, min(0.4, self.rnd.gauss(GAP, JIT_GAP)))
+            x += w + g * C * (SUP if sup else 1)
         return out + marks, x
 
     @staticmethod
@@ -290,8 +314,8 @@ class Notebook:
                 # черта — его линия с фото, по линии клетки
                 self._line(xb + bw / 2, axis - 0.02 * C + self.rnd.uniform(-0.04, 0.04) * C, bw)
                 # числитель — над чертой с зазором по хвостам (y, скобки), знаменатель — под ней по верху букв
-                nb = axis - (0.14 + self._ext(data[5])[1]) * C
-                db = axis + (0.16 + self._ext(data[6])[0]) * C
+                nb = axis - (FRAC_GAP + self._ext(data[5])[1]) * C
+                db = axis + (FRAC_GAP + 0.02 + self._ext(data[6])[0]) * C
                 for dx, dy, draw in n:
                     draw(xb + (bw - wn) / 2 + dx, nb + dy)
                 for dx, dy, draw in d:
@@ -304,13 +328,17 @@ class Notebook:
             if isinstance(it, tuple):
                 nu, nd = self._ext(it[0])
                 du, dd = self._ext(it[1])
-                up, down = max(up, 0.14 + nd + nu), max(down, 0.16 + du + dd)
+                up, down = max(up, FRAC_GAP + nd + nu), max(down, FRAC_GAP + 0.02 + du + dd)
             else:
                 u, d = self._ext(it)
                 up, down = max(up, u - 0.45), max(down, 0.45 + d)
                 if ('(' in it or ')' in it) and any(isinstance(j, tuple) for j in items):
                     up, down = max(up, 1.15), max(down, 1.15)    # высокая скобка у дроби
         return up, down
+
+    def _row_drift(self, row, axis):
+        """На сколько px плывущая строка ушла вниз к своему правому краю (чтобы следующая не наехала)."""
+        return max(self.drift(x) for x in (self.left, self.right)) if self.drift else 0
 
     # ---------- текст на листе ----------
     def title(self, text):
@@ -342,6 +370,10 @@ class Notebook:
             for ch in chunks:
                 lay, w = self._layout(ch)
                 if cur and x + w > self.right:
+                    if isinstance(ch[0], str) and ch[0].lstrip().startswith('='):
+                        # как он: строка, оборванная на «=», кончается «=», и следующая начинается с «=»
+                        eq, ew = self._layout(['='])
+                        cur.append((x, eq, self._vext(['='])))
                     rows.append(cur)
                     cur, x = [], self.left + 0.6 * C
                 if x + w > self.right:
@@ -352,14 +384,18 @@ class Notebook:
             for r in rows:
                 up = max(v[0] for _, _, v in r)
                 down = max(v[1] for _, _, v in r)
-                axis = math.ceil((self.y + up * C) / C) * C   # черта дроби — по линии клетки
+                axis = self.y + (up + ROW_GAP + self.rnd.uniform(0, 0.25)) * C   # не по линиям клетки — как у него
+                k, A, ph = math.tan(math.radians(self.rnd.gauss(0, SLOPE / 2))), self.rnd.uniform(0, WAVE), self.rnd.uniform(0, 6.3)
+                x0r = self.left
+                self.drift = lambda X, k=k, A=A, ph=ph, x0r=x0r: k * (X - x0r) + A * C * math.sin((X - x0r) / (5 * C) + ph)
                 if first:
                     for dx, dy, draw in lab:
                         draw(self.left + dx, axis + 0.45 * C + dy)
                     first = False
                 for x, lay, _ in r:
                     self._draw(lay, x, axis)
-                self.y = axis + down * C
+                self.y = axis + down * C + max(0, self._row_drift(r, axis))
+                self.drift = None
         self.y += 0.5 * C
         if self.y > self.H - 0.6 * C:
             raise ValueError('лист закончился — нужна вторая страница')
