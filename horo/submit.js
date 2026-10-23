@@ -16,7 +16,7 @@
 //   multipleSelection: "4": ["вариант A", "вариант C"]   (вариант-картинка без текста — его uuid)
 //   sequence:        "5": ["первый", "второй", ...]  (тексты вариантов в нужном порядке)
 //   singleMatching:  "6": [["левая карточка", "правая карточка"], ...]   (карточка-картинка без текста — её uuid)
-//   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать)
+//   grouping:        "7": {"Regular": ["текст", ...], "Irregular": [...]}  (лишние не указывать; элемент-картинка без текста — его uuid)
 const fs = require('fs');
 const path = require('path');
 const { open, close, loadTask, BASE, TMP } = require('./lib');
@@ -181,13 +181,22 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       } else if (q.type === 'grouping') {
         // Группы: клик по элементу, затем по группе.
         const group = g => view.locator('[role=group]').filter({ has: page.locator(`p:text-is(${JSON.stringify(g)})`) }).last();
-        const inGroup = async g => (await group(g).locator('[role=listitem]').allInnerTexts()).map(x => x.trim());
-        for (const [g, list] of Object.entries(a)) for (const txt of list) {
+        // Элемент-картинка без текста задаётся uuid варианта — на странице ищем его по src картинки.
+        const img = w => { const o = q.options.find(o => o.uuid === w); return o && !o.text && o.image ? o.image.location : w; };
+        const want = Object.fromEntries(Object.entries(a).map(([g, l]) => [g, l.map(img)]));
+        const inGroup = async g => group(g).locator('[role=listitem]').evaluateAll(els => els.map(e => {
+          const txt = e.innerText.trim(), im = e.querySelector('img');
+          return txt || (im ? im.getAttribute('src') : '');
+        }));
+        const item = txt => txt.startsWith('/store/')
+          ? view.locator('[role=listitem]').filter({ has: page.locator(`img[src="${txt}"]`) })
+          : view.locator('[role=listitem]').filter({ hasText: txt });
+        for (const [g, list] of Object.entries(want)) for (const txt of list) {
           if ((await inGroup(g)).includes(txt)) continue;
-          await view.locator('[role=listitem]').filter({ hasText: txt }).first().click(); await page.waitForTimeout(500);
+          await item(txt).first().click(); await page.waitForTimeout(500);
           await group(g).click(); await page.waitForTimeout(800);
         }
-        for (const [g, list] of Object.entries(a)) {
+        for (const [g, list] of Object.entries(want)) {
           const got = await inGroup(g);
           if (got.length !== list.length || !list.every(x => got.includes(x))) throw new Error(`Вопрос ${n}: в группе «${g}» оказалось: ${got.join(' | ')}`);
         }
