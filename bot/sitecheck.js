@@ -164,20 +164,26 @@ async function panel(page, sink) {
     }
     await ctx.close();
   }
-  // сверка с настоящей платформой: что есть и там — не наше
+  // сверка с настоящей платформой: что есть и там — не наше. На том же экране, где нашлось: 23.10 ошибка Dark Reader
+  // платформы (CORS картинок usedesk) была только на iPad и телефоне, а сверка шла лишь на компьютере — 🛡 Страж
+  // посчитал её нашей и звал бы Claude чинить чужое
   if (ORIG && fs.existsSync(STATE)) {
-    const ctx = await browser.newContext({ viewport: VIEWS.desktop, storageState: STATE, locale: 'ru-RU' });
-    const po = await ctx.newPage();
-    await readOnly(po);
-    for (const pg of pages.filter(x => x.issues.some(i => !i.view))) {
-      const s = [];
-      watch(po, { push: x => s.push(x) });
-      await visit(po, PLATFORM + pg.path, s);
-      const theirs = new Set(s.map(x => x.kind + '|' + x.text.replace(/\d+ с /, '')));
-      for (const i of pg.issues) if (!i.view && theirs.has(i.kind + '|' + i.text.replace(/\d+ с /, ''))) i.platform = true;
-      po.removeAllListeners('pageerror'); po.removeAllListeners('console'); po.removeAllListeners('requestfailed'); po.removeAllListeners('response');
+    const viewOf = i => i.view || 'desktop';
+    const views = [...new Set(pages.flatMap(x => x.issues.map(viewOf)))].filter(v => VIEWS[v]);
+    for (const view of views) {
+      const ctx = await browser.newContext({ viewport: VIEWS[view], storageState: STATE, locale: 'ru-RU' });
+      const po = await ctx.newPage();
+      await readOnly(po);
+      for (const pg of pages.filter(x => x.issues.some(i => viewOf(i) === view))) {
+        const s = [];
+        watch(po, { push: x => s.push(x) });
+        await visit(po, PLATFORM + pg.path, s);
+        const theirs = new Set(s.map(x => x.kind + '|' + x.text.replace(/\d+ с /, '')));
+        for (const i of pg.issues) if (viewOf(i) === view && theirs.has(i.kind + '|' + i.text.replace(/\d+ с /, ''))) i.platform = true;
+        po.removeAllListeners('pageerror'); po.removeAllListeners('console'); po.removeAllListeners('requestfailed'); po.removeAllListeners('response');
+      }
+      await ctx.close();
     }
-    await ctx.close();
   }
   await browser.close();
   // свести: одинаковые ошибки на разных страницах — одной строкой
