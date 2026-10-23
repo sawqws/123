@@ -11,6 +11,10 @@
     Traceback в логе pm2;
   • зависшие дела: задание решается дольше 45 мин, тест не сдан в срок, ответ учителю не ушёл в срок.
 Раз в 2 часа (и по кнопке) — глубокая проверка: вход на сайт, Claude отвечает, тесты HDP.
+🪞 Дозор зеркала (Глеб 23.10: «часто проверяет работу сайта-зеркала и сразу чинит»): каждые 5 мин bot/mirrorwatch.py
+заходит в зеркало hdp как Глеб (вход, страница с кнопками бота, файлы кнопок, API, данные == платформа); раз в 6 ч —
+полный обход сайта браузером (bot/sitecheck.py). Ошибка повторилась (лёгкая — 2 проверки подряд, обход — сразу) —
+Claude чинит зеркало (MIRROR_TZ), как и прочие баги: когда HDP свободен.
 
 Нашёл баг — чинит сам: Claude (maker.fix) правит код HDP, гоняет тесты, перезапускает; только когда HDP ничего
 не решает и не сдаёт, не чаще раза в 12 ч на одну ошибку и 4 раз в сутки. Сеть, лимит Claude, вход на сайт —
@@ -48,16 +52,21 @@ FRESH = 6 * 3600         # чиним и напоминаем, только ес
 KEEP = 3 * 86400         # закрытые ошибки и события храним столько
 WEB = "http://127.0.0.1:8788/health"
 URGENT_AGAIN = 3600      # сайт лежит: Claude зовём снова не раньше чем через час (а не через 12 ч)
+MIRROR_EVERY = 5 * 60    # 🪞 Дозор зеркала: лёгкая проверка сайта hdp (bot/mirrorwatch.py, ~3 с)
+MIRROR_AZ_EVERY = 6 * 3600  # и полный обход сайта браузером (bot/sitecheck.py, до 30 мин) — когда HDP свободен
+AZ = "сайт А–Я: "         # начало текста ошибок полного обхода (лёгкая проверка пишет «зеркало: …»)
 
 lock = threading.RLock()  # hub.py ставит сюда свой lock: state.json один на всех
 deep_lock = threading.Lock()
+mirror_lock = threading.Lock()
+az_lock = threading.Lock()  # полный обход идёт до 30 мин — лёгкие проверки в это время не ждут
 # не баги кода — чинить нечего, только сказать (и то если повторяется)
 NOT_CODE = re.compile(r"timed? ?out|timeout|не уложился|network|unreachable|econn|enotfound|temporary failure|"
                       r"name resolution|connection (reset|refused|aborted)|bad gateway|50[234]|429|rate limit|"
                       r"usage limit|limit reached|overloaded|не вош|login|логин|unauthori|401|403|"
                       r"прерван сигналом", re.I)
 KIND_ICON = {"bug": "🐞", "script": "🌐", "claude": "🤖", "net": "📡", "down": "🔴", "hang": "🧊", "web": "🕸",
-             "crash": "🟠", "stuck": "⏳", "deep": "🔍", "log": "📜"}
+             "crash": "🟠", "stuck": "⏳", "deep": "🔍", "log": "📜", "mirror": "🪞"}
 
 
 def tmp(*p):
@@ -358,6 +367,14 @@ FIX_TZ = ("🛡 Страж HDP нашёл ошибку в HDP-боте. Найд
           "переживал это мягко. Ошибка: {text} (раз: {count})\nПодробности:\n{detail}")
 
 
+MIRROR_TZ = ("🪞 Дозор зеркала (🛡 Страж HDP) нашёл ошибку сайта-зеркала HDP (https://hdp.…, код: bot/mirror.py, bot/web.py, "
+             "bot/site/mirror/overlay.js|css|guard.js). Найди причину и почини в корне (не прячь ошибку, не трогай тесты "
+             "ради зелёного; добавь тест на этот случай). Проверь себя: python3 bot/mirrorwatch.py <адрес зеркала> "
+             "(отчёт — horo/tmp/mirrorwatch/last.json, полный обход — horo/tmp/sitecheck/last.json). Если причина — "
+             "сама платформа horodigital.ru, а не зеркало, ничего не ломай и так и напиши. Ошибка: {text} (раз: {count})\n"
+             "Подробности:\n{detail}")
+
+
 def busy():
     return bool(ui.hdp_busy()) or maker.job.locked()
 
@@ -388,7 +405,8 @@ def run_fix(chat, sig, by_hand=False):
     if not by_hand:
         ui.send(chat, ui.card("🛡 <b>HDP: нашёл ошибку — чиню сам</b>", [ui.esc(it["text"][:200])]),
                 [[ui.b("🛡 Страж", "grd")]])
-    maker.fix(chat, it.get("target") or PM2, FIX_TZ.format(text=it["text"], count=it["count"], detail=(it.get("detail") or "—")[-2500:]))
+    tz = MIRROR_TZ if it["kind"] == "mirror" else FIX_TZ
+    maker.fix(chat, it.get("target") or PM2, tz.format(text=it["text"], count=it["count"], detail=(it.get("detail") or "—")[-2500:]))
     with lock:
         st = ui.load()
         x = state(st)["issues"].get(sig)
@@ -472,6 +490,7 @@ def loop():
                     last = state(ui.load()).get("deep", {}).get("at", 0)
                 if time.time() - last > DEEP_EVERY and not deep_lock.locked() and not ui.hdp_busy():
                     threading.Thread(target=deep, daemon=True).start()
+                mirror_due()
         except Exception as e:
             print("guard:", e)
             traceback.print_exc()
@@ -531,7 +550,7 @@ def deep(chat=None):
         try:
             base = src or ui.REPO
             fails = []
-            for rel in ("bot/test_bot.py", "bot/test_buttons.py", "bot/test_mirror.py"):
+            for rel in ("bot/test_bot.py", "bot/test_buttons.py", "bot/test_mirror.py", "bot/test_mirrorwatch.py"):
                 if os.path.exists(os.path.join(base, rel)):
                     t_ok, t_out = check.run_test(base, ["python3", rel])
                     if not t_ok:
@@ -570,6 +589,119 @@ def deep(chat=None):
             ui.send(chat, ui.card("⚠️ <b>Проверка упала</b>", [ui.esc(str(e)[:300])]))
     finally:
         deep_lock.release()
+
+
+# ---------- 🪞 Дозор зеркала ----------
+
+def mirror_base():
+    return site_url()[:-len("/health")] if site_url() else ""
+
+
+def mirror_due(now=None):
+    """Из loop(): пора ли лёгкой проверке зеркала (5 мин) или полному обходу (6 ч, только когда HDP свободен)."""
+    now = now or time.time()
+    if not mirror_base() or not web_ok():
+        return None  # сайт лежит — это уже ловит минутная проверка (перезапуск, Claude)
+    with lock:
+        m = state(ui.load()).get("mirror", {})
+    started = []
+    if now - m.get("at", 0) > MIRROR_EVERY and not mirror_lock.locked():
+        threading.Thread(target=mirror_check, daemon=True).start()
+        started.append("watch")
+    if now - m.get("az_at", 0) > MIRROR_AZ_EVERY and not ui.hdp_busy() and not az_lock.locked():
+        threading.Thread(target=mirror_az, daemon=True).start()
+        started.append("az")
+    return started
+
+
+def last_json(out):
+    """Последняя строка вывода — JSON отчёта (выше могут быть предупреждения)."""
+    for ln in reversed((out or "").strip().splitlines()):
+        if ln.startswith("{"):
+            try:
+                return json.loads(ln)
+            except ValueError:
+                return None
+    return None
+
+
+def mirror_apply(rep, why, now, az=False):
+    """Итог проверки зеркала → ошибки Стража. rep — отчёт (None — проверка не прошла: why). → действия decide()."""
+    with lock:
+        st = ui.load()
+        g = state(st)
+        m = g.setdefault("mirror", {})
+        mine = lambda it: it["kind"] == "mirror" and it["text"].startswith(AZ) == az
+        if az:
+            m["az_at"] = round(now)
+            m["az"] = None if rep is None else len(rep.get("ours") or [])
+        else:
+            m.update(at=round(now), ok=bool(rep and rep.get("ok")), secs=(rep or {}).get("secs"))
+        if rep is None:
+            text = (AZ if az else "зеркало: ") + "проверка не прошла — " + (why or "без ответа")[:150]
+            it = raise_issue(g, now, "mirror", text, why, fixable=not NOT_CODE.search(why or ""))
+            if it["count"] < 2:
+                it["fixable_later"] = True
+        else:
+            found = ([{"text": f"{AZ}ошибок {len(rep['ours'])} (первая: {rep['ours'][0][:90]})", "detail": rep.get("fix", "")}]
+                     if az and rep.get("ours") else [] if az else rep.get("issues") or [])
+            sigs = set()
+            for x in found:
+                it = raise_issue(g, now, "mirror", x["text"], x.get("detail") or "")
+                sigs.add(it["sig"])
+                # лёгкая проверка: разовый сбой бывает (сеть, перезапуск) — чиним, если повторилась через 5 мин;
+                # полный обход сам сверяет с платформой и идёт раз в 6 ч — чиним сразу
+                it["fixable_later"] = not az and it["count"] < 2
+            for it in g["issues"].values():
+                if mine(it) and it["sig"] not in sigs:
+                    it["closed"] = True
+        acts = decide(g, now)
+        ui.save(st)
+    return acts
+
+
+def mirror_check(chat=None):
+    """Лёгкая проверка (bot/mirrorwatch.py, секунды). chat — прислать итог (по кнопке)."""
+    if not mirror_lock.acquire(blocking=False):
+        return chat and ui.send(chat, "⏳ Уже проверяю зеркало — итог придёт сюда.")
+    try:
+        ok, out, why = run(["python3", "bot/mirrorwatch.py", mirror_base()], 150)
+        rep = last_json(out) if ok else None
+        acts = mirror_apply(rep, check.mask(why or "нет отчёта")[:300], time.time())
+        if chat:
+            ui.send(chat, *mirror_card(rep, why))
+            acts = [a for a in acts if a[0] != "tell"]
+        handle(acts)
+    except Exception as e:
+        traceback.print_exc()
+        if chat:
+            ui.send(chat, ui.card("⚠️ <b>Проверка зеркала упала</b>", [ui.esc(str(e)[:300])]))
+    finally:
+        mirror_lock.release()
+
+
+def mirror_az():
+    """Полный обход сайта браузером (bot/sitecheck.py, до 30 мин) — раз в 6 ч, когда HDP свободен."""
+    if not az_lock.acquire(blocking=False):
+        return
+    try:
+        ok, out, why = run(["python3", "bot/sitecheck.py", mirror_base(), "--max", "30"], 35 * 60)
+        rep = last_json(out) if ok else None
+        handle(mirror_apply(rep, check.mask(why or "нет отчёта")[:300], time.time(), az=True))
+    except Exception:
+        traceback.print_exc()
+    finally:
+        az_lock.release()
+
+
+def mirror_card(rep, why=""):
+    if rep is None:
+        return ui.card("🪞 <b>Зеркало: проверка не прошла</b>", [ui.esc((why or "без ответа")[:300])]), [[ui.b("🛡 Страж", "grd")]]
+    lines = [("✅ " if c["ok"] else "❌ ") + ui.esc(c["name"]) + (f" · {c['ms'] / 1000:.1f} с" if c.get("ms") else "")
+             + (f" — {ui.esc(c['why'][:80])}" if c.get("why") else "") for c in rep.get("checks", [])]
+    head = "🪞 <b>Зеркало: всё работает</b>" if rep.get("ok") else f"🪞 <b>Зеркало: проблем {len(rep.get('issues', []))}</b>"
+    foot = f"<i>{rep.get('secs', 0)} с · " + ("найденное починю сам, когда HDP свободен</i>" if not rep.get("ok") else "проверяю каждые 5 мин</i>")
+    return ui.card(head, lines, foot, expand=len(lines) > 6), [[ui.b("🔁 Ещё раз", "grd|mir"), ui.b("🛡 Страж", "grd")]]
 
 
 # ---------- экран ----------
@@ -612,16 +744,22 @@ def screen():
     if d:
         mark = lambda k: "✅" if (d.get(k) or [False])[0] else "❌"
         lines.append(f"🔍 {when(d['at'])}: сайт {mark('site')} · Claude {mark('claude')} · тесты {mark('tests')}")
+    m = g.get("mirror") or {}
+    if m.get("at"):
+        az = m.get("az")
+        lines.append(f"🪞 Зеркало {when(m['at'])}: " + ("✅" if m.get("ok") else "❌")
+                     + (f" · обход {when(m['az_at'])}: " + ("✅" if az == 0 else f"ошибок {az}" if az else "❌")
+                        if m.get("az_at") else ""))
     open_ = sorted((it for it in g["issues"].values() if not it.get("closed") and not it.get("muted")),
                    key=lambda it: -it["last"])
     for it in open_[:4]:
         lines.append(f"{KIND_ICON.get(it['kind'], '⚠️')} {ui.esc(it['text'][:120])}"
                      + (f" ×{it['count']}" if it["count"] > 1 else ""))
-    foot = ("<i>Слежу каждую минуту, раз в 2 ч — сайт, Claude и тесты. "
+    foot = ("<i>Слежу каждую минуту, зеркало — каждые 5 мин, раз в 2 ч — сайт, Claude и тесты. "
             + ("Баг — чиню сам, когда HDP свободен.</i>" if g.get("auto") else "Баги только показываю.</i>"))
-    btns = [[ui.b("🔍 Проверить сейчас", "grd|deep", "primary")]]
+    btns = [[ui.b("🔍 Проверить сейчас", "grd|deep", "primary"), ui.b("🪞 Зеркало", "grd|mir")]]
     if any(it.get("fixable") for it in open_):
-        btns[0].append(ui.b("🛠 Починить", "grd|fixall"))
+        btns.insert(1, [ui.b("🛠 Починить", "grd|fixall")])
     btns.append([ui.b("🤖 Чиню сам: " + ("вкл" if g.get("auto") else "выкл"), "grd|auto"),
                  ui.b("📋 Журнал", "grd|log")])
     btns.append([ui.b("‹ Главная", "home"), ui.b("📜 Логи", f"lg|{PM2}")])
@@ -637,7 +775,7 @@ def journal_screen():
 
 
 def on_callback(chat, mid, data):
-    """grd, grd|deep, grd|auto, grd|log, grd|fix|<ключ>, grd|mute|<ключ>, grd|fixall → текст всплывашки."""
+    """grd, grd|deep, grd|mir, grd|auto, grd|log, grd|fix|<ключ>, grd|mute|<ключ>, grd|fixall → текст всплывашки."""
     arg = data[1] if len(data) > 1 else ""
     if not arg:
         ui.show(chat, mid, *screen())
@@ -647,6 +785,11 @@ def on_callback(chat, mid, data):
             return "Уже проверяю"
         threading.Thread(target=deep, args=(chat,), daemon=True).start()
         return "Проверяю сайт, Claude и тесты — минуты 3…"
+    if arg == "mir":
+        if mirror_lock.locked():
+            return "Уже проверяю зеркало"
+        threading.Thread(target=mirror_check, args=(chat,), daemon=True).start()
+        return "Проверяю зеркало — секунд 10…"
     if arg == "auto":
         with lock:
             st = ui.load()
@@ -694,7 +837,7 @@ def app_state():
     with lock:
         g = state(ui.load())
     open_ = [it for it in g["issues"].values() if not it.get("closed") and not it.get("muted")]
-    return {"auto": bool(g.get("auto")), "deep": g.get("deep"),
+    return {"auto": bool(g.get("auto")), "deep": g.get("deep"), "mirror": g.get("mirror"),
             "issues": [{"text": it["text"][:160], "kind": it["kind"], "count": it["count"]} for it in open_[:6]]}
 
 

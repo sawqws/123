@@ -269,6 +269,87 @@ class GuardTest(Base):
         self.assertIn("SIGKILL", guard.run(["bash", "-c", "echo x; kill -9 $$"], 10)[2])
         self.assertEqual(guard.run(["bash", "-c", "echo ok"], 10), (True, "ok\n", ""))
 
+    # ---------- 🪞 Дозор зеркала ----------
+
+    BAD = {"ok": False, "secs": 2.1, "checks": [{"name": "страница", "ok": False, "ms": 80, "why": "ответ 502"}],
+           "issues": [{"text": "зеркало: страница /student/ — ответ 502", "detail": "<html>Bad Gateway</html>"}]}
+    GOOD = {"ok": True, "secs": 1.9, "checks": [{"name": "страница", "ok": True, "ms": 80, "why": ""}], "issues": []}
+
+    def mirror_fixes(self, acts):
+        return [a for a in acts if a[0] == "fix"]
+
+    def test_mirror_error_fixed_when_repeats_then_closes(self):
+        """Разовый сбой — не чиним; повторился через 5 мин — Claude чинит зеркало; прошёл — ошибка закрыта."""
+        self.assertEqual(self.mirror_fixes(guard.mirror_apply(self.BAD, "", NOW)), [])
+        acts = guard.mirror_apply(self.BAD, "", NOW + 300)
+        self.assertEqual(len(self.mirror_fixes(acts)), 1)
+        with mock.patch.object(guard.threading, "Thread") as T:
+            T.side_effect = lambda target, args, daemon: mock.Mock(start=lambda: target(*args))
+            guard.handle(acts)
+        self.assertEqual(len(self.fixes), 1)
+        self.assertIn("Дозор зеркала", self.fixes[0][1])  # своё ТЗ: код зеркала и как проверить себя
+        self.assertIn("ответ 502", self.fixes[0][1])
+        guard.mirror_apply(self.BAD, "", NOW + 600)
+        guard.mirror_apply(self.GOOD, "", NOW + 900)
+        self.assertTrue(all(it.get("closed") for it in self.issues().values() if it["kind"] == "mirror"))
+        m = guard.state(hub.load())["mirror"]
+        self.assertTrue(m["ok"])
+        self.assertEqual(m["at"], NOW + 900)
+
+    def test_mirror_waits_while_hdp_busy(self):
+        with open(self.tmp("bot_settings.json"), "w") as f:
+            json.dump({"active": {"t1": {"since": NOW - 60}}}, f)
+        guard.mirror_apply(self.BAD, "", NOW)
+        guard.handle(guard.mirror_apply(self.BAD, "", NOW + 300))
+        self.assertEqual(self.fixes, [])  # HDP решает — починка (с перезапуском) подождёт
+
+    def test_mirror_az_fixes_at_once_and_keeps_light_issues(self):
+        guard.mirror_apply(self.BAD, "", NOW)
+        az = {"pages": 30, "ours": ["ошибка JS: x is undefined — /student/topic/1"], "fix": "🧪 Проверка сайта… x is undefined"}
+        acts = guard.mirror_apply(az, "", NOW + 60, az=True)
+        self.assertEqual(len(self.mirror_fixes(acts)), 1)  # полный обход сам сверяет с платформой — чиним сразу
+        az_it = self.issues()[acts[0][1]]
+        self.assertTrue(az_it["text"].startswith(guard.AZ))
+        self.assertIn("x is undefined", az_it["detail"])
+        guard.mirror_apply({"pages": 30, "ours": [], "fix": ""}, "", NOW + 120, az=True)
+        light = [it for it in self.issues().values() if it["text"].startswith("зеркало:")]
+        self.assertFalse(light[0].get("closed"))  # чистый обход не закрывает ошибку лёгкой проверки
+        self.assertTrue(self.issues()[acts[0][1]]["closed"])
+        self.assertEqual(guard.state(hub.load())["mirror"]["az"], 0)
+
+    def test_mirror_check_failed_network_only_tells(self):
+        guard.mirror_apply(None, "URLError: Network is unreachable", NOW)
+        acts = guard.mirror_apply(None, "URLError: Network is unreachable", NOW + 300)
+        self.assertEqual(self.mirror_fixes(acts), [])
+        self.assertTrue([a for a in acts if a[0] == "tell"])
+
+    def test_mirror_due_schedules(self):
+        started = []
+        with mock.patch.object(guard, "mirror_base", lambda: "https://hdp.1-2-3-4.sslip.io"), \
+                mock.patch.object(guard.threading, "Thread") as T:
+            T.side_effect = lambda target, daemon, args=(): mock.Mock(start=lambda: started.append(target.__name__))
+            self.assertEqual(guard.mirror_due(NOW), ["watch", "az"])
+            guard.mirror_apply(self.GOOD, "", NOW)
+            guard.mirror_apply({"pages": 1, "ours": []}, "", NOW, az=True)
+            self.assertEqual(guard.mirror_due(NOW + 60), [])
+            self.assertEqual(guard.mirror_due(NOW + guard.MIRROR_EVERY + 1), ["watch"])
+            self.web = False
+            self.assertIsNone(guard.mirror_due(NOW + 3600))  # сайт лежит — это дело минутной проверки
+        self.assertEqual(started, ["mirror_check", "mirror_az", "mirror_check"])
+
+    def test_mirror_check_button_card(self):
+        out = json.dumps(self.BAD, ensure_ascii=False)
+        with mock.patch.object(guard, "mirror_base", lambda: "https://hdp.x"), \
+                mock.patch.object(guard, "run", lambda cmd, t: (True, "warn\n" + out, "")) as r:
+            guard.mirror_check(hub.owner())
+        text, kb = self.last()
+        self.assertIn("Зеркало: проблем 1", text)
+        self.assertIn("ответ 502", text)
+        self.assertIn("grd|mir", kb)
+        self.cq("grd")
+        self.assertIn("🪞 Зеркало", self.last()[0])
+        self.assertIsNotNone(r)
+
     def test_child_env_drops_pm2_channel(self):
         with mock.patch.dict(os.environ, {"NODE_CHANNEL_FD": "3", "NODE_CHANNEL_SERIALIZATION_MODE": "json"}):
             env = guard.child_env()

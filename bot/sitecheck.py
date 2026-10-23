@@ -37,18 +37,19 @@ def last():
         return None
 
 
-def run(max_pages=45, orig=True):
-    """Полная проверка. -> отчёт (dict). RuntimeError — уже идёт, сайт не готов или скрипт упал."""
+def run(max_pages=45, orig=True, base=None):
+    """Полная проверка. -> отчёт (dict). RuntimeError — уже идёт, сайт не готов или скрипт упал.
+    base — адрес зеркала (из 🛡 Стража: он в другом процессе, web.site_url() там пустой)."""
     if not lock.acquire(blocking=False):
         raise RuntimeError("Проверка уже идёт")
     token = None
     try:
-        base = web.site_url()
+        base = (base or web.site_url()).rstrip("/")
         if not base:
             raise RuntimeError("Сайт ещё запускается — попробуй через минуту")
         os.makedirs(DIR, exist_ok=True)
         token = web.site_login(web.site_code())  # вход только на время проверки
-        out = os.path.join(DIR, "run.json")
+        out = os.path.join(DIR, f"run{os.getpid()}.json")  # бот и 🛡 Страж могут проверять одновременно
         cmd = ["node", os.path.join(HERE, "sitecheck.js"), base, out, "--max", str(max_pages)] + (["--orig"] if orig else [])
         try:
             r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, timeout=TIMEOUT,
@@ -109,3 +110,14 @@ def fix_text(rep):
 def age(rep):
     t = (rep or {}).get("at")
     return int(time.time() - t) if t else None
+
+
+if __name__ == "__main__":  # 🛡 Страж (hub/guard.py) раз в 6 ч: python3 bot/sitecheck.py <адрес> [--max N] → JSON
+    import sys
+    args = sys.argv[1:]
+    if not args:
+        sys.exit("usage: python3 bot/sitecheck.py <https://hdp.…> [--max N]")
+    n = int(args[args.index("--max") + 1]) if "--max" in args else 45
+    rep = run(n, base=args[0])
+    print(json.dumps({"pages": rep.get("pages"), "ours": [line(i) for i in ours(rep)], "fix": fix_text(rep)},
+                     ensure_ascii=False))
