@@ -374,7 +374,10 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       S.running = new Set(run.running || []);
       S.busy = !!run.busy;
       const working = st.working || st.busy || S.running.size > 0;
-      if (S.wasWorking && !working) {  // решение закончилось — статусы заданий на платформе поменялись
+      // решение закончилось — статусы заданий на платформе поменялись. 23.10: вкладка Safari спала, конец работы
+      // не увидела, и «⚡ Автотесты» до утра показывали уже сданные (25 вместо 3) — список старше 3 мин тоже обновляем
+      const old = S.ov && S.ov.at && Date.now() - S.ov.at > 180000 && !S.ovLoading;
+      if ((S.wasWorking && !working) || old) {
         for (const k of Object.keys(S.topics)) S.topics[k].at = 0;
         S.ov = null;
       }
@@ -1067,6 +1070,16 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
 
   // запуск пачки тестов: по одному /api/solve — до 6 сразу (сколько потянет память сервера), остальные в очереди бота
   async function runAutos(btn, tasks, head) {
+    // свежие статусы: уже сданные (решены, пока список на странице устарел) не запускаем
+    try {
+      const r = await api('/api/overview');
+      if (r.data) {
+        S.ov = r.data;
+        const st = new Map((r.data.topics || []).flatMap(tp => (tp.tasks || []).map(norm)).map(t => [t.uuid, t]));
+        tasks = tasks.filter(t => !st.has(t.uuid) || autoOk(st.get(t.uuid)));
+      }
+    } catch (e) { /* бот сам не решит сданное */ }
+    if (!tasks.length) { toast('Все эти тесты уже сданы'); update(); return; }
     // сначала обязательные (Глеб 22.10: «это обяз или не обяз») — и можно сдать только их
     const must = tasks.filter(t => t.req !== false), opt = tasks.filter(t => t.req === false);
     tasks = [...must, ...opt];
@@ -1090,7 +1103,8 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       for (const t of todo) S.running.add(t.uuid);
       started = r.n || todo.length;
     }
-    if (started) toast(started === tasks.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат' : `Запустил ${started} из ${tasks.length}`);
+    if (r && r.skipped) toast(started ? `Запустил ${started} · уже сдано ${r.skipped}` : 'Все эти тесты уже сданы');
+    else if (started) toast(started === tasks.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат' : `Запустил ${started} из ${tasks.length}`);
     update();
     setTimeout(tick, 800);
   }

@@ -3614,15 +3614,24 @@ def busy_check():
         raise ValueError(f"Сейчас решаю {lock.busy()} — подожди, пока одно закончу")
 
 
+def done_tasks():
+    """Задания, которые по overview.json уже сданы (зачтены или на проверке)."""
+    return {t.get("uuid") for tp in (overview() or {}).get("topics") or [] for t in tp.get("tasks") or []
+            if t.get("status") in ("approved", "reviewing")}
+
+
 def app_solve(b):
     if isinstance(b.get("urls"), list):  # «⚡ Все автотесты» с сайта — пачка одним запросом (22.10: по одному сайт
         # слал 70 запросов подряд, под нагрузкой один не дошёл — и остальные так и не запустились)
         links = list(dict.fromkeys(m.group(0) for m in (LINK.search(str(u)) for u in b["urls"][:200]) if m))
         if not links:
             raise ValueError("Нет ссылок на задания HDP")
+        done = done_tasks()  # 23.10: список на странице устарел — уже сданные молча пропускаем
+        skipped = [u for u in links if drafts.task_id(u) in done]
+        links = [u for u in links if u not in skipped]
         for url in links:
             threading.Thread(target=run_task, args=(owner(), url, "", False, None, None, True), daemon=True).start()  # quiet
-        return {"ok": True, "n": len(links)}
+        return {"ok": True, "n": len(links), "skipped": len(skipped)}
     m = LINK.search(str(b.get("url") or ""))
     if not m:
         raise ValueError("Это не ссылка на задание HDP")
