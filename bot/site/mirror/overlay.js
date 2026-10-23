@@ -146,7 +146,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   const isTest = t => t && t.type === 'test';
   const done = t => t && ['approved', 'reviewing'].includes(t.status);
   // Глеб 22.10: «автотесты» — все несданные тесты темы (и обязательные, и по желанию), пока есть попытки и тема открыта
-  const autoOk = t => isTest(t) && ['appointed', 'reworking', 'failed'].includes(t.status) && t.left !== 0;
+  // 23.10: на последней попытке (left 1) — не в «Сдать все»: ошибку не исправить, такие сдаются по одному со страницы
+  // задания (у «ИБ» нужно 20/20, у «Phrases» ключ учителя под вопросом — одно нажатие сожгло бы обе)
+  const autoOk = t => isTest(t) && ['appointed', 'reworking', 'failed'].includes(t.status) && t.left !== 0 && t.left !== 1;
   // срок темы + дни доработок прошли — платформа пишет «Прошел срок доработок…, отправка решений невозможна»
   const todayMsk = () => new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
   function closedTill(deadline, extra) {
@@ -874,7 +876,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       ${subs ? `<div class="hdpx-chips">${subs.map(s => `<button class="hdpx-chip${s.name === S.prepSubj ? ' hdpx-chip-on' : ''}" data-a="psubj" data-v="${esc(s.name)}">${esc(s.icon)} ${esc(s.short || s.name)}</button>`).join('')}</div>`
         : `<div class="hdpx-row">${spin}<span class="hdpx-muted hdpx-small">Беру темы с HDP…</span></div>`}
       ${cur ? `<p class="hdpx-label">Что прошли <span class="hdpx-muted">— отмечены недавние</span></p>
-        <div class="hdpx-chips">${cur.topics.map(t => `<button class="hdpx-chip${sel.includes(t.uuid) ? ' hdpx-chip-on' : ''}" data-a="ptopic" data-v="${t.uuid}">${esc(t.title)}</button>`).join('')}</div>` : ''}
+        <div class="hdpx-chips">${cur.topics.map(t => `<button class="hdpx-chip hdpx-chip-long${sel.includes(t.uuid) ? ' hdpx-chip-on' : ''}" data-a="ptopic" data-v="${t.uuid}">${esc(t.title)}</button>`).join('')}</div>` : ''}
       <p class="hdpx-label">Сколько есть времени</p>
       <div class="hdpx-mins">${[[1, '⚡ 1 мин', 'главное'], [5, '📝 5 мин', 'конспект'], [10, '📚 10 мин', 'с задачами']].map(([m, t, s]) =>
         `<button class="hdpx-min${S.prepMin === m ? ' hdpx-min-on' : ''}" data-a="pmin" data-v="${m}"><b>${t}</b><small>${s}</small></button>`).join('')}</div>
@@ -1103,7 +1105,7 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
       for (const t of todo) S.running.add(t.uuid);
       started = r.n || todo.length;
     }
-    if (r && r.skipped) toast(started ? `Запустил ${started} · уже сдано ${r.skipped}` : 'Все эти тесты уже сданы');
+    if (r && r.skipped) toast(started ? `Запустил ${started} · пропустил ${r.skipped}: сданы или последняя попытка` : 'Эти тесты уже сданы или на последней попытке');
     else if (started) toast(started === tasks.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат' : `Запустил ${started} из ${tasks.length}`);
     update();
     setTimeout(tick, 800);

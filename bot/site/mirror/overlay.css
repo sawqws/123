@@ -135,6 +135,12 @@
 .hdpx-tabbtn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 14px 4px 12px; margin: 0 4px; border: 0;
   border-bottom: 2px solid transparent; background: none; font: 400 15px/18px var(--hdpx-font); color: var(--hdpx-grey); cursor: pointer; white-space: nowrap; }
 .hdpx-tabbtn svg { width: 20px; height: 20px; }
+/* 23.10: на телефоне (390) «Подготовка» обрезалась, а ⚙️ Настройки уезжали за край — все вкладки в один ряд */
+@media (max-width: 440px) {
+  .hdpx-tabs { gap: 0; padding: 0 6px; }
+  .hdpx-tabbtn { margin: 0 2px; padding: 13px 3px 11px; font-size: 13.5px; letter-spacing: -.2px; }
+  .hdpx-tabbtn svg { width: 18px; height: 18px; }
+}
 .hdpx-tabbtn:hover { color: var(--hdpx-ink); }
 .hdpx-tabbtn-on { color: var(--hdpx-primary); border-bottom-color: var(--hdpx-primary); font-weight: 500; }
 .hdpx-dr-body { flex: 1 1 auto; overflow-y: auto; padding: 16px; overscroll-behavior: contain; }
@@ -169,6 +175,8 @@
 .hdpx-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--hdpx-line);
   background: var(--hdpx-white); color: var(--hdpx-ink); font: 400 14px/1 var(--hdpx-font); cursor: pointer; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .hdpx-chip:hover { border-color: var(--hdpx-primary); }
+/* длинные названия тем («А4. Степень с отрицательным целым показателем») — в две строки, а не за край карточки */
+.hdpx-chip-long { height: auto; min-height: 32px; padding: 7px 12px; white-space: normal; text-align: left; line-height: 1.3; }
 .hdpx-chip-on { background: var(--hdpx-primary); border-color: var(--hdpx-primary); color: #fff; }
 .hdpx-mins { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .hdpx-min { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 4px; border-radius: 8px; border: 1px solid var(--hdpx-line);
