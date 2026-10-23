@@ -1560,11 +1560,14 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
             if pend:  # Claude ответы не внёс — внёс бот; его «не внёс» Глебу не показываем
                 out = "Ответы внесены на сайт."
         if pend:  # тест: ответы внесены, сдаст бот по таймеру
+            unhold_test(task)
             remember(title or "Тест", True, parse_score(out)[1], url=url, secs=time.time() - t0)
             react(chat, mid, "👌")
             schedule_test(chat, task, pend, title, out, tries=(retry or {}).get("k", 0))
             return
         result, full = result_card(out, title, time.time() - t0, show)
+        if not show and drafts.task_info(task)[0] == "test":  # тест решён, но не внесён — ждёт выбора Глеба
+            hold_test(task, title)
         has_draft = drafts.fresh(task, t0)
         score, body = parse_score(out)
         remember(title or "Задание", True, body, score=score, url=url, show=show, secs=time.time() - t0, draft=has_draft)
@@ -2070,6 +2073,35 @@ def test_delay(n):
     if not human_on():
         return 0
     return max(90.0, min(360.0, sum(random.uniform(20, 45) for _ in range(max(1, int(n or 1))))))
+
+
+# Тест решён, но не внесён: последняя попытка и ответ неоднозначный — Claude спросил Глеба, какой вариант внести
+# (23.10: «Phrases with prepositions» висел в «⚡ Автотесты по желанию (1)», каждое нажатие снова будило Claude,
+# а Глебу казалось, что кнопка не работает). В пачки с сайта такие тесты не берём; сдаются по его ответу или ссылке.
+HELD_TTL = 3 * 86400
+
+
+def held_tests():
+    """{задание: {at, title}} — ждут выбора Глеба (не старше HELD_TTL)."""
+    now = time.time()
+    return {k: v for k, v in (load_settings().get("held") or {}).items() if now - (v.get("at") or 0) < HELD_TTL}
+
+
+def hold_test(task, title):
+    with settings_lock:
+        s = load_settings()
+        h = {k: v for k, v in (s.get("held") or {}).items() if time.time() - (v.get("at") or 0) < HELD_TTL}
+        h[task] = {"at": round(time.time()), "title": title or "Тест"}
+        s["held"] = h
+        save_settings(s)
+
+
+def unhold_test(task):
+    with settings_lock:
+        s = load_settings()
+        if task in (s.get("held") or {}):
+            s["held"].pop(task)
+            save_settings(s)
 
 
 def pending_tests():
@@ -3580,6 +3612,7 @@ def app_state(_=None):
     return {
         "busy": lock.locked(),  # заняты ВСЕ места — новое задание встанет в очередь
         "mv": web._cfg.get("mirror_version", ""),
+        "held": list(held_tests()),  # ждут выбора Глеба (последняя попытка) — в «⚡ Автотесты» не берутся
         "tests": [k for k, t in pending_tests().items() if t.get("at")],  # ждут сдачи по таймеру — сайт их не берёт  # версия кнопок сайта: открытая страница со старой обновит их сама
         "working": lock.busy() > 0 or bool(lives),  # что-то решается прямо сейчас (хоть одно задание)
         "live": live.state() if live else None,
@@ -3628,7 +3661,8 @@ def app_solve(b):
         if not links:
             raise ValueError("Нет ссылок на задания HDP")
         done = done_tasks()  # 23.10: список на странице устарел — уже сданные молча пропускаем
-        skipped = [u for u in links if drafts.task_id(u) in done]
+        held = held_tests()  # и ждущие выбора Глеба: пачка их не сдаёт (последняя попытка)
+        skipped = [u for u in links if drafts.task_id(u) in done or drafts.task_id(u) in held]
         links = [u for u in links if u not in skipped]
         for url in links:
             threading.Thread(target=run_task, args=(owner(), url, "", False, None, None, True), daemon=True).start()  # quiet
