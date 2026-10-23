@@ -1627,6 +1627,13 @@ class SiteTest(BotTest):
             self.assertEqual(req("GET", "/site/site.js")[0], 200)
             self.assertEqual(req("GET", "/site/../bot.py")[0], 404)
             self.assertEqual(req("GET", "/", {"Host": "hdp.1-2-3-4.sslip.io"})[1], "/student")  # зеркало платформы
+            # файлы оформления платформы — без входа (тёмная тема берёт их fetch-ем без cookie), остальное — нет
+            hdp = {"Host": "hdp.1-2-3-4.sslip.io"}
+            with mock.patch.object(web.mirror, "proxy", lambda h, v: h.reply(200, b"ok", "text/plain")):
+                self.assertEqual(req("GET", "/student/assets/index-D08skGbi.js", hdp)[0], 200)
+                self.assertEqual(req("GET", "/student/assets/%2e%2e/x", hdp)[0], 401)
+                self.assertEqual(req("GET", "/api/education/v1/students/current", hdp)[0], 401)
+                self.assertEqual(req("POST", "/student/assets/a.js", hdp, b"{}")[0], 401)
             self.assertEqual(req("GET", "/api/state", {"X-Site": "1"})[0], 401)
             # плохая ссылка — без входа
             st, loc, cookie, _ = req("GET", "/site/login?c=nope")
