@@ -57,6 +57,8 @@ tui = _load_ui()
 TOKEN = os.environ.get("PULSE_TOKEN", "")
 API = f"https://api.telegram.org/bot{TOKEN}/"
 ALLOWED = {int(x) for x in re.findall(r"\d+", os.environ.get("PULSE_ALLOWED", ""))}
+HUB_ENV = os.environ.get("PULSE_HUB_ENV") or "/etc/hub-bot.env"  # владелец Главного — он же владелец Пульса
+HUB_STATE = os.environ.get("PULSE_HUB_STATE") or os.path.join(REPO, "hub", "data", "state.json")
 DATA = os.environ.get("PULSE_DATA") or os.path.join(HERE, "data")
 STATE = os.path.join(DATA, "state.json")
 PORT = int(os.environ.get("PULSE_PORT") or 8798)
@@ -208,18 +210,36 @@ def fmt(title, body="", note=""):
 
 # ---------- доступ ----------
 
+def hub_owner():
+    """Владелец Главного на этом сервере: HUB_ALLOWED или первый /start там (hub/data/state.json); 0 — нет."""
+    try:
+        with open(HUB_ENV) as f:
+            ids = re.findall(r"^HUB_ALLOWED=\D*(\d+)", f.read(), re.M)
+        if ids:
+            return int(ids[0])
+    except OSError:
+        pass
+    try:
+        with open(HUB_STATE) as f:
+            return int(json.load(f).get("owner") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
 def owner_id():
-    return st.get("owner") or min(ALLOWED or {0})
+    # 23.10: владелец не записан (он не жал /start в Пульсе) — мини-приложение отвечало «Нет связи», сводки
+    # не уходили. Теперь без записи владелец — тот же, что у Главного
+    return st.get("owner") or min(ALLOWED or {0}) or hub_owner()
 
 
 def allowed(uid):
-    return bool(uid) and (uid in ALLOWED or uid == st.get("owner"))
+    return bool(uid) and (uid in ALLOWED or uid == owner_id())
 
 
 def claim(uid):
-    """Первый /start — владелец (если PULSE_ALLOWED пуст)."""
+    """Первый /start — владелец (если PULSE_ALLOWED пуст и владельца Главного нет)."""
     if not ALLOWED and not st.get("owner"):
-        st["owner"] = uid
+        st["owner"] = hub_owner() or uid
         save()
     return allowed(uid)
 
