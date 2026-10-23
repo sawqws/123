@@ -76,12 +76,16 @@ class Upstream(BaseHTTPRequestHandler):
         if self.path == "/api/education/v1/files":
             return self.answer(200, b'{"img": "https://horodigital.ru/store/t/' + b"a" * 32 + b'"}', "application/json")
         edu = "/api/education/v1/students/current"
+        wrap = lambda d: json.dumps({"success": True, "meta": {"correlationId": "C1"}, "data": d}).encode()  # noqa: E731 как у платформы
         if self.path == edu + "/topics/T1/tasks?taskUuid=X1":
-            return self.answer(200, b'{"group": {"uuid": "G1"}, "tasks": [{"uuid": "X1", "type": "test"}]}', "application/json")
-        if self.path in (edu + "/topics/T1/tasks/X1", "/api/profile/v1/users/preferences"):
+            return self.answer(200, wrap({"group": {"uuid": "G1"}, "tasks": [{"uuid": "X1", "type": "test"}]}), "application/json")
+        if self.path == edu + "/topics/T1/tasks?taskUuid=X2":
+            return self.answer(200, wrap({"group": {"uuid": "G1"}, "tasks": [{"uuid": "X2", "type": "detailedAnswer"}]}),
+                               "application/json")
+        if self.path in (edu + "/topics/T1/tasks/X1", edu + "/topics/T1/tasks/X2", "/api/profile/v1/users/preferences"):
             return self.answer(200, b'{"ok": 1}', "application/json")
         if self.path.startswith(edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts?"):
-            return self.answer(200, b'[{"uuid": "A1"}]', "application/json")
+            return self.answer(200, wrap([{"uuid": "A1"}]), "application/json")
         if self.path == edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts/A1":
             return self.answer(200, b'{"uuid": "A1", "answers": []}', "application/json")
         if self.path == "/go":
@@ -442,6 +446,14 @@ class MirrorTest(unittest.TestCase):
         with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
             out = mirror._ahead.bundle("T1", "X1", first_too=True)  # касание карточки — и первое звено
         self.assertIn(edu + "/topics/T1/tasks?taskUuid=X1", out)
+        # письменное задание: цепочка короче (без попыток) — bundle не ждёт до упора (23.10: ответ платформы в обёртке
+        # {"data": …} не разбирался, и каждое задание ждало 4 с — страница была пустой 19 с)
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
+            t = time.time()
+            out = mirror._ahead.bundle("T1", "X2")
+            self.assertLess(time.time() - t, 2)
+            self.assertEqual((mirror._ahead.group.get("T1"), mirror._ahead.kind.get("X2")), ("G1", "detailedAnswer"))
+        self.assertEqual(set(out), {edu + "/topics/T1/tasks/X2", "/api/profile/v1/users/preferences"})
         code, h, body = self.req("GET", "/_hdp/sw.js", cookie=False)
         self.assertEqual((code, h.get("Service-Worker-Allowed"), h.get("Cache-Control")), (200, "/", "no-cache"))
         self.assertIn(b"/_hdp/bundle", body)

@@ -666,16 +666,24 @@ class Ahead:
         base = f"{EDU}/study-groups/{group}/topics/{topic}/tasks/{task}/test-attempts"
         return [base + "?status=completed", base + "?status=started&status=created&view=full"]
 
+    @staticmethod
+    def _data(text):
+        """Тело ответа API: платформа заворачивает его в {"success", "meta", "data"} (23.10 — разбор искал group и
+        попытки сверху, не находил, и bundle() на каждом задании ждал все 4 с: страница пустая 19 с, 🛡 Страж)."""
+        d = json.loads(text)
+        return d["data"] if isinstance(d, dict) and "data" in d and "success" in d else d
+
     def seen(self, path, text):
         """Ответ платформы (браузеру или наперёд) — из него следующие звенья цепочки."""
         m = TASKS_OF.fullmatch(path)
         if m:
             topic, task = m.groups()
             try:
-                d = json.loads(text)
+                d = self._data(text)
                 group = d["group"]["uuid"]
                 kind = next((t.get("type") for t in d.get("tasks") or [] if t.get("uuid") == task), None)
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, AttributeError):
+                self.kind[task] = None  # первое звено пришло, но не разобралось — bundle() его больше не ждёт
                 return
             self.group[topic], self.kind[task] = group, kind
             if kind == "test":
@@ -684,7 +692,7 @@ class Ahead:
         base = path.split("?")[0]
         if ATTEMPTS.fullmatch(base) and "?" in path:
             try:
-                items = json.loads(text)
+                items = self._data(text)
                 uuids = [a["uuid"] for a in items[:2]] if isinstance(items, list) else []
             except (ValueError, KeyError, TypeError):
                 return
