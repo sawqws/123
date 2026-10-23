@@ -2323,6 +2323,30 @@ class DeferTest(BotTest):
         self.assertIn("17 / 17", self.last()[0])
         self.assertIn("попыток 1 из 3", self.last()[0])
 
+    def test_held_on_last_attempt_not_in_batches_until_entered(self):
+        """23.10: «Phrases» на последней попытке — Claude не внёс ответы и спросил Глеба. Тест висел в
+        «⚡ Автотесты по желанию (1)», каждое нажатие снова будило Claude — Глебу казалось, что кнопка не работает."""
+        def ask(prompt, tools, timeout=0, on_tool=None):
+            self.prompts.append(prompt)
+            return True, "Тест не сдавал: осталась последняя попытка. Для тебя: выбери вариант 1, 2 или 3."
+        bot.save_settings({**bot.load_settings(), "owner": CHAT})
+        with mock.patch.object(bot, "claude", ask):
+            self.say(URL)
+        self.assertIn(TASK, bot.held_tests())
+        self.assertIn(TASK, bot.app_state({})["held"])  # сайт не берёт его в «⚡ Автотесты»
+        self.assertNotIn(TASK, bot.app_state({})["tests"])
+        with mock.patch.object(bot.threading, "Thread") as th:  # страница устарела — пачка его всё равно не сдаёт
+            self.assertEqual(bot.app_solve({"urls": [URL]}), {"ok": True, "n": 0, "skipped": 1})
+        th.assert_not_called()
+        self.say(URL)  # Глеб выбрал вариант / прислал ссылку — Claude вносит ответы, бот сдаёт: больше не ждёт
+        self.assertIn(TASK, bot.pending_tests())
+        self.assertNotIn(TASK, bot.held_tests())
+        bot.hold_test(TASK, "Тест")
+        s = bot.load_settings()
+        s["held"][TASK]["at"] -= bot.HELD_TTL + 1
+        bot.save_settings(s)
+        self.assertEqual(bot.held_tests(), {})  # через 3 дня — забыт
+
     def test_answers_not_entered_by_claude_bot_enters_them(self):
         """22.10: Claude записал answers.json, но submit.js ему не разрешили (другая форма команды) — бот вносит сам."""
         def claude(prompt, tools, timeout=0, on_tool=None):

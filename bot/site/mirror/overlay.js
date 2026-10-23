@@ -162,8 +162,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
   // 22.10: после срока платформа закрывает только задания уровня 3.0 и выше, уровни 1.0–2.0 принимает (и тесты, и письменные)
   const lateOk = t => !!t && t.lvl != null && t.lvl <= 2;
   const shut = (topic, t) => !!closedOf(topic) && !lateOk(t);
-  // решается или уже решён и ждёт сдачи по таймеру (S.st.tests) — в автотесты не берём, иначе лишняя попытка
-  const busyTask = uuid => S.running.has(uuid) || ((S.st && S.st.tests) || []).includes(uuid);
+  // решается, уже решён и ждёт сдачи по таймеру (S.st.tests) или ждёт выбора Глеба на последней попытке (S.st.held) —
+  // в автотесты не берём: лишняя попытка, а у held каждое нажатие снова будило Claude, и казалось, что кнопка не работает
+  const busyTask = uuid => S.running.has(uuid) || ((S.st && S.st.tests) || []).includes(uuid) || ((S.st && S.st.held) || []).includes(uuid);
   const topicAutos = topic => (cachedTasks(topic) || []).filter(autoOk).filter(t => !busyTask(t.uuid) && !shut(topic, t));
 
   /* ---------- где мы ---------- */
@@ -1103,9 +1104,9 @@ settings: null, ov: null, times: {}, timeOpen: '', files: {}, filesOpen: {}, edi
     const r = todo.length && await busy(btn, () => api('/api/solve', { urls: todo.map(t => taskUrl(t.topic, t.uuid)) }));
     if (r) {
       for (const t of todo) S.running.add(t.uuid);
-      started = r.n || todo.length;
+      started = r.n != null ? r.n : todo.length;  // 0 — сервер всё пропустил (сданы или ждут выбора)
     }
-    if (r && r.skipped) toast(started ? `Запустил ${started} · пропустил ${r.skipped}: сданы или последняя попытка` : 'Эти тесты уже сданы или на последней попытке');
+    if (r && r.skipped) toast(started ? `Запустил ${started} · пропустил ${r.skipped}: сданы или ждут твоего выбора` : 'Эти тесты уже сданы или ждут твоего выбора — ответ бота в чате');
     else if (started) toast(started === tasks.length ? 'Запустил — по каждому тесту результат придёт сюда и в чат' : `Запустил ${started} из ${tasks.length}`);
     update();
     setTimeout(tick, 800);
