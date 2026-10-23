@@ -40,9 +40,9 @@ MARGIN = (226, 106, 92)
 
 XH, DIG = 0.88, 0.95          # высота строчной и цифры, в клетках
 SUP = 0.8                     # степень
-GAP = 0.13                    # промежуток у знаков + − = и пробелов, в клетках (его медиана по 75 фото)
-GAP_IN = 0.0                  # внутри члена («3mn», «(x − 2y)^2»): у него буквы почти вплотную (Глеб 22.10: «шрифт поменять»)
-SLANT = (0.12, 0.22)          # его буквы наклонены вправо на 7–12° (сравнение с его записью на том же фото)
+GAP = 0.18                    # промежуток у знаков + − = и пробелов, в клетках (как в его записи, Глеб 23.10)
+GAP_IN = 0.06                 # внутри члена («3mn», «(x − 2y)^2»): маленький зазор, как в его записи, которую он обвёл 23.10
+SLANT = (0.04, 0.11)          # его буквы чуть наклонены вправо, 2–6° (его запись, которую он обвёл 23.10)
 # его рука по замерам 75 фото тетради (Глеб 22.10: «пока видно, что написано ИИ»), разброс — вдвое меньше
 # замеренного (Глеб 22.10: «убери неряшливость»):
 JIT_Y = 0.025      # низ соседних букв гуляет: σ ≈ 0.15 клетки между соседями → у каждой ±0.07
@@ -52,7 +52,7 @@ SLOPE = 0.0        # строка в целом чуть уходит вверх
 WAVE = 0.0         # и плывёт волной, клетки
 FRAC_GAP = 0.15    # от черты до числителя/знаменателя (у него почти вплотную)
 ROW_GAP = 0.12     # между строками решения (шаг строк дробей ≈ 2.6 клетки, не по линиям клетки)
-SPACE = 0.16                  # пробел (вокруг + − =)
+SPACE = 0.2                   # пробел (вокруг + − =)
 BASE = {'y': 'desc', '(': 'paren', ')': 'paren', '+': 'axis', '=': 'axis', '−': 'axis', '·': 'axis', ':': 'colon'}
 
 STAMPS = {}
@@ -79,6 +79,20 @@ for _ch in '()':
     if _ch in STAMPS:
         STAMPS[_ch] = [a for a in STAMPS[_ch] if _round_paren(a, _ch)] or STAMPS[_ch]
 
+
+def _whole_digit(a):
+    """Цифра целая: один штрих и не узкая палочка — обрывки «3» и «4» в строке читаются как «1» / «7» (Глеб 23.10)."""
+    import cv2
+    n, _, st, _ = cv2.connectedComponentsWithStats((a > 0.4).astype(np.uint8))
+    return sum(s[4] > 8 for s in st[1:]) == 1 and a.shape[1] / a.shape[0] >= 0.42
+
+
+for _ch in '0234569':
+    if _ch in STAMPS:
+        _ok = [a for a in STAMPS[_ch] if _whole_digit(a)]
+        STAMPS[_ch] = _ok if len(_ok) >= 6 else STAMPS[_ch]
+
+BAR_K = 0.7         # черта тоньше штампа: у него черта той же тонкой ручкой, что и буквы
 PAREN = 1.12        # высота обычной скобки, в клетках
 TALL = 1.75         # скобки выше этого (в клетках) — его высокие скобки у дробей
 ALIAS = {'-': '−'}
@@ -217,7 +231,7 @@ class Notebook:
         cand = sorted(range(len(opts)), key=lambda i: abs(opts[i].shape[1] - want))[:6]
         a = opts[self.rnd.choice(cand)]
         k = self.C / REF
-        im = Image.fromarray((a * 255).astype(np.uint8)).resize((max(2, round(length)), max(2, round(a.shape[0] * k))), Image.LANCZOS)
+        im = Image.fromarray((a * 255).astype(np.uint8)).resize((max(2, round(length)), max(2, round(a.shape[0] * k * BAR_K))), Image.LANCZOS)
         im = im.rotate(angle + self.rnd.uniform(-1.2, 1.2), Image.BICUBIC, expand=True)
         st = np.asarray(im, np.float32) / 255
         body = st[st > 0.15]

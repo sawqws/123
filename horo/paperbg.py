@@ -132,9 +132,12 @@ def _look(img, bgm, mask):
     cs, _ = cv2.findContours(core, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
     per = sum(cv2.arcLength(c, True) for c in cs)
     hp = f[..., 1] - cv2.GaussianBlur(f[..., 1], (0, 0), 1.5)
-    return float(np.percentile(L[core > 0], 90)), float(2 * core.sum() / max(1.0, per)), float(hp[core > 0].std())
+    return (float(np.percentile(L[core > 0], 90)), float(2 * core.sum() / max(1.0, per)), float(hp[core > 0].std()),
+            float(np.median(L[core > 0])))
 
 
+PRESS = 0.22        # разброс нажима (доля густоты)
+PRESS_SIGMA = 9.0   # px фото: нажим меняется от знака к знаку, не внутри штриха
 UP = 1   # итоговое фото — в родном размере его фото (Глеб 22.10: при 2.5× с шумодавом и резкостью «фон видно ИИ»)
 
 
@@ -190,8 +193,9 @@ def render(nbs, i, path):
         """Чернила на фото; thin — насколько тоньше линия (у него в разные дни разная ручка)."""
         if thin not in warped:
             a = hi
-            if thin > 0:   # тоньше на thin/SS px фото: размытие + порог по краю, форма штриха сохраняется
-                a = np.clip((cv2.GaussianBlur(a, (0, 0), 1.0) - 0.12 * thin) / (1 - 0.12 * thin), 0, 1)
+            if thin > 0:   # тоньше на thin/SS px фото с каждого края: перо у него тонкое (≈ 2 px на фото)
+                se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * thin + 1, 2 * thin + 1))
+                a = cv2.erode(a, se)
             elif thin < 0:   # толще: у него ручка бывает жирнее (давит сильнее)
                 se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * -thin + 1, 2 * -thin + 1))
                 a = cv2.dilate(a, se)
@@ -203,8 +207,12 @@ def render(nbs, i, path):
     nz = cv2.GaussianBlur(rng.normal(0, 1, big.shape[:2]).astype(np.float32), (0, 0), 0.7)
     nz = nz / max(1e-6, nz.std())
 
+    # нажим шариковой ручки гуляет: в одном знаке гуще, в соседнем бледнее (у него p50 густоты ≈ 0.6, p90 ≈ 0.85)
+    press = cv2.GaussianBlur(rng.normal(0, 1, big.shape[:2]).astype(np.float32), (0, 0), PRESS_SIGMA)
+    press = 1 + PRESS * press / max(1e-6, press.std())
+
     def comp(thin, gain, blur, noise):
-        L = np.clip(cv2.GaussianBlur(ink_at(thin), (0, 0), blur) * gain, 0, 1) * Lmax
+        L = np.clip(cv2.GaussianBlur(ink_at(thin), (0, 0), blur) * gain * press, 0, 1) * Lmax
         ratio = np.stack([np.interp(L, xs, ys[:, c]) for c in range(3)], -1)
         # под пастой — бумага без клетки (иначе на пересечениях с клеткой «бусины»)
         w = np.clip(L / max(Lmax, 1e-6) * 2.5, 0, 1)[..., None]
@@ -217,15 +225,16 @@ def render(nbs, i, path):
     his = _look(ref, rbg, rmask)
     where = cv2.dilate((ink_at(0) > 0.02).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
     best = None
-    for thin in (-3, -2, -1, 0, 1, 2, 3, 4):
-        for gain in ((1.0, 1.3, 1.7, 2.2) if not thin else (1.6, 2.0, 2.5)):   # тонкая линия — густая, не серая
+    # (Глеб 23.10, обвёл свою запись на фото: «чтобы всё выглядело как это») — по густоте (p50 и p90) и толщине
+    for thin in (-2, -1, 0, 1, 2, 3, 4):
+        for gain in (0.55, 0.65, 0.75, 0.85, 1.0, 1.3, 1.7):
             for blur in (0.45, 0.65, 0.9):
                 o = comp(thin, gain, blur, 10.0)
                 st = _look(o, cv2.medianBlur(o, 61).astype(np.float32), where)
                 if not st or not his:
                     continue
-                # утоньшение съедает мелкие степени — только если без него никак
-                err = abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.25 + 0.5 * blur + 0.6 * max(0, thin)
+                err = (abs(st[3] - his[3]) / 0.04 + abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.2
+                       + 0.5 * blur + 0.15 * abs(thin))
                 if best is None or err < best[0]:
                     best = (err, (thin, gain, blur), st)
     if best:
