@@ -3615,9 +3615,10 @@ def busy_check():
 
 
 def done_tasks():
-    """Задания, которые по overview.json уже сданы (зачтены или на проверке)."""
+    """Задания, которые пачкой не запускаем: по overview.json уже сданы (зачтены или на проверке) или тест на последней
+    попытке (23.10: ошибку не исправить — такие только по одному, ссылкой или со страницы задания)."""
     return {t.get("uuid") for tp in (overview() or {}).get("topics") or [] for t in tp.get("tasks") or []
-            if t.get("status") in ("approved", "reviewing")}
+            if t.get("status") in ("approved", "reviewing") or (t.get("type") == "test" and t.get("left") == 1)}
 
 
 def app_solve(b):

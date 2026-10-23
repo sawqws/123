@@ -219,6 +219,31 @@ class Update(Base):
         self.assertFalse(os.path.exists(os.path.join(root, "b.txt")))
 
 
+    def test_conflict_keeps_local_in_branch_and_takes_main(self):
+        # 22.10: Страж коммитил здесь, те же строки пришли в main — rebase конфликтовал, обновление не шло совсем
+        root = tempfile.mkdtemp()
+
+        def g(*a):
+            p = subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                               capture_output=True, text=True)
+            return p.returncode, p.stdout + p.stderr
+        g("init", "-q", "-b", "main")
+        open(os.path.join(root, "a.txt"), "w").write("1\n")
+        g("add", "-A"), g("commit", "-qm", "base")
+        open(os.path.join(root, "a.txt"), "w").write("main\n")
+        g("commit", "-qam", "upstream"), g("update-ref", "refs/remotes/origin/main", "HEAD")
+        g("reset", "-q", "--hard", "HEAD~1")
+        open(os.path.join(root, "a.txt"), "w").write("local\n")
+        g("commit", "-qam", "local fix")
+        code, out = hub.sync_main(g)
+        self.assertEqual(code, 0)
+        self.assertIn("ветке local-", out)
+        self.assertEqual(open(os.path.join(root, "a.txt")).read(), "main\n")  # код — свежий main
+        _, br = g("branch", "--list", "local-*")
+        _, kept = g("show", br.strip() + ":a.txt")
+        self.assertEqual(kept, "local\n")  # местная правка не потерялась
+
+
 class StudioBots(Base):
     def test_studio_registry_merged(self):
         os.makedirs(self.bots, exist_ok=True)

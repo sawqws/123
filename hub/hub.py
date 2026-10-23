@@ -853,7 +853,7 @@ def restart_app(name, wait=4):
 
 
 def restart(chat, name):
-    if name == SELF:  # после перезапуска Главный сам напишет «Снова на связи» в этот чат
+    if name == SELF:  # после перезапуска Главный сам покажет свой экран в этом чате
         setting("updated_chat", chat)
         try:  # подтвердить нажатие у Telegram, иначе после перезапуска оно придёт снова — и так по кругу
             tg("getUpdates", offset=offset, timeout=0)
@@ -1008,8 +1008,15 @@ def sync_main(git, reset=False):
     git("-c", "user.name=Главный", "-c", "user.email=hub@localhost", "commit", "-q", "-m", "Главный: правки на сервере")
     code, out = git("-c", "user.name=Главный", "-c", "user.email=hub@localhost", "rebase", "origin/main")
     if code != 0:
+        # 22.10: Страж коммитил починки здесь, те же правки пришли в main — rebase конфликтовал, и обновление не шло
+        # вообще. Теперь местные правки — в ветку-копию, код — свежий main (правки не теряются, их можно вернуть)
         git("rebase", "--abort")
-        return code, "Правки, сделанные здесь через «✏️ Доработать», конфликтуют с обновлением (rebase).\n" + out
+        keep = time.strftime("local-%m%d-%H%M")
+        git("branch", "-f", keep, "HEAD")
+        code2, out2 = git("checkout", "-B", "main", "origin/main")
+        if code2 != 0:
+            return code2, out2
+        return 0, f"Местные правки конфликтовали с main — сохранил их в ветке {keep}, код — свежий main.\n" + out
     return 0, out
 
 
@@ -2415,8 +2422,7 @@ def main():
     if chat:
         setting("updated_chat", None)
         try:
-            send(chat, "👑 <b>Снова на связи</b>")
-            home(chat)
+            home(chat)  # 23.10: отдельное «👑 Снова на связи» убрал — после каждого обновления было три сообщения подряд
         except Exception as e:
             print("notify:", e)
     bootstrap_remote()

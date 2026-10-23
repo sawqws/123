@@ -1523,9 +1523,11 @@ class SiteTest(BotTest):
         with self.assertRaises(ValueError):
             bot.app_solve({"urls": ["https://example.com"]})
         # 23.10: список на странице устарел — уже сданное (по overview.json) не запускаем
-        ov = {"topics": [{"uuid": "t", "tasks": [{"uuid": TASK, "status": "approved"}]}]}
+        last = "1" * 8 + TASK[8:]
+        ov = {"topics": [{"uuid": "t", "tasks": [{"uuid": TASK, "status": "approved"},
+                                                 {"uuid": last, "type": "test", "status": "reworking", "left": 1}]}]}
         with mock.patch.object(bot, "overview", lambda: ov), mock.patch.object(bot.threading, "Thread") as th:
-            self.assertEqual(bot.app_solve({"urls": [URL, u2]}), {"ok": True, "n": 1, "skipped": 1})
+            self.assertEqual(bot.app_solve({"urls": [URL, u2, URL.replace(TASK, last)]}), {"ok": True, "n": 1, "skipped": 2})
         self.assertEqual([c.kwargs["args"][1] for c in th.call_args_list], [u2])
         for _ in range(bot.MAX_PARALLEL):
             bot.lock.acquire()

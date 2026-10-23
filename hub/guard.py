@@ -582,7 +582,9 @@ def summary():
     """Одна строка для главного экрана Главного или None, если всё спокойно."""
     with lock:
         g = state(ui.load())
-    open_ = [it for it in g["issues"].values() if not it.get("closed") and not it.get("muted")]
+    now = time.time()  # 23.10: «проблем 6» висело сутки после починки — считаем только свежие (FRESH)
+    open_ = [it for it in g["issues"].values()
+             if not it.get("closed") and not it.get("muted") and now - it.get("last", now) <= FRESH]
     return f"🛡 HDP: проблем {len(open_)}" if open_ else None
 
 
