@@ -148,5 +148,27 @@ class MirrorWatchTest(unittest.TestCase):
         self.assertEqual(self.logouts, ["tok"])
 
 
+class SessionsAcrossProcesses(unittest.TestCase):
+    """23.10: Дозор и полный обход (два процесса) выдали себе вход одновременно — один упал на чужом .part,
+    у второго код входа затёрся. Файл входов теперь под замком между процессами."""
+
+    def test_parallel_logins_in_processes(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            code = ("import sys, web; web.SESSIONS = sys.argv[1]; bad = 0\n"
+                    "for _ in range(40):\n"
+                    "    t = web.site_login(web.site_code())\n"
+                    "    bad += not (t and web.site_check(t))\n"
+                    "    web.site_logout(t)\n"
+                    "print(bad)")
+            here = os.path.dirname(os.path.abspath(__file__))
+            ps = [subprocess.Popen([sys.executable, "-c", code, os.path.join(d, "s.json")], cwd=here,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(4)]
+            outs = [p.communicate(timeout=60) for p in ps]
+            self.assertEqual([o.strip() for o, _ in outs], ["0"] * 4, [e[-300:] for _, e in outs])
+            with open(os.path.join(d, "s.json")) as f:
+                self.assertEqual(json.load(f), {})  # все вышли, ничего не потерялось и не осталось
+
+
 if __name__ == "__main__":
     unittest.main()

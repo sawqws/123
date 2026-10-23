@@ -323,6 +323,11 @@ class GuardTest(Base):
         self.assertEqual(self.mirror_fixes(acts), [])
         self.assertTrue([a for a in acts if a[0] == "tell"])
 
+    def test_mirror_az_failed_retries_in_hour(self):
+        guard.mirror_apply(None, "FileNotFoundError: site_sessions.json.part", NOW, az=True)
+        az_at = guard.state(hub.load())["mirror"]["az_at"]
+        self.assertEqual(az_at + guard.MIRROR_AZ_EVERY, NOW + 3600)
+
     def test_mirror_due_schedules(self):
         started = []
         with mock.patch.object(guard, "mirror_base", lambda: "https://hdp.1-2-3-4.sslip.io"), \
