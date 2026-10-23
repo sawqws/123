@@ -615,7 +615,7 @@ def home(chat, mid=None):
 
 # ☰ Полное меню — клавиатура у поля ввода: свёрнута в квадратик справа (не is_persistent), по нажатию — все
 # действия; после выбора сама сворачивается (one_time). Кнопки Секретаря (📬, 🗂) — те же тексты, что у него.
-KB_VERSION = 2
+KB_VERSION = 3  # 23.10: +1 — пропал у Глеба, при запуске поставится заново
 KB_ROWS = [["✨ Поручить", "🤖 Боты", "👤 Аккаунт"],
            ["🧪 Проверка", "🛠 Сделать бота", "✏️ Доработать"],
            ["📬 Что я пропустил", "🧠 Разбор чата", "🗂 Навести порядок"],
@@ -2098,7 +2098,7 @@ def on_message(msg):
     elif cmd in ("/start", "/bots", "/menu") or text in MENU_TEXTS:
         setting("wait", None)
         if cmd == "/start":
-            ensure_keyboard(chat)
+            ensure_keyboard(chat, force=True)  # ☰ — на каждый /start: Telegram мог его потерять
         bots_screen(chat) if cmd == "/bots" else home(chat)
     elif cmd == "/mode":
         setting("wait", None)

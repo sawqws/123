@@ -709,7 +709,7 @@ class BotTest(unittest.TestCase):
         texts = [b["text"] for row in mk["keyboard"] for b in row]
         for t in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение", "📅 Сегодня"):
             self.assertIn(t, texts)
-        self.assertEqual(self.db.meta("kb_ver"), "1")
+        self.assertEqual(self.db.meta("kb_ver"), str(planner.KB.version))
         self.msg("/start")
         self.assertEqual(len(kb()), 2)  # /start ставит снова
         self.sent.clear()

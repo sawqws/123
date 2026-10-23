@@ -80,6 +80,7 @@ MSK = datetime.timezone(datetime.timedelta(hours=3))
 DAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 MODES = {"chat": "💬 чат", "app": "📱 приложение"}
 KB_NOTE = "☰ Меню — квадратик справа от поля ввода"
+KB_REV = 1  # общий сброс: +1 — все боты при запуске заново ставят меню владельцу (23.10: у Глеба пропал квадратик)
 KB_MODE = ("⚙️ Режим", "mode")         # готовые кнопки для своего меню-квадратика (kb=)
 KB_SUPPORT = ("🛠 Поддержка", "sup|ask")
 KB_APP = ("📱 Приложение", "_app")
@@ -778,7 +779,7 @@ class Bot:
             return False
         if not chat or not rows:
             return False
-        ver = f"{self.kb_version}:" + hashlib.sha1(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:10]
+        ver = f"{self.kb_version}.{KB_REV}:" + hashlib.sha1(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:10]
         st = self.db.get("_kb") or {}
         if not force and st.get("ver") == ver:
             return False
