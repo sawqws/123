@@ -4,6 +4,7 @@ usage: python3 bot/test_bot.py
 import json
 import shutil
 import os
+import subprocess
 import pathlib
 import sys
 import tempfile
@@ -1491,6 +1492,22 @@ class SiteTest(BotTest):
             self.assertNotIn("500 GET", sitecheck.fix_text(got))  # ошибка платформы — не наша
             st = bot.app_site_check({})
             self.assertEqual((st["errors"], st["running"]), (1, False))
+
+    @unittest.skipUnless(shutil.which("node"), "нет node")
+    def test_sitecheck_compares_fairly(self):
+        """🧪 Проверка сайта: у принятого письменного задания кнопок бота не ждём, платформа — в теме зеркала."""
+        js = ("const s = require('./bot/sitecheck.js');"
+              "const st = x => ({ progress: { status: { type: x } } });"
+              "const out = [s.barExpected(null), s.barExpected({ type: 'detailedAnswer', ...st('approved') }),"
+              " s.barExpected({ type: 'test', ...st('approved') }), s.barExpected({ type: 'detailedAnswer', ...st('reworking') })];"
+              "const store = {}; global.localStorage = { setItem: (k, v) => { store[k] = v; } };"
+              "eval(s.themeScript('{\"state\":{\"darkThemeEnabled\":true},\"version\":0}'));"
+              "console.log(JSON.stringify([out, store]));")
+        r = subprocess.run(["node", "-e", js], cwd=os.path.dirname(HERE), capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out, store = json.loads(r.stdout)
+        self.assertEqual(out, [True, False, True, True])
+        self.assertTrue(json.loads(store["hdp-theme-storage"])["state"]["darkThemeEnabled"])
 
     def test_wishes_default_short_and_own(self):
         """💬 Пожелания: по умолчанию «максимально кратко», своё — с сайта или словами рядом со ссылкой."""
