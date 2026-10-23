@@ -14,6 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 os.environ.setdefault("PULSE_TOKEN", "1:test")
 os.environ["PULSE_DATA"] = tempfile.mkdtemp()
+os.environ["PULSE_HUB_ENV"] = os.environ["PULSE_HUB_STATE"] = os.path.join(os.environ["PULSE_DATA"], "нет")
 import pulse  # noqa: E402
 import reporter  # noqa: E402
 
@@ -336,10 +337,23 @@ class Bot(unittest.TestCase):
 
     def test_start_owner_and_stranger(self):
         pulse.st.clear()
+        self.assertFalse(pulse.allowed(5))
         pulse.on_message({"chat": {"id": 5, "type": "private"}, "from": {"id": 5}, "text": "/start"})
         self.assertEqual(pulse.st["owner"], 5)
         pulse.on_message({"chat": {"id": 6, "type": "private"}, "from": {"id": 6}, "text": "/start"})
         self.assertIn("личный", self.sent[-1][1]["text"])
+
+    def test_owner_from_hub(self):
+        """Владелец не записан — им считается владелец Главного: приложение и сводки работают без /start."""
+        pulse.st.clear()
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write("HUB_TOKEN=x\nHUB_ALLOWED=777, 8\n")
+        with mock.patch.object(pulse, "HUB_ENV", f.name):
+            self.assertEqual(pulse.owner_id(), 777)
+            self.assertTrue(pulse.allowed(777) and not pulse.allowed(8))
+            self.assertFalse(pulse.claim(9))  # чужой /start не забирает Пульс
+            self.assertEqual(pulse.st["owner"], 777)
+        os.unlink(f.name)
 
     def test_api(self):
         pulse.ingest(summary())
