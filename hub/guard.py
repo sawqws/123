@@ -632,8 +632,8 @@ def mirror_apply(rep, why, now, az=False):
         g = state(st)
         m = g.setdefault("mirror", {})
         mine = lambda it: it["kind"] == "mirror" and it["text"].startswith(AZ) == az
-        if az:
-            m["az_at"] = round(now)
+        if az:  # не прошёл — ещё раз через час, а не через 6 ч
+            m["az_at"] = round(now if rep is not None else now - MIRROR_AZ_EVERY + 3600)
             m["az"] = None if rep is None else len(rep.get("ours") or [])
         else:
             m.update(at=round(now), ok=bool(rep and rep.get("ok")), secs=(rep or {}).get("secs"))

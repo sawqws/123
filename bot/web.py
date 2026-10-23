@@ -17,6 +17,7 @@
   HORO_WEB_URL   свой https-адрес; если пусто — бот поднимает туннель cloudflared (адрес …trycloudflare.com)
   HORO_SITE_URL  адрес сайта; если пусто — https://hdp.<ip>.sslip.io, когда он отвечает, иначе адрес приложения
 """
+import fcntl
 import hashlib
 import hmac
 import json
@@ -93,7 +94,33 @@ def version(folder=WEB):
 
 # ---------- вход на сайт без Telegram ----------
 # Храним только sha256 от кодов и сессий: файл не даёт войти, даже если его прочитать.
-_slock = threading.Lock()
+class _SessionsLock:
+    """Замок файла входов: и между потоками, и между процессами — файл пишут HDP, 🪞 Дозор зеркала и проверка сайта
+    (bot/mirrorwatch.py, bot/sitecheck.py из 🛡 Стража). 23.10 Дозор и проверка выдали себе вход одновременно: общий
+    .part один затёр другой (FileNotFoundError), а код входа второго потерялся (прочитал-изменил-записал без замка)."""
+
+    def __init__(self):
+        self.t = threading.Lock()
+        self.f = None
+
+    def __enter__(self):
+        self.t.acquire()
+        try:
+            os.makedirs(os.path.dirname(SESSIONS), exist_ok=True)
+            self.f = open(SESSIONS + ".lock", "a")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        except OSError:
+            self.f = None  # без файлового замка — хотя бы потоки по очереди
+        return self
+
+    def __exit__(self, *exc):
+        if self.f:
+            self.f.close()  # закрытие снимает flock
+            self.f = None
+        self.t.release()
+
+
+_slock = _SessionsLock()
 _digest = lambda x: hashlib.sha256(x.encode()).hexdigest()
 
 
@@ -109,7 +136,7 @@ def _sessions():
 
 def _save_sessions(data):
     os.makedirs(os.path.dirname(SESSIONS), exist_ok=True)
-    tmp = SESSIONS + ".part"
+    tmp = f"{SESSIONS}.{os.getpid()}.part"  # у каждого процесса свой
     with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
         json.dump(data, f)
     os.replace(tmp, SESSIONS)
