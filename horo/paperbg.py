@@ -136,6 +136,8 @@ def _look(img, bgm, mask):
             float(np.median(L[core > 0])))
 
 
+BOLD_L = float(os.environ.get('PAPER_BOLD_L', 0.08))   # Глеб 23.10: «бледно» — замер его штрихов захватывает
+BOLD_W = float(os.environ.get('PAPER_BOLD_W', 1.2))    # размытый край, на глаз его паста гуще и толще замера
 PRESS = 0.22        # разброс нажима (доля густоты)
 PRESS_SIGMA = 9.0   # px фото: нажим меняется от знака к знаку, не внутри штриха
 UP = 1   # итоговое фото — в родном размере его фото (Глеб 22.10: при 2.5× с шумодавом и резкостью «фон видно ИИ»)
@@ -188,6 +190,9 @@ def render(nbs, i, path):
         ink = cv2.resize(nb.ink, None, fx=k * SS, fy=k * SS, interpolation=cv2.INTER_AREA if k * SS < 1 else cv2.INTER_CUBIC)
         hi = np.maximum(hi, cv2.warpPerspective(np.clip(ink, 0, 1), Up @ Hc @ S, (hi.shape[1], hi.shape[0]), flags=cv2.INTER_LINEAR))
     warped = {}
+    _r = np.random.default_rng(seed + 7)
+    wob = cv2.GaussianBlur(_r.normal(0, 1, big.shape[:2]).astype(np.float32), (0, 0), 4.0)
+    wob = wob / max(1e-6, wob.std())
 
     def ink_at(thin):
         """Чернила на фото; thin — насколько тоньше линия (у него в разные дни разная ручка)."""
@@ -199,6 +204,10 @@ def render(nbs, i, path):
             elif thin < 0:   # толще: у него ручка бывает жирнее (давит сильнее)
                 se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * -thin + 1, 2 * -thin + 1))
                 a = cv2.dilate(a, se)
+            # толщина штриха гуляет, как у шариковой ручки (ровная одинаковая линия выдаёт наложение — Глеб 23.10)
+            fat = cv2.dilate(a, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+            k = np.clip(0.5 + 0.5 * cv2.resize(wob, (a.shape[1], a.shape[0]), interpolation=cv2.INTER_LINEAR), 0, 1)
+            a = a * (1 - k) + fat * k
             warped[thin] = np.clip(cv2.resize(a, (big.shape[1], big.shape[0]), interpolation=cv2.INTER_AREA), 0, 1)
         return warped[thin]
 
@@ -233,7 +242,7 @@ def render(nbs, i, path):
                 st = _look(o, cv2.medianBlur(o, 61).astype(np.float32), where)
                 if not st or not his:
                     continue
-                err = (abs(st[3] - his[3]) / 0.04 + abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1]) / 0.2
+                err = (abs(st[3] - (his[3] + BOLD_L)) / 0.04 + abs(st[0] - his[0]) / 0.04 + abs(st[1] - his[1] * BOLD_W) / 0.2
                        + 0.5 * blur + 0.15 * abs(thin))
                 if best is None or err < best[0]:
                     best = (err, (thin, gain, blur), st)
