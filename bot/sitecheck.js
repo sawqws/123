@@ -76,6 +76,9 @@ async function visit(page, url, sink) {
     status = r ? r.status() : 0;
     await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(1500);
+    // 23.10: страница задания под нагрузкой рисуется 10–20 с (заготовка без текста) — «пустая» была ложной тревогой
+    await page.waitForFunction(() => (document.querySelector('main, #root, #app') || document.body).innerText.trim().length >= 20,
+      null, { timeout: 15000 }).catch(() => {});
   } catch (e) { sink.push({ kind: 'nav', text: String(e.message).split('\n')[0].slice(0, 200) }); }
   const ms = Date.now() - t0;
   const info = await page.evaluate(() => {
