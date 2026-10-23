@@ -1517,11 +1517,16 @@ class SiteTest(BotTest):
         bot.save_settings({"owner": CHAT})
         u2 = URL.replace(TASK, "0" * 8 + TASK[8:])
         with mock.patch.object(bot.threading, "Thread") as th:
-            self.assertEqual(bot.app_solve({"urls": [URL, "мусор", u2, URL]}), {"ok": True, "n": 2})
+            self.assertEqual(bot.app_solve({"urls": [URL, "мусор", u2, URL]}), {"ok": True, "n": 2, "skipped": 0})
         self.assertEqual([c.kwargs["args"][1] for c in th.call_args_list], [URL, u2])
         self.assertTrue(all(c.kwargs["args"][6] is True for c in th.call_args_list))  # quiet
         with self.assertRaises(ValueError):
             bot.app_solve({"urls": ["https://example.com"]})
+        # 23.10: список на странице устарел — уже сданное (по overview.json) не запускаем
+        ov = {"topics": [{"uuid": "t", "tasks": [{"uuid": TASK, "status": "approved"}]}]}
+        with mock.patch.object(bot, "overview", lambda: ov), mock.patch.object(bot.threading, "Thread") as th:
+            self.assertEqual(bot.app_solve({"urls": [URL, u2]}), {"ok": True, "n": 1, "skipped": 1})
+        self.assertEqual([c.kwargs["args"][1] for c in th.call_args_list], [u2])
         for _ in range(bot.MAX_PARALLEL):
             bot.lock.acquire()
         sent = []
