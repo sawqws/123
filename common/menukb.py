@@ -15,12 +15,13 @@ send_fn(chat, text, reply_markup) — функция бота, которая ш
 """
 
 NOTE = "☰ Меню — квадратик справа от поля ввода"
+REV = 1  # общий сброс: +1 — все боты при запуске заново ставят меню владельцу (23.10: у Глеба пропал квадратик)
 
 
 class MenuKB:
     def __init__(self, rows, version=1, placeholder="Напишите или ☰ справа"):
         self.rows = [list(r) for r in rows]
-        self.version = version
+        self.version = version + 1000 * REV
         self.placeholder = placeholder[:64]
         self.texts = {t for r in self.rows for t in r}
 

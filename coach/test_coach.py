@@ -1073,7 +1073,7 @@ class BotTest(unittest.TestCase):
         texts = [b["text"] for row in mk["keyboard"] for b in row]
         for t in ("⚙️ Режим", "🛠 Поддержка", "📱 Приложение", "🧠 Разбор дня"):
             self.assertIn(t, texts)
-        self.assertEqual(self.db.meta(f"kb_ver:{U}"), "1")
+        self.assertEqual(self.db.meta(f"kb_ver:{U}"), str(coach.KB.version))
         coach.on_message(self.msg("/start"))
         self.assertEqual(len(kb()), 2)  # /start ставит снова (и в режиме «приложение»)
         self.sent.clear()

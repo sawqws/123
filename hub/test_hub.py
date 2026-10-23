@@ -113,7 +113,7 @@ class HubTest(Base):
         self.assertIn("Полное меню", self.last()[0])
 
     def test_keyboard_menu(self):
-        """☰ Полное меню — клавиатура у поля ввода: свёрнута в квадратик (не persistent), ставится один раз на версию."""
+        """☰ Полное меню — клавиатура у поля ввода: свёрнута в квадратик (не persistent), при запуске — раз на версию, /start — всегда."""
         kbs = [kw["reply_markup"] for k, kw in self.sent if k == "sendMessage" and "keyboard" in (kw.get("reply_markup") or {})]
         self.assertEqual(len(kbs), 1)  # первый /start поставил
         kb = kbs[0]
@@ -121,7 +121,10 @@ class HubTest(Base):
         self.assertTrue(kb["one_time_keyboard"])
         self.assertTrue(all(len(r) <= 3 and all(len(x["text"]) <= 24 for x in r) for r in kb["keyboard"]))
         hub.on_message(self.msg("/start"))
-        self.assertEqual(len([1 for k, kw in self.sent if "keyboard" in (kw.get("reply_markup") or {})]), 1)  # не повторяется
+        self.assertEqual(len([1 for k, kw in self.sent if "keyboard" in (kw.get("reply_markup") or {})]), 2)  # /start — снова (Telegram мог потерять)
+        n = len(self.sent)
+        hub.ensure_keyboard(1)  # запуск: версия уже стоит — не шлёт
+        self.assertEqual(len(self.sent), n)
         self.assertNotIn("1", [c for c, _ in hub.COMMANDS])
         hub.on_message(self.msg("🤖 Боты"))
         self.assertIn("работает 3 из 3", self.last()[0])

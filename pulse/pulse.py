@@ -929,7 +929,7 @@ def on_message(msg):
     if KB.has(text):
         return on_kb(chat, text)
     if cmd == "/start":
-        ensure_kb(chat)
+        ensure_kb(chat, force=True)  # ☰ — на каждый /start: Telegram мог его потерять
     if cmd == "/mode":
         mode_card(chat)
     elif cmd == "/alerts":
