@@ -227,7 +227,7 @@ def render(nbs, i, path):
     best = None
     # (Глеб 23.10, обвёл свою запись на фото: «чтобы всё выглядело как это») — по густоте (p50 и p90) и толщине
     for thin in (-2, -1, 0, 1, 2, 3, 4):
-        for gain in (0.55, 0.65, 0.75, 0.85, 1.0, 1.3, 1.7):
+        for gain in (0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 1.0, 1.3, 1.7):
             for blur in (0.45, 0.65, 0.9):
                 o = comp(thin, gain, blur, 10.0)
                 st = _look(o, cv2.medianBlur(o, 61).astype(np.float32), where)
