@@ -358,7 +358,10 @@ class Web(BaseHTTPRequestHandler):
             if not got:
                 return self.reply(404, {"error": "not found"})
             return self.reply(200, got[0], got[1], "public, max-age=31536000, immutable")
-        if not site_check(self.cookie()):
+        # 23.10: файлы оформления платформы (/student/assets/*.js|css|png|svg) — публичные и у самой платформы; тёмная
+        # тема платформы (Dark Reader) берёт их fetch-ем без cookie — зеркало отвечало 401 на каждой странице
+        public = self.command in ("GET", "HEAD") and re.fullmatch(r"/student/assets/[\w.-]+", path) and ".." not in path
+        if not public and not site_check(self.cookie()):
             if self.command == "GET" and "text/html" in (self.headers.get("Accept") or ""):
                 return self.redirect("/site/")  # там карточка «напиши боту /site»
             return self.reply(401, {"error": "Нужен вход: напиши боту /site — пришлю ссылку"})
