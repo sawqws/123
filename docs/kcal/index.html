@@ -36,6 +36,7 @@
   --f: #ffb547;
   --c: #5ed39b;
   --s: #bba8ff;
+  --wtr: #4cc2ff;
   --warn: #ff9f0a;
   --bad: #ff453a;
   --glass: rgba(44,44,48,.58);
@@ -58,7 +59,7 @@
     --fill: rgba(118,118,128,.12); --fill-2: rgba(118,118,128,.2); --sep: rgba(60,60,67,.2);
     --text: #000000; --text-2: rgba(60,60,67,.6); --text-3: rgba(60,60,67,.3);
     --ink: #000000; --on-ink: #ffffff; --track: rgba(0,0,0,.07);
-    --p: #2c7cf0; --f: #e8940f; --c: #1fa86b; --s: #7a5af5; --warn: #f08c00; --bad: #ff3b30;
+    --p: #2c7cf0; --f: #e8940f; --c: #1fa86b; --s: #7a5af5; --wtr: #1a9ee8; --warn: #f08c00; --bad: #ff3b30;
     --glass: rgba(255,255,255,.62); --glass-strong: rgba(250,250,252,.84); --glass-solid: #ffffff;
     --rim: rgba(255,255,255,.95); --spec: rgba(255,255,255,1); --edge: rgba(0,0,0,.14); --lens: rgba(0,0,0,.07);
     --drop: 0 10px 30px rgba(0,0,0,.13);
@@ -163,6 +164,17 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 @media (max-width: 370px) { /* узкие экраны (iPhone SE, 320 px): БЖУ и соль влезают в строку */
   .metrics { gap: 8px; } .metric .v { font-size: 16px; letter-spacing: -.4px; } .metric .v small { font-size: 11px; } .metric .n { font-size: 12px; }
   .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tab { width: 84px; } }
+.wcard { padding: 16px; }
+.wbar { position: relative; height: 44px; border-radius: 22px; background: var(--track); overflow: hidden; }
+.wbar i { position: absolute; inset: 0 auto 0 0; border-radius: 22px; background: linear-gradient(90deg, color-mix(in srgb, var(--wtr) 75%, transparent), var(--wtr)); transition: width .9s var(--spring); }
+.wbar span { position: relative; display: flex; align-items: center; height: 100%; padding: 0 16px; font-size: 15px; font-weight: 600; }
+.wbar.full span { color: #fff; }
+.wbtns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+.wb { height: 58px; border-radius: 20px; background: var(--fill); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.wb b { font-size: 17px; font-weight: 700; color: var(--wtr); }
+.wb span { font-size: 11px; color: var(--text-2); }
+.wb svg { width: 18px; height: 18px; color: var(--text-2); }
+.wb[disabled] { opacity: .35; pointer-events: none; }
 .metric .b { height: 4px; border-radius: 2px; background: var(--track); margin-top: 8px; overflow: hidden; }
 .metric .b i { display: block; height: 100%; border-radius: 2px; background: var(--dot); transition: width .9s var(--ios), background .3s; }
 
@@ -522,6 +534,7 @@ const DISHES = [
   ['Йогурт питьевой сладкий', 80, 2.8, 2.5, 11.5, 0.1, 'бутылка=270'],
   ['Какао на молоке', 85, 3.5, 3, 11, 0.15, 'кружка=250'],
 ];
+const SCALED = /^(порция|тарелка|миска|горсть|шампур)/i; // эти порции у меня больше; штуки, ломтики, банки — как есть
 const MEALS = [['breakfast', 'Завтрак'], ['lunch', 'Обед'], ['snack', 'Перекус'], ['dinner', 'Ужин']];
 const WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const WEEK_FULL = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
@@ -531,6 +544,8 @@ const KEY = 'kcal.v1', TOKEN = 'kcal.token';
 const DEFAULT = {
   goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } },
   salt: 5, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {},
+  portion: 1.2, // мои порции больше обычных (Глеб 25.10) — «порция», «тарелка» в базе умножаются
+  water: { train: 3000, rest: 2500 }, // мл в день; в день тренировки больше — пот
 };
 const I = {
   plus: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>',
@@ -542,6 +557,7 @@ const I = {
   flame: '<svg viewBox="0 0 14 14" fill="currentColor"><path d="M7.6.6c.3 2-1 3-2 4.1C4.5 5.9 3.6 7 3.6 8.7a3.4 3.4 0 0 0 6.8 0c0-1-.4-1.9-1-2.6.1 1-.4 1.7-1.1 1.9.6-2.4.2-5.4-.7-7.4z"/></svg>',
   check: '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.3l2.6 2.6L11 4.4"/></svg>',
   x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
+  undo: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5L3 9l4 4"/><path d="M3 9h9a5 5 0 0 1 0 10H9"/></svg>',
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
 };
 
@@ -553,12 +569,14 @@ function load() {
 function clean(x) {
   if (!x || typeof x !== 'object' || !x.goals || typeof x.goals !== 'object' || !x.days || typeof x.days !== 'object') return null;
   const pos = v => Math.max(0, num(v)), DAY = /^\d{4}-\d{2}-\d{2}$/;
-  const unit = u => u && typeof u === 'object' && num(u.g) > 0 ? { name: String(u.name || 'порция').slice(0, 30), g: num(u.g) } : null;
+  const unit = u => u && typeof u === 'object' && num(u.g) > 0 ? { name: String(u.name || 'порция').slice(0, 30), g: num(u.g), ...(u.scale ? { scale: true } : {}) } : null;
   const per = f => ({ kcal: pos(f.kcal), p: pos(f.p), f: pos(f.f), c: pos(f.c), salt: pos(f.salt) });
   const goals = k => { const o = {}, src = x.goals[k] || {}; for (const q in DEFAULT.goals[k]) o[q] = num(src[q]) > 0 ? Math.round(num(src[q])) : DEFAULT.goals[k][q]; return o; };
   const out = structuredClone(DEFAULT);
   out.goals = { train: goals('train'), rest: goals('rest') };
   out.salt = num(x.salt) > 0 ? r1(num(x.salt)) : DEFAULT.salt;
+  if (num(x.portion) >= 1 && num(x.portion) <= 2) out.portion = r1(num(x.portion));
+  if (x.water && typeof x.water === 'object') for (const k of ['train', 'rest']) if (num(x.water[k]) >= 500 && num(x.water[k]) <= 8000) out.water[k] = Math.round(num(x.water[k]));
   if (Array.isArray(x.trainDays)) out.trainDays = [...new Set(x.trainDays.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6))].sort();
   for (const [k, d] of Object.entries(x.days)) {
     if (!DAY.test(k) || !d || typeof d !== 'object') continue;
@@ -566,7 +584,8 @@ function clean(x) {
       id: String(i.id ?? '').replace(/[^\w-]/g, '').slice(0, 40) || `${k}-${n}`, meal: MEALS.some(m => m[0] === i.meal) ? i.meal : 'snack',
       name: String(i.name || 'Без названия').slice(0, 80), g: pos(i.g), ...per(i),
       ...(i.per100 && typeof i.per100 === 'object' ? { per100: per(i.per100), unit: unit(i.unit) } : {}) }));
-    out.days[k] = { items, ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}) };
+    const water = (Array.isArray(d.water) ? d.water : []).map(num).filter(v => v > 0 && v <= 3000).map(Math.round);
+    out.days[k] = { items, ...(water.length ? { water } : {}), ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}) };
   }
   const food = f => ({ name: String(f.name).slice(0, 80), ...per(f), unit: unit(f.unit) });
   out.custom = (Array.isArray(x.custom) ? x.custom : []).filter(f => f && f.name).map(food).slice(0, 200);
@@ -701,6 +720,7 @@ function renderToday(animate) {
       ${metric('c', 'Углеводы', Math.round(t.c), g.c, 'г', 'var(--c)')}
       ${metric('s', 'Соль', dec(t.salt), S.salt, 'г', salt > 1 ? 'var(--bad)' : salt > 0.8 ? 'var(--warn)' : 'var(--s)')}
     </div>
+    ${waterCard()}
     ${MEALS.map(([m, n]) => {
       const its = d.items.filter(i => i.meal === m);
       const sum = its.reduce((a, i) => a + i.kcal, 0);
@@ -738,8 +758,54 @@ function renderToday(animate) {
   app.querySelectorAll('[data-item]').forEach(b => b.onclick = () => { if (!b.dataset.moved) openItem(b.dataset.item); });
   app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => deleteItem(day(cur).items.find(i => i.id === b.dataset.del)));
   app.querySelectorAll('.swipe').forEach(swipeRow);
+  bindWater();
 }
 let lastAdded = null;
+/* ——— вода ——— */
+const waterOf = d => (day(d).water || []).reduce((a, v) => a + v, 0);
+const waterGoal = d => S.water[dayType(d)];
+const liters = ml => dec(ml / 1000);
+function waterCard() {
+  const w = waterOf(cur), goal = waterGoal(cur), pct = Math.min(100, w / goal * 100), n = (day(cur).water || []).length;
+  return `<section class="sec" id="water"><div class="sec-h"><h2>Вода</h2><span class="num">${liters(w)} из ${liters(goal)} л</span></div>
+    <div class="card wcard"><div class="wbar${w >= goal ? ' full' : ''}"><i style="width:${pct}%"></i><span class="num">${w >= goal ? 'Норма выпита' : 'Ещё ' + liters(goal - w) + ' л'}</span></div>
+      <div class="wbtns"><button class="wb press" data-ml="250"><b>+250</b><span>стакан</span></button><button class="wb press" data-ml="500"><b>+500</b><span>бутылка</span></button>
+        <button class="wb press" data-ml="other"><b>…</b><span>другое</span></button>
+        <button class="wb press undo" data-ml="undo" ${n ? '' : 'disabled'} aria-label="Убрать последнее">${I.undo}<span>отмена</span></button></div></div></section>`;
+}
+function addWater(ml) {
+  const before = waterOf(cur), d = S.days[cur] = day(cur);
+  if (ml === 'undo') { const v = (d.water || []).pop(); if (!v) return; save(); buzz(); refreshWater(); toast(`Убрано ${v} мл`); return; }
+  (d.water = d.water || []).push(ml); save(); buzz(); refreshWater();
+  const goal = waterGoal(cur), now = waterOf(cur);
+  toast(before < goal && now >= goal ? 'Норма воды выпита' : `+${ml} мл · ${liters(now)} л`);
+}
+function refreshWater() { // перерисовать только карточку воды — без мигания всей страницы
+  const old = $('#water'); if (!old) return;
+  const tmp = document.createElement('div'); tmp.innerHTML = waterCard(); const fresh = tmp.firstElementChild;
+  const from = old.querySelector('.wbar i').style.width; fresh.querySelector('.wbar i').style.width = from; old.replaceWith(fresh);
+  requestAnimationFrame(() => requestAnimationFrame(() => { fresh.querySelector('.wbar i').style.width = Math.min(100, waterOf(cur) / waterGoal(cur) * 100) + '%'; }));
+  bindWater();
+}
+function bindWater() {
+  const card = $('#water'); if (!card) return;
+  card.onclick = e => { const b = e.target.closest('[data-ml]'); if (!b || b.disabled) return;
+    const v = b.dataset.ml; v === 'other' ? openWater() : addWater(v === 'undo' ? 'undo' : +v); };
+}
+function openWater() {
+  const html = `<div class="portion"><div class="per" style="margin-top:12px">Сколько выпил</div>
+    <div class="grams"><span class="box"><input id="ml" class="num" inputmode="numeric" value="330" aria-label="Миллилитры"><span class="u">мл</span></span></div>
+    <div class="chips" id="mlc">${[100, 200, 330, 750, 1000].map(v => `<button class="chip" data-v="${v}">${v} мл</button>`).join('')}</div>
+    <div style="margin-top:24px"><button class="btn" id="mlok">Добавить</button></div></div>`;
+  openSheet('Вода', html, body => {
+    const inp = $('#ml', body);
+    const fit = () => inp.style.width = Math.max(2.4, String(inp.value).length + 0.3) + 'ch'; fit();
+    inp.oninput = () => { inp.value = inp.value.replace(/\D/g, '').slice(0, 4); fit(); };
+    inp.onfocus = () => inp.select();
+    $('#mlc', body).onclick = e => { const b = e.target.closest('[data-v]'); if (b) { inp.value = b.dataset.v; fit(); buzz(); } };
+    $('#mlok', body).onclick = () => { const v = Math.round(num(inp.value)); if (v < 10 || v > 3000) { toast('От 10 до 3000 мл'); inp.focus(); return; } closeSheet(); addWater(v); };
+  }, { short: true });
+}
 function swipeWeek(el) {
   let x0 = null, y0 = 0;
   el.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
@@ -795,6 +861,8 @@ function renderHistory() {
   const logged = list.filter(x => x.t > 0);
   const avg = logged.length ? logged.reduce((a, x) => a + x.t, 0) / logged.length : 0;
   const avgSalt = logged.length ? logged.reduce((a, x) => a + x.salt, 0) / logged.length : 0;
+  const wdays = list.map(x => ({ w: waterOf(x.d), g: waterGoal(x.d) })).filter(x => x.w > 0);
+  const avgW = wdays.length ? wdays.reduce((a, x) => a + x.w, 0) / wdays.length : 0, wNorm = wdays.filter(x => x.w >= x.g).length;
   const inNorm = logged.filter(x => x.t >= x.g * 0.9).length;
   const max = Math.max(...list.map(x => Math.max(x.t, x.g)), 1) * 1.06;
   const W = 340, H = 150, bw = W / list.length, gap = histRange === 7 ? 14 : 3, rx = histRange === 7 ? 6 : 2;
@@ -833,6 +901,13 @@ function renderHistory() {
           <line x1="0" x2="${W}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" stroke="var(--text-3)" stroke-width="1" stroke-dasharray="3 4"/>${bars}${labels}</svg></div>
       </div>
       <div class="caption">Пунктир — норма. Яркие столбики — день в норме, бледные — не добрал.</div>
+    </section>
+    <section class="sec"><div class="sec-h"><h2>Вода</h2></div>
+      <div class="card"><div class="kpis">
+        <div class="kpi"><div class="n">В среднем</div><div class="v num">${wdays.length ? liters(avgW) + '<small> л</small>' : '—'}</div></div>
+        <div class="kpi"><div class="n">Выпил норму</div><div class="v num">${wNorm}<small> из ${wdays.length}</small></div></div>
+        <div class="kpi"><div class="n">Норма</div><div class="v num">${liters(S.water.rest)}–${liters(S.water.train)}<small> л</small></div></div>
+      </div></div>
     </section>
     <section class="sec"><div class="sec-h"><h2>Вес</h2></div>
       <div class="card">
@@ -907,7 +982,7 @@ $('#sheetClose').onclick = closeSheet;
 })();
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
-const toFood = ([name, kcal, p, f, c, salt, u]) => ({ name, kcal, p, f, c, salt, unit: u ? { name: u.split('=')[0], g: +u.split('=')[1] } : null });
+const toFood = ([name, kcal, p, f, c, salt, u]) => ({ name, kcal, p, f, c, salt, unit: u ? { name: u.split('=')[0], g: +u.split('=')[1], scale: SCALED.test(u) } : null });
 const FOODS = BASE.map(toFood), DISH = DISHES.map(f => ({ ...toFood(f), dish: true }));
 const macroLine = f => `${fmt(f.kcal)} ккал · Б ${dec(f.p)} · Ж ${dec(f.f)} · У ${dec(f.c)}`;
 const mealName = m => MEALS.find(x => x[0] === m)[1];
@@ -917,7 +992,7 @@ let WORLD = null, worldLoading = null;
 function loadWorld() {
   if (WORLD || worldLoading) return worldLoading || Promise.resolve(WORLD);
   worldLoading = fetch('foods.json').then(r => r.ok ? r.json() : []).catch(() => []).then(rows => {
-    WORLD = rows.filter(r => Array.isArray(r) && r[0]).map(([name, kcal, p, f, c, salt, g, est]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g } : null, world: true, dish: !!est, n: norm(name) }));
+    WORLD = rows.filter(r => Array.isArray(r) && r[0]).map(([name, kcal, p, f, c, salt, g, est]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g, scale: true } : null, world: true, dish: !!est, n: norm(name) }));
     worldLoading = null; return WORLD;
   });
   return worldLoading;
@@ -1010,12 +1085,14 @@ function openAdd(meal, query) {
   }, {});
 }
 
+const myG = u => u && u.scale ? Math.round(u.g * (S.portion || 1) / 5) * 5 : u ? u.g : 0; // только порции из базы; свои и с упаковки — как есть
 function openPortion(food, meal, item, grams, back) {
-  let g = item ? item.g : grams || (food.unit ? food.unit.g : 100);
+  const ug = myG(food.unit);
+  let g = item ? item.g : grams || ug || 100;
   const per = food.per100 || food;
   const units = [];
-  if (food.unit) units.push([`${food.unit.name}`, food.unit.g]);
-  for (const x of [50, 100, 150, 200, 300]) if (!food.unit || x !== food.unit.g) units.push([`${x} г`, x]);
+  if (food.unit) units.push([`${food.unit.name} · ${fmt(ug)} г`, ug]);
+  for (const x of [50, 100, 150, 200, 300]) if (!food.unit || x !== ug) units.push([`${x} г`, x]);
   const html = `<div class="portion">
     <div class="title">${esc(food.name)}</div><div class="per num">${macroLine(per)}${per.salt ? ' · соль ' + dec(per.salt) : ''} на 100 г</div>
     <div class="grams"><button class="st" id="minus" aria-label="Меньше">${I.minus}</button>
@@ -1328,6 +1405,13 @@ function openSettings() {
       `<div class="cell field"><label for="g-${t}-${k}">${l}</label><input id="g-${t}-${k}" data-t="${t}" data-k="${k}" inputmode="numeric" value="${S.goals[t][k]}"></div>`).join('')}</div>`;
   const paired = !!getToken();
   const html = `${goal('train', 'Норма в день тренировки')}${goal('rest', 'Норма в день отдыха')}
+    <div class="group-t">Мои порции</div><div class="list"><div class="days" id="por" style="grid-template-columns:repeat(5,1fr)">${[[1, 'Как у всех'], [1.1, '+10%'], [1.2, '+20%'], [1.3, '+30%'], [1.5, '+50%']].map(([v, l]) =>
+      `<button data-p="${v}" aria-pressed="${Math.abs((S.portion || 1) - v) < 0.01}" style="font-size:${v === 1 ? 11 : 14}px">${l}</button>`).join('')}</div></div>
+    <div class="foot">«Порция» и «тарелка» в базе станут больше на столько. Штуки, ломтики и упаковки — как есть.</div>
+    <div class="group-t">Вода, мл в день</div><div class="list">
+      <div class="cell field"><label for="w-train">В день тренировки</label><input id="w-train" data-wg="train" inputmode="numeric" value="${S.water.train}"></div>
+      <div class="cell field"><label for="w-rest">В день отдыха</label><input id="w-rest" data-wg="rest" inputmode="numeric" value="${S.water.rest}"></div></div>
+    <div class="foot">На тренировке добавляй ещё 400–800 мл за час — пот уносит воду.</div>
     <div class="group-t">Соль</div><div class="list"><div class="cell field"><label for="salt">Не больше, г в день</label><input id="salt" inputmode="decimal" value="${dec(S.salt)}"></div></div>
     <div class="foot">ВОЗ советует меньше 5 г соли в день — это около чайной ложки вместе с солью в готовой еде.</div>
     <div class="group-t">Дни тренировок</div><div class="list"><div class="days" id="days">${WEEK.map((w, i) => `<button data-d="${i}" aria-pressed="${S.trainDays.includes(i)}">${w}</button>`).join('')}</div></div>
@@ -1344,6 +1428,10 @@ function openSettings() {
       const v = Math.round(num(inp.value));
       if (v > 0) { S.goals[inp.dataset.t][inp.dataset.k] = v; save(); } else inp.value = S.goals[inp.dataset.t][inp.dataset.k];
     });
+    $('#por', body).onclick = e => { const b = e.target.closest('[data-p]'); if (!b) return; S.portion = +b.dataset.p; save(); buzz();
+      body.querySelectorAll('#por [data-p]').forEach(c => c.setAttribute('aria-pressed', c === b)); };
+    body.querySelectorAll('[data-wg]').forEach(inp => inp.onchange = () => { const v = Math.round(num(inp.value));
+      if (v >= 500 && v <= 8000) { S.water[inp.dataset.wg] = v; save(); } else { toast('От 500 до 8000 мл'); inp.value = S.water[inp.dataset.wg]; } });
     $('#salt', body).onchange = e => { const v = num(e.target.value); if (v > 0) { S.salt = r1(v); save(); } else e.target.value = dec(S.salt); };
     $('#days', body).onclick = e => {
       const b = e.target.closest('[data-d]'); if (!b) return;

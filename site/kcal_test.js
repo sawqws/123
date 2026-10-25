@@ -211,7 +211,8 @@ async function addFood(page, q, grams, meal) {
       // дни 15..20: 20 вт(т) 3300≥3060 ✓, 19 пн(т) 2000 ✗, 18 вс(о) 3300 ✓, 17 сб(т) 2000 ✗, 16 пт(о) 3300 ✓, 15 чт(о) 2000 ✗ → 3 из 6
       ok(kp.includes('3 из 6'), '«в норме» 3 из 6', kp);
       ok(kp.includes('4 г'), 'соль в среднем 4 г', kp);
-      ok((await text(page, '.sec >> nth=1')).includes('+0,6'), 'темп веса +0,6 кг/мес', await text(page, '.sec >> nth=1'));
+      const wsec = await page.locator('.sec', { hasText: 'Темп' }).textContent();
+      ok(wsec.includes('+0,6'), 'темп веса +0,6 кг/мес', wsec);
       await page.click('#seg [data-r="30"]'); await sleep(600);
       ok((await page.locator('.chart rect').count()) === 30, 'месяц — 30 столбиков');
       await page.click('#addW'); await sleep(500);
@@ -495,6 +496,45 @@ async function addFood(page, q, grams, meal) {
       const before = shopCalls; await page.fill('#q', 'mol'); await page.fill('#q', 'molo'); await page.fill('#q', 'molok'); await sleep(900);
       ok(shopCalls - before === 1, 'быстрый ввод — один запрос к магазинам', String(shopCalls - before));
       ok(page.errors.length === 0, 'нет ошибок в консоли (база мира)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 14. Мои порции больше обычных и вода */
+    {
+      const { ctx, page } = await newPage(browser);
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300);
+      await page.click('#results [data-k="s0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '300' && (await text(page, '#units')).includes('порция · 300 г'), 'пельмени: порция 250 г × 1,2 = 300 г', await page.inputValue('#g'));
+      await page.click('#backBtn'); await sleep(400); await page.fill('#q', 'банан'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '120', 'банан — 1 шт как есть (штуки не увеличиваются)');
+      await page.click('#sheetClose'); await sleep(500);
+      await page.click('#gear'); await sleep(500); await page.click('#por [data-p="1"]'); await sleep(100);
+      await page.fill('#w-train', '3500'); await page.press('#w-train', 'Tab'); await sleep(100);
+      await page.fill('#w-rest', '100'); await page.press('#w-rest', 'Tab'); await sleep(150);
+      ok((await toastText(page)).includes('От 500 до 8000'), 'норма воды 100 мл не принимается');
+      await page.click('#sheetClose'); await sleep(600);
+      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500, 'настройки: порции как у всех, вода 3500 мл');
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '250', '«Как у всех» — порция 250 г');
+      await page.click('#sheetClose'); await sleep(500);
+      // вода (среда — тренировка, норма 3,5 л)
+      ok((await text(page, '#water')).includes('0 из 3,5 л'), 'вода: 0 из 3,5 л', await text(page, '#water'));
+      ok(await page.$eval('[data-ml="undo"]', b => b.disabled), 'отмена недоступна, пока пусто');
+      await page.click('[data-ml="250"]'); await sleep(200); await page.click('[data-ml="250"]'); await sleep(200); await page.click('[data-ml="500"]'); await sleep(300);
+      ok((await text(page, '#water')).includes('1 из 3,5 л') && (await text(page, '#water')).includes('Ещё 2,5 л'), 'вода: +250 +250 +500 = 1 л', await text(page, '#water'));
+      await page.click('[data-ml="undo"]'); await sleep(300);
+      ok((await text(page, '#water')).includes('0,5 из 3,5 л') && (await toastText(page)).includes('Убрано 500'), 'отмена последнего: 0,5 л');
+      await page.click('[data-ml="other"]'); await sleep(500); await page.fill('#ml', '5'); await page.click('#mlok'); await sleep(150);
+      ok((await toastText(page)).includes('От 10 до 3000'), 'другое: 5 мл не принимается');
+      await page.click('#mlc [data-v="1000"]'); await page.click('#mlok'); await sleep(600);
+      for (let i = 0; i < 4; i++) { await page.click('[data-ml="500"]'); await sleep(150); }
+      ok((await toastText(page)).includes('Норма воды выпита') && (await text(page, '#water')).includes('Норма выпита'), 'норма воды выпита — сообщение', await toastText(page));
+      await page.reload(); await sleep(700);
+      ok((await text(page, '#water')).includes('3,5 из 3,5 л'), 'вода сохраняется', await text(page, '#water'));
+      await page.click('[data-tab=history]'); await sleep(700);
+      ok((await text(page, '#app')).includes('Выпил норму') && (await text(page, '#app')).includes('3,5 л'), 'вода в истории');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (порции и вода)', page.errors.join(' | '));
+      await shot(page, '14-history', true);
+      await page.click('[data-tab=today]'); await sleep(600); await shot(page, '14-today', true);
       await ctx.close();
     }
   } catch (e) {
