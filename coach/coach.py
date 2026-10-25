@@ -1760,10 +1760,63 @@ class Web(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
-        for k, v in (headers or {}).items():
+        for k, v in {**self.cors(), **(headers or {})}.items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def cors(self):
+        """CORS только для сайта «Калории» и только на его пути."""
+        if urllib.parse.urlparse(getattr(self, "path", "")).path not in KCAL_PATHS:
+            return {}
+        ok = self.headers.get("Origin") == KCAL_ORIGIN
+        return {"Vary": "Origin", **({"Access-Control-Allow-Origin": KCAL_ORIGIN} if ok else {})}
+
+    def do_OPTIONS(self):  # preflight сайта «Калории»
+        if urllib.parse.urlparse(self.path).path not in KCAL_PATHS:
+            return self.reply(404, {"error": "not found"})
+        if self.headers.get("Origin") != KCAL_ORIGIN:
+            return self.reply(403, {"error": "чужой сайт"})
+        self.reply(204, b"", headers={"Access-Control-Allow-Methods": "POST, OPTIONS",
+                                      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                                      "Access-Control-Max-Age": "86400"})
+
+    def kcal(self, path, body):
+        """Сайт «Калории»: /api/kcal/pair — код из /site → Bearer-токен; /api/kcal/photo — фото → позиции."""
+        origin = self.headers.get("Origin")
+        if origin and origin != KCAL_ORIGIN:  # браузер с чужой страницы; без Origin — не браузер (curl)
+            return self.reply(403, {"error": "чужой сайт"})
+        if path == "/api/kcal/pair":
+            try:
+                tok = pwa.login(db, body.get("code"), kind="kcal")
+            except PermissionError as e:
+                return self.reply(429, {"error": str(e)})
+            uid = pwa.session_uid(db, tok, "kcal")
+            if not uid:
+                return self.reply(403, {"error": "Неверный или старый код"})
+            if not allowed(uid):
+                pwa.logout(db, tok, "kcal")
+                return self.reply(403, {"error": "Это личный тренер"})
+            return self.reply(200, {"token": tok})
+        tok = pwa.bearer(self.headers)
+        uid = pwa.session_uid(db, tok, "kcal")
+        if not uid:
+            return self.reply(401, {"error": "Нужен вход: код из /site в боте Формы"})
+        if not allowed(uid):
+            return self.reply(403, {"error": "Это личный тренер"})
+        if not pwa.throttle("kcal:" + hashlib.sha256(tok.encode()).hexdigest(), *KCAL_RATE):
+            return self.reply(429, {"error": "Много фото подряд — попробуй через час"})
+        try:
+            self.reply(200, kcal_photo(uid, body))
+        except NotFood:
+            self.reply(422, {"error": "Не похоже на еду"})
+        except ai.AIError as e:
+            self.reply(503, {"error": str(e)})
+        except ValueError as e:
+            self.reply(400, {"error": str(e)})
+        except Exception:
+            traceback.print_exc()
+            self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -1801,7 +1854,7 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
-            limit = MAX_PHOTO * 4 // 3 + 4096 if path == "/api/photo" else 1_000_000  # фото — base64
+            limit = MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
             if n > limit:
                 return self.reply(413, {"error": "слишком большой файл"})
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
@@ -1809,6 +1862,8 @@ class Web(BaseHTTPRequestHandler):
             return self.reply(400, {"error": "bad json"})
         if not isinstance(body, dict):
             return self.reply(400, {"error": "bad json"})
+        if path in KCAL_PATHS:
+            return self.kcal(path, body)
         if path == "/site/login":  # код из /site, введённый в приложении с экрана «Домой»
             try:
                 tok = pwa.login(db, body.get("code"))
@@ -1895,11 +1950,13 @@ def day_payload(uid, day):
 
 
 MAX_PHOTO = 8 * 1024 * 1024
+KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
+KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo")
+KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 
 
-def photo_api(uid, b):
-    """Фото из приложения (base64 или data:URL). mode="food" — оценить еду и записать;
-    mode="ask" — вопрос тренеру с картинкой (скрин тренировки, показателей)."""
+def decode_photo(b):
+    """Поле image (base64 или data:URL) → (байты, расширение). Плохое или пустое — ValueError."""
     data = str(b.get("image") or "")
     m = re.match(r"data:image/([\w.+-]+);base64,", data)
     try:
@@ -1910,7 +1967,13 @@ def photo_api(uid, b):
         raise ValueError("нет фото")
     if len(raw) > MAX_PHOTO:
         raise ValueError("фото больше 8 МБ")
-    ext = {"png": ".png", "webp": ".webp", "heic": ".heic"}.get((m.group(1) if m else "").lower(), ".jpg")
+    return raw, {"png": ".png", "webp": ".webp", "heic": ".heic"}.get((m.group(1) if m else "").lower(), ".jpg")
+
+
+def photo_api(uid, b):
+    """Фото из приложения (base64 или data:URL). mode="food" — оценить еду и записать;
+    mode="ask" — вопрос тренеру с картинкой (скрин тренировки, показателей)."""
+    raw, ext = decode_photo(b)
     folder = os.path.join(DATA, "photos", str(uid))
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"app-{int(time.time() * 1000)}{ext}")
@@ -1931,6 +1994,34 @@ def photo_api(uid, b):
     today = user_now(u).date()
     meal = db.save_meal(uid, {**est, "day": today.isoformat(), "time": user_now(u).strftime("%H:%M")})
     return {"meal": meal, "comment": est.get("comment", ""), "day": day_payload(uid, today)}
+
+
+class NotFood(Exception):
+    pass
+
+
+def kcal_photo(uid, b):
+    """Сайт «Калории»: фото → позиции с граммами и КБЖУ+соль. В дневник Формы не пишет, фото сразу удаляется."""
+    raw, ext = decode_photo(b)
+    try:
+        age = int(float(profile(uid).get("age")))
+    except (TypeError, ValueError):
+        age = None
+    folder = os.path.join(DATA, "photos", "kcal")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{secrets.token_hex(8)}{ext}")
+    try:
+        with open(path, "wb") as f:
+            f.write(raw)
+        est = ai.plate(path, str(b.get("text") or "").strip()[:300], age)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if not est["food"]:
+        raise NotFood
+    return {"items": est["items"], "comment": est["comment"]}
 
 
 def route(uid, path, b):
