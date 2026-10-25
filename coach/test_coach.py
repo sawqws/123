@@ -1682,13 +1682,15 @@ class KcalTest(unittest.TestCase):
         with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
             r = kcal_call("/api/kcal/photo", {"image": self.IMG, "text": "гречка 250 г"}, token=tok)
         self.assertEqual(r.code, 200, r.json)
-        self.assertEqual(r.json["items"][0], {"name": "Гречка варёная", "g": 200, "kcal": 220, "p": 8.4, "f": 2.2,
-                                              "c": 42, "salt": 0.6})
+        self.assertEqual(r.json["items"][0], {"name": "Гречка варёная", "g": 200, "lo": 170, "hi": 230, "sure": "mid",
+                                              "kcal": 220, "p": 8.4, "f": 2.2, "c": 42, "salt": 0.6})
         self.assertEqual(len(r.json["items"]), 2)  # позиция без названия отброшена
         self.assertEqual(r.json["comment"], "Хороший белок, добавь овощей.")
-        prompt, path = c.call_args[0][0], c.call_args.kwargs["image"]
+        prompt, path = c.call_args[0][0], c.call_args.kwargs["images"][0]
         self.assertIn("гречка 250 г", prompt)
         self.assertIn("натрий", prompt)
+        self.assertIn("пельмень 12–13 г", prompt)  # счёт штук и масштаб — в промпте
+        self.assertEqual(c.call_args.kwargs["model"], ai.PLATE_MODEL)
         self.assertFalse(os.path.exists(path))  # фото удалено после ответа
         self.assertEqual(self.meals(), before)  # дневник Формы не тронут
         self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
@@ -1707,7 +1709,7 @@ class KcalTest(unittest.TestCase):
         with mock.patch.object(ai, "claude", return_value='{"food": false}') as c:
             r = kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok)
         self.assertEqual((r.code, r.json), (422, {"error": "Не похоже на еду"}))
-        self.assertFalse(os.path.exists(c.call_args.kwargs["image"]))
+        self.assertFalse(os.path.exists(c.call_args.kwargs["images"][0]))
         with mock.patch.object(ai, "claude", return_value='{"food": true, "items": []}'):
             self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok).code, 422)
         with mock.patch.object(ai, "claude", return_value="не знаю"):
@@ -1718,6 +1720,28 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(kcal_call("/api/kcal/photo", {}, token=tok).code, 400)
         self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok,
                                    origin="https://evil.example").code, 403)
+
+    def test_photo_many_range_fallback(self):
+        tok = self.pair()
+        ans = ('{"food": true, "items": [{"name": "Пельмени", "g": 250, "lo": 220, "hi": 280, "sure": "high", "kcal": 600, '
+               '"p": 28, "f": 30, "c": 55, "salt": 3}, {"name": "Сметана", "g": 30, "lo": 50, "hi": 10, "sure": "??", '
+               '"kcal": 48, "p": 1, "f": 4.5, "c": 1, "salt": 0}], "comment": "ок"}')
+        calls = []
+
+        def fake(prompt, images=None, model=None, **kw):
+            calls.append((len(images), model, [os.path.exists(x) for x in images]))
+            if model:
+                raise ai.AIError("модель недоступна")  # сильная модель не ответила — повтор моделью по умолчанию
+            return ans
+        with mock.patch.object(ai, "claude", side_effect=fake):
+            r = kcal_call("/api/kcal/photo", {"image": self.IMG, "images": [self.IMG, self.IMG, self.IMG]}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual([(n, m) for n, m, _ in calls], [(3, ai.PLATE_MODEL), (3, None)])  # максимум 3 фото
+        self.assertTrue(all(all(e) for _, _, e in calls))
+        a, b = r.json["items"]
+        self.assertEqual((a["lo"], a["hi"], a["sure"]), (220, 280, "high"))
+        self.assertEqual((b["lo"], b["hi"], b["sure"]), (26, 34, "mid"))  # кривой диапазон — ±15%, уверенность — mid
+        self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG, "images": ["@@@"]}, token=tok).code, 400)
 
     def test_rate_limit(self):
         tok = self.pair()

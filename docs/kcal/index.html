@@ -13,6 +13,8 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 /* Вид — Liquid Glass iOS 27: стекло только у навигации и кнопок поверх контента (меню, кнопки, листы, тосты);
    стекло матовое, с тёмным краем и ярким бликом сверху. Контент — непрозрачный. */
@@ -66,7 +68,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body {
-  font: 17px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", system-ui, sans-serif;
+  font: 17px/1.35 ui-rounded, "SF Pro Rounded", Nunito, -apple-system, BlinkMacSystemFont, system-ui, sans-serif; /* мягкий круглый шрифт: на iPhone — SF Pro Rounded */
   letter-spacing: -.2px; -webkit-font-smoothing: antialiased; overscroll-behavior-y: none;
   min-height: 100vh; min-height: 100dvh; -webkit-user-select: none; user-select: none;
 }
@@ -325,7 +327,17 @@ body.min .fab { width: 54px; height: 54px; }
 .mini button { width: 32px; height: 32px; border-radius: 16px; background: var(--fill); display: grid; place-items: center; transition: transform .35s var(--spring); }
 .mini button:active { transform: scale(.85); }
 .mini button svg { width: 12px; height: 12px; }
-.mini .g { min-width: 48px; text-align: center; font-size: 15px; font-weight: 600; }
+.mini .g { width: 52px; height: 32px; border: 0; border-radius: 10px; background: transparent; text-align: center; font-size: 17px; font-weight: 600; padding: 0; }
+.mini .g:focus { outline: none; background: var(--fill); }
+.range { margin-top: 1px; white-space: normal !important; }
+.range.low { color: var(--warn); }
+.shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
+.sh { position: relative; aspect-ratio: 3 / 4; border-radius: 22px; overflow: hidden; background: var(--fill); }
+.sh img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sh button { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 15px; display: grid; place-items: center; color: var(--text); }
+.sh button svg { width: 12px; height: 12px; }
+.sh.add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text-2); font-size: 13px; text-align: center; border: 1.5px dashed var(--text-3); background: none; }
+.sh.add svg { width: 22px; height: 22px; }
 .sum-line { display: flex; justify-content: space-between; margin: 14px 6px 18px; font-size: 15px; color: var(--text-2); }
 .sum-line b { color: var(--text); }
 .code { display: flex; justify-content: center; margin: 26px 0 8px; }
@@ -375,7 +387,7 @@ body.min .fab { width: 54px; height: 54px; }
   <div class="body" id="sheetBody"></div>
 </section>
 <div class="toast glass" id="toast" role="status"></div>
-<input type="file" id="photoInput" accept="image/*" hidden>
+<input type="file" id="photoInput" accept="image/*" multiple hidden>
 
 <script>
 'use strict';
@@ -529,6 +541,7 @@ const I = {
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>',
   flame: '<svg viewBox="0 0 14 14" fill="currentColor"><path d="M7.6.6c.3 2-1 3-2 4.1C4.5 5.9 3.6 7 3.6 8.7a3.4 3.4 0 0 0 6.8 0c0-1-.4-1.9-1-2.6.1 1-.4 1.7-1.1 1.9.6-2.4.2-5.4-.7-7.4z"/></svg>',
   check: '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.3l2.6 2.6L11 4.4"/></svg>',
+  x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
 };
 
@@ -1126,46 +1139,69 @@ function photoFlow(meal) {
 }
 function readySheet(meal) { // выбор файла можно открыть только по нажатию — после подключения нужна кнопка
   openSheet('Еда по фото', `<div class="hero-ico">${I.cam}</div><div class="portion"><div class="title">Готово</div></div>
-    <div class="lead">Сфотографируй тарелку целиком, сверху или чуть сбоку. Если рядом вилка или ложка — граммы точнее.</div>
+    <div class="lead">Сними тарелку сверху целиком. Вилка, ложка или ладонь рядом — граммы точнее. Можно добавить ещё фото сбоку.</div>
     <div style="margin-top:24px"><button class="btn" id="pick">${I.cam}Снять или выбрать фото</button></div>`,
     body => { $('#pick', body).onclick = () => pickPhoto(meal); }, { short: true });
 }
-function pickPhoto(meal) {
+const MAX_SHOTS = 3;
+function pickPhoto(meal, shots = [], hint = '') { // shots — уже выбранные фото той же еды
   const inp = $('#photoInput');
-  inp.value = '';
+  inp.value = ''; inp.multiple = true;
   inp.onchange = async () => {
-    const file = inp.files[0]; if (!file) return;
-    let url;
-    try { url = await shrink(file); } catch (e) { toast('Не получилось открыть фото'); return; }
-    recognize(url, meal);
+    const files = [...inp.files].slice(0, MAX_SHOTS - shots.length); if (!files.length) return;
+    const got = [];
+    for (const f of files) { try { got.push(await shrink(f)); } catch (e) {} }
+    if (!got.length) { toast('Не получилось открыть фото'); return; }
+    previewShots(meal, shots.concat(got), hint);
   };
   inp.click();
+}
+function previewShots(meal, shots, hint = '') { // перед распознаванием: фото, ещё ракурс, подсказка
+  const html = `<div class="shots">${shots.map((u, i) => `<div class="sh"><img src="${u}" alt="Фото ${i + 1}"><button class="glass press" data-rm="${i}" aria-label="Убрать фото">${I.x}</button></div>`).join('')}
+      ${shots.length < MAX_SHOTS ? `<button class="sh add" id="more">${I.plus}<span>Ещё фото<br>сбоку</span></button>` : ''}</div>
+    <div class="group-t">Подсказка — необязательно</div>
+    <div class="list"><div class="cell"><input id="hint" class="wide" style="border:0;background:none;font-size:17px;width:100%;height:34px" maxlength="200"
+      placeholder="Например: 12 пельменей, тарелка 26 см" value="${esc(hint)}" autocomplete="off"></div></div>
+    <div class="foot">Вес с упаковки, число штук или размер тарелки — граммы будут точнее.</div>
+    <div style="margin-top:22px"><button class="btn" id="go">Распознать</button></div>`;
+  openSheet('Фото', html, body => {
+    const h = () => $('#hint', body).value.trim();
+    body.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
+      const rest = shots.filter((_, i) => i !== +b.dataset.rm);
+      rest.length ? previewShots(meal, rest, h()) : closeSheet();
+    });
+    const more = $('#more', body); if (more) more.onclick = () => pickPhoto(meal, shots, h());
+    $('#go', body).onclick = () => recognize(shots, meal, h());
+  });
 }
 function shrink(file) {
   return new Promise((ok, fail) => {
     const img = new Image(), src = URL.createObjectURL(file);
     img.onload = () => {
-      const k = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+      const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight)); // крупнее — видно масштаб и мелочь
       const cv = document.createElement('canvas');
       cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
       cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      URL.revokeObjectURL(src); ok(cv.toDataURL('image/jpeg', 0.82));
+      URL.revokeObjectURL(src); ok(cv.toDataURL('image/jpeg', 0.85));
     };
     img.onerror = () => { URL.revokeObjectURL(src); fail(); };
     img.src = src;
   });
 }
-async function recognize(url, meal) {
+async function recognize(shots, meal, hint = '') {
+  if (typeof shots === 'string') shots = [shots];
+  const url = shots[0];
   openSheet('Фото', `<div class="shot"><img src="${url}" alt=""><div class="scan"></div></div>
-    <div class="thinking"><b>Смотрю, что на тарелке</b>Определяю блюда и граммы — обычно до минуты<div class="dots"><i></i><i></i><i></i></div></div>`, null, {});
+    <div class="thinking"><b>Смотрю, что на тарелке</b>Считаю штуки и прикидываю граммы по масштабу — обычно до минуты<div class="dots"><i></i><i></i><i></i></div></div>`, null, {});
   const ctl = new AbortController(); photoReq = ctl;
-  const timer = setTimeout(() => ctl.abort(), 150000);
+  const timer = setTimeout(() => ctl.abort(), 180000);
   try {
     const r = await fetch(API + '/api/kcal/photo', { method: 'POST', signal: ctl.signal,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() }, body: JSON.stringify({ image: url }) });
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+      body: JSON.stringify({ image: url, images: shots.slice(1), text: hint }) });
     const j = await r.json().catch(() => ({}));
     if (photoReq !== ctl) return;
-    if (r.status === 401) { setToken(''); return openPair(() => recognize(url, meal)); }
+    if (r.status === 401) { setToken(''); return openPair(() => recognize(shots, meal, hint)); }
     if (!r.ok) throw new Error(j.error || 'Не получилось распознать');
     const items = (Array.isArray(j.items) ? j.items : []).filter(i => i && i.name && num(i.g) > 0 && (num(i.kcal) > 0 || num(i.salt) > 0));
     if (!items.length) throw new Error('Не нашёл на фото еду');
@@ -1173,8 +1209,9 @@ async function recognize(url, meal) {
   } catch (e) {
     if (photoReq !== ctl) return;
     const msg = e.name === 'AbortError' ? 'Слишком долго — попробуй ещё раз' : e instanceof TypeError ? 'Нет связи с сервером' : e.message;
-    openSheet('Фото', `<div class="shot"><img src="${url}" alt=""></div><div class="thinking"><b>${esc(msg)}</b>Можно снять ещё раз или найти блюдо поиском.</div>
-      <div style="margin-top:24px"><button class="btn" id="again">Снять ещё раз</button><button class="btn soft" id="bySearch">Найти поиском</button></div>`, body => {
+    openSheet('Фото', `<div class="shot"><img src="${url}" alt=""></div><div class="thinking"><b>${esc(msg)}</b>Можно попробовать ещё раз или найти блюдо поиском.</div>
+      <div style="margin-top:24px"><button class="btn" id="retry">Попробовать ещё раз</button><button class="btn soft" id="again">Снять заново</button><button class="btn soft" id="bySearch">Найти поиском</button></div>`, body => {
+      $('#retry', body).onclick = () => recognize(shots, meal, hint);
       $('#again', body).onclick = () => pickPhoto(meal);
       $('#bySearch', body).onclick = () => openAdd(meal);
     }, {});
@@ -1184,7 +1221,8 @@ function showFound(url, items, comment, meal) {
   let m = meal;
   const rows = items.map(i => {
     const g0 = Math.max(1, num(i.g)), k = 100 / g0;
-    return { name: String(i.name).slice(0, 60), g: Math.round(g0), on: true,
+    const lo = num(i.lo) > 0 && num(i.lo) <= g0 ? Math.round(num(i.lo)) : 0, hi = num(i.hi) >= g0 ? Math.round(num(i.hi)) : 0;
+    return { name: String(i.name).slice(0, 60), g: Math.round(g0), lo, hi, sure: ['high', 'mid', 'low'].includes(i.sure) ? i.sure : '', on: true,
       per: { kcal: num(i.kcal) * k, p: num(i.p) * k, f: num(i.f) * k, c: num(i.c) * k, salt: num(i.salt) * k } };
   });
   const tot = () => rows.filter(r => r.on).reduce((a, r) => { const k = r.g / 100; a.kcal += r.per.kcal * k; a.salt += r.per.salt * k; return a; }, { kcal: 0, salt: 0 });
@@ -1192,17 +1230,18 @@ function showFound(url, items, comment, meal) {
     ${comment ? `<div class="comment">${esc(comment)}</div>` : ''}
     <div class="group-t">Нашёл на фото — поправь граммы</div>
     <div class="list" id="found">${rows.map((r, i) => `<div class="cell pi on" data-i="${i}"><button class="check" data-tog="${i}" aria-label="Учитывать">${I.check}</button>
-      <span class="t"><div class="n">${esc(r.name)}</div><div class="m num" id="pm${i}"></div></span>
-      <span class="mini"><button data-d="-10" aria-label="Меньше">${I.minus}</button><span class="g num" id="pg${i}"></span><button data-d="10" aria-label="Больше">${I.plus}</button></span></div>`).join('')}</div>
+      <span class="t"><div class="n">${esc(r.name)}</div><div class="m num" id="pm${i}"></div>
+        ${r.lo && r.hi ? `<div class="m num range${r.sure === 'low' ? ' low' : ''}">${r.sure === 'low' ? 'Проверь вес · ' : ''}по фото ${r.lo}–${r.hi} г</div>` : ''}</span>
+      <span class="mini"><button data-d="-10" aria-label="Меньше">${I.minus}</button><input class="g num" id="pg${i}" inputmode="numeric" aria-label="Граммы"><button data-d="10" aria-label="Больше">${I.plus}</button></span></div>`).join('')}</div>
     <div class="seg meal" id="mseg" style="margin-top:20px"><span class="thumb"></span>${MEALS.map(([k, n]) => `<button data-m="${k}" aria-pressed="${k === m}">${n}</button>`).join('')}</div>
     <div class="sum-line num" id="sum"></div>
     <button class="btn" id="addAll"></button>
-    <div class="foot" style="text-align:center;margin-top:12px">Граммы по фото — оценка. Если знаешь точно, поправь.</div>`;
+    <div class="foot" style="text-align:center;margin-top:12px">Граммы по фото — оценка. Нажми на число, чтобы ввести точный вес.</div>`;
   openSheet('Фото', html, body => {
-    const upd = () => {
+    const upd = typing => {
       rows.forEach((r, i) => {
-        const k = r.g / 100;
-        $('#pg' + i, body).textContent = r.g + ' г';
+        const k = r.g / 100, inp = $('#pg' + i, body);
+        if (typing !== i) inp.value = r.g;
         $('#pm' + i, body).textContent = `${fmt(r.per.kcal * k)} ккал · Б ${Math.round(r.per.p * k)} · Ж ${Math.round(r.per.f * k)} · У ${Math.round(r.per.c * k)}`;
         body.querySelector(`[data-i="${i}"]`).classList.toggle('on', r.on);
       });
@@ -1212,12 +1251,19 @@ function showFound(url, items, comment, meal) {
     };
     upd();
     $('#found', body).onclick = e => {
-      const row = e.target.closest('[data-i]'); if (!row) return; const r = rows[+row.dataset.i];
+      const row = e.target.closest('[data-i]'); if (!row || e.target.closest('input')) return; const r = rows[+row.dataset.i];
       const d = e.target.closest('[data-d]');
       if (d) { r.g = Math.max(5, r.g + +d.dataset.d); r.on = true; }
       else if (e.target.closest('[data-tog]') || e.target.closest('.t')) r.on = !r.on;
       buzz(); upd();
     };
+    $('#found', body).oninput = e => { // точный вес руками
+      const i = +e.target.closest('[data-i]').dataset.i, v = Math.round(num(e.target.value));
+      e.target.value = e.target.value.replace(/[^\d]/g, '').slice(0, 4);
+      if (v > 0) { rows[i].g = v; rows[i].on = true; upd(i); }
+    };
+    $('#found', body).addEventListener('focusin', e => { if (e.target.matches('input')) e.target.select(); });
+    $('#found', body).addEventListener('focusout', () => upd());
     const seg = $('#mseg', body);
     requestAnimationFrame(() => placeSeg(seg));
     seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); upd(); buzz(); };

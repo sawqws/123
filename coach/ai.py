@@ -30,13 +30,13 @@ class AIError(Exception):
     pass
 
 
-def claude(prompt, image=None, timeout=240, images=None):
+def claude(prompt, image=None, timeout=240, images=None, model=None):
     """(текст ответа). image — путь к картинке, images — несколько (кадры видео): Claude откроет их инструментом Read."""
     os.makedirs(WORK, exist_ok=True)
     copies = []
     pics = ([image] if image else []) + list(images or [])
     try:
-        return _run(prompt, pics, copies, timeout)
+        return _run(prompt, pics, copies, timeout, model)
     finally:
         for c in copies:  # копии картинок нужны только на время ответа
             try:
@@ -45,7 +45,7 @@ def claude(prompt, image=None, timeout=240, images=None):
                 pass
 
 
-def _run(prompt, pics, copies, timeout):
+def _run(prompt, pics, copies, timeout, model=None):
     tools = []
     if pics:
         for src in pics:
@@ -54,10 +54,13 @@ def _run(prompt, pics, copies, timeout):
             copies.append(dst)
         if len(copies) == 1:
             prompt += f"\n\nФото: {copies[0]} (открой его инструментом Read)."
+        elif model:  # несколько фото одной тарелки (сверху, сбоку)
+            prompt += "\n\nФото одной и той же еды с разных сторон (открой каждое инструментом Read):\n" + "\n".join(copies)
         else:
             prompt += "\n\nКадры видео по порядку (открой каждый инструментом Read):\n" + "\n".join(copies)
         tools = ["--allowedTools", "Read", "--max-turns", str(3 + len(copies))]
-    cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", persona(), *tools, *NO_TOOLS]
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", persona(), *tools, *NO_TOOLS,
+           *(["--model", model] if model else [])]
     try:
         p = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -199,20 +202,31 @@ def _meal_fields(out, text=""):
 
 
 PLATE_ASK = (
-    "Разбери еду на фото по позициям и верни ТОЛЬКО JSON без пояснений вокруг:\n"
-    '{"food": true, "items": [{"name": "Гречка варёная", "g": 200, "kcal": 220, "p": 8.4, "f": 2.2, "c": 42, '
-    '"salt": 0.6}], "comment": "одна короткая фраза по-русски"}\n'
+    "Ты нутрициолог, который по фото оценивает вес еды точнее всех. Разбери еду на фото по позициям.\n"
+    "Сначала молча, про себя (в ответ это не пиши):\n"
+    "1) Найди масштаб: тарелка (обычная плоская 24–26 см, глубокая 20–22 см, десертная 19–20 см), вилка ~19–20 см, "
+    "столовая ложка ~18 см, чайная ~13 см, нож ~22 см, ладонь подростка ~17–18 см, стакан 250 мл, кружка 300–350 мл, "
+    "контейнер, упаковка с весом на этикетке, монета, телефон ~15 см. Если фото несколько — сверь размеры по ним.\n"
+    "2) Для каждой позиции: что можно сосчитать — посчитай штуки и умножь на вес одной (пельмень 12–13 г, "
+    "вареник 25–30 г, куриный наггетс 18 г, котлета 70–100 г, яйцо 55 г, ломтик хлеба 25–35 г, сырник 50–60 г, "
+    "блин 40–60 г, ролл 25–30 г); остальное — площадь на тарелке × высота слоя → объём × плотность "
+    "(каши и рис ~0,8–0,9 г/мл, пюре ~1, супы ~1, салаты 0,5–0,7, листья 0,1–0,2, мясо ~1–1,1).\n"
+    "3) Сверь с типичными порциями (гарнир 150–250 г, тарелка супа 250–350 г, котлета 80–100 г, стейк 150–250 г) "
+    "и с подписью: если в подписи вес, число штук или размер посуды — это важнее фото.\n"
+    "Потом верни ТОЛЬКО JSON без пояснений вокруг:\n"
+    '{"food": true, "items": [{"name": "Гречка варёная", "g": 200, "lo": 170, "hi": 230, "sure": "mid", '
+    '"kcal": 220, "p": 8.4, "f": 2.2, "c": 42, "salt": 0.6}], "comment": "одна короткая фраза по-русски"}\n'
     "Правила:\n"
-    "- Каждая позиция — отдельно: гарнир, мясо или рыба, овощи, соус, хлеб, напиток. name — коротко по-русски, "
+    "- Каждая позиция отдельно: гарнир, мясо или рыба, овощи, соус, хлеб, напиток. name — коротко по-русски, "
     "со способом готовки (варёная, жареный, на пару).\n"
-    "- g — сколько граммов этой позиции на фото. Оценивай по масштабу: обычная тарелка ~24 см, вилка ~19 см, "
-    "столовая ложка, ладонь, стакан 250 мл; на упаковке или этикетке есть вес — бери его. "
-    "Если в подписи указаны граммы или размер порции — бери их из подписи, а не с фото.\n"
-    "- kcal, p (белки), f (жиры), c (углеводы) — на эти граммы по типичному составу блюда; "
-    "salt — граммы поваренной соли (натрий × 2,5) с учётом соли при готовке, соусов и сыра.\n"
+    "- g — лучшая оценка граммов позиции на фото; lo и hi — честный диапазон; sure — уверенность: "
+    "high (есть масштаб, видно целиком или вес на упаковке), mid, low (нет масштаба, перекрыто, глубокая посуда).\n"
+    "- kcal, p (белки), f (жиры), c (углеводы) — на эти граммы по типичному составу; "
+    "salt — граммы соли (натрий × 2,5) с учётом соли при готовке, соусов и сыра.\n"
     "- Невидимое не выдумывай; масло и соус добавляй, только если они видны или типичны для блюда.\n"
     "- comment — одна фраза до 100 символов: что хорошо или чего не хватает (белок, овощи, соль).\n"
     'Если на фото не еда — {"food": false}.')
+PLATE_MODEL = os.environ.get("KCAL_PHOTO_MODEL", "opus")  # сильная модель видит масштаб точнее; не вышло — модель по умолчанию
 
 
 def _num(v, digits, top):
@@ -223,18 +237,32 @@ def _num(v, digits, top):
     return round(x) if digits == 0 else round(x, digits)
 
 
-def plate(image, text="", age=None):
-    """Фото еды для сайта «Калории» → {"food": bool, "items": [{name, g, kcal, p, f, c, salt}], "comment"}.
-    Граммы — оценка по фото (или из подписи). Ничего не записывает в дневник Формы."""
+def plate(image, text="", age=None, images=None):
+    """Фото еды для сайта «Калории» → {"food": bool, "items": [{name, g, lo, hi, sure, kcal, p, f, c, salt}], "comment"}.
+    images — ещё фото той же еды (сбоку, с другого ракурса). Граммы — оценка по фото и масштабу (или из подписи).
+    Ничего не записывает в дневник Формы."""
     q = f"Подпись к фото: {text[:300]}\n" if text else ""
     if age is None or age < 18:  # школьник или возраст неизвестен — как в prompt.md: без диет
         q += (f"Мне {age} лет. " if age else "") + "В comment — без советов про диеты, дефицит и похудение.\n"
-    out = parse_json(claude(q + PLATE_ASK, image=image))
+    pics = [image] + list(images or [])
+    try:
+        out = parse_json(claude(q + PLATE_ASK, images=pics, model=PLATE_MODEL or None))
+    except AIError:
+        if not PLATE_MODEL:
+            raise
+        out = parse_json(claude(q + PLATE_ASK, images=pics))
     items, raw = [], out.get("items") if out.get("food") is not False else None
     for it in raw if isinstance(raw, list) else []:
         if not isinstance(it, dict) or not str(it.get("name") or "").strip():
             continue
-        items.append({"name": str(it["name"]).strip()[:80], "g": _num(it.get("g"), 0, 5000),
+        g = _num(it.get("g"), 0, 5000)
+        lo, hi = _num(it.get("lo"), 0, 5000), _num(it.get("hi"), 0, 5000)
+        if not 0 < lo <= g:
+            lo = round(g * 0.85)
+        if not hi >= g:
+            hi = round(g * 1.15)
+        sure = it.get("sure") if it.get("sure") in ("high", "mid", "low") else "mid"
+        items.append({"name": str(it["name"]).strip()[:80], "g": g, "lo": lo, "hi": hi, "sure": sure,
                       "kcal": _num(it.get("kcal"), 0, 10000), "p": _num(it.get("p"), 1, 1000),
                       "f": _num(it.get("f"), 1, 1000), "c": _num(it.get("c"), 1, 1000),
                       "salt": _num(it.get("salt"), 1, 100)})

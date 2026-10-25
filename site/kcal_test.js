@@ -269,7 +269,8 @@ async function addFood(page, q, grams, meal) {
       });
       const img = path.join(os.tmpdir(), 'kcal-plate.png');
       fs.writeFileSync(img, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==', 'base64'));
-      const pick = async () => { const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#pick')]); await fc.setFiles(img); };
+      const go = async () => { await sleep(400); await page.click('#go'); };
+      const pick = async () => { const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#pick')]); await fc.setFiles(img); await go(); };
       await page.click('#camBtn'); await sleep(500);
       ok(await page.isVisible('#code'), 'без подключения — экран кода');
       await page.fill('#code', '123456'); await sleep(600);
@@ -283,7 +284,7 @@ async function addFood(page, q, grams, meal) {
       ok(await page.isVisible('#found'), 'найденное показано');
       await shot(page, '07-found');
       await page.click('#found [data-i="1"] [data-d="10"]'); await sleep(100);
-      ok((await text(page, '#pg1')) === '110 г', '«+» у котлеты → 110 г');
+      ok((await page.inputValue('#pg1')) === '110', '«+» у котлеты → 110 г');
       await page.click('#found [data-i="0"] [data-tog]'); await sleep(100);
       ok((await text(page, '#sum')).includes('253'), 'гречка снята — всего 253 ккал', await text(page, '#sum'));
       await page.click('#mseg [data-m="dinner"]'); await sleep(200);
@@ -292,24 +293,39 @@ async function addFood(page, q, grams, meal) {
       let it = await items(page);
       ok(it.length === 1 && it[0].name === 'Котлета' && it[0].g === 110 && Math.round(it[0].kcal) === 253 && it[0].meal === 'dinner', 'добавлена котлета 110 г в ужин', JSON.stringify(it));
       ok(Math.abs(it[0].per100.kcal - 230) < 1e-9, 'у позиции с фото есть состав на 100 г (можно править граммы)');
+      // два фото + подсказка уходят на сервер; диапазон и «проверь вес»; вес руками
+      let body = null; await page.route(API + '/api/kcal/photo', async r => { body = JSON.parse(r.request().postData());
+        r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ name: 'Пельмени', g: 250, lo: 220, hi: 280, sure: 'low', kcal: 625, p: 30, f: 33, c: 55, salt: 3 }], comment: '' }) }); });
+      const [fm] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]); await fm.setFiles([img, img]); await sleep(500);
+      ok((await page.locator('.shots .sh img').count()) === 2 && await page.isVisible('#more'), 'выбрано 2 фото, можно добавить третье');
+      const [fm2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#more')]); await fm2.setFiles(img); await sleep(500);
+      ok((await page.locator('.shots .sh img').count()) === 3 && !(await page.isVisible('#more')), '3 фото — больше нельзя');
+      await page.click('.shots [data-rm="2"]'); await sleep(400);
+      ok((await page.locator('.shots .sh img').count()) === 2, 'лишнее фото убирается');
+      await page.fill('#hint', '20 пельменей'); await page.click('#go'); await sleep(900);
+      ok(body && body.images.length === 1 && body.text === '20 пельменей', 'на сервер ушли 2 фото и подсказка', JSON.stringify(body && { n: body.images.length, t: body.text }));
+      ok((await text(page, '#found')).includes('Проверь вес · по фото 220–280 г'), 'диапазон и «проверь вес» при низкой уверенности', await text(page, '#found'));
+      await page.fill('#pg0', '300'); await sleep(200);
+      ok((await text(page, '#sum')).includes('750 ккал'), 'вес руками 300 г → 750 ккал', await text(page, '#sum'));
+      await page.click('#sheetClose'); await sleep(600); await page.unroute(API + '/api/kcal/photo');
       // не еда
       mode = 'notfood'; await page.click('#camBtn'); await sleep(300); // токен есть — сразу выбор файла
       await sleep(100);
       const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]).catch(() => [null]);
-      if (fc) await fc.setFiles(img); await sleep(1300);
+      if (fc) { await fc.setFiles(img); await go(); } await sleep(1300);
       ok((await text(page, '.thinking')).includes('Не похоже на еду') && await page.isVisible('#again'), '422 — «Не похоже на еду» и «Снять ещё раз»', await text(page, '#sheetBody'));
       // нет связи
       mode = 'net';
-      const [fc3] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc3.setFiles(img); await sleep(500);
+      const [fc3] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc3.setFiles(img); await go(); await sleep(500);
       ok((await text(page, '.thinking')).includes('Нет связи'), 'нет сети — «Нет связи с сервером»', await text(page, '#sheetBody'));
       // отмена во время распознавания
       mode = 'slow';
-      const [fc4] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc4.setFiles(img); await sleep(400);
+      const [fc4] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc4.setFiles(img); await go(); await sleep(400);
       await page.click('#sheetClose'); await sleep(2600);
       ok(!(await page.$eval('#sheet', s => s.classList.contains('on'))), 'отмена — после ответа сервера ничего не всплывает');
       // токен устарел → снова код
       mode = 'ok'; await page.evaluate(() => localStorage.setItem('kcal.token', 'old'));
-      const [fc5] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]); await fc5.setFiles(img); await sleep(1300);
+      const [fc5] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]); await fc5.setFiles(img); await go(); await sleep(1300);
       ok(await page.isVisible('#code'), '401 — снова экран кода');
       await page.fill('#code', '111111'); await sleep(1500);
       ok(await page.isVisible('#found'), 'после нового кода распознаёт то же фото');

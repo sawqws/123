@@ -1868,7 +1868,7 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
-            limit = MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
+            limit = (3 if path == "/api/kcal/photo" else 1) * MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
             if n > limit:
                 return self.reply(413, {"error": "слишком большой файл"})
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
@@ -2071,24 +2071,28 @@ class NotFood(Exception):
 
 
 def kcal_photo(uid, b):
-    """Сайт «Калории»: фото → позиции с граммами и КБЖУ+соль. В дневник Формы не пишет, фото сразу удаляется."""
-    raw, ext = decode_photo(b)
+    """Сайт «Калории»: фото (до 3 — сверху, сбоку) → позиции с граммами, диапазоном и КБЖУ+соль.
+    В дневник Формы не пишет, фото сразу удаляются."""
+    extra = b.get("images") if isinstance(b.get("images"), list) else []
+    photos = [decode_photo(b)] + [decode_photo({"image": x}) for x in extra[:2]]
     try:
         age = int(float(profile(uid).get("age")))
     except (TypeError, ValueError):
         age = None
     folder = os.path.join(DATA, "photos", "kcal")
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{secrets.token_hex(8)}{ext}")
+    paths = [os.path.join(folder, f"{secrets.token_hex(8)}{ext}") for _, ext in photos]
     try:
-        with open(path, "wb") as f:
-            f.write(raw)
-        est = ai.plate(path, str(b.get("text") or "").strip()[:300], age)
+        for (raw, _), path in zip(photos, paths):
+            with open(path, "wb") as f:
+                f.write(raw)
+        est = ai.plate(paths[0], str(b.get("text") or "").strip()[:300], age, images=paths[1:])
     finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
     if not est["food"]:
         raise NotFood
     return {"items": est["items"], "comment": est["comment"]}
