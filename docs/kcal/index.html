@@ -987,7 +987,7 @@ function chatContext() {
     ...(ws.length ? { weight_kg: ws[ws.length - 1][1] } : {}) };
 }
 function chatText(t) { // абзацы и пункты «- …» → html, всё экранировано
-  const lines = esc(t).split(/\n+/); let html = '', list = [];
+  const lines = esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\*\*/g, '').split(/\n+/); let html = '', list = []; // **жирный** — как жирный
   const flush = () => { if (list.length) { html += `<ul>${list.map(l => `<li>${l}</li>`).join('')}</ul>`; list = []; } };
   for (const l of lines) { const m = l.match(/^\s*[-•*]\s+(.*)/); if (m) list.push(m[1]); else { flush(); if (l.trim()) html += `<p>${l}</p>`; } }
   flush(); return html;
