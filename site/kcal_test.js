@@ -24,6 +24,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function newPage(browser, opts = {}) {
   const ctx = await browser.newContext({ ...devices[opts.device || 'iPhone 14'], colorScheme: opts.scheme || 'dark', serviceWorkers: opts.sw ? 'allow' : 'block' });
   await ctx.clock.setFixedTime(opts.now || NOW);
+  await ctx.route(API + '/api/kcal/shop?*', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"items":[]}' })); // магазины — пусто, на сервер не ходим
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -94,8 +95,8 @@ async function addFood(page, q, grams, meal) {
       ok((await text(page, '#results .cell >> nth=0')).includes('Рис белый (сухой)'), 'поиск по словам «рис сух»');
       await page.fill('#q', 'свекла'); await sleep(100);
       ok((await text(page, '#results .cell >> nth=0')).includes('Свёкла'), 'ё = е в поиске');
-      await page.fill('#q', 'zzzz'); await sleep(100);
-      ok((await text(page, '#results')).includes('Такого нет в базе'), 'нет совпадений — подсказка');
+      await page.fill('#q', 'zzzz'); await sleep(900);
+      ok((await text(page, '#results')).includes('Такого не нашёл'), 'нет совпадений — подсказка');
       ok(!(await page.isVisible('#photoCta')), 'при поиске кнопка фото прячется');
       await page.fill('#q', ''); await sleep(100);
       ok((await text(page, '#results')).includes('Недавние'), 'появились «Недавние»');
@@ -268,7 +269,8 @@ async function addFood(page, q, grams, meal) {
       });
       const img = path.join(os.tmpdir(), 'kcal-plate.png');
       fs.writeFileSync(img, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==', 'base64'));
-      const pick = async () => { const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#pick')]); await fc.setFiles(img); };
+      const go = async () => { await sleep(400); await page.click('#go'); };
+      const pick = async () => { const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#pick')]); await fc.setFiles(img); await go(); };
       await page.click('#camBtn'); await sleep(500);
       ok(await page.isVisible('#code'), 'без подключения — экран кода');
       await page.fill('#code', '123456'); await sleep(600);
@@ -282,7 +284,7 @@ async function addFood(page, q, grams, meal) {
       ok(await page.isVisible('#found'), 'найденное показано');
       await shot(page, '07-found');
       await page.click('#found [data-i="1"] [data-d="10"]'); await sleep(100);
-      ok((await text(page, '#pg1')) === '110 г', '«+» у котлеты → 110 г');
+      ok((await page.inputValue('#pg1')) === '110', '«+» у котлеты → 110 г');
       await page.click('#found [data-i="0"] [data-tog]'); await sleep(100);
       ok((await text(page, '#sum')).includes('253'), 'гречка снята — всего 253 ккал', await text(page, '#sum'));
       await page.click('#mseg [data-m="dinner"]'); await sleep(200);
@@ -291,24 +293,39 @@ async function addFood(page, q, grams, meal) {
       let it = await items(page);
       ok(it.length === 1 && it[0].name === 'Котлета' && it[0].g === 110 && Math.round(it[0].kcal) === 253 && it[0].meal === 'dinner', 'добавлена котлета 110 г в ужин', JSON.stringify(it));
       ok(Math.abs(it[0].per100.kcal - 230) < 1e-9, 'у позиции с фото есть состав на 100 г (можно править граммы)');
+      // два фото + подсказка уходят на сервер; диапазон и «проверь вес»; вес руками
+      let body = null; await page.route(API + '/api/kcal/photo', async r => { body = JSON.parse(r.request().postData());
+        r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ name: 'Пельмени', g: 250, lo: 220, hi: 280, sure: 'low', kcal: 625, p: 30, f: 33, c: 55, salt: 3 }], comment: '' }) }); });
+      const [fm] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]); await fm.setFiles([img, img]); await sleep(500);
+      ok((await page.locator('.shots .sh img').count()) === 2 && await page.isVisible('#more'), 'выбрано 2 фото, можно добавить третье');
+      const [fm2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#more')]); await fm2.setFiles(img); await sleep(500);
+      ok((await page.locator('.shots .sh img').count()) === 3 && !(await page.isVisible('#more')), '3 фото — больше нельзя');
+      await page.click('.shots [data-rm="2"]'); await sleep(400);
+      ok((await page.locator('.shots .sh img').count()) === 2, 'лишнее фото убирается');
+      await page.fill('#hint', '20 пельменей'); await page.click('#go'); await sleep(900);
+      ok(body && body.images.length === 1 && body.text === '20 пельменей', 'на сервер ушли 2 фото и подсказка', JSON.stringify(body && { n: body.images.length, t: body.text }));
+      ok((await text(page, '#found')).includes('Проверь вес · по фото 220–280 г'), 'диапазон и «проверь вес» при низкой уверенности', await text(page, '#found'));
+      await page.fill('#pg0', '300'); await sleep(200);
+      ok((await text(page, '#sum')).includes('750 ккал'), 'вес руками 300 г → 750 ккал', await text(page, '#sum'));
+      await page.click('#sheetClose'); await sleep(600); await page.unroute(API + '/api/kcal/photo');
       // не еда
       mode = 'notfood'; await page.click('#camBtn'); await sleep(300); // токен есть — сразу выбор файла
       await sleep(100);
       const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]).catch(() => [null]);
-      if (fc) await fc.setFiles(img); await sleep(1300);
+      if (fc) { await fc.setFiles(img); await go(); } await sleep(1300);
       ok((await text(page, '.thinking')).includes('Не похоже на еду') && await page.isVisible('#again'), '422 — «Не похоже на еду» и «Снять ещё раз»', await text(page, '#sheetBody'));
       // нет связи
       mode = 'net';
-      const [fc3] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc3.setFiles(img); await sleep(500);
+      const [fc3] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc3.setFiles(img); await go(); await sleep(500);
       ok((await text(page, '.thinking')).includes('Нет связи'), 'нет сети — «Нет связи с сервером»', await text(page, '#sheetBody'));
       // отмена во время распознавания
       mode = 'slow';
-      const [fc4] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc4.setFiles(img); await sleep(400);
+      const [fc4] = await Promise.all([page.waitForEvent('filechooser'), page.click('#again')]); await fc4.setFiles(img); await go(); await sleep(400);
       await page.click('#sheetClose'); await sleep(2600);
       ok(!(await page.$eval('#sheet', s => s.classList.contains('on'))), 'отмена — после ответа сервера ничего не всплывает');
       // токен устарел → снова код
       mode = 'ok'; await page.evaluate(() => localStorage.setItem('kcal.token', 'old'));
-      const [fc5] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]); await fc5.setFiles(img); await sleep(1300);
+      const [fc5] = await Promise.all([page.waitForEvent('filechooser'), page.click('#camBtn')]); await fc5.setFiles(img); await go(); await sleep(1300);
       ok(await page.isVisible('#code'), '401 — снова экран кода');
       await page.fill('#code', '111111'); await sleep(1500);
       ok(await page.isVisible('#found'), 'после нового кода распознаёт то же фото');
@@ -445,6 +462,39 @@ async function addFood(page, q, grams, meal) {
       const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#imp')]); await fc2.setFiles(f); await sleep(600);
       ok((await toastText(page)).includes('Копия загружена'), 'тот же файл можно загрузить ещё раз');
       ok(page.errors.length === 0, 'нет ошибок в консоли (испорченная копия)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 13. Блюда со всего мира и продукты из магазинов */
+    {
+      const { ctx, page } = await newPage(browser);
+      let shopCalls = 0;
+      await ctx.route(API + '/api/kcal/shop?*', r => { shopCalls++; const q = new globalThis.URL(r.request().url()).searchParams.get('q');
+        return q.includes('ошибка') ? r.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"x"}' })
+          : r.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ items: [{ name: 'Сырок глазированный ванильный', brand: 'Чудо', kcal: 421, p: 8.7, f: 28.7, c: 31.9, salt: 0.25, g: 40 }] }) }); });
+      const n = JSON.parse(fs.readFileSync(path.join(ROOT, 'kcal', 'foods.json'), 'utf8')).length;
+      ok(n > 5000, `в базе мира ${n} блюд`);
+      await page.click('#addTab'); await sleep(500);
+      for (const [q, want] of [['пад тай', 'пад-тай'], ['буррито', 'буррито'], ['суши', ''], ['лазань', 'лазань'], ['тако', 'тако']]) {
+        await page.fill('#q', q); await sleep(350);
+        const t = (await text(page, '#results')).toLowerCase();
+        const cnt = await page.locator('#results [data-k^="s"]').count();
+        ok(cnt > 0 && (!want || t.includes(want)), `поиск «${q}» находит (${cnt})`, t.slice(0, 120));
+      }
+      await page.fill('#q', 'курица'); await sleep(350);
+      ok((await text(page, '#results')).includes('уточни запрос'), 'много совпадений — показаны первые и «уточни запрос»');
+      ok((await text(page, '#results [data-k="s0"]')).startsWith('Куриная') || (await text(page, '#results [data-k="s0"]')).toLowerCase().startsWith('кур'), 'сверху — то, что начинается с запроса', await text(page, '#results [data-k="s0"]'));
+      await page.fill('#q', 'сырок глаз'); await sleep(1100);
+      ok((await text(page, '#results')).includes('В магазинах') && (await text(page, '#results')).includes('Чудо'), 'продукты из магазина с маркой');
+      await page.click('#results [data-k="o0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '40' && (await text(page, '.portion .title')).includes('Чудо'), 'продукт из магазина: порция с упаковки 40 г');
+      await page.click('#ok'); await sleep(600);
+      ok(Math.round((await items(page))[0].kcal) === 168, 'добавлен сырок 40 г = 168 ккал', JSON.stringify(await items(page)));
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'ошибка сети'); await sleep(1100);
+      ok(!(await text(page, '#results')).includes('Ищу в магазинах') && page.errors.length === 0, 'магазины не ответили — тихо, без ошибок');
+      await page.fill('#q', 'ab'); await sleep(700);
+      const before = shopCalls; await page.fill('#q', 'mol'); await page.fill('#q', 'molo'); await page.fill('#q', 'molok'); await sleep(900);
+      ok(shopCalls - before === 1, 'быстрый ввод — один запрос к магазинам', String(shopCalls - before));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (база мира)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {

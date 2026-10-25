@@ -1818,6 +1818,18 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
 
+    def kcal_shop_get(self, q):
+        origin = self.headers.get("Origin")
+        if origin and origin != KCAL_ORIGIN:
+            return self.reply(403, {"error": "чужой сайт"})
+        ip = (self.headers.get("X-Forwarded-For") or getattr(self, "client_address", ("?",))[0]).split(",")[0].strip()
+        if not pwa.throttle("shop:" + ip, *SHOP_RATE):
+            return self.reply(429, {"error": "Много запросов — подожди минуту"})
+        try:
+            self.reply(200, kcal_shop(q), cache="public, max-age=3600")
+        except (OSError, ValueError):  # сеть, таймаут, не JSON
+            self.reply(502, {"error": "Магазины не ответили — попробуй позже"})
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         path = u.path
@@ -1832,6 +1844,8 @@ class Web(BaseHTTPRequestHandler):
             link = f"https://t.me/{db.meta('bot_username') or ''}"
             return self.reply(200, PAGE_DONE.format(icon="✅" if ok else "⚠️", text=esc(text), link=esc(link)),
                               "text/html; charset=utf-8")
+        if path == "/api/kcal/shop":  # «Калории»: продукты из магазинов (браузеру Open Food Facts не отдаёт CORS)
+            return self.kcal_shop_get(dict(urllib.parse.parse_qsl(u.query)).get("q", ""))
         if path.startswith("/api/"):
             return self.api(path, dict(urllib.parse.parse_qsl(u.query)))
         if path == "/site" or path.startswith("/site/"):
@@ -1854,7 +1868,7 @@ class Web(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
-            limit = MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
+            limit = (3 if path == "/api/kcal/photo" else 1) * MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
             if n > limit:
                 return self.reply(413, {"error": "слишком большой файл"})
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
@@ -1951,7 +1965,7 @@ def day_payload(uid, day):
 
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
-KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo")
+KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop")
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 
 
@@ -1996,29 +2010,89 @@ def photo_api(uid, b):
     return {"meal": meal, "comment": est.get("comment", ""), "day": day_payload(uid, today)}
 
 
+SHOP_URL = "https://search.openfoodfacts.org/search"
+SHOP_RATE = (40, 60)  # запросов в минуту с одного адреса
+_shop_cache = {}
+
+
+def kcal_shop(q):
+    """Продукты из магазинов по названию (Open Food Facts, ODbL) → {"items": [{name, brand, kcal, p, f, c, salt, g}]}
+    на 100 г; g — порция с упаковки (или 0). Кэш на сутки."""
+    q = re.sub(r"\s+", " ", str(q or "")).strip()[:60]
+    if len(q) < 3:
+        return {"items": []}
+    now, key = time.time(), q.lower()
+    hit = _shop_cache.get(key)
+    if hit and hit[0] > now - 86400:
+        return hit[1]
+    url = SHOP_URL + "?" + urllib.parse.urlencode({"q": q, "page_size": 30, "langs": "ru",
+                                                   "fields": "product_name,product_name_ru,brands,nutriments,serving_quantity"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Kalorii/1.0 (sawqws.github.io/123/kcal)"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.load(r)
+
+    def number(v, hi):
+        try:
+            v = float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return round(v, 1) if 0 <= v <= hi else None
+
+    items, seen = [], set()
+    for p in data.get("hits") or []:
+        n = p.get("nutriments") or {}
+        name = html.unescape(str(p.get("product_name_ru") or p.get("product_name") or "")).strip()[:80]
+        kcal = number(n.get("energy-kcal_100g"), 950)
+        if kcal is None and number(n.get("energy-kj_100g"), 4000) is not None:
+            kcal = round(number(n.get("energy-kj_100g"), 4000) / 4.184, 1)
+        if not name or kcal is None:
+            continue
+        salt = number(n.get("salt_100g"), 100)
+        if salt is None and number(n.get("sodium_100g"), 40) is not None:
+            salt = round(number(n.get("sodium_100g"), 40) * 2.5, 2)
+        b = p.get("brands")
+        brand = html.unescape((b[0] if isinstance(b, list) and b else str(b or "")).split(",")[0].strip())[:40]
+        sig = (name.lower(), brand.lower(), round(kcal))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        items.append({"name": name, "brand": brand, "kcal": kcal, "p": number(n.get("proteins_100g"), 100) or 0,
+                      "f": number(n.get("fat_100g"), 100) or 0, "c": number(n.get("carbohydrates_100g"), 100) or 0,
+                      "salt": salt or 0, "g": number(p.get("serving_quantity"), 2000) or 0})
+    out = {"items": items[:20]}
+    if len(_shop_cache) > 2000:
+        _shop_cache.clear()
+    _shop_cache[key] = (now, out)
+    return out
+
+
 class NotFood(Exception):
     pass
 
 
 def kcal_photo(uid, b):
-    """Сайт «Калории»: фото → позиции с граммами и КБЖУ+соль. В дневник Формы не пишет, фото сразу удаляется."""
-    raw, ext = decode_photo(b)
+    """Сайт «Калории»: фото (до 3 — сверху, сбоку) → позиции с граммами, диапазоном и КБЖУ+соль.
+    В дневник Формы не пишет, фото сразу удаляются."""
+    extra = b.get("images") if isinstance(b.get("images"), list) else []
+    photos = [decode_photo(b)] + [decode_photo({"image": x}) for x in extra[:2]]
     try:
         age = int(float(profile(uid).get("age")))
     except (TypeError, ValueError):
         age = None
     folder = os.path.join(DATA, "photos", "kcal")
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"{secrets.token_hex(8)}{ext}")
+    paths = [os.path.join(folder, f"{secrets.token_hex(8)}{ext}") for _, ext in photos]
     try:
-        with open(path, "wb") as f:
-            f.write(raw)
-        est = ai.plate(path, str(b.get("text") or "").strip()[:300], age)
+        for (raw, _), path in zip(photos, paths):
+            with open(path, "wb") as f:
+                f.write(raw)
+        est = ai.plate(paths[0], str(b.get("text") or "").strip()[:300], age, images=paths[1:])
     finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
     if not est["food"]:
         raise NotFood
     return {"items": est["items"], "comment": est["comment"]}
