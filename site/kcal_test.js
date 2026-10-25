@@ -447,6 +447,39 @@ async function addFood(page, q, grams, meal) {
       ok(page.errors.length === 0, 'нет ошибок в консоли (испорченная копия)', page.errors.join(' | '));
       await ctx.close();
     }
+    /* 13. Блюда со всего мира и продукты из магазинов */
+    {
+      const { ctx, page } = await newPage(browser);
+      let shopCalls = 0;
+      await ctx.route(API + '/api/kcal/shop?*', r => { shopCalls++; const q = new URL(r.request().url()).searchParams.get('q');
+        return q.includes('ошибка') ? r.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"x"}' })
+          : r.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ items: [{ name: 'Сырок глазированный ванильный', brand: 'Чудо', kcal: 421, p: 8.7, f: 28.7, c: 31.9, salt: 0.25, g: 40 }] }) }); });
+      const n = JSON.parse(fs.readFileSync(path.join(ROOT, 'kcal', 'foods.json'), 'utf8')).length;
+      ok(n > 5000, `в базе мира ${n} блюд`);
+      await page.click('#addTab'); await sleep(500);
+      for (const [q, want] of [['пад тай', 'пад-тай'], ['буррито', 'буррито'], ['суши', ''], ['лазань', 'лазань'], ['тако', 'тако']]) {
+        await page.fill('#q', q); await sleep(350);
+        const t = (await text(page, '#results')).toLowerCase();
+        const cnt = await page.locator('#results [data-k^="s"]').count();
+        ok(cnt > 0 && (!want || t.includes(want)), `поиск «${q}» находит (${cnt})`, t.slice(0, 120));
+      }
+      await page.fill('#q', 'курица'); await sleep(350);
+      ok((await text(page, '#results')).includes('уточни запрос'), 'много совпадений — показаны первые и «уточни запрос»');
+      ok((await text(page, '#results [data-k="s0"]')).startsWith('Куриная') || (await text(page, '#results [data-k="s0"]')).toLowerCase().startsWith('кур'), 'сверху — то, что начинается с запроса', await text(page, '#results [data-k="s0"]'));
+      await page.fill('#q', 'сырок глаз'); await sleep(1100);
+      ok((await text(page, '#results')).includes('В магазинах') && (await text(page, '#results')).includes('Чудо'), 'продукты из магазина с маркой');
+      await page.click('#results [data-k="o0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '40' && (await text(page, '.portion .title')).includes('Чудо'), 'продукт из магазина: порция с упаковки 40 г');
+      await page.click('#ok'); await sleep(600);
+      ok(Math.round((await items(page))[0].kcal) === 168, 'добавлен сырок 40 г = 168 ккал', JSON.stringify(await items(page)));
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'ошибка сети'); await sleep(1100);
+      ok(!(await text(page, '#results')).includes('Ищу в магазинах') && page.errors.length === 0, 'магазины не ответили — тихо, без ошибок');
+      await page.fill('#q', 'ab'); await sleep(700);
+      const before = shopCalls; await page.fill('#q', 'mol'); await page.fill('#q', 'molo'); await page.fill('#q', 'molok'); await sleep(900);
+      ok(shopCalls - before === 1, 'быстрый ввод — один запрос к магазинам', String(shopCalls - before));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (база мира)', page.errors.join(' | '));
+      await ctx.close();
+    }
   } catch (e) {
     ok(false, 'тест упал', e.stack.split('\n').slice(0, 3).join(' '));
   }

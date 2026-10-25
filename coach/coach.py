@@ -1818,6 +1818,18 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
 
+    def kcal_shop_get(self, q):
+        origin = self.headers.get("Origin")
+        if origin and origin != KCAL_ORIGIN:
+            return self.reply(403, {"error": "чужой сайт"})
+        ip = (self.headers.get("X-Forwarded-For") or getattr(self, "client_address", ("?",))[0]).split(",")[0].strip()
+        if not pwa.throttle("shop:" + ip, *SHOP_RATE):
+            return self.reply(429, {"error": "Много запросов — подожди минуту"})
+        try:
+            self.reply(200, kcal_shop(q), cache="public, max-age=3600")
+        except (OSError, ValueError):  # сеть, таймаут, не JSON
+            self.reply(502, {"error": "Магазины не ответили — попробуй позже"})
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         path = u.path
@@ -1832,6 +1844,8 @@ class Web(BaseHTTPRequestHandler):
             link = f"https://t.me/{db.meta('bot_username') or ''}"
             return self.reply(200, PAGE_DONE.format(icon="✅" if ok else "⚠️", text=esc(text), link=esc(link)),
                               "text/html; charset=utf-8")
+        if path == "/api/kcal/shop":  # «Калории»: продукты из магазинов (браузеру Open Food Facts не отдаёт CORS)
+            return self.kcal_shop_get(dict(urllib.parse.parse_qsl(u.query)).get("q", ""))
         if path.startswith("/api/"):
             return self.api(path, dict(urllib.parse.parse_qsl(u.query)))
         if path == "/site" or path.startswith("/site/"):
@@ -1951,7 +1965,7 @@ def day_payload(uid, day):
 
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
-KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo")
+KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop")
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 
 
@@ -1994,6 +2008,62 @@ def photo_api(uid, b):
     today = user_now(u).date()
     meal = db.save_meal(uid, {**est, "day": today.isoformat(), "time": user_now(u).strftime("%H:%M")})
     return {"meal": meal, "comment": est.get("comment", ""), "day": day_payload(uid, today)}
+
+
+SHOP_URL = "https://search.openfoodfacts.org/search"
+SHOP_RATE = (40, 60)  # запросов в минуту с одного адреса
+_shop_cache = {}
+
+
+def kcal_shop(q):
+    """Продукты из магазинов по названию (Open Food Facts, ODbL) → {"items": [{name, brand, kcal, p, f, c, salt, g}]}
+    на 100 г; g — порция с упаковки (или 0). Кэш на сутки."""
+    q = re.sub(r"\s+", " ", str(q or "")).strip()[:60]
+    if len(q) < 3:
+        return {"items": []}
+    now, key = time.time(), q.lower()
+    hit = _shop_cache.get(key)
+    if hit and hit[0] > now - 86400:
+        return hit[1]
+    url = SHOP_URL + "?" + urllib.parse.urlencode({"q": q, "page_size": 30, "langs": "ru",
+                                                   "fields": "product_name,product_name_ru,brands,nutriments,serving_quantity"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Kalorii/1.0 (sawqws.github.io/123/kcal)"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.load(r)
+
+    def number(v, hi):
+        try:
+            v = float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return round(v, 1) if 0 <= v <= hi else None
+
+    items, seen = [], set()
+    for p in data.get("hits") or []:
+        n = p.get("nutriments") or {}
+        name = html.unescape(str(p.get("product_name_ru") or p.get("product_name") or "")).strip()[:80]
+        kcal = number(n.get("energy-kcal_100g"), 950)
+        if kcal is None and number(n.get("energy-kj_100g"), 4000) is not None:
+            kcal = round(number(n.get("energy-kj_100g"), 4000) / 4.184, 1)
+        if not name or kcal is None:
+            continue
+        salt = number(n.get("salt_100g"), 100)
+        if salt is None and number(n.get("sodium_100g"), 40) is not None:
+            salt = round(number(n.get("sodium_100g"), 40) * 2.5, 2)
+        b = p.get("brands")
+        brand = html.unescape((b[0] if isinstance(b, list) and b else str(b or "")).split(",")[0].strip())[:40]
+        sig = (name.lower(), brand.lower(), round(kcal))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        items.append({"name": name, "brand": brand, "kcal": kcal, "p": number(n.get("proteins_100g"), 100) or 0,
+                      "f": number(n.get("fat_100g"), 100) or 0, "c": number(n.get("carbohydrates_100g"), 100) or 0,
+                      "salt": salt or 0, "g": number(p.get("serving_quantity"), 2000) or 0})
+    out = {"items": items[:20]}
+    if len(_shop_cache) > 2000:
+        _shop_cache.clear()
+    _shop_cache[key] = (now, out)
+    return out
 
 
 class NotFood(Exception):

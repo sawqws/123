@@ -880,6 +880,7 @@ function closeSheet() {
   unlockScroll();
   if (document.activeElement) document.activeElement.blur();
   photoReq && photoReq.abort(); photoReq = null;
+  clearTimeout(shopTimer); shopReq && shopReq.abort(); shopReq = null;
   const f = onSheetClose; onSheetClose = null; f && f();
 }
 $('#scrim').onclick = closeSheet;
@@ -898,10 +899,48 @@ const FOODS = BASE.map(toFood), DISH = DISHES.map(f => ({ ...toFood(f), dish: tr
 const macroLine = f => `${fmt(f.kcal)} ккал · Б ${dec(f.p)} · Ж ${dec(f.f)} · У ${dec(f.c)}`;
 const mealName = m => MEALS.find(x => x[0] === m)[1];
 
+/* большая база: блюда и продукты со всего мира (USDA FNDDS, переведено) — грузится при первом поиске */
+let WORLD = null, worldLoading = null;
+function loadWorld() {
+  if (WORLD || worldLoading) return worldLoading || Promise.resolve(WORLD);
+  worldLoading = fetch('foods.json').then(r => r.ok ? r.json() : []).catch(() => []).then(rows => {
+    WORLD = rows.filter(r => Array.isArray(r) && r[0]).map(([name, kcal, p, f, c, salt, g]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g } : null, world: true, n: norm(name) }));
+    worldLoading = null; return WORLD;
+  });
+  return worldLoading;
+}
+const LIMIT = 60;
+function findFoods(s) { // все слова запроса в названии; сначала мои и наши, потом мировая база; точнее и короче — выше
+  const words = s.split(/[\s,()«»"-]+/).filter(Boolean);
+  if (!words.length) return [];
+  const pools = [S.custom.map(x => ({ ...x, custom: true, n: norm(x.name) })), DISH.concat(FOODS).map(x => (x.n = x.n || norm(x.name), x)), WORLD || []];
+  const out = [];
+  pools.forEach((pool, src) => { for (const f of pool) if (words.every(w => f.n.includes(w))) {
+    const w0 = words[0], at = f.n.indexOf(w0);
+    out.push({ f, rank: src * 3 + (at === 0 ? 0 : /[\s,(]/.test(f.n[at - 1] || '') ? 1 : 2) + (src === 2 && at !== 0 ? 1 : 0), len: f.n.length });
+  } });
+  return out.sort((a, b) => a.rank - b.rank || a.len - b.len).map(x => x.f);
+}
+let shopReq = null, shopTimer = null;
+function shopSearch(q, done) { // продукты из магазинов (Open Food Facts) через сервер Тренера
+  clearTimeout(shopTimer); shopReq && shopReq.abort(); shopReq = null;
+  if (q.trim().length < 3) return done(null);
+  shopTimer = setTimeout(async () => {
+    const ctl = new AbortController(); shopReq = ctl;
+    const t = setTimeout(() => ctl.abort(), 9000);
+    try {
+      const r = await fetch(`${API}/api/kcal/shop?q=${encodeURIComponent(q.trim())}`, { signal: ctl.signal });
+      const j = await r.json().catch(() => ({}));
+      if (shopReq === ctl) done(r.ok && Array.isArray(j.items) ? j.items : 'err');
+    } catch (e) { if (shopReq === ctl) done(e.name === 'AbortError' && shopReq !== ctl ? null : 'err'); }
+    finally { clearTimeout(t); }
+  }, 450);
+}
+
 function openAdd(meal, query) {
-  let m = meal || mealNow(), q = query || '';
+  let m = meal || mealNow(), q = query || '', shop = null;
   const draw = () => {
-    const s = norm(q.trim()), all = S.custom.map(x => ({ ...x, custom: true })).concat(DISH, FOODS);
+    const s = norm(q.trim());
     let html = '';
     const row = (f, key, sub) => `<button class="cell" data-k="${key}"><span class="t"><div class="n">${esc(f.name)}${f.dish ? ' <span style="color:var(--text-3)">≈</span>' : ''}</div>
       <div class="m num">${sub || macroLine(f) + ' на 100 г'}</div></span>${I.chev}</button>`;
@@ -912,17 +951,22 @@ function openAdd(meal, query) {
       if (S.custom.length) html += `<div class="group-t">Мои продукты</div><div class="list">${S.custom.map((f, i) => { pool['m' + i] = f; return row(f, 'm' + i); }).join('')}</div>`;
       html += `<div class="group-t">Популярные блюда</div><div class="list">${DISH.map((f, i) => { pool['d' + i] = f; return row(f, 'd' + i); }).join('')}</div>`;
       html += `<div class="group-t">Продукты</div><div class="list">${FOODS.map((f, i) => { pool['b' + i] = f; return row(f, 'b' + i); }).join('')}</div>`;
-      html += `<div class="foot">≈ — готовое блюдо, калорийность зависит от рецепта.</div>`;
+      html += `<div class="foot">В поиске — больше 5 000 блюд со всего мира и продукты из магазинов. ≈ — готовое блюдо, калорийность зависит от рецепта.</div>`;
     } else {
-      const words = s.split(/[\s,()]+/).filter(Boolean); // «рис сух» найдёт «Рис белый (сухой)»
-      const hit = all.map(f => ({ f, n: norm(f.name) })).filter(x => words.every(w => x.n.includes(w)))
-        .sort((a, b) => (b.n.startsWith(words[0]) - a.n.startsWith(words[0])) || a.n.localeCompare(b.n));
-      html = hit.length ? `<div class="list" style="margin-top:14px">${hit.map((x, i) => { pool['s' + i] = x.f; return row(x.f, 's' + i); }).join('')}</div>`
-        : `<div class="lead" style="margin-top:30px">Такого нет в базе.<br>Сфотографируй еду или добавь свой продукт.</div>`;
+      const hit = findFoods(s), shown = hit.slice(0, LIMIT);
+      if (shown.length) html += `<div class="list" style="margin-top:14px">${shown.map((f, i) => { pool['s' + i] = f; return row(f, 's' + i); }).join('')}</div>`;
+      if (hit.length > LIMIT) html += `<div class="foot">Ещё ${fmt(hit.length - LIMIT)} — уточни запрос</div>`;
+      if (!WORLD) html += `<div class="foot">Загружаю блюда со всего мира…</div>`;
+      if (Array.isArray(shop) && shop.length) html += `<div class="group-t">В магазинах</div><div class="list">${shop.map((x, i) => {
+        const f = { name: x.brand ? `${x.name} · ${x.brand}` : x.name, kcal: x.kcal, p: x.p, f: x.f, c: x.c, salt: x.salt, unit: x.g > 0 ? { name: 'порция', g: x.g } : null };
+        pool['o' + i] = f; return row(f, 'o' + i); }).join('')}</div>`;
+      else if (shop === 'wait') html += `<div class="foot">Ищу в магазинах…</div>`;
+      if (!shown.length && shop !== 'wait' && !(Array.isArray(shop) && shop.length) && WORLD) html += `<div class="lead" style="margin-top:30px">Такого не нашёл.<br>Сфотографируй еду или добавь свой продукт.</div>`;
     }
     html += `<div class="list" style="margin-top:22px"><button class="cell" id="own"><span class="t"><div class="n">Свой продукт</div><div class="m">Цифры с этикетки</div></span>${I.chev}</button>
-      <button class="cell" id="quick"><span class="t"><div class="n">Только калории</div><div class="m">Когда состав неизвестен</div></span>${I.chev}</button></div>`;
-    const res = $('#results'); res.innerHTML = html;
+      <button class="cell" id="quick"><span class="t"><div class="n">Только калории</div><div class="m">Когда состав неизвестен</div></span>${I.chev}</button></div>
+      <div class="foot">Блюда мира — база USDA FoodData Central, продукты магазинов — Open Food Facts (ODbL).</div>`;
+    const res = $('#results'); if (!res) return; res.innerHTML = html;
     res.onclick = e => {
       const b = e.target.closest('[data-k]');
       if (b) { const f = pool[b.dataset.k]; if (b.dataset.k[0] === 'r' && !f.g) addItem(m, { name: f.name, g: 0, kcal: f.kcal, p: f.p, f: f.f, c: f.c, salt: f.salt || 0 }); else openPortion(f, m, null, b.dataset.k[0] === 'r' ? f.g : 0, () => openAdd(m, q)); }
@@ -930,7 +974,13 @@ function openAdd(meal, query) {
       else if (e.target.closest('#quick')) openQuick(m);
     };
   };
-  const html = `<div class="search">${I.search}<input id="q" type="search" placeholder="Поиск" autocomplete="off" enterkeyhint="search" aria-label="Найти продукт"></div>
+  const search = () => {
+    const mine = q;
+    shop = q.trim().length >= 3 ? 'wait' : null;
+    shopSearch(q, items => { if (mine === q) { shop = items; draw(); } });
+    draw();
+  };
+  const html = `<div class="search">${I.search}<input id="q" type="search" placeholder="Любое блюдо или продукт" autocomplete="off" enterkeyhint="search" aria-label="Найти продукт"></div>
     <button class="photo-cta" id="photoCta">${I.cam}<span><b>Сфотографировать еду</b><span>Узнаю блюда и граммы по фото</span></span></button>
     <div class="seg meal" id="mseg"><span class="thumb"></span>${MEALS.map(([k, n]) => `<button data-m="${k}" aria-pressed="${k === m}">${n}</button>`).join('')}</div>
     <div id="results"></div>`;
@@ -940,9 +990,10 @@ function openAdd(meal, query) {
     seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz(); };
     const inp = $('#q', body);
     inp.value = q; $('#photoCta', body).hidden = !!q.trim();
-    inp.oninput = () => { q = inp.value; draw(); $('#photoCta', body).hidden = !!q.trim(); };
+    inp.oninput = () => { q = inp.value; search(); $('#photoCta', body).hidden = !!q.trim(); };
     $('#photoCta', body).onclick = () => photoFlow(m);
-    draw();
+    if (!WORLD) loadWorld().then(() => { if ($('#q') === inp) draw(); });
+    q.trim() ? search() : draw();
   }, {});
 }
 

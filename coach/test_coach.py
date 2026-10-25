@@ -1623,6 +1623,32 @@ class KcalTest(unittest.TestCase):
     def meals(self):
         return self.db.q("SELECT COUNT(*) AS n FROM meals")[0]["n"]
 
+    def test_shop(self):
+        hits = {"hits": [
+            {"product_name": "Сырок глазированный &quot;Ваниль&quot;", "brands": ["Чудо", "x"], "serving_quantity": 40,
+             "nutriments": {"energy-kcal_100g": 421, "proteins_100g": 8.7, "fat_100g": 28.7, "carbohydrates_100g": 31.9, "sodium_100g": 0.1}},
+            {"product_name": "Сырок глазированный &quot;Ваниль&quot;", "brands": ["Чудо"], "nutriments": {"energy-kcal_100g": 421}},  # дубль
+            {"product_name": "Без калорий", "nutriments": {"fat_100g": 3}},
+            {"product_name": "Только кДж", "brands": "Б, В", "nutriments": {"energy-kj_100g": 418.4, "salt_100g": "1,5"}}]}
+        coach._shop_cache.clear()
+        with mock.patch.object(coach.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(hits).encode())) as op:
+            r = kcal_call("/api/kcal/shop?q=сырок%20глаз", method="GET")
+            self.assertEqual(r.code, 200)
+            self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+            self.assertEqual(r.json["items"], [
+                {"name": 'Сырок глазированный "Ваниль"', "brand": "Чудо", "kcal": 421.0, "p": 8.7, "f": 28.7, "c": 31.9, "salt": 0.25, "g": 40.0},
+                {"name": "Только кДж", "brand": "Б", "kcal": 100.0, "p": 0, "f": 0, "c": 0, "salt": 1.5, "g": 0}])
+            self.assertIn("q=%D1%81%D1%8B%D1%80%D0%BE%D0%BA+%D0%B3%D0%BB%D0%B0%D0%B7", op.call_args[0][0].full_url)
+            self.assertEqual(kcal_call("/api/kcal/shop?q=сырок%20глаз", method="GET").code, 200)
+            self.assertEqual(op.call_count, 1)  # второй раз — из кэша
+            self.assertEqual(kcal_call("/api/kcal/shop?q=ab", method="GET").json, {"items": []})
+        self.assertEqual(kcal_call("/api/kcal/shop?q=молоко", method="GET", origin="https://evil.example").code, 403)
+        with mock.patch.object(coach.urllib.request, "urlopen", side_effect=OSError("timeout")):
+            self.assertEqual(kcal_call("/api/kcal/shop?q=кефир", method="GET").code, 502)
+        coach.pwa._hits.clear()
+        coach.pwa._hits["shop:?"] = [time.time()] * coach.SHOP_RATE[0]
+        self.assertEqual(kcal_call("/api/kcal/shop?q=творог", method="GET").code, 429)
+
     def test_pair(self):
         tok = self.pair()
         self.assertEqual(coach.pwa.session_uid(self.db, tok, "kcal"), U)
