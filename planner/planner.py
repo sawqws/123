@@ -1656,6 +1656,9 @@ def caddy_bin():
     return path
 
 
+CADDY_EXTRA = "/etc/caddy-extra"
+
+
 def caddyfile(ip):
     """Настройки Caddy и адреса, по которым приложение будет доступно (сначала имя, потом IP)."""
     host = ip.replace(".", "-") + ".sslip.io"
@@ -1720,6 +1723,8 @@ def caddyfile(ip):
         "\tencode zstd gzip\n"  # страницы и ответы API зеркала идут без сжатия — по мобильной сети это секунды
         f"\treverse_proxy 127.0.0.1:{HDP_PORT}\n"
         "}\n"
+        # чужие сайты на этом сервере (временно — боты мамы Глеба): свой файл на сайт, пусто — ничего
+        f"import {CADDY_EXTRA}/*.caddy\n"
     )
     return conf, [f"https://{host}", f"https://{ip}"]
 
