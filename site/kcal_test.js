@@ -368,7 +368,7 @@ async function addFood(page, q, grams, meal) {
       const label = `${dev}${w ? ' ' + w + 'px' : ''}`;
       const over = async where => ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${label}: нет прокрутки вбок (${where})`, await page.evaluate(() => document.documentElement.scrollWidth + '>' + innerWidth));
       await over('сегодня');
-      const body = await page.textContent('body');
+      const body = await page.textContent('#app'); // без текста скрипта
       ok(!/NaN|undefined/.test(body), `${label}: старые данные без NaN/undefined`);
       const metr = await page.$$eval('.metric .v', els => els.every(e => e.scrollWidth <= e.parentElement.clientWidth + 2 && e.getBoundingClientRect().right <= innerWidth));
       ok(metr, `${label}: цифры БЖУ и соли влезают`);
@@ -546,7 +546,9 @@ async function addFood(page, q, grams, meal) {
       await ctx.route(API + '/api/kcal/pair', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"token":"tok"}' }));
       await ctx.route(API + '/api/kcal/chat', async r => { sent = JSON.parse(r.request().postData()); await sleep(500);
         if (mode === 'err') return r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"у Claude закончился лимит, попробуй позже"}' });
-        r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: 'Добери белок:\n- творог 240 г\n- банан', items: [{ name: 'Творог 5%', g: 240, kcal: 290, p: 41, f: 12, c: 4, salt: 0.2 }, { name: 'Банан', g: 120, kcal: 114, p: 2, f: 1, c: 25, salt: 0 }] }) }); });
+        const done = { done: true, text: 'Добери белок:\n- творог 240 г\n- банан', items: [{ name: 'Творог 5%', g: 240, kcal: 290, p: 41, f: 12, c: 4, salt: 0.2 }, { name: 'Банан', g: 120, kcal: 114, p: 2, f: 1, c: 25, salt: 0 }] };
+        if (!sent.stream) return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(done) });
+        r.fulfill({ status: 200, contentType: 'text/event-stream', body: ['Добери ', 'белок:\n- творог 240 г\n', '- банан'].map(t => `data: ${JSON.stringify({ t })}\n\n`).join('') + `data: ${JSON.stringify(done)}\n\n` }); });
       await addFood(page, 'овсян хлоп', 100, 'breakfast');
       if (await page.evaluate(() => document.body.classList.contains('min'))) { await page.click('#tabs'); await sleep(600); } // меню сжато после прокрутки — раскрыть
       await page.click('[data-tab=chat]'); await sleep(600);
@@ -554,6 +556,7 @@ async function addFood(page, q, grams, meal) {
       await page.click('.starter >> nth=0'); await sleep(500);
       ok(await page.isVisible('#code'), 'без подключения — код');
       await page.fill('#code', '111111'); await sleep(1500);
+      ok(sent && sent.stream === true, 'чат просит ответ потоком');
       ok(sent && sent.question === 'Что мне съесть сейчас?' && sent.context.left.kcal === 3048 && sent.context.meals[0].includes('Овсяные хлопья'), 'вопрос ушёл с дневником дня (осталось 3 048)', JSON.stringify(sent && sent.context.left));
       ok((await text(page, '#msgs')).includes('Добери белок') && (await page.locator('.msg.ai li').count()) === 2, 'ответ с пунктами');
       ok(!(await page.isVisible('#chatPair')), 'после подключения кнопки «Подключить» нет');

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import tempfile
 import uuid
 
@@ -285,35 +286,100 @@ KCAL_CHAT = (
     "добавить, чтобы закрыть норму; что из списка лучше отложить — коротко почему.\n"
     "- Цифры честные, по типичному составу; не выдумывай того, чего нет в данных.\n"    "- Воду — добрать сегодня, равномерно до сна (не переносить на завтра).\n"
     "- Обычный текст: строки и пункты «- …», без markdown (без **, #, таблиц).\n"
-    "Верни ТОЛЬКО JSON без пояснений вокруг:\n"
-    '{"text": "ответ", "items": [{"name": "Творог 5%", "g": 200, "kcal": 242, "p": 34, "f": 10, "c": 4, "salt": 0.2}]}\n'
-    "items — то, что конкретно советуешь съесть сейчас (0–5 позиций, граммы на его порцию), чтобы добавить в "
-    "дневник одной кнопкой; если совет не про конкретную еду — пустой список.")
+    "Формат: сначала сам ответ обычным текстом. В самом конце — отдельной последней строкой список того, что "
+    "конкретно советуешь съесть сейчас (0–5 позиций, граммы на его порцию), чтобы добавить в дневник одной кнопкой:\n"
+    'ITEMS: [{"name": "Творог 5%", "g": 200, "kcal": 242, "p": 34, "f": 10, "c": 4, "salt": 0.2}]\n'
+    "Если совет не про конкретную еду — ITEMS: []")
+CHAT_MODEL = os.environ.get("KCAL_CHAT_MODEL", "sonnet")  # быстрая модель: первые слова через 2–3 с
 
 
-def kcal_chat(app_ctx, whoop_ctx, history, question):
-    """Чат «Калорий»: совет, что съесть и что добрать. → {"text", "items": [{name, g, kcal, p, f, c, salt}]}."""
+def kcal_chat_prompt(app_ctx, whoop_ctx, history, question):
     talk = "\n".join(("Я: " if m.get("role") == "user" else "Нутрициолог: ") + str(m.get("text") or "")[:800]
                      for m in history[-12:])
-    q = (f"ДНЕВНИК ПИТАНИЯ СЕГОДНЯ (приложение «Калории»):\n{app_ctx}\n\n"
-         + (f"WHOOP И ПРОФИЛЬ:\n{whoop_ctx[:2500]}\n\n" if whoop_ctx else "")
-         + (f"РАЗГОВОР:\n{talk}\n\n" if talk else "") + f"ВОПРОС: {question}\n\n" + KCAL_CHAT)
-    out = claude(q)
-    try:
-        j = parse_json(out)
-    except AIError:  # ответил текстом — показываем как есть
-        return {"text": out.strip()[:2000], "items": []}
+    return (f"ДНЕВНИК ПИТАНИЯ СЕГОДНЯ (приложение «Калории»):\n{app_ctx}\n\n"
+            + (f"WHOOP И ПРОФИЛЬ:\n{whoop_ctx[:2500]}\n\n" if whoop_ctx else "")
+            + (f"РАЗГОВОР:\n{talk}\n\n" if talk else "") + f"ВОПРОС: {question}\n\n" + KCAL_CHAT)
+
+
+def chat_split(full):
+    """Ответ чата → (текст, блюда). Блюда — в последней строке «ITEMS: [...]» (или старый формат JSON {text, items})."""
+    full = (full or "").strip()
+    raw, i = None, full.rfind("ITEMS:")
+    if i >= 0:
+        text, tail = full[:i].strip(), full[i + 6:].strip()
+        try:
+            raw = json.loads(tail[:tail.rfind("]") + 1] if "]" in tail else tail)
+        except ValueError:
+            raw = None
+    elif full.startswith("{"):
+        try:
+            j = json.loads(full)
+            text, raw = str(j.get("text") or ""), j.get("items")
+        except ValueError:
+            text = full
+    else:
+        text = full
     items = []
-    for it in j.get("items") if isinstance(j.get("items"), list) else []:
+    for it in raw if isinstance(raw, list) else []:
         if isinstance(it, dict) and str(it.get("name") or "").strip() and _num(it.get("g"), 0, 3000) > 0:
             items.append({"name": str(it["name"]).strip()[:80], "g": _num(it.get("g"), 0, 3000),
                           "kcal": _num(it.get("kcal"), 0, 10000), "p": _num(it.get("p"), 1, 1000),
                           "f": _num(it.get("f"), 1, 1000), "c": _num(it.get("c"), 1, 1000),
                           "salt": _num(it.get("salt"), 1, 100)})
-    text = str(j.get("text") or "").strip()[:2000]
+    return text.strip()[:2000], items[:5]
+
+
+def kcal_chat(app_ctx, whoop_ctx, history, question):
+    """Чат «Калорий» целиком: совет, что съесть и что добрать. → {"text", "items": [{name, g, kcal, p, f, c, salt}]}."""
+    q = kcal_chat_prompt(app_ctx, whoop_ctx, history, question)
+    try:
+        out = claude(q, model=CHAT_MODEL or None)
+    except AIError:
+        if not CHAT_MODEL:
+            raise
+        out = claude(q)
+    text, items = chat_split(out)
     if not text and not items:
         raise AIError("Claude не ответил")
-    return {"text": text, "items": items[:5]}
+    return {"text": text, "items": items}
+
+
+def claude_stream(prompt, model=None, timeout=120):
+    """Ответ Claude по кусочкам (stream-json с частичными сообщениями) — генератор строк текста."""
+    os.makedirs(WORK, exist_ok=True)
+    cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+           "--append-system-prompt", persona(), *NO_TOOLS, *(["--model", model] if model else [])]
+    try:
+        p = subprocess.Popen(cmd, cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError:
+        raise AIError("Claude Code не установлен на сервере") from None
+    killer = threading.Timer(timeout, p.kill)
+    killer.start()
+    got = False
+    try:
+        for line in p.stdout:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            ev = d.get("event") or {}
+            if d.get("type") == "stream_event" and ev.get("type") == "content_block_delta":
+                t = (ev.get("delta") or {}).get("text") or ""
+                if t:
+                    got = True
+                    yield t
+            elif d.get("type") == "result" and d.get("is_error"):
+                raise AIError("Claude не ответил")
+        p.wait()
+    finally:
+        killer.cancel()
+        if p.poll() is None:
+            p.kill()
+    if not got:
+        log = (p.stderr.read() if p.stderr else "")[-800:].lower()
+        if any(w in log for w in ("rate limit", "usage limit", "limit reached", "429", "overloaded")):
+            raise AIError("у Claude закончился лимит, попробуй позже")
+        raise AIError("Claude не ответил")
 
 
 PHOTO_ASK = ("Что на фото? Если это скрин тренировки или показателей (WHOOP, часы, план) — коротко разбери по цифрам "
