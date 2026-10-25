@@ -163,7 +163,7 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 .metric .v small { font-size: 13px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 @media (max-width: 370px) { /* узкие экраны (iPhone SE, 320 px): БЖУ и соль влезают в строку */
   .metrics { gap: 8px; } .metric .v { font-size: 16px; letter-spacing: -.4px; } .metric .v small { font-size: 11px; } .metric .n { font-size: 12px; }
-  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tab { width: 84px; } }
+  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tab { width: 70px; } .fab { width: 56px; height: 56px; } .tabbar .in { padding: 0 14px; } }
 .wcard { padding: 16px; }
 .wbar { position: relative; height: 44px; border-radius: 22px; background: var(--track); overflow: hidden; }
 .wbar i { position: absolute; inset: 0 auto 0 0; border-radius: 22px; background: linear-gradient(90deg, color-mix(in srgb, var(--wtr) 75%, transparent), var(--wtr)); transition: width .9s var(--spring); }
@@ -210,7 +210,7 @@ button.cell:active { background: var(--fill); }
 .tabs { pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
 .tabs .lens { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 999px; background: var(--lens);
   transition: transform .55s var(--spring), width .45s var(--spring); }
-.tab { position: relative; z-index: 1; width: 94px; height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+.tab { position: relative; z-index: 1; width: 84px; height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   font-size: 10px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
 .tab:not([aria-current]) { color: var(--text-2); }
 .tab svg { width: 26px; height: 26px; transition: transform .35s var(--spring); }
@@ -224,6 +224,35 @@ body.min .tab span { opacity: 0; max-height: 0; }
 body.min .tab:not([aria-current]) { width: 0; opacity: 0; pointer-events: none; }
 body.min .fab { width: 54px; height: 54px; }
 
+.chat-list { display: flex; flex-direction: column; gap: 14px; margin-top: 22px; }
+.msg { max-width: 100%; font-size: 17px; line-height: 1.4; -webkit-user-select: text; user-select: text; animation: itemIn .45s var(--ios); }
+.msg.me { align-self: flex-end; max-width: 82%; background: var(--fill-2); padding: 10px 16px; border-radius: 22px 22px 6px 22px; }
+.msg.ai p { margin: 0 0 6px; } .msg.ai p:last-child { margin: 0; }
+.msg.ai ul { margin: 2px 0 6px; padding-left: 20px; }
+.sugg { margin-top: 10px; }
+.sugg .cell .add-one { width: 34px; height: 34px; border-radius: 17px; background: var(--fill); display: grid; place-items: center; flex: none; transition: transform .35s var(--spring), background .2s; }
+.sugg .cell .add-one svg { width: 16px; height: 16px; }
+.sugg .cell .add-one.done { background: var(--ink); color: var(--on-ink); }
+.sugg .all { margin-top: 8px; height: 44px; font-size: 15px; }
+.typing { display: flex; gap: 5px; padding: 6px 2px; }
+.typing i { width: 8px; height: 8px; border-radius: 4px; background: var(--text-2); animation: dot 1.2s infinite; }
+.typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+.chat-err { color: var(--bad); font-size: 15px; display: flex; align-items: center; gap: 10px; }
+.chat-err button { color: var(--p); font-weight: 600; }
+.starters { display: grid; gap: 8px; margin-top: 22px; }
+.starter { text-align: left; padding: 14px 18px; border-radius: 22px; background: var(--group); font-size: 16px; transition: transform .35s var(--spring); }
+.starter:active { transform: scale(.97); }
+.starter span { display: block; font-size: 13px; color: var(--text-2); margin-top: 2px; }
+.view.chat { padding-bottom: 76px; }
+.composer { position: fixed; z-index: 21; left: 50%; transform: translateX(-50%); width: min(508px, calc(100% - 32px));
+  bottom: calc(max(10px, calc(var(--safe-b) - 12px)) + 72px); display: flex; align-items: center; gap: 6px; padding: 5px 5px 5px 18px; border-radius: 999px; transition: bottom .25s var(--ios); }
+.composer input { flex: 1; min-width: 0; height: 40px; border: 0; background: none; font-size: 17px; }
+.composer input:focus { outline: none; }
+.composer .send { width: 40px; height: 40px; border-radius: 20px; background: var(--ink); color: var(--on-ink); display: grid; place-items: center; transition: transform .35s var(--spring), opacity .2s; }
+.composer .send svg { width: 18px; height: 18px; }
+.composer .send:disabled { opacity: .3; }
+body.kb .tabbar, body.kb .edge-bottom { opacity: 0; pointer-events: none; }
+body.kb .composer { bottom: calc(var(--kbh, 0px) + 8px); }
 .view { animation: viewIn .4s var(--ios); }
 @keyframes viewIn { from { opacity: 0; transform: scale(.985); } }
 
@@ -386,6 +415,8 @@ body.min .fab { width: 54px; height: 54px; }
         <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><circle cx="14" cy="14" r="10"/><circle cx="14" cy="14" r="5"/></svg><span>Сегодня</span></button>
       <button class="tab" data-tab="history">
         <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 22v-7M11 22V8M16 22v-9M21 22V11"/></svg><span>История</span></button>
+      <button class="tab" data-tab="chat">
+        <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"><path d="M5 13.2C5 8.7 9 5.5 14 5.5s9 3.2 9 7.7-4 7.7-9 7.7c-1.2 0-2.3-.2-3.3-.5L6 22l1.2-3.9C5.8 16.8 5 15.1 5 13.2z"/></svg><span>Чат</span></button>
     </div>
     <button class="fab glass" id="addTab" aria-label="Добавить еду">
       <svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M13 5v16M5 13h16"/></svg></button>
@@ -398,6 +429,10 @@ body.min .fab { width: 54px; height: 54px; }
     <button class="hbtn r glass press" id="sheetClose" aria-label="Закрыть"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></div>
   <div class="body" id="sheetBody"></div>
 </section>
+<form class="composer glass" id="composer" hidden autocomplete="off">
+  <input id="ask" placeholder="Что мне съесть?" enterkeyhint="send" maxlength="1000" aria-label="Вопрос">
+  <button class="send" id="send" aria-label="Отправить"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M5 9l5-5 5 5"/></svg></button>
+</form>
 <div class="toast glass" id="toast" role="status"></div>
 <input type="file" id="photoInput" accept="image/*" multiple hidden>
 
@@ -546,6 +581,7 @@ const DEFAULT = {
   salt: 5, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {},
   portion: 1.2, // мои порции больше обычных (Глеб 25.10) — «порция», «тарелка» в базе умножаются
   water: { train: 3000, rest: 2500 }, // мл в день; в день тренировки больше — пот
+  chat: [], // переписка с нутрициологом (последние 60)
 };
 const I = {
   plus: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>',
@@ -558,6 +594,7 @@ const I = {
   check: '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.3l2.6 2.6L11 4.4"/></svg>',
   x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
   undo: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5L3 9l4 4"/><path d="M3 9h9a5 5 0 0 1 0 10H9"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.8h6V7M6.5 7l.9 12.2h9.2L17.5 7"/></svg>',
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
 };
 
@@ -591,6 +628,10 @@ function clean(x) {
   out.custom = (Array.isArray(x.custom) ? x.custom : []).filter(f => f && f.name).map(food).slice(0, 200);
   out.recent = (Array.isArray(x.recent) ? x.recent : []).filter(f => f && f.name).map(f => ({ ...food(f), g: pos(f.g) })).slice(0, 20);
   if (x.weights && typeof x.weights === 'object') for (const [k, w] of Object.entries(x.weights)) if (DAY.test(k) && num(w) > 0) out.weights[k] = r1(num(w));
+  out.chat = (Array.isArray(x.chat) ? x.chat : []).filter(m => m && typeof m.text === 'string').slice(-60).map(m => ({
+    role: m.role === 'user' ? 'user' : 'coach', text: m.text.slice(0, 2000),
+    ...(Array.isArray(m.items) ? { items: m.items.filter(i => i && i.name).slice(0, 5).map(i => ({ name: String(i.name).slice(0, 80), g: pos(i.g), ...per(i) })) } : {}),
+    ...(Array.isArray(m.added) ? { added: m.added.map(Boolean).slice(0, 5) } : {}) }));
   return out;
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Не сохранилось: память недоступна'); } }
@@ -929,6 +970,94 @@ function renderHistory() {
   };
   $('#addW').onclick = openWeight;
 }
+
+/* ——— чат с нутрициологом (Claude на сервере Тренера) ——— */
+const STARTERS = [['Что мне съесть сейчас?', 'по времени и тому, что осталось до нормы'], ['Что добрать до нормы сегодня?', 'белок, калории, вода'],
+  ['Есть гречка, курица, яйца, творог, бананы — что лучше?', 'выберу и скажу, что добавить'], ['Что съесть перед тренировкой?', 'за 1,5–2 часа до бокса']];
+let chatBusy = false, chatErr = '';
+function chatContext() {
+  const d = today(), t = totals(d), type = dayType(d), g = S.goals[type], w = waterOf(d), now = new Date(), r = Math.round;
+  const ws = Object.entries(S.weights).sort();
+  return { date: d, time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+    day: type === 'train' ? 'тренировка (бокс)' : 'отдых', portion_coef: S.portion,
+    norm: { kcal: g.kcal, p: g.p, f: g.f, c: g.c, salt_max: S.salt, water_ml: waterGoal(d) },
+    eaten: { kcal: r(t.kcal), p: r(t.p), f: r(t.f), c: r(t.c), salt: r1(t.salt), water_ml: w },
+    left: { kcal: r(g.kcal - t.kcal), p: r(g.p - t.p), f: r(g.f - t.f), c: r(g.c - t.c), salt: r1(S.salt - t.salt), water_ml: waterGoal(d) - w },
+    meals: day(d).items.slice(0, 30).map(i => `${mealName(i.meal)}: ${i.name}${i.g ? ' ' + r(i.g) + ' г' : ''}, ${r(i.kcal)} ккал`),
+    ...(ws.length ? { weight_kg: ws[ws.length - 1][1] } : {}) };
+}
+function chatText(t) { // абзацы и пункты «- …» → html, всё экранировано
+  const lines = esc(t).split(/\n+/); let html = '', list = [];
+  const flush = () => { if (list.length) { html += `<ul>${list.map(l => `<li>${l}</li>`).join('')}</ul>`; list = []; } };
+  for (const l of lines) { const m = l.match(/^\s*[-•*]\s+(.*)/); if (m) list.push(m[1]); else { flush(); if (l.trim()) html += `<p>${l}</p>`; } }
+  flush(); return html;
+}
+function renderChat() {
+  $('#navTitle').textContent = 'Чат'; $('#todayBtn').hidden = true;
+  setActions(S.chat.length ? `<button class="ibtn press" id="clearChat" aria-label="Очистить чат">${I.trash}</button>` : '');
+  const msg = (m, i) => m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
+    : `<div class="msg ai">${chatText(m.text)}${m.items && m.items.length ? `<div class="sugg"><div class="list">${m.items.map((it, j) => `<div class="cell"><span class="t"><div class="n">${esc(it.name)}</div>
+        <div class="m num">${fmt(it.g)} г · ${fmt(it.kcal)} ккал · Б ${Math.round(it.p)} · Ж ${Math.round(it.f)} · У ${Math.round(it.c)}</div></span>
+        <button class="add-one${m.added && m.added[j] ? ' done' : ''}" data-m="${i}" data-j="${j}" aria-label="Добавить в дневник">${m.added && m.added[j] ? I.check : I.plus}</button></div>`).join('')}</div>
+        ${m.items.length > 1 && !(m.added || []).every(Boolean) ? `<button class="btn soft all" data-all="${i}">Добавить всё в дневник</button>` : ''}</div>` : ''}</div>`;
+  $('#app').innerHTML = `<div class="view chat">
+    <h1 class="large">Чат</h1><div class="subtitle">Спроси, что съесть и что добрать — нутрициолог видит твой дневник за сегодня</div>
+    ${!getToken() ? `<div class="card" style="margin-top:18px"><div class="lead" style="margin:0 0 12px;text-align:left">Чат отвечает через твоего Тренера. Подключи один раз — кодом из <b>/site</b>.</div><button class="btn" id="chatPair">Подключить</button></div>` : ''}
+    ${S.chat.length ? `<div class="chat-list" id="msgs">${S.chat.map(msg).join('')}</div>`
+      : `<div class="starters">${STARTERS.map(([q, h]) => `<button class="starter" data-q="${esc(q)}">${esc(q)}<span>${h}</span></button>`).join('')}</div>`}
+    ${chatBusy ? `<div class="typing" aria-label="Пишет"><i></i><i></i><i></i></div>` : ''}
+    ${chatErr ? `<div class="chat-err">${esc(chatErr)}<button id="chatRetry">Повторить</button></div>` : ''}
+  </div>`;
+  const app = $('#app');
+  const pairB = $('#chatPair'); if (pairB) pairB.onclick = () => openPair(() => { closeSheet(); renderChat(); toast('Чат подключён'); });
+  const clr = $('#clearChat'); if (clr) clr.onclick = () => { if (confirm('Очистить переписку?')) { S.chat = []; chatErr = ''; save(); renderChat(); } };
+  app.querySelectorAll('[data-q]').forEach(b => b.onclick = () => sendChat(b.dataset.q));
+  const rt = $('#chatRetry'); if (rt) rt.onclick = () => sendChat(null, true);
+  app.querySelectorAll('[data-j]').forEach(b => b.onclick = () => addSuggested(+b.dataset.m, [+b.dataset.j]));
+  app.querySelectorAll('[data-all]').forEach(b => b.onclick = () => { const m = S.chat[+b.dataset.all]; addSuggested(+b.dataset.all, m.items.map((_, j) => j)); });
+  $('#send').disabled = chatBusy || !$('#ask').value.trim();
+}
+function addSuggested(mi, js) { // предложенное нутрициологом — в дневник за сегодня, в текущий приём пищи
+  const m = S.chat[mi]; if (!m || !m.items) return;
+  m.added = m.added || m.items.map(() => false);
+  const prev = cur; cur = today(); const before = totals(cur).kcal; let n = 0, kcal = 0;
+  for (const j of js) { const it = m.items[j]; if (!it || m.added[j]) continue;
+    const k = it.g > 0 ? 100 / it.g : 0;
+    addItem(mealNow(), { name: it.name, g: it.g, kcal: it.kcal, p: it.p, f: it.f, c: it.c, salt: it.salt || 0,
+      per100: { kcal: it.kcal * k, p: it.p * k, f: it.f * k, c: it.c * k, salt: (it.salt || 0) * k }, unit: null }, true);
+    m.added[j] = true; n++; kcal += it.kcal; }
+  save(); buzz();
+  if (n) changed(before, `В «${mealName(mealNow())}» · ${fmt(kcal)} ккал`); // до возврата дня: норму считаем за сегодня
+  cur = prev; renderChat();
+}
+const chatEnd = () => requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: reduce() ? 'auto' : 'smooth' }));
+async function sendChat(q, retry) {
+  if (chatBusy) return;
+  if (!retry) { q = String(q || '').trim(); if (!q) return; }
+  if (!getToken()) return openPair(() => { closeSheet(); renderChat(); sendChat(q, retry); });
+  if (!retry) { S.chat.push({ role: 'user', text: q.slice(0, 1000) }); S.chat = S.chat.slice(-60); save(); $('#ask').value = ''; }
+  const last = [...S.chat].reverse().find(m => m.role === 'user'); if (!last) return;
+  chatBusy = true; chatErr = ''; if (view === 'chat') renderChat(); chatEnd();
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 120000);
+  try {
+    const hist = S.chat.slice(0, S.chat.lastIndexOf(last)).slice(-12).map(m => ({ role: m.role, text: m.text }));
+    const r = await fetch(API + '/api/kcal/chat', { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+      body: JSON.stringify({ question: last.text, messages: hist, context: chatContext() }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { setToken(''); throw new Error('Нужно подключить заново'); }
+    if (!r.ok || !j.text && !(j.items || []).length) throw new Error(j.error || 'Не получилось ответить');
+    S.chat.push({ role: 'coach', text: String(j.text || ''), items: (Array.isArray(j.items) ? j.items : []).filter(i => i && i.name && num(i.g) > 0).slice(0, 5)
+      .map(i => ({ name: String(i.name).slice(0, 80), g: num(i.g), kcal: num(i.kcal), p: num(i.p), f: num(i.f), c: num(i.c), salt: num(i.salt) })) });
+    S.chat = S.chat.slice(-60); save(); buzz();
+  } catch (e) {
+    chatErr = e.name === 'AbortError' ? 'Слишком долго — попробуй ещё раз' : e instanceof TypeError ? 'Нет связи с сервером' : e.message;
+  } finally {
+    clearTimeout(timer); chatBusy = false;
+    if (view === 'chat') { renderChat(); chatEnd(); }
+  }
+}
+$('#composer').onsubmit = e => { e.preventDefault(); sendChat($('#ask').value); };
+$('#ask').oninput = () => { $('#send').disabled = chatBusy || !$('#ask').value.trim(); };
 
 /* ——— листы ——— */
 let onSheetClose = null;
@@ -1484,11 +1613,13 @@ function toast(text, action, fn) {
 function render() {
   document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
   unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min'); placeLens();
-  view === 'today' ? renderToday(true) : renderHistory();
+  $('#composer').hidden = view !== 'chat';
+  view === 'today' ? renderToday(true) : view === 'chat' ? renderChat() : renderHistory();
 }
 if (window.visualViewport) visualViewport.addEventListener('resize', () => { // клавиатура не закрывает низкий лист
   const kb = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
   $('#sheet').style.setProperty('--kb', (kb > 80 ? kb : 0) + 'px');
+  document.body.style.setProperty('--kbh', (kb > 80 ? kb : 0) + 'px'); document.body.classList.toggle('kb', kb > 80); // чат: поле над клавиатурой
 });
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 $('#tabs').addEventListener('click', e => { // сжатое меню: нажатие раскрывает его, как в iOS

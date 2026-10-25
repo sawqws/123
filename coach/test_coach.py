@@ -1623,6 +1623,34 @@ class KcalTest(unittest.TestCase):
     def meals(self):
         return self.db.q("SELECT COUNT(*) AS n FROM meals")[0]["n"]
 
+    def test_chat(self):
+        tok = self.pair()
+        ctx = {"time": "18:40", "day": "тренировка", "left": {"kcal": 1200, "p": 60}, "portion": 1.2}
+        ans = ('{"text": "Добери белок: творог и банан.", "items": [{"name": "Творог 5%", "g": "240", "kcal": 290, "p": 41, '
+               '"f": 12, "c": 4, "salt": 0.2}, {"name": "", "g": 10}, {"name": "Банан", "g": 0}]}')
+        with mock.patch.object(ai, "claude", return_value=ans) as c, \
+                mock.patch.object(coach, "context", return_value=("Восстановление 80%", None)):
+            r = kcal_call("/api/kcal/chat", {"question": "что съесть?", "context": ctx,
+                                             "messages": [{"role": "user", "text": "привет"}, {"role": "coach", "text": "здравствуй"}]}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.json, {"text": "Добери белок: творог и банан.",
+                                  "items": [{"name": "Творог 5%", "g": 240, "kcal": 290, "p": 41.0, "f": 12.0, "c": 4.0, "salt": 0.2}]})
+        prompt = c.call_args[0][0]
+        for part in ('"left": {"kcal": 1200', "Восстановление 80%", "Нутрициолог: здравствуй", "ВОПРОС: что съесть?", "никаких диет"):
+            self.assertIn(part, prompt)
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        with mock.patch.object(ai, "claude", return_value="Просто текстом: съешь гречку."):
+            self.assertEqual(kcal_call("/api/kcal/chat", {"question": "а?"}, token=tok).json,
+                             {"text": "Просто текстом: съешь гречку.", "items": []})
+        self.assertEqual(kcal_call("/api/kcal/chat", {"question": "  "}, token=tok).code, 400)
+        self.assertEqual(kcal_call("/api/kcal/chat", {"question": "а?"}).code, 401)
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):
+            self.assertEqual(kcal_call("/api/kcal/chat", {"question": "а?"}, token=tok).code, 503)
+        coach.pwa._hits.clear()
+        key = "kcalchat:" + __import__("hashlib").sha256(tok.encode()).hexdigest()
+        coach.pwa._hits[key] = [time.time()] * coach.CHAT_RATE[0]
+        self.assertEqual(kcal_call("/api/kcal/chat", {"question": "а?"}, token=tok).code, 429)
+
     def test_shop(self):
         hits = {"hits": [
             {"product_name": "Сырок глазированный &quot;Ваниль&quot;", "brands": ["Чудо", "x"], "serving_quantity": 40,
