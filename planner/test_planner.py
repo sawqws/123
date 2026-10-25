@@ -595,6 +595,7 @@ class BotTest(unittest.TestCase):
         for name, port in (("coach", 8789), ("hub", 8790), ("eye", 8791), ("kpp", 8792), ("avito", 8793), ("agent", 8794),
                            ("apps", 8795)):
             self.assertIn(f"https://{name}.2-27-206-165.sslip.io {{\n\treverse_proxy 127.0.0.1:{port}\n}}", conf)
+        self.assertTrue(conf.endswith(f"import {planner.CADDY_EXTRA}/*.caddy\n"))  # сайты не из этого репозитория
         self.db.meta("owner", U)
         with mock.patch.object(planner, "public_url", ""):
             self.assertTrue(planner.use_url(cands[0]))
