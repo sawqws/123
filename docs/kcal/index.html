@@ -91,7 +91,7 @@ svg { display: block; }
 .press { transition: transform .35s var(--spring), opacity .2s; }
 .press:active { transform: scale(.9); }
 
-.app { max-width: 540px; margin: 0 auto; padding: calc(8px + var(--safe-t)) 16px calc(120px + var(--safe-b)); }
+.app { max-width: 540px; margin: 0 auto; padding: calc(8px + var(--safe-t)) max(16px, env(safe-area-inset-right)) calc(120px + var(--safe-b)) max(16px, env(safe-area-inset-left)); }
 
 /* верх: при прокрутке — ровная полоса с размытием (iOS 27), маленький заголовок */
 .edge-top { position: fixed; top: 0; left: 0; right: 0; z-index: 30; height: calc(56px + var(--safe-t)); pointer-events: none;
@@ -241,7 +241,7 @@ body.min .fab { width: 54px; height: 54px; }
   box-shadow: 0 -0.5px 0 var(--rim), 0 -10px 40px rgba(0,0,0,.25); transition: transform .55s var(--ios); }
 .sheet .list, .sheet .card { background: var(--sheet-group); }
 .sheet .cell { background: var(--sheet-group); }
-.sheet.short { height: auto; max-height: calc(100dvh - 24px - var(--safe-t)); left: 8px; right: 8px; bottom: max(8px, calc(var(--safe-b) - 8px));
+.sheet.short { height: auto; max-height: calc(100dvh - 24px - var(--safe-t)); left: 8px; right: 8px; bottom: calc(max(8px, calc(var(--safe-b) - 8px)) + var(--kb, 0px)); transition: transform .55s var(--ios), bottom .25s var(--ios);
   border-radius: 40px; background: var(--glass-strong); -webkit-backdrop-filter: blur(30px) saturate(1.9); backdrop-filter: blur(30px) saturate(1.9);
   box-shadow: 0 0 0 .5px var(--edge), inset 0 0 0 .5px var(--rim), inset 0 1.2px 0 var(--spec), var(--drop); transform: translateY(calc(100% + 40px)); }
 @media (min-width: 576px) { .sheet.short { left: 0; right: 0; } }
@@ -314,6 +314,7 @@ body.min .fab { width: 54px; height: 54px; }
 @keyframes dot { 0%, 80%, 100% { opacity: .25; transform: scale(.8); } 40% { opacity: 1; transform: none; } }
 .comment { margin: 14px 6px 0; font-size: 15px; color: var(--text-2); }
 .pi { gap: 10px; }
+.pi .n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
 .pi .check { width: 26px; height: 26px; border-radius: 13px; border: 1.5px solid var(--text-3); display: grid; place-items: center; flex: none; transition: background .2s, border-color .2s, transform .35s var(--spring); }
 .pi .check:active { transform: scale(.85); }
 .pi .check svg { width: 14px; height: 14px; color: var(--on-ink); opacity: 0; transition: opacity .2s; }
@@ -324,7 +325,7 @@ body.min .fab { width: 54px; height: 54px; }
 .mini button { width: 32px; height: 32px; border-radius: 16px; background: var(--fill); display: grid; place-items: center; transition: transform .35s var(--spring); }
 .mini button:active { transform: scale(.85); }
 .mini button svg { width: 12px; height: 12px; }
-.mini .g { min-width: 56px; text-align: center; font-size: 15px; font-weight: 600; }
+.mini .g { min-width: 48px; text-align: center; font-size: 15px; font-weight: 600; }
 .sum-line { display: flex; justify-content: space-between; margin: 14px 6px 18px; font-size: 15px; color: var(--text-2); }
 .sum-line b { color: var(--text); }
 .code { display: flex; justify-content: center; margin: 26px 0 8px; }
@@ -531,13 +532,34 @@ const I = {
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
 };
 
-let S = load();
 function load() {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && s.goals) return Object.assign(structuredClone(DEFAULT), s);
-  } catch (e) {}
+  try { const s = clean(JSON.parse(localStorage.getItem(KEY))); if (s) return s; } catch (e) {}
   return structuredClone(DEFAULT);
+}
+/* данные из памяти или из файла копии → только известные поля, числа — числами, id — без спецсимволов */
+function clean(x) {
+  if (!x || typeof x !== 'object' || !x.goals || typeof x.goals !== 'object' || !x.days || typeof x.days !== 'object') return null;
+  const pos = v => Math.max(0, num(v)), DAY = /^\d{4}-\d{2}-\d{2}$/;
+  const unit = u => u && typeof u === 'object' && num(u.g) > 0 ? { name: String(u.name || 'порция').slice(0, 30), g: num(u.g) } : null;
+  const per = f => ({ kcal: pos(f.kcal), p: pos(f.p), f: pos(f.f), c: pos(f.c), salt: pos(f.salt) });
+  const goals = k => { const o = {}, src = x.goals[k] || {}; for (const q in DEFAULT.goals[k]) o[q] = num(src[q]) > 0 ? Math.round(num(src[q])) : DEFAULT.goals[k][q]; return o; };
+  const out = structuredClone(DEFAULT);
+  out.goals = { train: goals('train'), rest: goals('rest') };
+  out.salt = num(x.salt) > 0 ? r1(num(x.salt)) : DEFAULT.salt;
+  if (Array.isArray(x.trainDays)) out.trainDays = [...new Set(x.trainDays.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6))].sort();
+  for (const [k, d] of Object.entries(x.days)) {
+    if (!DAY.test(k) || !d || typeof d !== 'object') continue;
+    const items = (Array.isArray(d.items) ? d.items : []).filter(i => i && typeof i === 'object').map((i, n) => ({
+      id: String(i.id ?? '').replace(/[^\w-]/g, '').slice(0, 40) || `${k}-${n}`, meal: MEALS.some(m => m[0] === i.meal) ? i.meal : 'snack',
+      name: String(i.name || 'Без названия').slice(0, 80), g: pos(i.g), ...per(i),
+      ...(i.per100 && typeof i.per100 === 'object' ? { per100: per(i.per100), unit: unit(i.unit) } : {}) }));
+    out.days[k] = { items, ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}) };
+  }
+  const food = f => ({ name: String(f.name).slice(0, 80), ...per(f), unit: unit(f.unit) });
+  out.custom = (Array.isArray(x.custom) ? x.custom : []).filter(f => f && f.name).map(food).slice(0, 200);
+  out.recent = (Array.isArray(x.recent) ? x.recent : []).filter(f => f && f.name).map(f => ({ ...food(f), g: pos(f.g) })).slice(0, 20);
+  if (x.weights && typeof x.weights === 'object') for (const [k, w] of Object.entries(x.weights)) if (DAY.test(k) && num(w) > 0) out.weights[k] = r1(num(w));
+  return out;
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Не сохранилось: память недоступна'); } }
 const getToken = () => { try { return localStorage.getItem(TOKEN) || ''; } catch (e) { return ''; } };
@@ -558,6 +580,7 @@ const norm = s => s.toLowerCase().replace(/ё/g, 'е');
 const buzz = () => { try { navigator.vibrate && navigator.vibrate(8); } catch (e) {} };
 const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+let S = load(); // после объявления num/r1 — load() ими пользуется
 let view = 'today', cur = today(), histRange = 7;
 
 function day(d) { return S.days[d] || { items: [] }; }
@@ -594,6 +617,7 @@ const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 &
 function setActions(html) { $('#actions').innerHTML = html; }
 let lastY = 0;
 addEventListener('scroll', () => {
+  if (lockY != null) return; // лист открыт — меню и полосу не трогаем
   const y = scrollY, b = document.body.classList;
   b.toggle('scrolled', y > 46);
   if (y < 80 || y < lastY - 6) b.remove('min'); else if (y > lastY + 6) b.add('min');
@@ -619,7 +643,7 @@ function placeSeg(seg, squish) { // «линза» сегментов; squish �
 }
 
 /* ——— «Сегодня» ——— */
-const shown = { left: null, pct: null };
+const shown = { left: null };
 function ringSvg(pct, size, stroke, color) {
   const r = (size - stroke) / 2, c = 2 * Math.PI * r, off = c * (1 - Math.min(1, pct));
   return `<svg viewBox="0 0 ${size} ${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--track)" stroke-width="${stroke}"/>
@@ -640,7 +664,7 @@ function renderToday(animate) {
     <button class="ibtn press" id="gear" aria-label="Настройки">${I.gear}</button>`);
   const salt = t.salt / S.salt;
   const metric = (k, n, val, goal, unit, color) => `<div class="metric" style="--dot:${color}"><div class="n">${n}</div>
-    <div class="v num">${val}<small> / ${goal} ${unit}</small></div><div class="b"><i data-w="${Math.min(100, (num(val) / goal) * 100 || 0)}%" style="width:${animate ? 0 : Math.min(100, (num(val) / goal) * 100 || 0)}%"></i></div></div>`;
+    <div class="v num">${val}<small> / ${k === 's' ? dec(goal) : goal} ${unit}</small></div><div class="b"><i data-w="${Math.min(100, (num(val) / goal) * 100 || 0)}%" style="width:${animate ? 0 : Math.min(100, (num(val) / goal) * 100 || 0)}%"></i></div></div>`;
   $('#app').innerHTML = `<div class="view">
     <h1 class="large">${dateTitle(cur)}</h1>
     <div class="subtitle">${WEEK_FULL[wdi(cur)]}, ${x.getDate()} ${MONTHS[x.getMonth()]}${st > 1 ? `<span class="streak">${I.flame}${st} ${plural(st, 'день', 'дня', 'дней')} подряд</span>` : ''}</div>
@@ -668,8 +692,8 @@ function renderToday(animate) {
       const its = d.items.filter(i => i.meal === m);
       const sum = its.reduce((a, i) => a + i.kcal, 0);
       return `<section class="sec"><div class="sec-h"><h2>${n}</h2><span class="num">${sum ? fmt(sum) + ' ккал' : ''}</span></div>
-        <div class="list">${its.map(i => `<div class="swipe" data-sw="${i.id}"><button class="del" data-del="${i.id}">Удалить</button>
-          <button class="cell${i.id === lastAdded ? ' item-in' : ''}" data-item="${i.id}"><span class="t"><div class="n">${esc(i.name)}</div>
+        <div class="list">${its.map(i => `<div class="swipe" data-sw="${esc(i.id)}"><button class="del" data-del="${esc(i.id)}">Удалить</button>
+          <button class="cell${i.id === lastAdded ? ' item-in' : ''}" data-item="${esc(i.id)}"><span class="t"><div class="n">${esc(i.name)}</div>
           <div class="m num">${i.g ? (i.g < 10 ? dec(i.g) : fmt(i.g)) + ' г · ' : ''}Б ${Math.round(i.p)} · Ж ${Math.round(i.f)} · У ${Math.round(i.c)}${i.salt >= 0.05 ? ' · соль ' + dec(i.salt) : ''}</div></span>
           <span class="k num">${fmt(i.kcal)}</span></button></div>`).join('')}
           <button class="cell add" data-add="${m}">${I.plus}Добавить<span class="ph" data-photo="${m}" role="button" aria-label="По фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</span></button></div></section>`;
@@ -685,11 +709,9 @@ function renderToday(animate) {
     const arc = $('#ring .arc'), c = +arc.getAttribute('stroke-dasharray');
     arc.style.strokeDashoffset = pct > 0 ? Math.min(c * (1 - Math.min(1, pct)), c - 0.01) : c;
   }));
-  if (shown.pct != null && shown.pct < 1 && pct >= 1 && !animate) { toast('Норма на сегодня закрыта'); buzz(); }
-  shown.pct = pct;
   $('#gear').onclick = openSettings;
   $('#camBtn').onclick = () => photoFlow(mealNow());
-  $('#week').onclick = e => { const b = e.target.closest('[data-d]'); if (b && b.dataset.d !== cur) { cur = b.dataset.d; shown.left = shown.pct = null; buzz(); renderToday(true); } };
+  $('#week').onclick = e => { const b = e.target.closest('[data-d]'); if (b && b.dataset.d !== cur) { cur = b.dataset.d; shown.left = null; buzz(); renderToday(true); } };
   swipeWeek($('#week'));
   $('#seg').onclick = e => {
     const b = e.target.closest('button'), seg = $('#seg'); if (!b || b.getAttribute('aria-pressed') === 'true') return;
@@ -708,12 +730,13 @@ let lastAdded = null;
 function swipeWeek(el) {
   let x0 = null, y0 = 0;
   el.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener('touchcancel', () => { x0 = null; });
   el.addEventListener('touchend', e => {
     if (x0 == null) return;
     const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
     if (Math.abs(dx) < 50 || Math.abs(dy) > Math.abs(dx)) return;
     const next = addDays(cur, dx < 0 ? 7 : -7);
-    cur = next > today() ? today() : next; shown.left = shown.pct = null; buzz(); renderToday(true);
+    cur = next > today() ? today() : next; shown.left = null; buzz(); renderToday(true);
   });
 }
 function swipeRow(row) { // свайп влево — «Удалить», как в iOS
@@ -727,6 +750,7 @@ function swipeRow(row) { // свайп влево — «Удалить», как
     dx = Math.min(0, Math.max(-120, mx + (open ? -88 : 0)));
     cell.style.transform = `translateX(${dx}px)`; cell.dataset.moved = 1; row.classList.add('sw');
   }, { passive: true });
+  row.addEventListener('touchcancel', () => { if (x0 == null) return; x0 = null; open = false; cell.style.transition = ''; cell.style.transform = ''; row.classList.remove('sw'); });
   row.addEventListener('touchend', () => {
     if (x0 == null) return; x0 = null; cell.style.transition = '';
     if (lock !== 'x') { if (open) { open = false; cell.style.transform = ''; cell.dataset.moved = 1; setTimeout(() => !open && row.classList.remove('sw'), 350); } return; }
@@ -790,7 +814,7 @@ function renderHistory() {
         <div class="kpis">
           <div class="kpi"><div class="n">В среднем</div><div class="v num">${logged.length ? fmt(avg) : '—'}</div></div>
           <div class="kpi"><div class="n">В норме</div><div class="v num">${inNorm}<small> из ${logged.length}</small></div></div>
-          <div class="kpi"><div class="n">Соль</div><div class="v num">${logged.length ? dec(avgSalt) : '—'}<small> г</small></div></div>
+          <div class="kpi"><div class="n">Соль</div><div class="v num">${logged.length ? dec(avgSalt) + '<small> г</small>' : '—'}</div></div>
         </div>
         <div class="chart"><svg viewBox="0 -4 ${W} ${H + (labels ? 28 : 6)}" role="img" aria-label="Калории по дням">
           <line x1="0" x2="${W}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" stroke="var(--text-3)" stroke-width="1" stroke-dasharray="3 4"/>${bars}${labels}</svg></div>
@@ -820,6 +844,18 @@ function renderHistory() {
 
 /* ——— листы ——— */
 let onSheetClose = null;
+let lockY = null;
+function lockScroll() { // iOS: body fixed — фон под листом не едет
+  if (lockY != null) return;
+  lockY = scrollY;
+  Object.assign(document.body.style, { position: 'fixed', top: -lockY + 'px', left: '0', right: '0' });
+}
+function unlockScroll() {
+  if (lockY == null) return;
+  const y = lockY;
+  Object.assign(document.body.style, { position: '', top: '', left: '', right: '' });
+  scrollTo(0, y); lockY = null;
+}
 function openSheet(title, html, after, opts = {}) {
   const sh = $('#sheet'), sc = $('#scrim'), body = $('#sheetBody');
   $('#sheetTitle').textContent = title;
@@ -828,6 +864,7 @@ function openSheet(title, html, after, opts = {}) {
   sh.classList.toggle('short', !!opts.short);
   body.innerHTML = html; body.scrollTop = 0;
   body.classList.remove('slide'); if (opts.slide) { void body.offsetWidth; body.classList.add('slide'); }
+  lockScroll();
   if (sh.hidden) {
     sh.hidden = sc.hidden = false;
     requestAnimationFrame(() => requestAnimationFrame(() => { sh.classList.add('on'); sc.classList.add('on'); }));
@@ -840,6 +877,7 @@ function closeSheet() {
   sh.style.transform = '';
   sh.classList.remove('on'); sc.classList.remove('on');
   setTimeout(() => { if (!sh.classList.contains('on')) sh.hidden = sc.hidden = true; }, 500);
+  unlockScroll();
   if (document.activeElement) document.activeElement.blur();
   photoReq && photoReq.abort(); photoReq = null;
   const f = onSheetClose; onSheetClose = null; f && f();
@@ -850,7 +888,8 @@ $('#sheetClose').onclick = closeSheet;
   const sh = $('#sheet'), head = sh.querySelector('.head'); let y0 = null, dy = 0;
   head.addEventListener('touchstart', e => { if (e.target.closest('button')) return; y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
   head.addEventListener('touchmove', e => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); sh.style.transform = `translateY(${dy}px)`; }, { passive: true });
-  head.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; sh.style.transition = ''; if (dy > 110) closeSheet(); else sh.style.transform = ''; });
+  const end = () => { if (y0 == null) return; y0 = null; sh.style.transition = ''; if (dy > 110) closeSheet(); else sh.style.transform = ''; };
+  head.addEventListener('touchend', end); head.addEventListener('touchcancel', end);
 })();
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
@@ -859,8 +898,8 @@ const FOODS = BASE.map(toFood), DISH = DISHES.map(f => ({ ...toFood(f), dish: tr
 const macroLine = f => `${fmt(f.kcal)} ккал · Б ${dec(f.p)} · Ж ${dec(f.f)} · У ${dec(f.c)}`;
 const mealName = m => MEALS.find(x => x[0] === m)[1];
 
-function openAdd(meal) {
-  let m = meal || mealNow(), q = '';
+function openAdd(meal, query) {
+  let m = meal || mealNow(), q = query || '';
   const draw = () => {
     const s = norm(q.trim()), all = S.custom.map(x => ({ ...x, custom: true })).concat(DISH, FOODS);
     let html = '';
@@ -886,7 +925,7 @@ function openAdd(meal) {
     const res = $('#results'); res.innerHTML = html;
     res.onclick = e => {
       const b = e.target.closest('[data-k]');
-      if (b) { const f = pool[b.dataset.k]; if (b.dataset.k[0] === 'r' && !f.g) addItem(m, { name: f.name, g: 0, kcal: f.kcal, p: f.p, f: f.f, c: f.c, salt: f.salt || 0 }); else openPortion(f, m, null, b.dataset.k[0] === 'r' ? f.g : 0, () => openAdd(m)); }
+      if (b) { const f = pool[b.dataset.k]; if (b.dataset.k[0] === 'r' && !f.g) addItem(m, { name: f.name, g: 0, kcal: f.kcal, p: f.p, f: f.f, c: f.c, salt: f.salt || 0 }); else openPortion(f, m, null, b.dataset.k[0] === 'r' ? f.g : 0, () => openAdd(m, q)); }
       else if (e.target.closest('#own')) openCustom(m);
       else if (e.target.closest('#quick')) openQuick(m);
     };
@@ -900,6 +939,7 @@ function openAdd(meal) {
     requestAnimationFrame(() => placeSeg(seg));
     seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz(); };
     const inp = $('#q', body);
+    inp.value = q; $('#photoCta', body).hidden = !!q.trim();
     inp.oninput = () => { q = inp.value; draw(); $('#photoCta', body).hidden = !!q.trim(); };
     $('#photoCta', body).onclick = () => photoFlow(m);
     draw();
@@ -944,30 +984,39 @@ function openPortion(food, meal, item, grams, back) {
       const k = gr / 100;
       const data = { name: food.name, g: gr, kcal: per.kcal * k, p: per.p * k, f: per.f * k, c: per.c * k, salt: (per.salt || 0) * k,
         per100: { kcal: per.kcal, p: per.p, f: per.f, c: per.c, salt: per.salt || 0 }, unit: food.unit || null };
-      if (item) { Object.assign(item, data); save(); closeSheet(); renderToday(false); toast('Сохранено'); }
+      if (item) { const before = totals(cur).kcal; Object.assign(item, data); save(); closeSheet(); renderToday(false); changed(before, 'Сохранено'); }
       else addItem(meal, data);
     };
     if (item) $('#del', body).onclick = () => deleteItem(item);
   }, { back, slide: !!back });
 }
 
+function changed(before, text) { // тост после добавления/правки; перешли норму — говорим об этом
+  const g = S.goals[dayType(cur)].kcal, after = totals(cur).kcal;
+  if (before < g && after >= g) { toast(cur === today() ? 'Норма на сегодня закрыта' : 'Норма дня закрыта'); buzz(); }
+  else toast(text);
+}
 function addItem(meal, data, many) {
-  const d = S.days[cur] = day(cur);
+  const before = totals(cur).kcal, d = S.days[cur] = day(cur);
   const it = Object.assign({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), meal }, data);
   d.items.push(it); lastAdded = it.id;
   const per = data.per100 || { kcal: data.kcal, p: data.p, f: data.f, c: data.c, salt: data.salt || 0 };
   S.recent = [{ name: data.name, g: data.g || 0, unit: data.unit || null, ...per }].concat(S.recent.filter(r => r.name !== data.name)).slice(0, 20);
   save();
   if (many) return;
-  buzz(); closeSheet();
-  toast(`${data.name.length > 22 ? data.name.slice(0, 21) + '…' : data.name} · ${fmt(data.kcal)} ккал`);
-  renderToday(false); // после тоста: если норма закрылась, покажется «Норма на сегодня закрыта»
+  buzz(); closeSheet(); renderToday(false);
+  changed(before, `${data.name.length > 22 ? data.name.slice(0, 21) + '…' : data.name} · ${fmt(data.kcal)} ккал`);
 }
 function deleteItem(item) {
   if (!item) return;
-  const d = day(cur), i = d.items.indexOf(item);
+  const dk = cur, d = day(dk), i = d.items.indexOf(item);
+  if (i < 0) return;
   d.items.splice(i, 1); save(); closeSheet(); renderToday(false); buzz();
-  toast('Удалено', 'Вернуть', () => { d.items.splice(i, 0, item); S.days[cur] = d; save(); renderToday(false); });
+  toast('Удалено', 'Вернуть', () => { // в тот день, откуда удалили, даже если уже открыт другой
+    if (d.items.includes(item)) return;
+    d.items.splice(Math.min(i, d.items.length), 0, item); S.days[dk] = d; save();
+    if (view === 'today' && cur === dk) renderToday(false);
+  });
 }
 function openItem(id) {
   const it = day(cur).items.find(i => i.id === id); if (!it) return;
@@ -992,14 +1041,15 @@ function openCustom(meal) {
       if (!name) { toast('Напиши название'); $('#cn', body).focus(); return; }
       if (kcal <= 0) { toast('Укажи калории на 100 г'); $('#ck', body).focus(); return; }
       const ug = num($('#cu', body).value);
-      const f = { name, kcal, p: num($('#cp', body).value), f: num($('#cf', body).value), c: num($('#cc', body).value), salt: num($('#cs', body).value), unit: ug > 0 ? { name: 'порция', g: ug } : null };
+      const pos = id => Math.max(0, num($(id, body).value));
+      const f = { name, kcal, p: pos('#cp'), f: pos('#cf'), c: pos('#cc'), salt: pos('#cs'), unit: ug > 0 ? { name: 'порция', g: ug } : null };
       S.custom = [f].concat(S.custom.filter(x => x.name !== name)); save();
       openPortion(f, meal, null, 0, () => openAdd(meal));
     };
   }, { back: () => openAdd(meal), slide: true });
 }
 function openQuick(meal, item) {
-  const v = k => item ? (k === 'salt' ? dec(item[k] || 0) : Math.round(item[k])) : '';
+  const v = k => item ? dec(item[k] || 0) : '';
   const html = `<div class="group-t">Что съел</div>${formRows([['qn', 'Что съел', item ? esc(item.name) : '', 'Например, обед в столовой', 1]])}
     <div class="group-t">Всего</div>${formRows([['qk', 'Калории', v('kcal'), '0'], ['qp', 'Белки, г', v('p'), '—'], ['qf', 'Жиры, г', v('f'), '—'], ['qc', 'Углеводы, г', v('c'), '—'], ['qs', 'Соль, г', v('salt'), '—']])}
     <div style="margin-top:26px"><button class="btn" id="qsave">${item ? 'Сохранить' : 'Добавить в «' + mealName(meal) + '»'}</button>
@@ -1008,8 +1058,9 @@ function openQuick(meal, item) {
     $('#qsave', body).onclick = () => {
       const kcal = num($('#qk', body).value);
       if (kcal <= 0) { toast('Укажи калории'); $('#qk', body).focus(); return; }
-      const data = { name: $('#qn', body).value.trim() || 'Без названия', g: 0, kcal, p: num($('#qp', body).value), f: num($('#qf', body).value), c: num($('#qc', body).value), salt: num($('#qs', body).value) };
-      if (item) { Object.assign(item, data); save(); closeSheet(); renderToday(false); toast('Сохранено'); }
+      const pos = id => Math.max(0, num($(id, body).value));
+      const data = { name: $('#qn', body).value.trim() || 'Без названия', g: 0, kcal, p: pos('#qp'), f: pos('#qf'), c: pos('#qc'), salt: pos('#qs') };
+      if (item) { const before = totals(cur).kcal; Object.assign(item, data); save(); closeSheet(); renderToday(false); changed(before, 'Сохранено'); }
       else addItem(meal, data);
     };
     if (item) $('#qdel', body).onclick = () => deleteItem(item);
@@ -1065,12 +1116,12 @@ async function recognize(url, meal) {
     if (photoReq !== ctl) return;
     if (r.status === 401) { setToken(''); return openPair(() => recognize(url, meal)); }
     if (!r.ok) throw new Error(j.error || 'Не получилось распознать');
-    const items = (j.items || []).filter(i => i && i.name && i.g > 0);
+    const items = (Array.isArray(j.items) ? j.items : []).filter(i => i && i.name && num(i.g) > 0 && (num(i.kcal) > 0 || num(i.salt) > 0));
     if (!items.length) throw new Error('Не нашёл на фото еду');
     showFound(url, items, j.comment || '', meal);
   } catch (e) {
     if (photoReq !== ctl) return;
-    const msg = e.name === 'AbortError' ? 'Слишком долго — попробуй ещё раз' : e.message === 'Failed to fetch' ? 'Нет связи с сервером' : e.message;
+    const msg = e.name === 'AbortError' ? 'Слишком долго — попробуй ещё раз' : e instanceof TypeError ? 'Нет связи с сервером' : e.message;
     openSheet('Фото', `<div class="shot"><img src="${url}" alt=""></div><div class="thinking"><b>${esc(msg)}</b>Можно снять ещё раз или найти блюдо поиском.</div>
       <div style="margin-top:24px"><button class="btn" id="again">Снять ещё раз</button><button class="btn soft" id="bySearch">Найти поиском</button></div>`, body => {
       $('#again', body).onclick = () => pickPhoto(meal);
@@ -1120,14 +1171,13 @@ function showFound(url, items, comment, meal) {
     requestAnimationFrame(() => placeSeg(seg));
     seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); upd(); buzz(); };
     $('#addAll', body).onclick = () => {
-      const sel = rows.filter(r => r.on); let kcal = 0;
+      const sel = rows.filter(r => r.on), before = totals(cur).kcal; let kcal = 0;
       for (const r of sel) {
         const k = r.g / 100; kcal += r.per.kcal * k;
         addItem(m, { name: r.name, g: r.g, kcal: r.per.kcal * k, p: r.per.p * k, f: r.per.f * k, c: r.per.c * k, salt: r.per.salt * k, per100: r.per, unit: null }, true);
       }
-      buzz(); closeSheet();
-      toast(`Добавлено ${sel.length} ${plural(sel.length, 'блюдо', 'блюда', 'блюд')} · ${fmt(kcal)} ккал`);
-      renderToday(false);
+      buzz(); closeSheet(); renderToday(false);
+      changed(before, `Добавлено ${sel.length} ${plural(sel.length, 'блюдо', 'блюда', 'блюд')} · ${fmt(kcal)} ккал`);
     };
   }, {});
 }
@@ -1135,12 +1185,14 @@ function openPair(then) {
   const html = `<div class="hero-ico">${I.cam}</div>
     <div class="portion"><div class="title">Еда по фото</div></div>
     <div class="lead">Фото разбирает твой Тренер. Напиши ему <b>/site</b> в Telegram — он пришлёт код из 6 цифр.</div>
-    <div class="code"><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="······" aria-label="Код"></div>
+    <div class="code"><input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="······" aria-label="Код"></div>
     <div style="margin-top:22px"><button class="btn" id="pair" disabled>Подключить</button></div>`;
   openSheet('Подключение', html, body => {
     const inp = $('#code', body), b = $('#pair', body);
     inp.oninput = () => { inp.value = inp.value.replace(/\D/g, '').slice(0, 6); b.disabled = inp.value.length !== 6; if (inp.value.length === 6) b.click(); };
+    let busy = false;
     b.onclick = async () => {
+      if (busy) return; busy = true; // повторный ввод, пока идёт проверка, второй запрос не шлёт
       b.disabled = true; b.textContent = 'Проверяю…';
       try {
         const r = await fetch(API + '/api/kcal/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: inp.value }) });
@@ -1148,10 +1200,11 @@ function openPair(then) {
         if (!r.ok || !j.token) throw new Error(j.error || 'Неверный или старый код');
         setToken(j.token); buzz(); toast('Фото подключено'); then();
       } catch (e) {
-        toast(e.message === 'Failed to fetch' ? 'Нет связи с сервером' : e.message); b.textContent = 'Подключить'; b.disabled = false; inp.select();
+        toast(e instanceof TypeError ? 'Нет связи с сервером' : e.message); b.textContent = 'Подключить'; b.disabled = false; inp.select();
+      } finally { busy = false;
       }
     };
-    setTimeout(() => inp.focus(), 450);
+    inp.focus({ preventScroll: true });
   }, { short: true });
 }
 
@@ -1198,6 +1251,7 @@ function openSettings() {
     $('#days', body).onclick = e => {
       const b = e.target.closest('[data-d]'); if (!b) return;
       const i = +b.dataset.d, on = S.trainDays.includes(i);
+      for (const [k, d] of Object.entries(S.days)) if (k < today() && !d.type && d.items.length) d.type = dayType(k); // прошлые дни — со своей нормой
       S.trainDays = on ? S.trainDays.filter(x => x !== i) : S.trainDays.concat(i).sort();
       b.setAttribute('aria-pressed', !on); save(); buzz();
     };
@@ -1206,17 +1260,19 @@ function openSettings() {
       else openPair(() => { openSettings(); });
     };
     $('#exp', body).onclick = () => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
-      a.download = `kalorii-${today()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      const name = `kalorii-${today()}.json`, blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
+      const file = new File([blob], name, { type: 'application/json' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { navigator.share({ files: [file] }).catch(() => {}); return; }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     };
     $('#imp', body).onclick = () => $('#file', body).click();
     $('#file', body).onchange = async e => {
       try {
-        const x = JSON.parse(await e.target.files[0].text());
-        if (!x || !x.goals || !x.days) throw 0;
-        S = Object.assign(structuredClone(DEFAULT), x); save(); closeSheet(); render(); toast('Копия загружена');
+        const x = clean(JSON.parse(await e.target.files[0].text()));
+        if (!x) throw 0;
+        S = x; save(); closeSheet(); render(); toast('Копия загружена');
       } catch (err) { toast('Это не копия из «Калорий»'); }
+      e.target.value = ''; // тот же файл можно выбрать ещё раз
     };
     $('#wipe', body).onclick = () => {
       if (!confirm('Удалить всю еду и вес? Нормы останутся.')) return;
@@ -1233,7 +1289,7 @@ function toast(text, action, fn) {
   t.style.pointerEvents = 'none';
   if (action) {
     const b = document.createElement('button'); b.textContent = action;
-    b.onclick = () => { fn(); t.classList.remove('on'); };
+    b.onclick = () => { b.onclick = null; t.style.pointerEvents = 'none'; fn(); t.classList.remove('on'); };
     t.appendChild(b); t.style.pointerEvents = 'auto';
   }
   t.classList.add('on'); clearTimeout(toastT);
@@ -1242,9 +1298,13 @@ function toast(text, action, fn) {
 
 function render() {
   document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
-  window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min'); placeLens();
+  unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min'); placeLens();
   view === 'today' ? renderToday(true) : renderHistory();
 }
+if (window.visualViewport) visualViewport.addEventListener('resize', () => { // клавиатура не закрывает низкий лист
+  const kb = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
+  $('#sheet').style.setProperty('--kb', (kb > 80 ? kb : 0) + 'px');
+});
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 $('#tabs').addEventListener('click', e => { // сжатое меню: нажатие раскрывает его, как в iOS
   if (!document.body.classList.contains('min')) return;
@@ -1254,12 +1314,12 @@ document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => {
   if (view !== t.dataset.tab) { view = t.dataset.tab; buzz(); render(); } else window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 $('#addTab').onclick = () => { if (view !== 'today') { view = 'today'; render(); } buzz(); openAdd(); };
-$('#todayBtn').onclick = () => { cur = today(); shown.left = shown.pct = null; buzz(); renderToday(true); };
+$('#todayBtn').onclick = () => { cur = today(); shown.left = null; buzz(); renderToday(true); };
 addEventListener('resize', () => { placeThumb(); placeLens(); });
 let onToday = true;
 document.addEventListener('visibilitychange', () => { // открыли на следующий день — показать новый день
   if (document.hidden) { onToday = cur === today(); return; }
-  if (onToday && cur !== today() && view === 'today' && !$('#sheet').classList.contains('on')) { cur = today(); shown.left = shown.pct = null; renderToday(true); }
+  if (onToday && cur !== today() && view === 'today' && !$('#sheet').classList.contains('on')) { cur = today(); shown.left = null; renderToday(true); }
 });
 render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

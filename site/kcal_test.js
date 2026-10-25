@@ -380,6 +380,73 @@ async function addFood(page, q, grams, meal) {
       ok(await page.isVisible('#left'), 'без интернета открывается');
       await ctx.close();
     }
+    /* 11. Находки независимой проверки (не должны вернуться) */
+    {
+      const it = (k, id, extra = {}) => ({ id, meal: 'lunch', name: 'Еда ' + id, g: 0, kcal: k, p: 1, f: 1, c: 1, salt: 0, ...extra });
+      const seed = { goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } }, salt: 4.5, trainDays: [0, 1, 2, 5],
+        days: { '2026-10-20': { items: [it(1000, 'y1'), it(500, 'y2')] }, '2026-10-21': { items: [it(3000, 't1'), it(100, 't2')] } }, custom: [], recent: [], weights: {} };
+      const { ctx, page } = await newPage(browser, { seed });
+      ok((await text(page, '.metrics')).includes('/ 4,5 г'), 'лимит соли с запятой «4,5»');
+      // «Вернуть» после перехода на другой день
+      await page.click('[data-item="t2"]'); await sleep(500); await page.click('#qdel'); await sleep(300);
+      await page.click('.wd[data-d="2026-10-20"]'); await sleep(400);
+      await page.dblclick('#toast button'); await sleep(400);
+      const st = await state(page);
+      ok(st.days['2026-10-20'].items.map(i => i.id).join() === 'y1,y2', '«Вернуть» на другом дне не трогает этот день', JSON.stringify(st.days['2026-10-20'].items.map(i => i.id)));
+      ok(st.days['2026-10-21'].items.map(i => i.id).join() === 't1,t2', '«Вернуть» вернул в свой день и один раз (двойное нажатие)', JSON.stringify(st.days['2026-10-21'].items.map(i => i.id)));
+      // переключение «Тренировка/Отдых» не пишет «Норма закрыта»; прошлый день — «Норма дня закрыта»
+      await page.click('#todayBtn'); await sleep(600);
+      await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+      await page.click('#seg [data-type=rest]'); await sleep(700);
+      ok(!(await toastText(page)).includes('Норма'), 'смена на «Отдых» не говорит «Норма закрыта»', await toastText(page));
+      await page.click('#seg [data-type=train]'); await sleep(700);
+      await page.click('.wd[data-d="2026-10-20"]'); await sleep(500);
+      await page.click('#addTab'); await sleep(500); await page.click('#quick'); await sleep(500);
+      await page.fill('#qk', '2500'); await page.click('#qsave'); await sleep(300);
+      ok((await toastText(page)).includes('Норма дня закрыта'), 'на прошлом дне — «Норма дня закрыта»', await toastText(page));
+      // смена расписания не меняет норму прошлых дней (вторник был тренировкой)
+      await page.click('#todayBtn'); await sleep(500); await page.click('#gear'); await sleep(500);
+      await page.click('#days [data-d="1"]'); await sleep(100); await page.click('#sheetClose'); await sleep(600);
+      ok((await state(page)).days['2026-10-20'].type === 'train', 'снятый вторник остался тренировкой в прошлом');
+      // «Назад» из порции сохраняет поиск
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'рис'); await sleep(100);
+      await page.click('#results [data-k] >> nth=0'); await sleep(500); await page.click('#backBtn'); await sleep(500);
+      ok((await page.inputValue('#q')) === 'рис' && (await text(page, '#results .cell >> nth=0')).toLowerCase().includes('рис'), '«Назад» из порции — поиск «рис» на месте');
+      // отрицательные числа
+      await page.click('#quick'); await sleep(500); await page.fill('#qk', '100'); await page.fill('#qp', '-5'); await page.click('#qsave'); await sleep(600);
+      ok((await items(page)).every(i => i.p >= 0), 'отрицательные белки не принимаются');
+      // фон под листом не прокручивается
+      await page.click('#addTab'); await sleep(500);
+      const y0 = await page.evaluate(() => document.body.getBoundingClientRect().top);
+      await page.mouse.move(200, 60); await page.mouse.wheel(0, 600); await sleep(300);
+      ok((await page.evaluate(() => document.body.getBoundingClientRect().top)) === y0, 'под открытым листом страница стоит');
+      await page.click('#sheetClose'); await sleep(600);
+      // код с пробелом, как его присылает Тренер
+      await ctx.route(API + '/api/kcal/pair', r => r.fulfill({ status: JSON.parse(r.request().postData()).code === '123456' ? 200 : 403, contentType: 'application/json', body: '{"token":"tok","error":"Неверный или старый код"}' }));
+      await page.click('#camBtn'); await sleep(500);
+      await page.fill('#code', '123 456'); await sleep(700);
+      ok(await page.isVisible('#pick'), 'код «123 456» с пробелом принимается');
+      await page.click('#sheetClose'); await sleep(600);
+      ok(page.errors.length === 0, 'нет ошибок в консоли (находки)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 12. Испорченная копия не ломает приложение и не исполняет код */
+    {
+      const { ctx, page } = await newPage(browser);
+      const bad = { goals: { train: { kcal: '3000' } }, days: { '2026-10-21': { items: [{ id: '"><img src=x onerror="window.__x=2">', name: 'Строки', kcal: '100', p: '5' }, { id: 'b', kcal: '200' }] }, '2026-10-20': {}, 'мусор': { items: 1 } }, weights: { '2026-10-21': '57,5', x: 1 } };
+      const f = path.join(os.tmpdir(), 'kcal-broken.json'); fs.writeFileSync(f, JSON.stringify(bad));
+      await page.click('#gear'); await sleep(500);
+      const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#imp')]); await fc.setFiles(f); await sleep(700);
+      ok((await text(page, '.ring-in')).includes('300 из 3 000'), 'строки-числа складываются: 300 из 3 000', await text(page, '.ring-in'));
+      ok(await page.evaluate(() => window.__x === undefined), 'id из файла не исполняется (XSS)');
+      await page.reload(); await sleep(700);
+      ok(await page.isVisible('#gear') && await page.isVisible('#left'), 'после перезагрузки приложение живо');
+      await page.click('#gear'); await sleep(500);
+      const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#imp')]); await fc2.setFiles(f); await sleep(600);
+      ok((await toastText(page)).includes('Копия загружена'), 'тот же файл можно загрузить ещё раз');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (испорченная копия)', page.errors.join(' | '));
+      await ctx.close();
+    }
   } catch (e) {
     ok(false, 'тест упал', e.stack.split('\n').slice(0, 3).join(' '));
   }
