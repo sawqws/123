@@ -1,5 +1,5 @@
 // офлайн: страница и иконки в кэше; при сети — всегда свежая версия
-const CACHE = 'kcal-2';
+const CACHE = 'kcal-4';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('kcal-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
