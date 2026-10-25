@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Иконки сайта «Калории» (docs/kcal/): кольцо из трёх долей — белки, жиры, углеводы.
+"""Иконки сайта «Калории» (docs/kcal/): чёрный фон, тонкое белое кольцо, почти замкнутое — как на главном экране.
 usage: python3 site/kcal_icons.py
 """
+import math
 import os
 
 from PIL import Image, ImageDraw
@@ -10,17 +11,17 @@ OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 
 
 def icon(size):
-    s = 1024
-    img = Image.new("RGB", (s, s), (15, 24, 40))
+    s = 2048  # рисуем крупно и уменьшаем — ровные края
+    img = Image.new("RGB", (s, s), (0, 0, 0))
     d = ImageDraw.Draw(img)
-    box, w = [232, 232, 792, 792], 92
-    d.arc(box, 0, 360, fill=(31, 44, 66), width=w)
-    start = -90
-    for share, color in ((0.18, (90, 169, 255)), (0.28, (246, 180, 69)), (0.36, (62, 214, 162))):
-        end = start + 360 * share
-        d.arc(box, start + 4, end - 4, fill=color, width=w)
-        start = end
-    d.ellipse([462, 462, 562, 562], fill=(255, 90, 95))
+    box, w = [524, 524, 1524, 1524], 112
+    d.arc(box, 0, 360, fill=(38, 38, 40), width=w)
+    d.arc(box, -90, 200, fill=(255, 255, 255), width=w)
+    for ang in (-90, 200):  # скруглённые концы дуги
+        r = (box[2] - box[0]) / 2 - w / 2
+        cx = s / 2 + r * math.cos(math.radians(ang))
+        cy = s / 2 + r * math.sin(math.radians(ang))
+        d.ellipse([cx - w / 2, cy - w / 2, cx + w / 2, cy + w / 2], fill=(255, 255, 255))
     return img.resize((size, size), Image.LANCZOS)
 
 
