@@ -1804,7 +1804,20 @@ class Web(BaseHTTPRequestHandler):
             return self.reply(401, {"error": "Нужен вход: код из /site в боте Формы"})
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
-        if not pwa.throttle("kcal:" + hashlib.sha256(tok.encode()).hexdigest(), *KCAL_RATE):
+        key = hashlib.sha256(tok.encode()).hexdigest()
+        if path == "/api/kcal/chat":
+            if not pwa.throttle("kcalchat:" + key, *CHAT_RATE):
+                return self.reply(429, {"error": "Много сообщений подряд — попробуй через час"})
+            try:
+                return self.reply(200, kcal_chat(uid, body))
+            except ai.AIError as e:
+                return self.reply(503, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception:
+                traceback.print_exc()
+                return self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
+        if not pwa.throttle("kcal:" + key, *KCAL_RATE):
             return self.reply(429, {"error": "Много фото подряд — попробуй через час"})
         try:
             self.reply(200, kcal_photo(uid, body))
@@ -1965,8 +1978,9 @@ def day_payload(uid, day):
 
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
-KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop")
+KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat")
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
+CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
 
 
 def decode_photo(b):
@@ -2064,6 +2078,23 @@ def kcal_shop(q):
         _shop_cache.clear()
     _shop_cache[key] = (now, out)
     return out
+
+
+def kcal_chat(uid, b):
+    """Чат «Калорий»: вопрос + дневник дня с сайта (+ WHOOP и профиль с сервера) → совет и что съесть."""
+    q = str(b.get("question") or "").strip()[:1000]
+    if not q:
+        raise ValueError("пустой вопрос")
+    hist = [{"role": "user" if m.get("role") == "user" else "coach", "text": str(m.get("text") or "")[:800]}
+            for m in (b.get("messages") if isinstance(b.get("messages"), list) else []) if isinstance(m, dict)][-12:]
+    app = b.get("context") if isinstance(b.get("context"), dict) else {}
+    app_ctx = json.dumps(app, ensure_ascii=False)[:4000]
+    try:
+        whoop_ctx = context(uid)[0]
+    except Exception:  # нет WHOOP или сломался — советуем по дневнику
+        traceback.print_exc()
+        whoop_ctx = ""
+    return ai.kcal_chat(app_ctx, whoop_ctx, hist, q)
 
 
 class NotFood(Exception):

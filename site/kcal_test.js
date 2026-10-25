@@ -374,6 +374,8 @@ async function addFood(page, q, grams, meal) {
       ok(metr, `${label}: цифры БЖУ и соли влезают`);
       await shot(page, `09-${label.replace(/\s/g, '_')}`);
       await page.click('#addTab'); await sleep(600); await over('добавить');
+      const bar = await page.evaluate(() => { const t = document.querySelector('.tabs').getBoundingClientRect(), f = document.querySelector('.fab').getBoundingClientRect(); return t.left >= 0 && f.right <= innerWidth && t.right <= f.left; });
+      ok(bar, `${label}: меню из трёх вкладок и «+» влезает`);
       const fonts = await page.$$eval('input', els => els.filter(e => e.type !== 'file').every(e => parseFloat(getComputedStyle(e).fontSize) >= 16));
       ok(fonts, `${label}: поля ввода ≥ 16 px (iPhone не зумит)`);
       await page.click('#results [data-k] >> nth=0'); await sleep(500); await over('порция');
@@ -535,6 +537,48 @@ async function addFood(page, q, grams, meal) {
       ok(page.errors.length === 0, 'нет ошибок в консоли (порции и вода)', page.errors.join(' | '));
       await shot(page, '14-history', true);
       await page.click('[data-tab=today]'); await sleep(600); await shot(page, '14-today', true);
+      await ctx.close();
+    }
+    /* 15. Чат с нутрициологом */
+    {
+      const { ctx, page } = await newPage(browser);
+      let sent = null, mode = 'ok';
+      await ctx.route(API + '/api/kcal/pair', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"token":"tok"}' }));
+      await ctx.route(API + '/api/kcal/chat', async r => { sent = JSON.parse(r.request().postData()); await sleep(500);
+        if (mode === 'err') return r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"у Claude закончился лимит, попробуй позже"}' });
+        r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: 'Добери белок:\n- творог 240 г\n- банан', items: [{ name: 'Творог 5%', g: 240, kcal: 290, p: 41, f: 12, c: 4, salt: 0.2 }, { name: 'Банан', g: 120, kcal: 114, p: 2, f: 1, c: 25, salt: 0 }] }) }); });
+      await addFood(page, 'овсян хлоп', 100, 'breakfast');
+      if (await page.evaluate(() => document.body.classList.contains('min'))) { await page.click('#tabs'); await sleep(600); } // меню сжато после прокрутки — раскрыть
+      await page.click('[data-tab=chat]'); await sleep(600);
+      ok((await text(page, '.large')) === 'Чат' && await page.isVisible('#composer') && await page.isVisible('#chatPair'), 'вкладка «Чат»: поле ввода и «Подключить»');
+      await page.click('.starter >> nth=0'); await sleep(500);
+      ok(await page.isVisible('#code'), 'без подключения — код');
+      await page.fill('#code', '111111'); await sleep(1500);
+      ok(sent && sent.question === 'Что мне съесть сейчас?' && sent.context.left.kcal === 3048 && sent.context.meals[0].includes('Овсяные хлопья'), 'вопрос ушёл с дневником дня (осталось 3 048)', JSON.stringify(sent && sent.context.left));
+      ok((await text(page, '#msgs')).includes('Добери белок') && (await page.locator('.msg.ai li').count()) === 2, 'ответ с пунктами');
+      ok(!(await page.isVisible('#chatPair')), 'после подключения кнопки «Подключить» нет');
+      await page.click('[data-m="1"][data-j="0"]'); await sleep(500);
+      let it = await items(page);
+      ok(it.length === 2 && it[1].name === 'Творог 5%' && it[1].g === 240 && Math.abs(it[1].per100.kcal - 290 / 2.4) < 1e-6, 'творог из совета — в дневник', JSON.stringify(it[1]));
+      ok(await page.$eval('[data-m="1"][data-j="0"]', b => b.classList.contains('done')), 'добавленное отмечено галочкой');
+      await page.click('[data-all="1"]'); await sleep(500);
+      ok((await items(page)).length === 3, '«Добавить всё» — только то, чего ещё нет');
+      await page.fill('#ask', 'есть рис и курица'); await page.press('#ask', 'Enter'); await sleep(200);
+      ok(await page.isVisible('.typing'), 'пока думает — точки');
+      await sleep(900);
+      ok(sent.messages.length === 2 && sent.messages[0].role === 'user' && sent.messages[1].role === 'coach', 'история разговора уходит на сервер', JSON.stringify(sent.messages.map(m => m.role)));
+      mode = 'err'; await page.fill('#ask', 'а ужин?'); await page.click('#send'); await sleep(900);
+      ok((await text(page, '.chat-err')).includes('лимит'), 'ошибка сервера — понятный текст');
+      mode = 'ok'; await page.click('#chatRetry'); await sleep(900);
+      const st = await state(page);
+      ok(!(await page.isVisible('.chat-err')) && st.chat.filter(m => m.text === 'а ужин?').length === 1 && st.chat[st.chat.length - 1].role === 'coach', '«Повторить» не дублирует вопрос');
+      await page.reload(); await sleep(700); await page.click('[data-tab=chat]'); await sleep(500);
+      ok((await page.locator('.msg').count()) === 6, 'переписка сохраняется', String(await page.locator('.msg').count()));
+      await page.click('#clearChat'); await sleep(400);
+      ok(await page.isVisible('.starter'), 'очистка переписки');
+      await page.click('[data-tab=today]'); await sleep(500);
+      ok(!(await page.isVisible('#composer')), 'на «Сегодня» поля чата нет');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (чат)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {
