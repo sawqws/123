@@ -1852,7 +1852,7 @@ class Web(BaseHTTPRequestHandler):
         full, sent = "", 0
         try:
             try:
-                parts = ai.claude_stream(prompt, model=ai.CHAT_MODEL or None)
+                parts = ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None)
                 for t in parts:
                     full += t
                     cut = full.find("ITEMS:")

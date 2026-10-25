@@ -31,13 +31,13 @@ class AIError(Exception):
     pass
 
 
-def claude(prompt, image=None, timeout=240, images=None, model=None):
+def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None):
     """(текст ответа). image — путь к картинке, images — несколько (кадры видео): Claude откроет их инструментом Read."""
     os.makedirs(WORK, exist_ok=True)
     copies = []
     pics = ([image] if image else []) + list(images or [])
     try:
-        return _run(prompt, pics, copies, timeout, model)
+        return _run(prompt, pics, copies, timeout, model, effort)
     finally:
         for c in copies:  # копии картинок нужны только на время ответа
             try:
@@ -46,7 +46,7 @@ def claude(prompt, image=None, timeout=240, images=None, model=None):
                 pass
 
 
-def _run(prompt, pics, copies, timeout, model=None):
+def _run(prompt, pics, copies, timeout, model=None, effort=None):
     tools = []
     if pics:
         for src in pics:
@@ -61,7 +61,7 @@ def _run(prompt, pics, copies, timeout, model=None):
             prompt += "\n\nКадры видео по порядку (открой каждый инструментом Read):\n" + "\n".join(copies)
         tools = ["--allowedTools", "Read", "--max-turns", str(3 + len(copies))]
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", persona(), *tools, *NO_TOOLS,
-           *(["--model", model] if model else [])]
+           *(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
     try:
         p = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -290,7 +290,8 @@ KCAL_CHAT = (
     "конкретно советуешь съесть сейчас (0–5 позиций, граммы на его порцию), чтобы добавить в дневник одной кнопкой:\n"
     'ITEMS: [{"name": "Творог 5%", "g": 200, "kcal": 242, "p": 34, "f": 10, "c": 4, "salt": 0.2}]\n'
     "Если совет не про конкретную еду — ITEMS: []")
-CHAT_MODEL = os.environ.get("KCAL_CHAT_MODEL", "sonnet")  # быстрая модель: первые слова через 2–3 с
+CHAT_MODEL = os.environ.get("KCAL_CHAT_MODEL", "sonnet")  # быстрая модель
+CHAT_EFFORT = os.environ.get("KCAL_CHAT_EFFORT", "low")  # без долгого размышления: первые слова ~3 с, весь ответ ~7 с (было 20–30)
 
 
 def kcal_chat_prompt(app_ctx, whoop_ctx, history, question):
@@ -333,7 +334,7 @@ def kcal_chat(app_ctx, whoop_ctx, history, question):
     """Чат «Калорий» целиком: совет, что съесть и что добрать. → {"text", "items": [{name, g, kcal, p, f, c, salt}]}."""
     q = kcal_chat_prompt(app_ctx, whoop_ctx, history, question)
     try:
-        out = claude(q, model=CHAT_MODEL or None)
+        out = claude(q, model=CHAT_MODEL or None, effort=CHAT_EFFORT or None)
     except AIError:
         if not CHAT_MODEL:
             raise
@@ -344,11 +345,12 @@ def kcal_chat(app_ctx, whoop_ctx, history, question):
     return {"text": text, "items": items}
 
 
-def claude_stream(prompt, model=None, timeout=120):
+def claude_stream(prompt, model=None, timeout=120, effort=None):
     """Ответ Claude по кусочкам (stream-json с частичными сообщениями) — генератор строк текста."""
     os.makedirs(WORK, exist_ok=True)
     cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-           "--append-system-prompt", persona(), *NO_TOOLS, *(["--model", model] if model else [])]
+           "--append-system-prompt", persona(), *NO_TOOLS, *(["--model", model] if model else []),
+           *(["--effort", effort] if effort else [])]
     try:
         p = subprocess.Popen(cmd, cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError:
