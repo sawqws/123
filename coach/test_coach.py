@@ -1670,6 +1670,7 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(evs[-1], {"done": True, "text": "Сейчас лучше гречку с курицей.",
                                    "items": [{"name": "Гречка", "g": 250, "kcal": 275, "p": 10.0, "f": 3.0, "c": 52.0, "salt": 1.0}]})
         self.assertEqual(cs.call_args.kwargs["model"], ai.CHAT_MODEL)
+        self.assertEqual(cs.call_args.kwargs["effort"], ai.CHAT_EFFORT)
         # быстрая модель не ответила — запасной ответ одним куском
         with mock.patch.object(ai, "claude_stream", side_effect=ai.AIError("нет модели")), \
                 mock.patch.object(ai, "claude", return_value="Ешь творог.\nITEMS: []"), mock.patch.object(coach, "context", return_value=("", None)):
