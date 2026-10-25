@@ -63,7 +63,8 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None):
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", persona(), *tools, *NO_TOOLS,
            *(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
     try:
-        p = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL)  # иначе claude -p ждёт ввод от pm2 — лишние секунды
     except FileNotFoundError:
         raise AIError("Claude Code не установлен на сервере") from None
     except subprocess.TimeoutExpired:
@@ -352,7 +353,7 @@ def claude_stream(prompt, model=None, timeout=120, effort=None):
            "--append-system-prompt", persona(), *NO_TOOLS, *(["--model", model] if model else []),
            *(["--effort", effort] if effort else [])]
     try:
-        p = subprocess.Popen(cmd, cwd=WORK, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        p = subprocess.Popen(cmd, cwd=WORK, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except FileNotFoundError:
         raise AIError("Claude Code не установлен на сервере") from None
     killer = threading.Timer(timeout, p.kill)
