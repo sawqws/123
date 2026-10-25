@@ -5,6 +5,8 @@
 углеводы, натрий (соль = натрий × 2,5) на 100 г и типичная порция («Quantity not specified»).
 Русские названия — site/kcal_usda_ru.tsv (fdc_id, русское, английское), переведены вручную.
 Детское питание и смеси не берём.
+Плюс site/kcal_extra.tsv — блюда, которых нет в USDA (русская, кавказская, азиатская… кухня): название, ккал, Б, Ж, У,
+соль, порция — оценка по типичной рецептуре; в базе помечены восьмым полем 1 (на сайте — «≈»).
 
 usage: python3 site/kcal_foods.py [папка-с-csv]   (без папки — скачает архив USDA во временную)
 """
@@ -21,6 +23,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(HERE), "docs", "kcal", "foods.json")
 RU = os.path.join(HERE, "kcal_usda_ru.tsv")
+EXTRA = os.path.join(HERE, "kcal_extra.tsv")
 URL = "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_survey_food_csv_2024-10-31.zip"
 NUTR = {"208": "kcal", "203": "p", "204": "f", "205": "c", "307": "na"}  # nutrient_nbr
 
@@ -62,6 +65,17 @@ def main():
         typical = [p for p in ps if p[1].startswith("quantity not specified")] or ps
         out.append([ru[fid], round(f["kcal"]), round(f.get("p", 0), 1), round(f.get("f", 0), 1), round(f.get("c", 0), 1),
                     round(f.get("na", 0) * 2.5 / 1000, 2), round(typical[0][2]) if typical else 0])
+    have = {x[0].lower().replace("ё", "е") for x in out}
+    if os.path.exists(EXTRA):
+        with open(EXTRA, encoding="utf-8") as f:
+            for line in f:
+                name, *nums = line.rstrip("\n").split("\t")
+                key = name.lower().replace("ё", "е")
+                if len(nums) != 6 or key in have:
+                    continue
+                kcal, p, fat, c, salt, g = (float(v) for v in nums)
+                out.append([name, round(kcal), round(p, 1), round(fat, 1), round(c, 1), round(salt, 2), round(g), 1])
+                have.add(key)
     out.sort(key=lambda x: x[0])
     with open(OUT, "w", encoding="utf-8") as fh:
         json.dump(out, fh, ensure_ascii=False, separators=(",", ":"))

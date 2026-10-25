@@ -904,7 +904,7 @@ let WORLD = null, worldLoading = null;
 function loadWorld() {
   if (WORLD || worldLoading) return worldLoading || Promise.resolve(WORLD);
   worldLoading = fetch('foods.json').then(r => r.ok ? r.json() : []).catch(() => []).then(rows => {
-    WORLD = rows.filter(r => Array.isArray(r) && r[0]).map(([name, kcal, p, f, c, salt, g]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g } : null, world: true, n: norm(name) }));
+    WORLD = rows.filter(r => Array.isArray(r) && r[0]).map(([name, kcal, p, f, c, salt, g, est]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g } : null, world: true, dish: !!est, n: norm(name) }));
     worldLoading = null; return WORLD;
   });
   return worldLoading;

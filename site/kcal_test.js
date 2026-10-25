@@ -24,6 +24,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function newPage(browser, opts = {}) {
   const ctx = await browser.newContext({ ...devices[opts.device || 'iPhone 14'], colorScheme: opts.scheme || 'dark', serviceWorkers: opts.sw ? 'allow' : 'block' });
   await ctx.clock.setFixedTime(opts.now || NOW);
+  await ctx.route(API + '/api/kcal/shop?*', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"items":[]}' })); // магазины — пусто, на сервер не ходим
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -94,8 +95,8 @@ async function addFood(page, q, grams, meal) {
       ok((await text(page, '#results .cell >> nth=0')).includes('Рис белый (сухой)'), 'поиск по словам «рис сух»');
       await page.fill('#q', 'свекла'); await sleep(100);
       ok((await text(page, '#results .cell >> nth=0')).includes('Свёкла'), 'ё = е в поиске');
-      await page.fill('#q', 'zzzz'); await sleep(100);
-      ok((await text(page, '#results')).includes('Такого нет в базе'), 'нет совпадений — подсказка');
+      await page.fill('#q', 'zzzz'); await sleep(900);
+      ok((await text(page, '#results')).includes('Такого не нашёл'), 'нет совпадений — подсказка');
       ok(!(await page.isVisible('#photoCta')), 'при поиске кнопка фото прячется');
       await page.fill('#q', ''); await sleep(100);
       ok((await text(page, '#results')).includes('Недавние'), 'появились «Недавние»');
@@ -451,7 +452,7 @@ async function addFood(page, q, grams, meal) {
     {
       const { ctx, page } = await newPage(browser);
       let shopCalls = 0;
-      await ctx.route(API + '/api/kcal/shop?*', r => { shopCalls++; const q = new URL(r.request().url()).searchParams.get('q');
+      await ctx.route(API + '/api/kcal/shop?*', r => { shopCalls++; const q = new globalThis.URL(r.request().url()).searchParams.get('q');
         return q.includes('ошибка') ? r.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"x"}' })
           : r.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ items: [{ name: 'Сырок глазированный ванильный', brand: 'Чудо', kcal: 421, p: 8.7, f: 28.7, c: 31.9, salt: 0.25, g: 40 }] }) }); });
       const n = JSON.parse(fs.readFileSync(path.join(ROOT, 'kcal', 'foods.json'), 'utf8')).length;
