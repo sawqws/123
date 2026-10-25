@@ -1808,6 +1808,8 @@ class Web(BaseHTTPRequestHandler):
         if path == "/api/kcal/chat":
             if not pwa.throttle("kcalchat:" + key, *CHAT_RATE):
                 return self.reply(429, {"error": "Много сообщений подряд — попробуй через час"})
+            if body.get("stream"):
+                return self.kcal_chat_stream(uid, body)
             try:
                 return self.reply(200, kcal_chat(uid, body))
             except ai.AIError as e:
@@ -1830,6 +1832,52 @@ class Web(BaseHTTPRequestHandler):
         except Exception:
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
+
+    def kcal_chat_stream(self, uid, body):
+        """Ответ чата по кусочкам (text/event-stream): {"t": кусок}…, в конце {"done", "text", "items"} или {"error"}.
+        Строку «ITEMS: […]» не показываем — из неё в конце собираются блюда."""
+        try:
+            prompt = ai.kcal_chat_prompt(*kcal_chat_input(uid, body))
+        except ValueError as e:
+            return self.reply(400, {"error": str(e)})
+        self.send_response(200)
+        for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store",
+                     "X-Accel-Buffering": "no", **self.cors()}.items():
+            self.send_header(k, v)
+        self.end_headers()
+
+        def ev(obj):
+            self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+        full, sent = "", 0
+        try:
+            try:
+                parts = ai.claude_stream(prompt, model=ai.CHAT_MODEL or None)
+                for t in parts:
+                    full += t
+                    cut = full.find("ITEMS:")
+                    safe = cut if cut >= 0 else max(sent, len(full) - 6)  # хвост держим: вдруг это начало «ITEMS:»
+                    if safe > sent:
+                        ev({"t": full[sent:safe]})
+                        sent = safe
+            except ai.AIError:
+                if full or not ai.CHAT_MODEL:
+                    raise
+                full = ai.claude(prompt)  # быстрая модель недоступна — обычная, одним куском
+            text, items = ai.chat_split(full)
+            if not text and not items:
+                raise ai.AIError("Claude не ответил")
+            ev({"done": True, "text": text, "items": items})
+        except ai.AIError as e:
+            ev({"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):  # пользователь закрыл чат
+            pass
+        except Exception:
+            traceback.print_exc()
+            try:
+                ev({"error": "Что-то сломалось на сервере — попробуй ещё раз"})
+            except OSError:
+                pass
 
     def kcal_shop_get(self, q):
         origin = self.headers.get("Origin")
@@ -2080,8 +2128,8 @@ def kcal_shop(q):
     return out
 
 
-def kcal_chat(uid, b):
-    """Чат «Калорий»: вопрос + дневник дня с сайта (+ WHOOP и профиль с сервера) → совет и что съесть."""
+def kcal_chat_input(uid, b):
+    """Вопрос, история и контекст чата «Калорий» → промпт (дневник дня с сайта + WHOOP и профиль с сервера)."""
     q = str(b.get("question") or "").strip()[:1000]
     if not q:
         raise ValueError("пустой вопрос")
@@ -2094,7 +2142,12 @@ def kcal_chat(uid, b):
     except Exception:  # нет WHOOP или сломался — советуем по дневнику
         traceback.print_exc()
         whoop_ctx = ""
-    return ai.kcal_chat(app_ctx, whoop_ctx, hist, q)
+    return app_ctx, whoop_ctx, hist, q
+
+
+def kcal_chat(uid, b):
+    """Чат «Калорий» одним ответом: совет и что съесть."""
+    return ai.kcal_chat(*kcal_chat_input(uid, b))
 
 
 class NotFood(Exception):

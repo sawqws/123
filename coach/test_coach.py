@@ -1626,8 +1626,8 @@ class KcalTest(unittest.TestCase):
     def test_chat(self):
         tok = self.pair()
         ctx = {"time": "18:40", "day": "тренировка", "left": {"kcal": 1200, "p": 60}, "portion": 1.2}
-        ans = ('{"text": "Добери белок: творог и банан.", "items": [{"name": "Творог 5%", "g": "240", "kcal": 290, "p": 41, '
-               '"f": 12, "c": 4, "salt": 0.2}, {"name": "", "g": 10}, {"name": "Банан", "g": 0}]}')
+        ans = ('Добери белок: творог и банан.\nITEMS: [{"name": "Творог 5%", "g": "240", "kcal": 290, "p": 41, '
+               '"f": 12, "c": 4, "salt": 0.2}, {"name": "", "g": 10}, {"name": "Банан", "g": 0}]')
         with mock.patch.object(ai, "claude", return_value=ans) as c, \
                 mock.patch.object(coach, "context", return_value=("Восстановление 80%", None)):
             r = kcal_call("/api/kcal/chat", {"question": "что съесть?", "context": ctx,
@@ -1650,6 +1650,36 @@ class KcalTest(unittest.TestCase):
         key = "kcalchat:" + __import__("hashlib").sha256(tok.encode()).hexdigest()
         coach.pwa._hits[key] = [time.time()] * coach.CHAT_RATE[0]
         self.assertEqual(kcal_call("/api/kcal/chat", {"question": "а?"}, token=tok).code, 429)
+
+    def test_chat_split_and_stream(self):
+        self.assertEqual(ai.chat_split('Ешь кашу.\nITEMS: []'), ("Ешь кашу.", []))
+        self.assertEqual(ai.chat_split('{"text": "Старый формат", "items": [{"name": "Каша", "g": 200, "kcal": 180}]}')[1][0]["g"], 200)
+        self.assertEqual(ai.chat_split("Просто текст"), ("Просто текст", []))
+        self.assertEqual(ai.chat_split('Текст\nITEMS: [сломано'), ("Текст", []))
+        tok = self.pair()
+        parts = ["Сейчас ", "лучше гречку ", "с курицей.\nIT", 'EMS: [{"name": "Гречка", "g": 250, "kcal": 275, "p": 10, "f": 3, "c": 52, "salt": 1}]']
+        with mock.patch.object(ai, "claude_stream", return_value=iter(parts)) as cs, \
+                mock.patch.object(coach, "context", return_value=("", None)):
+            r = kcal_call("/api/kcal/chat", {"question": "что съесть?", "stream": True}, token=tok)
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.headers["Content-Type"], "text/event-stream; charset=utf-8")
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        evs = [json.loads(x[6:]) for x in r.body.decode().split("\n\n") if x.startswith("data: ")]
+        shown = "".join(e.get("t", "") for e in evs)
+        self.assertEqual(shown, "Сейчас лучше гречку с курицей.\n")  # строка ITEMS не показывается
+        self.assertEqual(evs[-1], {"done": True, "text": "Сейчас лучше гречку с курицей.",
+                                   "items": [{"name": "Гречка", "g": 250, "kcal": 275, "p": 10.0, "f": 3.0, "c": 52.0, "salt": 1.0}]})
+        self.assertEqual(cs.call_args.kwargs["model"], ai.CHAT_MODEL)
+        # быстрая модель не ответила — запасной ответ одним куском
+        with mock.patch.object(ai, "claude_stream", side_effect=ai.AIError("нет модели")), \
+                mock.patch.object(ai, "claude", return_value="Ешь творог.\nITEMS: []"), mock.patch.object(coach, "context", return_value=("", None)):
+            evs = [json.loads(x[6:]) for x in kcal_call("/api/kcal/chat", {"question": "а?", "stream": True}, token=tok).body.decode().split("\n\n") if x.startswith("data: ")]
+        self.assertEqual(evs[-1], {"done": True, "text": "Ешь творог.", "items": []})
+        with mock.patch.object(ai, "claude_stream", side_effect=ai.AIError("лимит")), \
+                mock.patch.object(ai, "claude", side_effect=ai.AIError("у Claude закончился лимит")), mock.patch.object(coach, "context", return_value=("", None)):
+            evs = [json.loads(x[6:]) for x in kcal_call("/api/kcal/chat", {"question": "а?", "stream": True}, token=tok).body.decode().split("\n\n") if x.startswith("data: ")]
+        self.assertEqual(evs[-1], {"error": "у Claude закончился лимит"})
+        self.assertEqual(kcal_call("/api/kcal/chat", {"question": " ", "stream": True}, token=tok).code, 400)
 
     def test_shop(self):
         hits = {"hits": [
