@@ -205,6 +205,8 @@ class InsightsTest(unittest.TestCase):
 
     def test_teen_no_hard_cut(self):
         base = {"kcal": 2800}
+        free = insights.nutrition({"age": 14, "weight": 60, "goal": "максимально вырасти: без дефицита, профицит под рост"}, {}, base)
+        self.assertEqual(free["goal"], "mass")  # цель своими словами не роняет утреннюю сводку
         teen = insights.nutrition({"age": 14, "weight": 60, "goal": "dry"}, {}, base)
         adult = insights.nutrition({"age": 25, "weight": 60, "goal": "dry"}, {}, base)
         self.assertGreaterEqual(teen["kcal"], 2800 * .95 - 10)

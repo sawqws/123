@@ -26,6 +26,19 @@ SPORTS = {
 GOAL_NAMES = {"form": "Форма и результат", "mass": "Набор мышц", "dry": "Рельеф", "weight": "Держать вес"}
 
 
+def goal_code(goal):
+    """Код цели; старый профиль мог хранить цель своими словами («вырасти, профицит под рост») — угадать по словам."""
+    goal = goal or "form"
+    if goal in GOAL_NAMES:
+        return goal
+    g = str(goal).lower()
+    if any(w in g for w in ("профицит", "масс", "набор", "набрать", "вырас")):
+        return "mass"
+    if any(w in g for w in ("рельеф", "суш", "похуд")):
+        return "dry"
+    return "form"
+
+
 def zone(score):
     if score is None:
         return None
@@ -208,7 +221,7 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
     if today_kcal and today_kcal > spend:
         spend = today_kcal  # сегодня уже потратил больше обычного
         how = "по сегодняшним тратам WHOOP"
-    goal = profile.get("goal") or "form"
+    goal = goal_code(profile.get("goal"))
     teen = bool(age and age < 18)
     k = {"form": 1.0, "weight": 1.0, "mass": 1.1, "dry": 0.95 if teen else 0.88}[goal]
     kcal = round(spend * k / 10) * 10
@@ -634,7 +647,8 @@ def profile_line(p, body):
         parts.append(f"спорт: {p['sport']}")
     if p.get("schedule"):
         parts.append(f"расписание: {p['schedule']}")
-    parts.append("цель: " + GOAL_NAMES.get(p.get("goal") or "form", "форма"))
+    g = p.get("goal") or "form"
+    parts.append("цель: " + GOAL_NAMES.get(g, str(g)))
     if p.get("diet"):
         parts.append(f"питание: {p['diet']}")
     if p.get("notes"):
