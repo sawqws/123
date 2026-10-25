@@ -1569,5 +1569,153 @@ class SiteTest(unittest.TestCase):
         self.assertEqual(site_call("/site/../coach.py").code, 404)
 
 
+def kcal_call(path, body=None, token="", origin="https://sawqws.github.io", method="POST"):
+    """Запрос сайта «Калории» с GitHub Pages: Bearer-токен, Origin, без cookie и подписи Telegram."""
+    h = coach.Web.__new__(coach.Web)
+    raw = json.dumps(body).encode() if body is not None else b""
+    h.headers = {"Content-Length": str(len(raw)), "Content-Type": "application/json",
+                 **({"Origin": origin} if origin else {}), **({"Authorization": f"Bearer {token}"} if token else {})}
+    h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
+    h.path = path
+    out = Resp()
+    h.send_response = lambda c: setattr(out, "code", c)
+    h.send_header = lambda k, v: out.headers.__setitem__(k, v)
+    h.end_headers = lambda: None
+    {"POST": h.do_POST, "OPTIONS": h.do_OPTIONS, "GET": h.do_GET}[method]()
+    out.body = h.wfile.getvalue()
+    try:
+        out.json = json.loads(out.body)
+    except ValueError:
+        out.json = None
+    return out
+
+
+class KcalTest(unittest.TestCase):
+    """Сайт «Калории» (GitHub Pages): код из /site → Bearer-токен → фото → позиции с граммами и КБЖУ+соль."""
+    IMG = "data:image/jpeg;base64," + __import__("base64").b64encode(b"\xff\xd8fakejpeg").decode()
+    PLATE = ('Вот: {"food": true, "items": [{"name": "Гречка варёная", "g": "200", "kcal": 220.4, "p": 8.44, '
+             '"f": 2.2, "c": 42, "salt": "0,6"}, {"name": "Котлета куриная", "g": 120, "kcal": 230, "p": 22, '
+             '"f": 14, "c": 6, "salt": 1.2}, {"name": ""}], "comment": "Хороший белок, добавь овощей."}')
+
+    def setUp(self):
+        self.db, _ = seeded(os.path.join(tempfile.mkdtemp(), "kcal.db"))
+        self.db.meta("owner", U)
+        coach.pwa._fails.clear()
+        coach.pwa._hits.clear()
+        self.p = [mock.patch.object(coach, "db", self.db), mock.patch.object(coach, "DATA", tempfile.mkdtemp())]
+        for p in self.p:
+            p.start()
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+        self.db.db.close()
+
+    def pair(self):
+        code, _ = coach.pwa.new_code(self.db, U)
+        r = kcal_call("/api/kcal/pair", {"code": code})
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        return r.json["token"]
+
+    def meals(self):
+        return self.db.q("SELECT COUNT(*) AS n FROM meals")[0]["n"]
+
+    def test_pair(self):
+        tok = self.pair()
+        self.assertEqual(coach.pwa.session_uid(self.db, tok, "kcal"), U)
+        # токен «Калорий» — не cookie Формы: API приложения им не открыть
+        self.assertIsNone(coach.pwa.uid_for(self.db, {"Cookie": f"forma_site={tok}", "X-Init-Data": ""}))
+        r = kcal_call("/api/kcal/pair", {"code": "000000"})
+        self.assertEqual((r.code, r.json), (403, {"error": "Неверный или старый код"}))
+        self.assertEqual(kcal_call("/api/kcal/pair", {}).code, 403)
+        coach.pwa._fails[:] = [time.time()] * coach.pwa.FAILS[0]  # подбор — пауза
+        self.assertEqual(kcal_call("/api/kcal/pair", {"code": "123456"}).code, 429)
+        coach.pwa._fails.clear()
+        code, _ = coach.pwa.new_code(self.db, U)
+        self.assertEqual(kcal_call("/api/kcal/pair", {"code": code}, origin="https://evil.example").code, 403)
+
+    def test_photo_requires_token(self):
+        self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}).code, 401)
+        r = kcal_call("/api/kcal/photo", {"image": self.IMG}, token="x" * 43)
+        self.assertEqual(r.code, 401)
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")  # ошибку сайт тоже прочтёт
+        # cookie-сессия Формы как Bearer не годится
+        code, _ = coach.pwa.new_code(self.db, U)
+        site_tok = coach.pwa.login(self.db, code)
+        self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=site_tok).code, 401)
+        tok = self.pair()
+        self.db.meta("owner", 99)  # не владелец — не пускает
+        self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok).code, 403)
+
+    def test_photo_ok(self):
+        tok = self.pair()
+        before = self.meals()
+        with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
+            r = kcal_call("/api/kcal/photo", {"image": self.IMG, "text": "гречка 250 г"}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.json["items"][0], {"name": "Гречка варёная", "g": 200, "kcal": 220, "p": 8.4, "f": 2.2,
+                                              "c": 42, "salt": 0.6})
+        self.assertEqual(len(r.json["items"]), 2)  # позиция без названия отброшена
+        self.assertEqual(r.json["comment"], "Хороший белок, добавь овощей.")
+        prompt, path = c.call_args[0][0], c.call_args.kwargs["image"]
+        self.assertIn("гречка 250 г", prompt)
+        self.assertIn("натрий", prompt)
+        self.assertFalse(os.path.exists(path))  # фото удалено после ответа
+        self.assertEqual(self.meals(), before)  # дневник Формы не тронут
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        # возраст < 18 — без советов про диеты
+        self.db.save_profile(U, {"age": 15})
+        with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
+            kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok)
+        self.assertIn("без советов про диеты", c.call_args[0][0])
+        self.db.save_profile(U, {"age": 30})
+        with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
+            kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok)
+        self.assertNotIn("без советов про диеты", c.call_args[0][0])
+
+    def test_not_food_bad_image_and_errors(self):
+        tok = self.pair()
+        with mock.patch.object(ai, "claude", return_value='{"food": false}') as c:
+            r = kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok)
+        self.assertEqual((r.code, r.json), (422, {"error": "Не похоже на еду"}))
+        self.assertFalse(os.path.exists(c.call_args.kwargs["image"]))
+        with mock.patch.object(ai, "claude", return_value='{"food": true, "items": []}'):
+            self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok).code, 422)
+        with mock.patch.object(ai, "claude", return_value="не знаю"):
+            self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok).code, 503)
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):
+            self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok).code, 503)
+        self.assertEqual(kcal_call("/api/kcal/photo", {"image": "@@@"}, token=tok).code, 400)
+        self.assertEqual(kcal_call("/api/kcal/photo", {}, token=tok).code, 400)
+        self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok,
+                                   origin="https://evil.example").code, 403)
+
+    def test_rate_limit(self):
+        tok = self.pair()
+        n = coach.KCAL_RATE[0]
+        with mock.patch.object(ai, "claude", return_value=self.PLATE):
+            codes = [kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok).code for _ in range(n + 1)]
+        self.assertEqual(codes, [200] * n + [429])
+        self.assertTrue(coach.pwa.throttle("x", 1, 60, now=1000))
+        self.assertFalse(coach.pwa.throttle("x", 1, 60, now=1030))
+        self.assertTrue(coach.pwa.throttle("x", 1, 60, now=1061))  # окно прошло
+
+    def test_preflight(self):
+        for path in coach.KCAL_PATHS:
+            r = kcal_call(path, method="OPTIONS")
+            self.assertEqual(r.code, 204)
+            self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+            self.assertEqual(r.headers["Access-Control-Allow-Methods"], "POST, OPTIONS")
+            self.assertEqual(r.headers["Access-Control-Allow-Headers"], "Authorization, Content-Type")
+            self.assertGreater(int(r.headers["Access-Control-Max-Age"]), 0)
+            bad = kcal_call(path, method="OPTIONS", origin="https://evil.example")
+            self.assertEqual(bad.code, 403)
+            self.assertNotIn("Access-Control-Allow-Origin", bad.headers)
+            self.assertNotIn("Access-Control-Allow-Origin", kcal_call(path, method="OPTIONS", origin="").headers)
+        self.assertEqual(kcal_call("/api/all", method="OPTIONS").code, 404)
+        self.assertNotIn("Access-Control-Allow-Origin", kcal_call("/api/all", {}).headers)  # остальному API — без CORS
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

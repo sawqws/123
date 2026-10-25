@@ -5,6 +5,8 @@
 Сессия — cookie forma_site (HttpOnly, Secure, SameSite=Lax) на полгода; в базе хранится только sha256.
 API с cookie принимается только со страницы самого приложения: есть заголовок X-Init-Data (его ставит
 Kit.api, чужая страница без разрешения CORS его не пошлёт) и Sec-Fetch-Site не cross-site.
+Тот же код годится и сайту «Калории» (GitHub Pages): login(kind="kcal") → Bearer-токен, свои сессии
+`meta kcal:sessions` — им не открыть API Формы, а cookie Формы не подходит как Bearer.
 """
 import hashlib
 import json
@@ -19,6 +21,7 @@ CODE_USES = 3
 SESSION_TTL = 180 * 86400
 FAILS = (10, 600)  # не больше 10 неверных кодов за 10 минут на весь сервер — подбор 6 цифр бессмыслен
 _fails = []
+_hits = {}  # ключ → времена запросов (throttle)
 _lock = threading.Lock()
 
 
@@ -50,8 +53,9 @@ def new_code(db, uid, now=None):
     return code, link
 
 
-def login(db, code, now=None):
-    """Код или токен ссылки → токен сессии (или None). Неверных попыток много — PermissionError."""
+def login(db, code, now=None, kind="site"):
+    """Код или токен ссылки → токен сессии (или None). Неверных попыток много — PermissionError.
+    kind — чьи сессии: "site" (cookie Формы) или "kcal" (Bearer сайта «Калории»)."""
     now = now or time.time()
     code = re.sub(r"\s+", "", str(code or ""))[:64]
     with _lock:
@@ -69,17 +73,17 @@ def login(db, code, now=None):
             codes.pop(_h(code))
         db.meta("site:codes", json.dumps(codes))
         token = secrets.token_urlsafe(32)
-        sess = {k: v for k, v in _load(db, "site:sessions").items() if v["exp"] > now}
+        sess = {k: v for k, v in _load(db, f"{kind}:sessions").items() if v["exp"] > now}
         sess[_h(token)] = {"uid": rec["uid"], "exp": now + SESSION_TTL}
-        db.meta("site:sessions", json.dumps(sess))
+        db.meta(f"{kind}:sessions", json.dumps(sess))
     return token
 
 
-def logout(db, token):
+def logout(db, token, kind="site"):
     with _lock:
-        sess = _load(db, "site:sessions")
+        sess = _load(db, f"{kind}:sessions")
         if sess.pop(_h(token or ""), None):
-            db.meta("site:sessions", json.dumps(sess))
+            db.meta(f"{kind}:sessions", json.dumps(sess))
 
 
 def cookie(headers):
@@ -94,8 +98,33 @@ def uid_for(db, headers, api=True, now=None):
         return None
     if api and ("X-Init-Data" not in headers or (headers.get("Sec-Fetch-Site") or "same-origin") not in ("same-origin", "none")):
         return None
-    rec = _load(db, "site:sessions").get(_h(tok))
+    return session_uid(db, tok, "site", now)
+
+
+def session_uid(db, token, kind="site", now=None):
+    """uid живой сессии kind по токену или None."""
+    rec = _load(db, f"{kind}:sessions").get(_h(token)) if token else None
     return rec["uid"] if rec and rec["exp"] > (now or time.time()) else None
+
+
+def bearer(headers):
+    """Токен из заголовка Authorization: Bearer <токен> (или "")."""
+    m = re.fullmatch(r"\s*Bearer\s+([\w-]{16,128})\s*", headers.get("Authorization") or "", re.I)
+    return m.group(1) if m else ""
+
+
+def throttle(key, limit, window, now=None):
+    """True — можно (и запрос засчитан), False — за последние window секунд уже limit запросов."""
+    now = now or time.time()
+    with _lock:
+        for k in [k for k, v in _hits.items() if not v or v[-1] <= now - window]:
+            _hits.pop(k)  # старые ключи не копятся
+        hits = [t for t in _hits.get(key, []) if t > now - window]
+        if len(hits) >= limit:
+            _hits[key] = hits
+            return False
+        _hits[key] = hits + [now]
+        return True
 
 
 def set_cookie(token, secure=True):

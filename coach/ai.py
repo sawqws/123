@@ -198,6 +198,51 @@ def _meal_fields(out, text=""):
     return out
 
 
+PLATE_ASK = (
+    "Разбери еду на фото по позициям и верни ТОЛЬКО JSON без пояснений вокруг:\n"
+    '{"food": true, "items": [{"name": "Гречка варёная", "g": 200, "kcal": 220, "p": 8.4, "f": 2.2, "c": 42, '
+    '"salt": 0.6}], "comment": "одна короткая фраза по-русски"}\n'
+    "Правила:\n"
+    "- Каждая позиция — отдельно: гарнир, мясо или рыба, овощи, соус, хлеб, напиток. name — коротко по-русски, "
+    "со способом готовки (варёная, жареный, на пару).\n"
+    "- g — сколько граммов этой позиции на фото. Оценивай по масштабу: обычная тарелка ~24 см, вилка ~19 см, "
+    "столовая ложка, ладонь, стакан 250 мл; на упаковке или этикетке есть вес — бери его. "
+    "Если в подписи указаны граммы или размер порции — бери их из подписи, а не с фото.\n"
+    "- kcal, p (белки), f (жиры), c (углеводы) — на эти граммы по типичному составу блюда; "
+    "salt — граммы поваренной соли (натрий × 2,5) с учётом соли при готовке, соусов и сыра.\n"
+    "- Невидимое не выдумывай; масло и соус добавляй, только если они видны или типичны для блюда.\n"
+    "- comment — одна фраза до 100 символов: что хорошо или чего не хватает (белок, овощи, соль).\n"
+    'Если на фото не еда — {"food": false}.')
+
+
+def _num(v, digits, top):
+    try:
+        x = min(max(0.0, float(str(v).replace(",", "."))), top)
+    except (TypeError, ValueError):
+        return 0
+    return round(x) if digits == 0 else round(x, digits)
+
+
+def plate(image, text="", age=None):
+    """Фото еды для сайта «Калории» → {"food": bool, "items": [{name, g, kcal, p, f, c, salt}], "comment"}.
+    Граммы — оценка по фото (или из подписи). Ничего не записывает в дневник Формы."""
+    q = f"Подпись к фото: {text[:300]}\n" if text else ""
+    if age is None or age < 18:  # школьник или возраст неизвестен — как в prompt.md: без диет
+        q += (f"Мне {age} лет. " if age else "") + "В comment — без советов про диеты, дефицит и похудение.\n"
+    out = parse_json(claude(q + PLATE_ASK, image=image))
+    items, raw = [], out.get("items") if out.get("food") is not False else None
+    for it in raw if isinstance(raw, list) else []:
+        if not isinstance(it, dict) or not str(it.get("name") or "").strip():
+            continue
+        items.append({"name": str(it["name"]).strip()[:80], "g": _num(it.get("g"), 0, 5000),
+                      "kcal": _num(it.get("kcal"), 0, 10000), "p": _num(it.get("p"), 1, 1000),
+                      "f": _num(it.get("f"), 1, 1000), "c": _num(it.get("c"), 1, 1000),
+                      "salt": _num(it.get("salt"), 1, 100)})
+    if not items:
+        return {"food": False, "items": [], "comment": ""}
+    return {"food": True, "items": items[:30], "comment": str(out.get("comment") or "").strip()[:200]}
+
+
 PHOTO_ASK = ("Что на фото? Если это скрин тренировки или показателей (WHOOP, часы, план) — коротко разбери по цифрам "
              "и скажи, что сделать. 2–4 строки.")
 
