@@ -12,7 +12,7 @@ import trimesh
 from manifold3d import CrossSection, Manifold
 
 SEG = 96
-WRAP_W = 60.0     # зазор между щеками (бинт до 55 мм)
+WRAP_W = 55.0     # зазор между щеками: бинты 50 мм (Clinch, Hardcore) + 5 мм
 CHEEK = 3.5       # толщина щёк
 BACK = 3.5        # толщина спинки (лежит на столе)
 BASE_W = 76.0     # ширина спинки
@@ -26,7 +26,7 @@ CRANK_R = 45.0    # плечо ручки
 KNOB_D, KNOB_L = 14.0, 24.0
 FILLET = 7.0      # косынки между спинкой и щеками
 FLAT = 1.5        # срез низа валика под стол
-FEED_W, FEED_L = 4.0, 57.0  # щель-натяжитель в спинке
+FEED_W, FEED_L = 4.0, 53.0  # щель-натяжитель в спинке
 
 
 def cyl_x(length, d, x0=0.0, y=0.0, z=0.0):
