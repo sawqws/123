@@ -1,17 +1,15 @@
 #!/bin/sh
 # Мост принтер -> сервер Глеба (Ender-3 V3 KE, root по ssh). Запускается setup.ps1 с компьютера Глеба.
-# На вход: K — ключ туннеля (base64), H — адрес сервера, P — ключ сервера для входа на принтер.
+# На вход: H — адрес сервера, P — публичный ключ сервера для входа на принтер.
+# Ключ туннеля создаётся тут же, на принтере; наружу уходит только его публичная часть (строка BRIDGE-KEY).
 # Принтер сам держит обратный ssh-туннель: порт 2222 на сервере (только localhost) -> ssh принтера.
 # Сообщения — латиницей: консоль Windows может не показать кириллицу.
 set -u
 say() { echo "[bridge] $*"; }
-[ -n "${K:-}" ] && [ -n "${H:-}" ] && [ -n "${P:-}" ] || { say "ERROR: no key/host"; exit 1; }
+[ -n "${H:-}" ] && [ -n "${P:-}" ] || { say "ERROR: no host/key"; exit 1; }
 
 D=/usr/data/bridge
 mkdir -p "$D" && chmod 700 "$D"
-b64d() { base64 -d 2>/dev/null || python3 -c 'import sys,base64;sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))'; }
-echo "$K" | b64d > "$D/key" && chmod 600 "$D/key"
-[ -s "$D/key" ] || { say "ERROR: cannot decode key"; exit 1; }
 
 # вход с сервера на принтер по ключу (пароль root не нужен)
 HOME_DIR=$(awk -F: '$1=="root"{print $6}' /etc/passwd); HOME_DIR=${HOME_DIR:-/root}
@@ -23,16 +21,19 @@ if [ -d /etc/dropbear ]; then
   chmod 600 /etc/dropbear/authorized_keys
 fi
 
-# какой ssh-клиент есть на принтере
-if command -v ssh >/dev/null 2>&1 && ssh -V 2>&1 | grep -q OpenSSH; then
+# какой ssh-клиент есть на принтере; ключ туннеля — в его формате
+if command -v ssh >/dev/null 2>&1 && ssh -V 2>&1 | grep -q OpenSSH && command -v ssh-keygen >/dev/null 2>&1; then
+  [ -s "$D/key" ] || ssh-keygen -q -t rsa -b 3072 -N "" -C printer-tunnel -f "$D/key" >/dev/null
+  PUB=$(cat "$D/key.pub")
   CL="ssh -i $D/key -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$D/known_hosts -R 2222:127.0.0.1:22 printer@$H"
-elif command -v dbclient >/dev/null 2>&1; then
-  KEY=$D/key
-  if command -v dropbearconvert >/dev/null 2>&1 && dropbearconvert openssh dropbear "$D/key" "$D/key.db" >/dev/null 2>&1; then KEY=$D/key.db; fi
-  CL="dbclient -i $KEY -N -y -K 30 -R 2222:127.0.0.1:22 printer@$H"
+elif command -v dbclient >/dev/null 2>&1 && command -v dropbearkey >/dev/null 2>&1; then
+  [ -s "$D/key.db" ] || dropbearkey -t rsa -s 3072 -f "$D/key.db" >/dev/null 2>&1
+  PUB=$(dropbearkey -y -f "$D/key.db" 2>/dev/null | grep '^ssh-rsa')
+  CL="dbclient -i $D/key.db -N -y -K 30 -R 2222:127.0.0.1:22 printer@$H"
 else
-  say "ERROR: no ssh client on printer"; uname -a; ls /usr/bin | tr '\n' ' ' | head -c 3000; exit 2
+  say "ERROR: no ssh client on printer"; uname -a; ls /usr/bin /usr/sbin /bin | tr '\n' ' ' | head -c 3000; exit 2
 fi
+[ -n "$PUB" ] || { say "ERROR: cannot make key"; exit 1; }
 say "client: ${CL%% *}"
 
 cat > "$D/run.sh" <<RUN
@@ -57,9 +58,5 @@ SVC
 chmod 755 /etc/init.d/S99bridge
 /etc/init.d/S99bridge restart
 
-sleep 10
-if pgrep -f "printer@$H" >/dev/null 2>&1 || ps | grep -v grep | grep -q "printer@$H"; then
-  say "OK: bridge is up"
-else
-  say "ERROR: tunnel did not start"; tail -n 15 "$D/log"; exit 3
-fi
+say "service started; it connects as soon as the server accepts the key"
+echo "BRIDGE-KEY: $PUB"
