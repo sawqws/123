@@ -2,13 +2,15 @@
 @echo off
 set "RAZBOR_SELF=%~f0"
 set "RAZBOR_MODE=%~1"
+set "RAZBOR_YES=%~2"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ([IO.File]::ReadAllText($env:RAZBOR_SELF, [Text.Encoding]::UTF8))"
-pause
+if not "%~2"=="yes" pause
 exit /b
 #>
 # Разбор файлов: Рабочий стол и Загрузки — по папкам, шлак — в карантин. Всё пишется в журнал,
 # «Вернуть как было» (кнопка на Рабочем столе) откатывает последний разбор. Удаляет насовсем только пункт 3.
 # Кнопка: razbor.bat — меню; razbor.bat undo — сразу вернуть; razbor.bat purge — удалить шлак.
+# Без вопросов (для Claude на компьютере): razbor.bat plan — только план; razbor.bat sort yes — разобрать.
 
 $ErrorActionPreference = 'Stop'
 $State  = Join-Path $env:USERPROFILE 'Razbor'
@@ -38,7 +40,7 @@ function Size($b) {
   if ($b -ge 1MB) { return ('{0:N0} МБ' -f ($b / 1MB)) }
   return ('{0:N0} КБ' -f ($b / 1KB))
 }
-function Yes($q) { $a = (Read-Host $q).Trim().ToLower(); return ($a -in 'да', 'lf', 'y', 'yes', 'д', 'l') }
+function Yes($q) { if ($env:RAZBOR_YES -eq 'yes') { return $true }; $a = (Read-Host $q).Trim().ToLower(); return ($a -in 'да', 'lf', 'y', 'yes', 'д', 'l') }
 
 function Get-Downloads {
   try {
@@ -254,6 +256,7 @@ function Main {
     $mode = @{ '1' = 'sort'; '2' = 'undo'; '3' = 'purge' }[$a]
   }
   switch ($mode) {
+    'plan'  { $p = Make-Plan; if ($p) { Show-Plan $p } else { Say 'Разбирать нечего.' } }
     'sort'  { Run-Sort }
     'undo'  { Run-Undo }
     'purge' { Run-Purge }
