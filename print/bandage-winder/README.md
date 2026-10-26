@@ -11,7 +11,7 @@
 |---|---|
 | `model.py` | модель (manifold3d), `python3 model.py` → `frame.stl`, `spindle.stl`, `plate.stl` |
 | `render.py` | картинки `view_*.png` |
-| `ender3v3ke.ini` + `pla.ini` / `petg.ini` | настройки PrusaSlicer под V3 KE (из профиля Creality в OrcaSlicer) |
+| `ender3v3ke.ini` + `pla.ini` / `petg.ini` / `silk_pla.ini` (Kingroon PLA Silk Глеба: 215 °C, поток 9 мм³/с) | настройки PrusaSlicer под V3 KE (из профиля Creality в OrcaSlicer) |
 
 Нарезка: `prusa-slicer --export-gcode --load ender3v3ke.ini --load pla.ini --center 110,110 plate.stl -o winder_pla.gcode`
 - PLA: 220/60 °C, 2 ч 41 мин, 90 г; PETG: 240/70 °C, 3 ч 20 мин, 92 г (по нарезчику). Слой 0.2, 3 стенки, 15 % gyroid, кайма 5 мм.
