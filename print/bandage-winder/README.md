@@ -13,6 +13,9 @@
 | `render.py` | картинки `view_*.png` |
 | `ender3v3ke.ini` + `pla.ini` / `petg.ini` / `silk_pla.ini` (Kingroon PLA Silk Глеба: 215 °C, поток 9 мм³/с) | настройки PrusaSlicer под V3 KE (из профиля Creality в OrcaSlicer) |
 
+Проверка готового G-code: `python3 ../check_gcode.py файл.gcode <лимит потока> <мин-макс °C>` (стол, поток, температуры, команды).
+- `fast_pla.ini` — для быстрого PLA (Hyper/High Speed), поток 20 мм³/с: ~2 ч 28 мин против 3 ч 06 мин у Silk.
+
 Нарезка: `prusa-slicer --export-gcode --load ender3v3ke.ini --load pla.ini --center 110,110 plate.stl -o winder_pla.gcode`
 - PLA: 220/60 °C, 2 ч 41 мин, 90 г; PETG: 240/70 °C, 3 ч 20 мин, 92 г (по нарезчику). Слой 0.2, 3 стенки, 15 % gyroid, кайма 5 мм.
 - Против «печати в воздухе»: кайма 5 мм, поток ограничен (PLA 12, PETG 8 мм³/с), чтобы сопло не забивалось и шестерня не срезала пруток.
