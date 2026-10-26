@@ -5,7 +5,8 @@ if (-not $h -or -not $k -or -not $p) { Write-Host 'Скопируй команд
 if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
   Write-Host 'В Windows нет ssh. Параметры -> Приложения -> Дополнительные компоненты -> «Клиент OpenSSH» -> Установить, потом снова команду.' -ForegroundColor Red; return
 }
-$ip = (Read-Host 'IP принтера (на экране принтера: Настройки -> Сеть)').Trim()
+$ip = (Read-Host 'IP принтера (Enter = 192.168.1.141)').Trim()
+if (-not $ip) { $ip = '192.168.1.141' }
 if ($ip -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { Write-Host "Это не IP: $ip" -ForegroundColor Red; return }
 $src = (Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/sawqws/123/claude/ender-k3-filament-rewinder-nff89j/print/bridge/printer.sh').Content
 if ($src -is [byte[]]) { $src = [Text.Encoding]::UTF8.GetString($src) }
