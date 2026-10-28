@@ -106,7 +106,7 @@ function Check {
   if ($svc -and $svc.Status -eq 'Running') { Say '✅ Служба работает (доступ есть и до входа в Windows)' 'Green' }
   else { Say '⚠️ Служба не запущена' 'Red'; $ok = $false }
   $id = Get-Id
-  if ($id) { Say "✅ На связи, ID: $id" 'Green' } else { Say '⚠️ Нет ID — нет связи с сервером' 'Red'; $ok = $false }
+  if ($id) { Say "✅ ID: $id" 'Green' } else { Say '⚠️ Нет ID — Пульт не запустился' 'Red'; $ok = $false }
   if (Test-Path $Info) { Say "✅ ID и пароль: $Info" 'Green' }
   return $ok
 }
