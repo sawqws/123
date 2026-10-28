@@ -61,7 +61,9 @@ function Install {
       Remove-Item $tmp -Force; Fail 'Файл скачался с ошибкой (контрольная сумма не совпала) — не ставлю. Запусти ещё раз.'
     }
     Say '⏳ Ставлю…' 'Cyan'
-    Start-Process -FilePath $tmp -ArgumentList '--silent-install' -Wait
+    # -Wait ждал бы и запущенную службу — ждём только сам установщик и появление программы
+    $p = Start-Process -FilePath $tmp -ArgumentList '--silent-install' -PassThru
+    $null = $p.WaitForExit(180000)
     for ($i = 0; $i -lt 60 -and !(Test-Path $Exe); $i++) { Start-Sleep -Seconds 2 }
     if (!(Test-Path $Exe)) { Fail 'Установка не завершилась. Запусти ещё раз.' }
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
@@ -93,7 +95,7 @@ function Install {
   Say "   ID:     $nice" 'White'
   Say "   Пароль: $pass" 'White'
   Say "   Записал на Рабочий стол: $(Split-Path $Info -Leaf)" 'DarkGray'
-  Start-Process -FilePath $Exe
+  if ($env:PULT_YES -ne 'yes') { Start-Process -FilePath $Exe }
 }
 
 function Check {
@@ -112,7 +114,8 @@ function Check {
 function Remove {
   if (!(Test-Path $Exe)) { Say 'Пульт и так не установлен.'; return }
   Say '⏳ Удаляю…' 'Cyan'
-  Start-Process -FilePath $Exe -ArgumentList '--uninstall' -Wait
+  $p = Start-Process -FilePath $Exe -ArgumentList '--uninstall' -PassThru
+  $null = $p.WaitForExit(180000)
   for ($i = 0; $i -lt 30 -and (Test-Path $Exe); $i++) { Start-Sleep -Seconds 2 }
   Remove-Item $Info -Force -ErrorAction SilentlyContinue
   if (Test-Path $Exe) { Fail 'Не удалилось до конца. Удали «RustDesk» в Параметры → Приложения.' }
@@ -122,7 +125,8 @@ function Remove {
 if (!(Test-Admin)) {
   Say 'Нужны права администратора — нажми «Да» в окне Windows.' 'Yellow'
   $cmdArgs = "/c `"`"$env:PULT_SELF`" $Mode $env:PULT_YES $env:PULT_PASS`""
-  $p = Start-Process cmd.exe -ArgumentList $cmdArgs -Verb RunAs -Wait -PassThru
+  $p = Start-Process cmd.exe -ArgumentList $cmdArgs -Verb RunAs -PassThru
+  $p.WaitForExit()
   exit $p.ExitCode
 }
 
