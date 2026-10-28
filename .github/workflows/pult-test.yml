@@ -1,0 +1,52 @@
+name: pult-test
+# Проверка установщика «Пульт» (docs/pult/pult.bat) на настоящей Windows: поставить, проверить связь, удалить.
+on:
+  workflow_dispatch:
+  push:
+    paths: ['docs/pult/**', '.github/workflows/pult-test.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установка
+        shell: cmd
+        run: call docs\pult\pult.bat install yes Test-Pult-42
+      - name: Проверка
+        shell: cmd
+        run: call docs\pult\pult.bat check yes
+      - name: ID и пароль на Рабочем столе
+        shell: pwsh
+        run: |
+          $f = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Пульт - ID и пароль.txt'
+          Get-Content $f -Encoding UTF8
+          if (-not (Select-String -Path $f -Pattern 'Test-Pult-42' -Quiet)) { throw 'нет пароля в файле' }
+      - name: Скриншот окна
+        shell: pwsh
+        run: |
+          Start-Sleep 5
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object Drawing.Bitmap $b.Width, $b.Height
+          [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$env:GITHUB_WORKSPACE\pult-${{ matrix.os }}.png")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pult-${{ matrix.os }}
+          path: pult-*.png
+      - name: Удаление
+        shell: cmd
+        run: call docs\pult\pult.bat remove yes
+      - name: Удалён начисто
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:ProgramFiles\RustDesk\rustdesk.exe") { throw 'не удалился' }
+          if (Get-Service RustDesk -ErrorAction SilentlyContinue) { throw 'служба осталась' }
+          'ок'
