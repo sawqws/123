@@ -7,6 +7,16 @@ on:
 permissions:
   contents: read
 jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Сервер связи доступен снаружи
+        run: |
+          for p in 443 21115 21116 21117 21118 21119; do
+            if timeout 5 bash -c "</dev/tcp/2.27.206.165/$p" 2>/dev/null; then echo "tcp $p открыт"; else echo "tcp $p ЗАКРЫТ"; fi
+          done
+          curl -sS -m 10 -o /dev/null -w 'hub https %{http_code}\n' https://hub.2-27-206-165.sslip.io/ || true
   windows:
     strategy:
       fail-fast: false
