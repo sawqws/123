@@ -500,6 +500,16 @@ async function addFood(page, q, grams, meal) {
       ok(page.errors.length === 0, 'нет ошибок в консоли (база мира)', page.errors.join(' | '));
       await ctx.close();
     }
+    /* 14а. Норма воды: старые значения по умолчанию заменяются расчётом, своя норма — остаётся */
+    {
+      const base = { goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } }, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {} };
+      let { ctx, page } = await newPage(browser, { seed: { ...base, water: { train: 3000, rest: 2500 } } });
+      ok((await text(page, '#water')).includes('0 из 3,4 л'), 'старая норма 3 л → расчёт 3,4 л в день тренировки', await text(page, '#water'));
+      await ctx.close();
+      ({ ctx, page } = await newPage(browser, { seed: { ...base, water: { train: 4000, rest: 2000 }, waterSet: true } }));
+      ok((await text(page, '#water')).includes('0 из 4 л'), 'своя норма 4 л сохраняется', await text(page, '#water'));
+      await ctx.close();
+    }
     /* 14. Мои порции больше обычных и вода */
     {
       const { ctx, page } = await newPage(browser);
@@ -514,7 +524,7 @@ async function addFood(page, q, grams, meal) {
       await page.fill('#w-rest', '100'); await page.press('#w-rest', 'Tab'); await sleep(150);
       ok((await toastText(page)).includes('От 500 до 8000'), 'норма воды 100 мл не принимается');
       await page.click('#sheetClose'); await sleep(600);
-      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500, 'настройки: порции как у всех, вода 3500 мл');
+      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500 && (await state(page)).waterSet === true, 'настройки: порции как у всех, вода 3500 мл (своя)');
       await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
       ok((await page.inputValue('#g')) === '250', '«Как у всех» — порция 250 г');
       await page.click('#sheetClose'); await sleep(500);

@@ -583,7 +583,8 @@ const DEFAULT = {
   goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } },
   salt: 5, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {},
   portion: 1.2, // мои порции больше обычных (Глеб 25.10) — «порция», «тарелка» в базе умножаются
-  water: { train: 3000, rest: 2500 }, // мл в день; в день тренировки больше — пот
+  water: { train: 3400, rest: 2500 }, waterSet: false, // мл в день, посчитано под Глеба (29.10): отдых 2,5 л; бокс ~1,5 ч × ~0,6 л/ч пота → +0,9 л
+  // waterSet — норму поменял сам в настройках; иначе берём этот расчёт
   chat: [], // переписка с нутрициологом (последние 60)
 };
 const I = {
@@ -616,7 +617,8 @@ function clean(x) {
   out.goals = { train: goals('train'), rest: goals('rest') };
   out.salt = num(x.salt) > 0 ? r1(num(x.salt)) : DEFAULT.salt;
   if (num(x.portion) >= 1 && num(x.portion) <= 2) out.portion = r1(num(x.portion));
-  if (x.water && typeof x.water === 'object') for (const k of ['train', 'rest']) if (num(x.water[k]) >= 500 && num(x.water[k]) <= 8000) out.water[k] = Math.round(num(x.water[k]));
+  out.waterSet = !!x.waterSet;
+  if (out.waterSet && x.water && typeof x.water === 'object') for (const k of ['train', 'rest']) if (num(x.water[k]) >= 500 && num(x.water[k]) <= 8000) out.water[k] = Math.round(num(x.water[k])); // своя норма; иначе — расчёт по умолчанию
   if (Array.isArray(x.trainDays)) out.trainDays = [...new Set(x.trainDays.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6))].sort();
   for (const [k, d] of Object.entries(x.days)) {
     if (!DAY.test(k) || !d || typeof d !== 'object') continue;
@@ -1576,7 +1578,7 @@ function openSettings() {
     <div class="group-t">Вода, мл в день</div><div class="list">
       <div class="cell field"><label for="w-train">В день тренировки</label><input id="w-train" data-wg="train" inputmode="numeric" value="${S.water.train}"></div>
       <div class="cell field"><label for="w-rest">В день отдыха</label><input id="w-rest" data-wg="rest" inputmode="numeric" value="${S.water.rest}"></div></div>
-    <div class="foot">На тренировке добавляй ещё 400–800 мл за час — пот уносит воду.</div>
+    <div class="foot">Посчитано под тебя: 2,5 л в обычный день и ещё ~0,9 л на тренировку (1,5 ч бокса, пот ~0,6 л в час). Если весишь после тренировки меньше, чем до, — допей по 1,5 л на каждый потерянный килограмм.</div>
     <div class="group-t">Соль</div><div class="list"><div class="cell field"><label for="salt">Не больше, г в день</label><input id="salt" inputmode="decimal" value="${dec(S.salt)}"></div></div>
     <div class="foot">ВОЗ советует меньше 5 г соли в день — это около чайной ложки вместе с солью в готовой еде.</div>
     <div class="group-t">Дни тренировок</div><div class="list"><div class="days" id="days">${WEEK.map((w, i) => `<button data-d="${i}" aria-pressed="${S.trainDays.includes(i)}">${w}</button>`).join('')}</div></div>
@@ -1596,7 +1598,7 @@ function openSettings() {
     $('#por', body).onclick = e => { const b = e.target.closest('[data-p]'); if (!b) return; S.portion = +b.dataset.p; save(); buzz();
       body.querySelectorAll('#por [data-p]').forEach(c => c.setAttribute('aria-pressed', c === b)); };
     body.querySelectorAll('[data-wg]').forEach(inp => inp.onchange = () => { const v = Math.round(num(inp.value));
-      if (v >= 500 && v <= 8000) { S.water[inp.dataset.wg] = v; save(); } else { toast('От 500 до 8000 мл'); inp.value = S.water[inp.dataset.wg]; } });
+      if (v >= 500 && v <= 8000) { S.water[inp.dataset.wg] = v; S.waterSet = true; save(); } else { toast('От 500 до 8000 мл'); inp.value = S.water[inp.dataset.wg]; } });
     $('#salt', body).onchange = e => { const v = num(e.target.value); if (v > 0) { S.salt = r1(v); save(); } else e.target.value = dec(S.salt); };
     $('#days', body).onclick = e => {
       const b = e.target.closest('[data-d]'); if (!b) return;
