@@ -13,13 +13,14 @@ exit /b %PULT_CODE%
 # Пульт: удалённое управление компьютером как в AnyDesk, без лимитов по времени (на основе открытого RustDesk).
 # Кнопка: pult.bat — поставить (или обновить) и показать ID и пароль; pult.bat check — проверить; pult.bat remove — удалить.
 # Без вопросов (для Claude на компьютере): pult.bat install yes [пароль]; pult.bat check yes.
-# Свой сервер связи (по желанию): заполнить $Server и $Key ниже; пусто — бесплатные серверы RustDesk.
+# Сервер связи — свой (сервер ботов, RustDesk hbbs/hbbr под pm2: pult-hbbs, pult-hbbr). Недоступен при установке —
+# остаются бесплатные серверы RustDesk, а повторный запуск pult.bat переключит на свой.
 
 $ErrorActionPreference = 'Stop'
 $Version = '1.5.0'
 $Url     = "https://github.com/rustdesk/rustdesk/releases/download/$Version/rustdesk-$Version-x86_64.exe"
 $Sha256  = '8555777215510d83d2d61c9dc984e4fcc838bd7e79f9d18a42585431f5e8bb47'
-$Server  = ''
+$Server  = '2.27.206.165'
 $Key     = ''
 $Exe     = Join-Path $env:ProgramFiles 'RustDesk\rustdesk.exe'
 $Mode    = if ($env:PULT_MODE) { $env:PULT_MODE.ToLower() } else { 'install' }
@@ -41,6 +42,39 @@ function Get-Id {
     Start-Sleep -Seconds 2
   }
   return ''
+}
+
+function Test-Server {
+  $c = New-Object Net.Sockets.TcpClient
+  try { return $c.ConnectAsync($Server, 21116).Wait(4000) -and $c.Connected } catch { return $false } finally { $c.Close() }
+}
+
+# Настройки показа по умолчанию (для этого компьютера как пульта) — RustDesk_default.toml, раздел [options].
+function Set-Defaults($pairs) {
+  $dir = Join-Path $env:APPDATA 'RustDesk\config'
+  $f = Join-Path $dir 'RustDesk_default.toml'
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $lines = [Collections.Generic.List[string]]::new()
+  if (Test-Path $f) { $lines.AddRange([string[]]@(Get-Content $f -Encoding UTF8)) }
+  $at = $lines.IndexOf('[options]')
+  if ($at -lt 0) { $lines.Add('[options]'); $at = $lines.Count - 1 }
+  foreach ($k in $pairs.Keys) {
+    $line = "$k = '$($pairs[$k])'"
+    $end = $at + 1
+    while ($end -lt $lines.Count -and $lines[$end] -notmatch '^\[') { $end++ }
+    $hit = -1
+    for ($i = $at + 1; $i -lt $end; $i++) { if ($lines[$i] -match "^\s*'?$([regex]::Escape($k))'?\s*=") { $hit = $i } }
+    if ($hit -ge 0) { $lines[$hit] = $line } else { $lines.Insert($end, $line) }
+  }
+  [IO.File]::WriteAllLines($f, $lines, (New-Object Text.UTF8Encoding $false))
+}
+
+# Максимум, который отдаёт RustDesk: со своим сервером — 60 кадров/с и картинка вдвое чётче «Лучшего»
+# (на общих серверах программа сама режет до 30 кадров/с, поэтому там — «Лучшее»). Кодек — авто (аппаратный H.264/H.265),
+# подстройка под сеть (ABR) остаётся: при слабом интернете снижает чёткость, а не замирает.
+function Set-Quality($own) {
+  if ($own) { Set-Defaults ([ordered]@{ 'image_quality' = 'custom'; 'custom_image_quality' = '150'; 'custom-fps' = '60'; 'codec-preference' = 'auto' }) }
+  else { Set-Defaults ([ordered]@{ 'image_quality' = 'best'; 'custom-fps' = '30'; 'codec-preference' = 'auto' }) }
 }
 
 function Get-Svc { Get-Service -Name 'RustDesk' -ErrorAction SilentlyContinue }
@@ -72,11 +106,18 @@ function Install {
     if (Get-Svc) { Start-Service RustDesk -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
   }
-  if ($Server) {
+  $own = $false
+  if ($Server -and $Key -and (Test-Server)) {
     & $Exe --option custom-rendezvous-server $Server | Out-Null
     & $Exe --option relay-server $Server | Out-Null
     & $Exe --option key $Key | Out-Null
+    $own = $true
+    Say '✅ Связь через свой сервер' 'Green'
+  } elseif ($Server -and $Key) {
+    Say '⚠️ Свой сервер не отвечает — пока через бесплатные серверы RustDesk' 'Yellow'
   }
+  Set-Quality $own
+  if ($own) { Say '✅ Качество: максимум, 60 кадров/с' 'Green' } else { Say '✅ Качество: «Лучшее» (больше 30 кадров/с — только со своим сервером)' 'Green' }
   $pass = if ($env:PULT_PASS) { $env:PULT_PASS } else { New-Pass }
   & $Exe --password $pass | Out-Null
   $id = Get-Id
