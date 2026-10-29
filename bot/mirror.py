@@ -50,6 +50,12 @@ ABS = re.compile(r"https?:(?:\\?/){2}horodigital\.ru(?=[/\"'\\?#]|$)")
 
 # ---------- сессия платформы ----------
 
+# Привязка к серверу живых обновлений (/realtime, Path=/realtime): negotiate и websocket обязаны прийти на один и тот
+# же сервер платформы, иначе 404 «connection could not be found». У horo/*.js своя привязка (их браузеры тоже
+# открывают /realtime), и каждая их запись state.json подменяла зеркалу его — из файла берём, только пока своей нет.
+OWN = {"signalr-hub"}
+
+
 class Jar:
     """Cookie платформы: из state.json (его пишут horo/*.js после входа) + что платформа прислала через зеркало."""
 
@@ -72,6 +78,8 @@ class Jar:
         now = time.time()
         for c in data.get("cookies", []):
             if c.get("domain", "").lstrip(".") == UP and (c.get("expires", -1) in (-1, None) or c["expires"] > now):
+                if c["name"] in OWN and c["name"] in self.c:
+                    continue
                 self.c[c["name"]] = c["value"]
 
     def header(self):
@@ -473,6 +481,27 @@ def get_json(path):
         return None
 
 
+FRESH = "/api/education/v1/students/current/study-class"
+
+
+def fresh():
+    """Продлить сессию платформы. Токен в cookie живёт 15 мин; новый присылает только /api (Set-Cookie), а /realtime
+    на старый отвечает 401 — на странице, простоявшей без запросов, живые обновления не переподключались
+    (29.10, 🪞 Дозор: «WebSocket failed to connect…» раз в 30 с). → True, если сессия жива."""
+    headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*"}
+    ck = _jar.header()
+    if ck:
+        headers["Cookie"] = ck
+    try:
+        conn, resp = request("GET", FRESH, headers, None)
+        resp.read()
+        _pool.put(conn)
+    except (http.client.HTTPException, OSError):
+        return False
+    _jar.update(resp.headers.get_all("Set-Cookie") or [])
+    return resp.status == 200
+
+
 # ---------- «сразу из памяти, обновить в фоне» ----------
 # Каркас страницы (HTML одинаковый для всех /student/…) и редко меняющиеся ответы API (настройки школы, модули,
 # подсказки, документы на подпись — до 2,6 с у платформы) отдаются сразу из памяти, а свежие тут же берутся в фоне:
@@ -728,16 +757,17 @@ def proxy(h, version="0"):
             if ctype.startswith("text/html"):
                 text = inject(text, version, plain(h))
             return send(h, status, "OK", out, text.encode("utf-8"))
+    realtime = path.startswith("/realtime")
     for attempt in range(2):
         headers = up_headers(h, UP)
         try:
             conn, resp = request(method, path, headers, body)
         except (http.client.HTTPException, OSError) as e:
             return h.reply(502, {"error": f"Платформа не отвечает: {e}"})
-        if resp.status == 401 and attempt == 0 and path.startswith("/api/") and method in ("GET", "HEAD"):
+        if resp.status == 401 and attempt == 0 and (realtime or path.startswith("/api/") and method in ("GET", "HEAD")):
             resp.read()
             _pool.put(conn)
-            if relogin():
+            if (realtime and fresh()) or relogin():  # /realtime сам токен не продлевает — см. fresh()
                 continue
         break
     _jar.update(resp.headers.get_all("Set-Cookie") or [])
@@ -845,24 +875,47 @@ def _raw_socket():
     return ctx.wrap_socket(s, server_hostname=UP)
 
 
+def _head(s):
+    """Начало ответа платформы на рукопожатие: заголовки (и что пришло следом — уже кадры websocket)."""
+    buf = b""
+    while b"\r\n\r\n" not in buf and len(buf) < 65536:
+        part = s.recv(4096)
+        if not part:
+            break
+        buf += part
+    return buf
+
+
 def websocket(h):
-    """Прозрачный туннель websocket: заголовки — как у обычного запроса, дальше байты в обе стороны."""
-    headers = up_headers(h, UP)
-    headers.pop("Accept-Encoding", None)
-    for k, v in h.headers.items():
-        if k.lower().startswith("sec-websocket"):
-            headers[k] = v
-    headers["Upgrade"] = "websocket"
-    headers["Connection"] = "Upgrade"
-    try:
-        up = _raw_socket()
-        req = f"GET {h.path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items()) + "\r\n"
-        up.sendall(req.encode())
-    except OSError as e:
-        return h.reply(502, {"error": f"Платформа не отвечает: {e}"})
+    """Туннель websocket: заголовки — как у обычного запроса, дальше байты в обе стороны. Платформа ответила 401
+    (токен в cookie устарел, а сам /realtime его не продлевает) — продлеваем сессию и повторяем один раз."""
+    for attempt in range(2):
+        headers = up_headers(h, UP)
+        headers.pop("Accept-Encoding", None)
+        for k, v in h.headers.items():
+            if k.lower().startswith("sec-websocket"):
+                headers[k] = v
+        headers["Upgrade"] = "websocket"
+        headers["Connection"] = "Upgrade"
+        try:
+            up = _raw_socket()
+            req = f"GET {h.path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items()) + "\r\n"
+            up.sendall(req.encode())
+            head = _head(up)
+        except OSError as e:
+            return h.reply(502, {"error": f"Платформа не отвечает: {e}"})
+        if attempt == 0 and head.split(b"\r\n", 1)[0].split(b" ")[1:2] == [b"401"] and (fresh() or relogin()):
+            up.close()
+            continue
+        break
     h.close_connection = True
     client = h.connection
     h.wfile.flush()
+    try:
+        client.sendall(head)
+    except OSError:
+        up.close()
+        return
     pipe(client, up)
 
 

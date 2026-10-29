@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -90,6 +91,27 @@ class Upstream(BaseHTTPRequestHandler):
             return self.answer(200, b'{"uuid": "A1", "answers": []}', "application/json")
         if self.path == "/go":
             return self.answer(302, b"", "text/plain", [("Location", "https://horodigital.ru/login")])
+        # живые обновления: токен продлевает только /api, /realtime на старый — 401; negotiate и websocket — на один
+        # сервер (signalr-hub), иначе 404
+        cookie = self.headers.get("Cookie") or ""
+        if self.path == mirror.FRESH:
+            return self.answer(200, b"{}", "application/json", [("Set-Cookie", "hdp-portal-session=FRESH; path=/")])
+        if self.path.startswith("/realtime/negotiate") and self.command == "POST":
+            if "hdp-portal-session=FRESH" not in cookie:
+                return self.answer(401, b"{}", "application/json")
+            return self.answer(200, b'{"connectionToken": "C1"}', "application/json",
+                               [("Set-Cookie", "signalr-hub=POD1; Path=/realtime; HttpOnly")])
+        if self.path == "/realtime?id=C1" and (self.headers.get("Upgrade") or "").lower() == "websocket":
+            if "hdp-portal-session=FRESH" not in cookie:
+                return self.answer(401, b"{}", "application/json")
+            if "signalr-hub=POD1" not in cookie:
+                return self.answer(404, b"", "text/plain")
+            self.wfile.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+            self.wfile.flush()
+            self.wfile.write(self.rfile.readline())  # эхо — как кадры websocket
+            self.wfile.flush()
+            self.close_connection = True
+            return
         self.answer(404, b"{}", "application/json")
 
     do_GET = do_POST = do_PUT = do_DELETE = handle_any
@@ -371,6 +393,41 @@ class MirrorTest(unittest.TestCase):
         j.update(["hdp-portal-session=NEW; Path=/; HttpOnly", "gone=; Max-Age=0"])
         self.assertIn("hdp-portal-session=NEW", j.header())
         self.assertTrue(j.has_session())
+
+    def test_realtime_reconnects_after_token_expired(self):
+        """29.10, 🪞 Дозор: живые обновления (/realtime) раз в 30 с «WebSocket failed to connect». Токен в cookie
+        живёт 15 мин и продлевается только через /api — зеркало продлевает его само; привязку к серверу
+        (signalr-hub) запись state.json другими скриптами не подменяет, иначе websocket уходил на другой сервер."""
+        code, _, body = self.req("POST", "/realtime/negotiate?negotiateVersion=1", body=b"",
+                                 headers={"Origin": "https://hdp.1-2-3-4.sslip.io"})
+        self.assertEqual((code, json.loads(body)), (200, {"connectionToken": "C1"}))
+        self.assertEqual([p for _, p, _, _ in Upstream.seen],
+                         ["/realtime/negotiate?negotiateVersion=1", mirror.FRESH, "/realtime/negotiate?negotiateVersion=1"])
+        mirror.relogin.assert_not_called()
+        # пока браузер открывает websocket, horo/*.js пишут state.json: своя привязка и токен, уже устаревший
+        with open(mirror._jar.path, "w") as f:
+            json.dump({"cookies": [{"name": "hdp-portal-session", "value": "OLD", "domain": "horodigital.ru", "expires": -1},
+                                   {"name": "signalr-hub", "value": "POD2", "domain": "horodigital.ru", "expires": -1}]}, f)
+        os.utime(mirror._jar.path, (time.time() + 5, time.time() + 5))
+        Upstream.seen.clear()
+        port = self.up.server_port
+        with mock.patch.object(mirror, "_raw_socket", lambda: socket.create_connection(("127.0.0.1", port), timeout=10)):
+            s = socket.create_connection(("127.0.0.1", self.srv.server_port), timeout=10)
+            s.sendall(f"GET /realtime?id=C1 HTTP/1.1\r\nHost: hdp.1-2-3-4.sslip.io\r\nCookie: hdp_site={self.token}\r\n"
+                      "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n".encode())
+            f = s.makefile("rb")
+            self.assertEqual(f.readline(), b"HTTP/1.1 101 Switching Protocols\r\n")
+            while f.readline() != b"\r\n":
+                pass
+            s.sendall(b'{"protocol":"json","version":1}\n')
+            self.assertEqual(f.readline(), b'{"protocol":"json","version":1}\n')  # туннель живой в обе стороны
+            s.close()
+        ws = [hd for _, p, hd, _ in Upstream.seen if p == "/realtime?id=C1"]
+        self.assertEqual(len(ws), 2)                                  # 401 на OLD → продлили → повтор
+        self.assertIn("hdp-portal-session=OLD", ws[0]["Cookie"])
+        self.assertIn("hdp-portal-session=FRESH", ws[1]["Cookie"])
+        self.assertTrue(all("signalr-hub=POD1" in hd["Cookie"] for hd in ws))  # свой сервер, не POD2 из файла
 
     @unittest.skipUnless(shutil.which("node"), "нужен node")
     def test_guard_keeps_hdp_brand(self):
