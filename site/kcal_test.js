@@ -343,11 +343,13 @@ async function addFood(page, q, grams, meal) {
       ok(await page.$eval('#sheet', s => !s.hidden && s.classList.contains('on')), 'быстрое повторное открытие листа не теряет его');
       await page.click('#sheetClose'); await sleep(600);
       for (const q of ['банан', 'хлеб бел', 'молоко 2', 'сыр тв', 'пельм', 'борщ']) await addFood(page, q, null);
+      const tw0 = await page.$eval('#tabs', e => e.offsetWidth);
       await page.mouse.wheel(0, 700); await sleep(700);
-      ok(await page.evaluate(() => document.body.classList.contains('min') && document.body.classList.contains('scrolled')), 'прокрутка вниз — меню сжалось, сверху полоса');
-      await shot(page, '08-min');
-      await page.click('#tabs'); await sleep(600);
-      ok(!(await page.evaluate(() => document.body.classList.contains('min'))), 'нажатие раскрывает меню');
+      ok(await page.evaluate(() => document.body.classList.contains('scrolled')) && (await page.$eval('#tabs', e => e.offsetWidth)) === tw0, 'прокрутка вниз — сверху полоса, меню не меняет размер (без рывков)');
+      await shot(page, '08-scrolled');
+      const y0 = await page.evaluate(() => scrollY);
+      await page.click('[data-tab=history]'); await sleep(700); await page.click('[data-tab=today]'); await sleep(700);
+      ok(Math.abs((await page.evaluate(() => scrollY)) - y0) < 4 && !(await page.$('.ghost')), 'вкладка «Сегодня» открылась там, где оставили; старая страница растаяла', `${y0} → ${await page.evaluate(() => scrollY)}`);
       await page.click('[data-tab=history]'); await sleep(700);
       ok((await text(page, '.large')) === 'История', 'переход в «Историю»');
       await page.click('[data-tab=today]'); await sleep(600);
@@ -560,7 +562,6 @@ async function addFood(page, q, grams, meal) {
         if (!sent.stream) return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(done) });
         r.fulfill({ status: 200, contentType: 'text/event-stream', body: ['Добери ', 'белок:\n- творог 240 г\n', '- банан'].map(t => `data: ${JSON.stringify({ t })}\n\n`).join('') + `data: ${JSON.stringify(done)}\n\n` }); });
       await addFood(page, 'овсян хлоп', 100, 'breakfast');
-      if (await page.evaluate(() => document.body.classList.contains('min'))) { await page.click('#tabs'); await sleep(600); } // меню сжато после прокрутки — раскрыть
       await page.click('[data-tab=chat]'); await sleep(600);
       ok((await text(page, '.large')) === 'Чат' && await page.isVisible('#composer') && await page.isVisible('#chatPair'), 'вкладка «Чат»: поле ввода и «Подключить»');
       await page.click('.starter >> nth=0'); await sleep(500);
