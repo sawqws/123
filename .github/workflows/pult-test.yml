@@ -38,6 +38,17 @@ jobs:
           $f = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Пульт - ID и пароль.txt'
           Get-Content $f -Encoding UTF8
           if (-not (Select-String -Path $f -Pattern 'Test-Pult-42' -Quiet)) { throw 'нет пароля в файле' }
+      - name: Настройки качества записаны
+        shell: pwsh
+        run: |
+          $f = "$env:APPDATA\RustDesk\config\RustDesk_default.toml"
+          Get-Content $f
+          foreach ($l in "image_quality = 'best'", "codec-preference = 'auto'") {
+            if (-not (Select-String -Path $f -SimpleMatch $l -Quiet)) { throw "нет строки: $l" }
+          }
+          # повторный запуск не плодит дубли
+          cmd /c "docs\pult\pult.bat install yes Test-Pult-42"
+          if ((Select-String -Path $f -Pattern '^image_quality').Count -ne 1) { throw 'дубли в настройках' }
       - name: Скриншот окна
         shell: pwsh
         run: |
