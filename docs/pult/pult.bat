@@ -13,13 +13,14 @@ exit /b %PULT_CODE%
 # Пульт: удалённое управление компьютером как в AnyDesk, без лимитов по времени (на основе открытого RustDesk).
 # Кнопка: pult.bat — поставить (или обновить) и показать ID и пароль; pult.bat check — проверить; pult.bat remove — удалить.
 # Без вопросов (для Claude на компьютере): pult.bat install yes [пароль]; pult.bat check yes.
-# Свой сервер связи (по желанию): заполнить $Server и $Key ниже; пусто — бесплатные серверы RustDesk.
+# Сервер связи — свой (сервер ботов, RustDesk hbbs/hbbr под pm2: pult-hbbs, pult-hbbr). Недоступен при установке —
+# остаются бесплатные серверы RustDesk, а повторный запуск pult.bat переключит на свой.
 
 $ErrorActionPreference = 'Stop'
 $Version = '1.5.0'
 $Url     = "https://github.com/rustdesk/rustdesk/releases/download/$Version/rustdesk-$Version-x86_64.exe"
 $Sha256  = '8555777215510d83d2d61c9dc984e4fcc838bd7e79f9d18a42585431f5e8bb47'
-$Server  = ''
+$Server  = '2.27.206.165'
 $Key     = ''
 $Exe     = Join-Path $env:ProgramFiles 'RustDesk\rustdesk.exe'
 $Mode    = if ($env:PULT_MODE) { $env:PULT_MODE.ToLower() } else { 'install' }
@@ -41,6 +42,11 @@ function Get-Id {
     Start-Sleep -Seconds 2
   }
   return ''
+}
+
+function Test-Server {
+  $c = New-Object Net.Sockets.TcpClient
+  try { return $c.ConnectAsync($Server, 21116).Wait(4000) -and $c.Connected } catch { return $false } finally { $c.Close() }
 }
 
 function Get-Svc { Get-Service -Name 'RustDesk' -ErrorAction SilentlyContinue }
@@ -72,10 +78,13 @@ function Install {
     if (Get-Svc) { Start-Service RustDesk -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
   }
-  if ($Server) {
+  if ($Server -and $Key -and (Test-Server)) {
     & $Exe --option custom-rendezvous-server $Server | Out-Null
     & $Exe --option relay-server $Server | Out-Null
     & $Exe --option key $Key | Out-Null
+    Say '✅ Связь через свой сервер' 'Green'
+  } elseif ($Server -and $Key) {
+    Say '⚠️ Свой сервер не отвечает — пока через бесплатные серверы RustDesk' 'Yellow'
   }
   $pass = if ($env:PULT_PASS) { $env:PULT_PASS } else { New-Pass }
   & $Exe --password $pass | Out-Null
