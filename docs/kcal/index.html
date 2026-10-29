@@ -160,7 +160,7 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 .metric .v small { font-size: 13px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 @media (max-width: 370px) { /* узкие экраны (iPhone SE, 320 px): БЖУ и соль влезают в строку */
   .metrics { gap: 8px; } .metric .v { font-size: 16px; letter-spacing: -.4px; } .metric .v small { font-size: 11px; } .metric .n { font-size: 12px; }
-  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tabs .tab { width: 66px; } .tabbar .fab { width: 54px; height: 54px; } .tabbar .in { padding: 0 14px; } /* специфичнее общих правил ниже */ }
+  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tabbar .tabs { --tw: 66px; } body.min .tabbar .tabs { --tw: 62px; } .tabbar .fab { width: 54px; height: 54px; } .tabbar .in { padding: 0 14px; } /* специфичнее общих правил ниже */ }
 .wcard { padding: 16px; }
 .wbar { position: relative; height: 44px; border-radius: 22px; background: var(--track); overflow: hidden; }
 .wbar i { position: absolute; inset: 0 auto 0 0; border-radius: 22px; background: linear-gradient(90deg, color-mix(in srgb, var(--wtr) 75%, transparent), var(--wtr)); transition: width .9s var(--spring); }
@@ -204,10 +204,12 @@ button.cell:active { background: var(--fill); }
 /* нижнее меню — плавающее стекло: вкладки в капсуле, «+» отдельным кругом; при прокрутке вниз сжимается */
 .tabbar { position: fixed; z-index: 20; left: 0; right: 0; bottom: max(10px, calc(var(--safe-b) - 12px)); pointer-events: none; }
 .tabbar .in { max-width: 540px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.tabs { flex: none; pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
-.tabs .lens { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 999px; background: var(--lens);
-  transition: transform .55s var(--spring), width .45s var(--spring); }
-.tab { position: relative; z-index: 1; width: 84px; height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+.tabs { --tw: 84px; flex: none; pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
+/* «линза» стоит по номеру вкладки (--i) и ширине вкладки (--tw) из CSS — едет вместе с вкладками, без замеров в JS и рывка в конце */
+.tabs .lens { position: absolute; top: 4px; bottom: 4px; left: 4px; width: var(--tw); border-radius: 999px; background: var(--lens);
+  transform: translateX(calc(var(--i, 0) * var(--tw))); will-change: transform; transition: transform .45s var(--spring), width .45s var(--spring); }
+body.min .tabs .lens { transform: none; } /* сжатое меню: видна только выбранная вкладка */
+.tab { position: relative; z-index: 1; width: var(--tw); height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   font-size: 11px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
 .tab:not([aria-current]) { color: var(--text-2); }
 .tab svg { width: 26px; height: 26px; transition: transform .35s var(--spring); }
@@ -216,7 +218,8 @@ button.cell:active { background: var(--fill); }
 .fab { flex: none; pointer-events: auto; width: 62px; height: 62px; border-radius: 31px; display: grid; place-items: center; color: var(--text); transition: transform .45s var(--spring), width .45s var(--spring), height .45s var(--spring); }
 .fab svg { width: 26px; height: 26px; }
 .fab:active { transform: scale(.88); }
-body.min .tab { width: 62px; height: 46px; }
+body.min .tabs { --tw: 62px; }
+body.min .tab { height: 46px; }
 body.min .tab span { opacity: 0; max-height: 0; }
 body.min .tab:not([aria-current]) { width: 0; opacity: 0; pointer-events: none; }
 body.min .fab { width: 54px; height: 54px; }
@@ -252,12 +255,13 @@ body.min .fab { width: 54px; height: 54px; }
 .composer .send:disabled { opacity: .3; }
 body.kb .tabbar, body.kb .edge-bottom { opacity: 0; pointer-events: none; }
 body.kb .composer { bottom: calc(var(--kbh, 0px) + 8px); }
-.view.enter { animation: viewIn .4s var(--ios); }
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: .28s; animation-timing-function: cubic-bezier(.32,.72,0,1); }
+.view.enter { animation: viewIn .38s var(--ios); }
+.view.swap .card { animation: fadeIn .3s var(--ios); } /* Неделя ↔ Месяц: графики меняются мягко */
+@keyframes fadeIn { from { opacity: .35; } }
 .sheet .list { content-visibility: auto; contain-intrinsic-size: auto 560px; } /* длинные списки в листе рисуются по мере прокрутки */
 .app .list, .card { contain: layout paint; }
 button, .cell { -webkit-touch-callout: none; }
-@keyframes viewIn { from { opacity: 0; transform: scale(.985); } }
+@keyframes viewIn { from { opacity: 0; transform: translateY(8px); } } /* сдвиг, а не масштаб: текст не размывается на iPhone */
 
 /* история */
 .card { background: var(--group); border-radius: 26px; padding: 18px; }
@@ -741,14 +745,11 @@ function onScroll() {
   const y = scrollY, b = document.body.classList;
   b.toggle('scrolled', y > 46);
   if (y < 80 || y < lastY - 6) b.remove('min'); else if (y > lastY + 6) b.add('min');
-  if (Math.abs(y - lastY) > 6) { lastY = y; setTimeout(placeLens, 460); placeLens(); }
+  if (Math.abs(y - lastY) > 6) lastY = y;
 }
-function placeLens() { // «линза» под выбранной вкладкой
-  const on = $('.tab[aria-current]'), l = $('#lens'); if (!on) return;
-  const first = !l.dataset.placed;
-  if (first) l.style.transition = 'none';
-  l.style.width = on.offsetWidth + 'px'; l.style.transform = `translateX(${on.offsetLeft}px)`;
-  if (first) { void l.offsetWidth; l.style.transition = ''; l.dataset.placed = 1; }
+function placeLens() { // «линза» под выбранной вкладкой: номер вкладки → --i, дальше едет CSS
+  const tabs = [...document.querySelectorAll('.tab[data-tab]')];
+  $('#tabs').style.setProperty('--i', Math.max(0, tabs.findIndex(t => t.dataset.tab === view)));
 }
 function placeSeg(seg, squish) { // «линза» сегментов; squish — пружинит при переезде
   if (!seg) return;
@@ -950,7 +951,8 @@ function countUp(el, from, to) {
 }
 
 /* ——— «История» ——— */
-function renderHistory(enter) {
+function renderHistory(enter, swap) { // swap — сменили Неделя/Месяц: переключатель тот же, графики мягко меняются
+  const oldSeg = swap && $('#seg');
   $('#navTitle').textContent = 'История';
   $('#todayBtn').hidden = true;
   setActions('');
@@ -983,7 +985,7 @@ function renderHistory(enter) {
     spark = `<div class="chart"><svg viewBox="0 0 340 74"><polyline points="${xy.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="var(--ink)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
       <circle cx="${xy[xy.length - 1][0].toFixed(1)}" cy="${xy[xy.length - 1][1].toFixed(1)}" r="4.5" fill="var(--ink)"/></svg></div>`;
   }
-  $('#app').innerHTML = `<div class="view${enter ? ' enter' : ''}">
+  $('#app').innerHTML = `<div class="view${enter ? ' enter' : swap ? ' swap' : ''}">
     <h1 class="large">История</h1>
     <div class="seg" id="seg"><span class="thumb"></span>
       <button data-r="7" aria-pressed="${histRange === 7}">Неделя</button>
@@ -1020,11 +1022,12 @@ function renderHistory(enter) {
         ${ws.slice(-6).reverse().map(([d, w]) => `<div class="cell"><span class="t"><div class="n">${dateTitle(d)}</div></span><span class="k num">${dec(w)} кг</span></div>`).join('')}</div>
     </section>
   </div></div>`;
+  if (oldSeg) $('#seg').replaceWith(oldSeg); // старая «линза» доезжает без рывка
   placeThumb();
   $('#seg').onclick = e => {
     const b = e.target.closest('button'), seg = $('#seg'); if (!b || +b.dataset.r === histRange) return;
     seg.querySelectorAll('button').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz();
-    histRange = +b.dataset.r; setTimeout(renderHistory, 260);
+    histRange = +b.dataset.r; setTimeout(() => renderHistory(false, true), 160);
   };
   $('#addW').onclick = openWeight;
 }
@@ -1695,9 +1698,9 @@ function toast(text, action, fn) {
   toastT = setTimeout(() => t.classList.remove('on'), action ? 4000 : 2000);
 }
 
+function markTab() { document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')); placeLens(); }
 function render() {
-  document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
-  unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min'); placeLens();
+  markTab(); unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min');
   $('#composer').hidden = view !== 'chat';
   view === 'today' ? renderToday(true) : view === 'chat' ? renderChat(true) : renderHistory(true);
 }
@@ -1709,12 +1712,17 @@ if (window.visualViewport) visualViewport.addEventListener('resize', () => { // 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 $('#tabs').addEventListener('click', e => { // сжатое меню: нажатие раскрывает его, как в iOS
   if (!document.body.classList.contains('min')) return;
-  e.stopPropagation(); e.preventDefault(); document.body.classList.remove('min'); buzz(); setTimeout(placeLens, 460);
+  e.stopPropagation(); e.preventDefault(); document.body.classList.remove('min'); buzz();
 }, true);
-const smooth = fn => document.startViewTransition && !reduce() ? document.startViewTransition(fn) : fn();
+// смена вкладки: сначала линза и цвет вкладки (сразу, в этом кадре), страница — со следующего кадра,
+// чтобы тяжёлая отрисовка не задерживала отклик меню; без снимка всей страницы (startViewTransition) — он и дёргал меню
+let renderQ = 0;
 document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => {
-  if (view !== t.dataset.tab) { view = t.dataset.tab; buzz(); smooth(render); } else window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (view === t.dataset.tab) return window.scrollTo({ top: 0, behavior: 'smooth' });
+  view = t.dataset.tab; markTab(); buzz();
+  if (!renderQ) renderQ = requestAnimationFrame(() => setTimeout(() => { renderQ = 0; render(); }));
 });
+document.addEventListener('touchstart', () => {}, { passive: true }); // без этого iPhone не показывает нажатие (:active) на кнопках
 $('#addTab').onclick = () => { if (view !== 'today') { view = 'today'; render(); } buzz(); openAdd(); };
 $('#todayBtn').onclick = () => { cur = today(); shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); };
 addEventListener('resize', () => { placeThumb(); placeLens(); });
