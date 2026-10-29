@@ -48,7 +48,7 @@
   --lens: rgba(255,255,255,.13);
   --drop: 0 10px 32px rgba(0,0,0,.42);
   --ios: cubic-bezier(.32,.72,0,1);
-  --spring: cubic-bezier(.34,1.32,.64,1);
+  --spring: cubic-bezier(.22,1,.36,1); /* плавное торможение без перелёта — с перелётом всё «подпрыгивало» (Глеб 29.10: дёргано) */
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   color-scheme: dark;
@@ -92,7 +92,9 @@ svg { display: block; }
   .glass, .sheet.short, .edge-top, .edge-bottom { background: var(--glass-solid) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 }
 .press { transition: transform .35s var(--spring), opacity .2s; }
-.press:active { transform: scale(.9); }
+.press:active { transform: scale(.93); }
+/* нажатие — быстро (.12 с), отпускание — плавно (обычная длительность) */
+.press:active, .fab:active, .btn:active, .chip:active, .starter:active, .photo-cta:active, .days button:active, .mini button:active, .pi .check:active, .tab:active svg, .sugg .cell .add-one:active { transition-duration: .12s; }
 
 .app { max-width: 540px; margin: 0 auto; padding: calc(8px + var(--safe-t)) max(16px, env(safe-area-inset-right)) calc(120px + var(--safe-b)) max(16px, env(safe-area-inset-left)); }
 
@@ -141,7 +143,7 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
   box-shadow: inset 0 1px 0 var(--spec), 0 0 0 .5px var(--edge), 0 3px 10px rgba(0,0,0,.12); transition: transform .55s var(--spring), width .45s var(--spring); }
 @media (prefers-color-scheme: light) { .seg .thumb { background: #fff; } }
 .seg .thumb.squish { animation: squish .45s var(--ios); }
-@keyframes squish { 40% { scale: 1.12 .9; } }
+@keyframes squish { 40% { scale: 1.05 .96; } }
 
 /* кольцо */
 .ring-wrap { position: relative; width: min(62vw, 236px); aspect-ratio: 1; margin: 22px auto 0; }
@@ -213,11 +215,11 @@ body.min .tabs .lens { transform: none; } /* сжатое меню: видна �
   font-size: 11px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
 .tab:not([aria-current]) { color: var(--text-2); }
 .tab svg { width: 26px; height: 26px; transition: transform .35s var(--spring); }
-.tab:active svg { transform: scale(.86); }
+.tab:active svg { transform: scale(.9); }
 .tab span { transition: opacity .2s, max-height .3s; max-height: 14px; overflow: hidden; }
 .fab { flex: none; pointer-events: auto; width: 62px; height: 62px; border-radius: 31px; display: grid; place-items: center; color: var(--text); transition: transform .45s var(--spring), width .45s var(--spring), height .45s var(--spring); }
 .fab svg { width: 26px; height: 26px; }
-.fab:active { transform: scale(.88); }
+.fab:active { transform: scale(.92); }
 body.min .tabs { --tw: 62px; }
 body.min .tab { height: 46px; }
 body.min .tab span { opacity: 0; max-height: 0; }
@@ -255,13 +257,14 @@ body.min .fab { width: 54px; height: 54px; }
 .composer .send:disabled { opacity: .3; }
 body.kb .tabbar, body.kb .edge-bottom { opacity: 0; pointer-events: none; }
 body.kb .composer { bottom: calc(var(--kbh, 0px) + 8px); }
-.view.enter { animation: viewIn .38s var(--ios); }
+.view.enter { animation: appear .24s ease-out; }
+#actions.enter { animation: appear .24s ease-out; }
+@keyframes appear { from { opacity: 0; } }
 .view.swap .card { animation: fadeIn .3s var(--ios); } /* Неделя ↔ Месяц: графики меняются мягко */
 @keyframes fadeIn { from { opacity: .35; } }
 .sheet .list { content-visibility: auto; contain-intrinsic-size: auto 560px; } /* длинные списки в листе рисуются по мере прокрутки */
 .app .list, .card { contain: layout paint; }
 button, .cell { -webkit-touch-callout: none; }
-@keyframes viewIn { from { opacity: 0; transform: translateY(8px); } } /* сдвиг, а не масштаб: текст не размывается на iPhone */
 
 /* история */
 .card { background: var(--group); border-radius: 26px; padding: 18px; }
@@ -349,7 +352,7 @@ button, .cell { -webkit-touch-callout: none; }
 .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 12px; }
 .days button { height: 40px; border-radius: 999px; background: var(--fill); color: var(--text-2); font-size: 14px; font-weight: 600; transition: background .2s, color .2s, transform .35s var(--spring); }
 .days button[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); }
-.days button:active { transform: scale(.9); }
+.days button:active { transform: scale(.94); }
 
 /* фото */
 .shot { position: relative; height: 210px; border-radius: 28px; overflow: hidden; margin-top: 4px; background: var(--fill); }
@@ -366,14 +369,14 @@ button, .cell { -webkit-touch-callout: none; }
 .pi { gap: 10px; }
 .pi .n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
 .pi .check { width: 26px; height: 26px; border-radius: 13px; border: 1.5px solid var(--text-3); display: grid; place-items: center; flex: none; transition: background .2s, border-color .2s, transform .35s var(--spring); }
-.pi .check:active { transform: scale(.85); }
+.pi .check:active { transform: scale(.9); }
 .pi .check svg { width: 14px; height: 14px; color: var(--on-ink); opacity: 0; transition: opacity .2s; }
 .pi.on .check { background: var(--ink); border-color: var(--ink); }
 .pi.on .check svg { opacity: 1; }
 .pi:not(.on) .t, .pi:not(.on) .mini { opacity: .4; }
 .mini { display: flex; align-items: center; gap: 4px; }
 .mini button { width: 32px; height: 32px; border-radius: 16px; background: var(--fill); display: grid; place-items: center; transition: transform .35s var(--spring); }
-.mini button:active { transform: scale(.85); }
+.mini button:active { transform: scale(.9); }
 .mini button svg { width: 12px; height: 12px; }
 .mini .g { width: 52px; height: 32px; border: 0; border-radius: 10px; background: transparent; text-align: center; font-size: 17px; font-weight: 600; padding: 0; }
 .mini .g:focus { outline: none; background: var(--fill); }
@@ -743,9 +746,15 @@ addEventListener('scroll', () => { if (!scrollTick) { scrollTick = true; request
 function onScroll() {
   if (lockY != null) return; // лист открыт — меню и полосу не трогаем
   const y = scrollY, b = document.body.classList;
-  b.toggle('scrolled', y > 46);
-  if (y < 80 || y < lastY - 6) b.remove('min'); else if (y > lastY + 6) b.add('min');
-  if (Math.abs(y - lastY) > 6) lastY = y;
+  if (b.contains('scrolled') !== y > 46) b.toggle('scrolled', y > 46);
+  // меню сжимается после 40 px вниз и раскрывается после 60 px вверх (или у верха): мелкие рывки пальца,
+  // инерция и отскок у краёв страницы его больше не дёргают туда-сюда
+  const maxY = document.documentElement.scrollHeight - innerHeight;
+  if (y < 0 || y > maxY - 2) { lastY = Math.min(Math.max(y, 0), maxY); return; } // отскок у краёв
+  const min = b.contains('min'), dy = y - lastY;
+  if (y < 80) { if (min) b.remove('min'); lastY = y; }
+  else if (min ? dy < -60 : dy > 40) { b.toggle('min', !min); lastY = y; }
+  else if (min ? dy > 0 : dy < 0) lastY = y; // едем в «свою» сторону — отсчёт заново от этой точки
 }
 function placeLens() { // «линза» под выбранной вкладкой: номер вкладки → --i, дальше едет CSS
   const tabs = [...document.querySelectorAll('.tab[data-tab]')];
@@ -1703,6 +1712,7 @@ function render() {
   markTab(); unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min');
   $('#composer').hidden = view !== 'chat';
   view === 'today' ? renderToday(true) : view === 'chat' ? renderChat(true) : renderHistory(true);
+  const a = $('#actions'); a.classList.remove('enter'); void a.offsetWidth; a.classList.add('enter'); // верхние кнопки проявляются вместе со страницей
 }
 if (window.visualViewport) visualViewport.addEventListener('resize', () => { // клавиатура не закрывает низкий лист
   const kb = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
