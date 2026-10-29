@@ -135,7 +135,7 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 
 /* сегменты: капсула, «линза» переезжает с пружиной */
 .seg { position: relative; display: flex; background: var(--fill); border-radius: 999px; padding: 3px; margin-top: 18px; }
-.seg button { flex: 1; position: relative; z-index: 1; height: 34px; border-radius: 999px; font-size: 15px; font-weight: 500; color: var(--text); }
+.seg button { flex: 1; position: relative; z-index: 1; height: 36px; border-radius: 999px; font-size: 15px; font-weight: 500; color: var(--text); }
 .seg button[aria-pressed="true"] { font-weight: 600; }
 .seg .thumb { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 999px; background: var(--fill-2);
   box-shadow: inset 0 1px 0 var(--spec), 0 0 0 .5px var(--edge), 0 3px 10px rgba(0,0,0,.12); transition: transform .55s var(--spring), width .45s var(--spring); }
@@ -160,7 +160,7 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 .metric .v small { font-size: 13px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 @media (max-width: 370px) { /* узкие экраны (iPhone SE, 320 px): БЖУ и соль влезают в строку */
   .metrics { gap: 8px; } .metric .v { font-size: 16px; letter-spacing: -.4px; } .metric .v small { font-size: 11px; } .metric .n { font-size: 12px; }
-  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tab { width: 70px; } .fab { width: 56px; height: 56px; } .tabbar .in { padding: 0 14px; } }
+  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tabs .tab { width: 66px; } .tabbar .fab { width: 54px; height: 54px; } .tabbar .in { padding: 0 14px; } /* специфичнее общих правил ниже */ }
 .wcard { padding: 16px; }
 .wbar { position: relative; height: 44px; border-radius: 22px; background: var(--track); overflow: hidden; }
 .wbar i { position: absolute; inset: 0 auto 0 0; border-radius: 22px; background: linear-gradient(90deg, color-mix(in srgb, var(--wtr) 75%, transparent), var(--wtr)); transition: width .9s var(--spring); }
@@ -204,16 +204,16 @@ button.cell:active { background: var(--fill); }
 /* нижнее меню — плавающее стекло: вкладки в капсуле, «+» отдельным кругом; при прокрутке вниз сжимается */
 .tabbar { position: fixed; z-index: 20; left: 0; right: 0; bottom: max(10px, calc(var(--safe-b) - 12px)); pointer-events: none; }
 .tabbar .in { max-width: 540px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.tabs { pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
+.tabs { flex: none; pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
 .tabs .lens { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 999px; background: var(--lens);
   transition: transform .55s var(--spring), width .45s var(--spring); }
 .tab { position: relative; z-index: 1; width: 84px; height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  font-size: 10px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
+  font-size: 11px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
 .tab:not([aria-current]) { color: var(--text-2); }
 .tab svg { width: 26px; height: 26px; transition: transform .35s var(--spring); }
 .tab:active svg { transform: scale(.86); }
 .tab span { transition: opacity .2s, max-height .3s; max-height: 14px; overflow: hidden; }
-.fab { pointer-events: auto; width: 62px; height: 62px; border-radius: 31px; display: grid; place-items: center; color: var(--text); transition: transform .45s var(--spring), width .45s var(--spring), height .45s var(--spring); }
+.fab { flex: none; pointer-events: auto; width: 62px; height: 62px; border-radius: 31px; display: grid; place-items: center; color: var(--text); transition: transform .45s var(--spring), width .45s var(--spring), height .45s var(--spring); }
 .fab svg { width: 26px; height: 26px; }
 .fab:active { transform: scale(.88); }
 body.min .tab { width: 62px; height: 46px; }
@@ -398,6 +398,46 @@ button, .cell { -webkit-touch-callout: none; }
 .toast span { overflow: hidden; text-overflow: ellipsis; }
 .toast.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
 .toast button { color: var(--p); font-weight: 600; }
+
+
+/* ——— широкие экраны: iPad, ноутбук, монитор (правило Глеба 29.10 — нормальный вид на всех устройствах) ——— */
+.wkrow { display: flex; align-items: center; gap: 4px; }
+.wkrow .week { flex: 1; }
+.wk-nav { display: none; width: 36px; height: 36px; border-radius: 18px; place-items: center; color: var(--text-2); flex: none; }
+.wk-nav svg { width: 10px; height: 16px; }
+.wk-nav[disabled] { opacity: .25; pointer-events: none; }
+@media (hover: hover) and (pointer: fine) { /* мышь: стрелки недели, подсветка под курсором */
+  .wk-nav { display: grid; margin-top: 18px; }
+  .wk-nav:hover, .ibtn:hover, .hbtn:hover, .tab:hover, .chip:hover, .wb:hover, .starter:hover { background: var(--lens); }
+  button.cell:hover, .wd:hover { background: var(--fill); }
+  .btn:hover { opacity: .9; }
+  button, [role=button] { cursor: pointer; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: var(--fill-2); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
+}
+@media (min-width: 768px) { /* iPad и больше: окна — по центру, как на iPad */
+  .sheet, .sheet.short { top: 50%; bottom: auto; left: 50%; right: auto; width: min(600px, 92vw); max-width: none; margin: 0;
+    height: min(86dvh, 880px); border-radius: 38px; transform: translate(-50%, -46%) scale(.97); opacity: 0; transition: transform .45s var(--ios), opacity .3s; }
+  .sheet.short { height: auto; max-height: 86dvh; }
+  .sheet.on { transform: translate(-50%, -50%); opacity: 1; }
+  .sheet .head::before { display: none; }
+  .ring-wrap { width: 260px; }
+  .seg button { height: 38px; }
+}
+@media (min-width: 960px) { /* ноутбук и монитор: две колонки */
+  .app { max-width: 1180px; padding-left: 40px; padding-right: 40px; }
+  .tgrid { display: grid; grid-template-columns: minmax(360px, 440px) 1fr; gap: 48px; align-items: start; }
+  .tb > .sec:first-child { margin-top: 52px; }
+  .hgrid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 0 32px; align-items: start; }
+  .hgrid .hcal { grid-row: span 2; }
+  .view.chat { max-width: 760px; margin: 0 auto; }
+  .composer { width: min(728px, calc(100% - 32px)); }
+  .actions { right: max(40px, calc(50% - 550px)); }
+  .today-btn { left: max(40px, calc(50% - 550px)); }
+  .tabbar .in { justify-content: center; gap: 14px; }
+  .large { font-size: 40px; }
+}
+@media (min-width: 960px) and (min-height: 820px) { .ta { position: sticky; top: calc(64px + var(--safe-t)); } } /* левая колонка стоит, правая листается */
+@media (min-width: 1600px) { .app { max-width: 1320px; } .tgrid { grid-template-columns: 480px 1fr; gap: 64px; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
@@ -599,6 +639,7 @@ const I = {
   x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
   undo: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5L3 9l4 4"/><path d="M3 9h9a5 5 0 0 1 0 10H9"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.8h6V7M6.5 7l.9 12.2h9.2L17.5 7"/></svg>',
+  chevR: '<svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l8 8-8 8"/></svg>',
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
 };
 
@@ -746,14 +787,16 @@ function renderToday(animate) {
   const metric = (k, n, val, goal, unit, color) => { const w = Math.min(100, (num(val) / goal) * 100 || 0); now[k] = w;
     return `<div class="metric" style="--dot:${color}"><div class="n">${n}</div>
     <div class="v num">${val}<small> / ${k === 's' ? dec(goal) : goal} ${unit}</small></div><div class="b"><i data-w="${w}%" style="width:${was[k] ?? (animate ? 0 : w)}%"></i></div></div>`; };
-  $('#app').innerHTML = `<div class="view${animate ? ' enter' : ''}">
+  $('#app').innerHTML = `<div class="view${animate ? ' enter' : ''}"><div class="tgrid"><div class="ta">
     <h1 class="large">${dateTitle(cur)}</h1>
     <div class="subtitle">${WEEK_FULL[wdi(cur)]}, ${x.getDate()} ${MONTHS[x.getMonth()]}${st > 1 ? `<span class="streak">${I.flame}${st} ${plural(st, 'день', 'дня', 'дней')} подряд</span>` : ''}</div>
+    <div class="wkrow"><button class="wk-nav press" id="wkPrev" aria-label="Прошлая неделя">${I.back}</button>
     <div class="week" id="week">${weekDays().map(dd => {
       const tt = totals(dd).kcal, gg = S.goals[dayType(dd)].kcal;
       return `<button class="wd${dd === today() ? ' today' : ''}" data-d="${dd}" ${dd === cur ? 'aria-current="date"' : ''} ${dd > today() ? 'disabled' : ''} aria-label="${dateTitle(dd)}">
         <span class="l">${WEEK[wdi(dd)]}</span>${ringSvg(tt / gg, 34, 4, 'var(--ink)')}</button>`;
     }).join('')}</div>
+    <button class="wk-nav press" id="wkNext" aria-label="Следующая неделя" ${weekDays()[6] >= today() ? 'disabled' : ''}>${I.chevR}</button></div>
     <div class="seg" id="seg"><span class="thumb"></span>
       <button data-type="train" aria-pressed="${type === 'train'}">Тренировка</button>
       <button data-type="rest" aria-pressed="${type === 'rest'}">Отдых</button></div>
@@ -770,6 +813,7 @@ function renderToday(animate) {
       ${metric('s', 'Соль', dec(t.salt), S.salt, 'г', salt > 1 ? 'var(--bad)' : salt > 0.8 ? 'var(--warn)' : 'var(--s)')}
     </div>
     ${waterCard()}
+    </div><div class="tb">
     ${MEALS.map(([m, n]) => {
       const its = d.items.filter(i => i.meal === m);
       const sum = its.reduce((a, i) => a + i.kcal, 0);
@@ -780,7 +824,7 @@ function renderToday(animate) {
           <span class="k num">${fmt(i.kcal)}</span></button></div>`).join('')}
           <button class="cell add" data-add="${m}">${I.plus}Добавить<span class="ph" data-photo="${m}" role="button" aria-label="По фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</span></button></div></section>`;
     }).join('')}
-  </div>`;
+  </div></div></div>`;
   lastAdded = null;
   placeThumb();
   countUp($('#left'), shown.left, Math.abs(left));
@@ -798,6 +842,8 @@ function renderToday(animate) {
   $('#camBtn').onclick = () => photoFlow(mealNow());
   $('#week').onclick = e => { const b = e.target.closest('[data-d]'); if (b && b.dataset.d !== cur) { cur = b.dataset.d; shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); } };
   swipeWeek($('#week'));
+  const wk = n => { const next = addDays(cur, n); cur = next > today() ? today() : next; shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); };
+  $('#wkPrev').onclick = () => wk(-7); $('#wkNext').onclick = () => wk(7); // мышью — стрелками (на телефоне — свайп)
   $('#seg').onclick = e => {
     const b = e.target.closest('button'), seg = $('#seg'); if (!b || b.getAttribute('aria-pressed') === 'true') return;
     seg.querySelectorAll('button').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz();
@@ -942,7 +988,8 @@ function renderHistory(enter) {
     <div class="seg" id="seg"><span class="thumb"></span>
       <button data-r="7" aria-pressed="${histRange === 7}">Неделя</button>
       <button data-r="30" aria-pressed="${histRange === 30}">Месяц</button></div>
-    <section class="sec"><div class="sec-h"><h2>Калории</h2></div>
+    <div class="hgrid">
+    <section class="sec hcal"><div class="sec-h"><h2>Калории</h2></div>
       <div class="card">
         <div class="kpis">
           <div class="kpi"><div class="n">В среднем</div><div class="v num">${logged.length ? fmt(avg) : '—'}</div></div>
@@ -972,7 +1019,7 @@ function renderHistory(enter) {
       <div class="list" style="margin-top:14px"><button class="cell" id="addW"><span class="t"><div class="n">Записать вес</div></span>${I.chev}</button>
         ${ws.slice(-6).reverse().map(([d, w]) => `<div class="cell"><span class="t"><div class="n">${dateTitle(d)}</div></span><span class="k num">${dec(w)} кг</span></div>`).join('')}</div>
     </section>
-  </div>`;
+  </div></div>`;
   placeThumb();
   $('#seg').onclick = e => {
     const b = e.target.closest('button'), seg = $('#seg'); if (!b || +b.dataset.r === histRange) return;
@@ -1141,7 +1188,7 @@ $('#scrim').onclick = closeSheet;
 $('#sheetClose').onclick = closeSheet;
 (() => { // лист тянется вниз пальцем
   const sh = $('#sheet'), head = sh.querySelector('.head'); let y0 = null, dy = 0;
-  head.addEventListener('touchstart', e => { if (e.target.closest('button')) return; y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
+  head.addEventListener('touchstart', e => { if (e.target.closest('button') || innerWidth >= 768) return; /* на iPad окно по центру — не тянется */ y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
   head.addEventListener('touchmove', e => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); sh.style.transform = `translateY(${dy}px)`; }, { passive: true });
   const end = () => { if (y0 == null) return; y0 = null; sh.style.transition = ''; if (dy > 110) closeSheet(); else sh.style.transform = ''; };
   head.addEventListener('touchend', end); head.addEventListener('touchcancel', end);
