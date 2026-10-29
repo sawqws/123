@@ -21,7 +21,7 @@ $Version = '1.5.0'
 $Url     = "https://github.com/rustdesk/rustdesk/releases/download/$Version/rustdesk-$Version-x86_64.exe"
 $Sha256  = '8555777215510d83d2d61c9dc984e4fcc838bd7e79f9d18a42585431f5e8bb47'
 $Server  = '2.27.206.165'
-$Key     = ''
+$Key     = 'oszzzQNQsnfZMNHWmQrzMRaALis+q7ICejJAPp8LfDg='
 $Exe     = Join-Path $env:ProgramFiles 'RustDesk\rustdesk.exe'
 $Mode    = if ($env:PULT_MODE) { $env:PULT_MODE.ToLower() } else { 'install' }
 $Desk    = [Environment]::GetFolderPath('Desktop')
