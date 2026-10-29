@@ -48,7 +48,7 @@
   --lens: rgba(255,255,255,.13);
   --drop: 0 10px 32px rgba(0,0,0,.42);
   --ios: cubic-bezier(.32,.72,0,1);
-  --spring: cubic-bezier(.34,1.32,.64,1);
+  --spring: cubic-bezier(.22,1,.36,1); /* плавное торможение без перелёта — с перелётом всё «подпрыгивало» (Глеб 29.10: дёргано) */
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   color-scheme: dark;
@@ -92,7 +92,9 @@ svg { display: block; }
   .glass, .sheet.short, .edge-top, .edge-bottom { background: var(--glass-solid) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 }
 .press { transition: transform .35s var(--spring), opacity .2s; }
-.press:active { transform: scale(.9); }
+.press:active { transform: scale(.93); }
+/* нажатие — быстро (.12 с), отпускание — плавно (обычная длительность) */
+.press:active, .fab:active, .btn:active, .chip:active, .starter:active, .photo-cta:active, .days button:active, .mini button:active, .pi .check:active, .tab:active svg, .sugg .cell .add-one:active { transition-duration: .12s; }
 
 .app { max-width: 540px; margin: 0 auto; padding: calc(8px + var(--safe-t)) max(16px, env(safe-area-inset-right)) calc(120px + var(--safe-b)) max(16px, env(safe-area-inset-left)); }
 
@@ -135,13 +137,13 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 
 /* сегменты: капсула, «линза» переезжает с пружиной */
 .seg { position: relative; display: flex; background: var(--fill); border-radius: 999px; padding: 3px; margin-top: 18px; }
-.seg button { flex: 1; position: relative; z-index: 1; height: 34px; border-radius: 999px; font-size: 15px; font-weight: 500; color: var(--text); }
+.seg button { flex: 1; position: relative; z-index: 1; height: 36px; border-radius: 999px; font-size: 15px; font-weight: 500; color: var(--text); }
 .seg button[aria-pressed="true"] { font-weight: 600; }
 .seg .thumb { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 999px; background: var(--fill-2);
   box-shadow: inset 0 1px 0 var(--spec), 0 0 0 .5px var(--edge), 0 3px 10px rgba(0,0,0,.12); transition: transform .55s var(--spring), width .45s var(--spring); }
 @media (prefers-color-scheme: light) { .seg .thumb { background: #fff; } }
 .seg .thumb.squish { animation: squish .45s var(--ios); }
-@keyframes squish { 40% { scale: 1.12 .9; } }
+@keyframes squish { 40% { scale: 1.05 .96; } }
 
 /* кольцо */
 .ring-wrap { position: relative; width: min(62vw, 236px); aspect-ratio: 1; margin: 22px auto 0; }
@@ -160,7 +162,7 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 .metric .v small { font-size: 13px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 @media (max-width: 370px) { /* узкие экраны (iPhone SE, 320 px): БЖУ и соль влезают в строку */
   .metrics { gap: 8px; } .metric .v { font-size: 16px; letter-spacing: -.4px; } .metric .v small { font-size: 11px; } .metric .n { font-size: 12px; }
-  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tab { width: 70px; } .fab { width: 56px; height: 56px; } .tabbar .in { padding: 0 14px; } }
+  .ring-in .big { font-size: 44px; } .large { font-size: 31px; } .tabbar .tabs { --tw: 66px; } body.min .tabbar .tabs { --tw: 62px; } .tabbar .fab { width: 54px; height: 54px; } .tabbar .in { padding: 0 14px; } /* специфичнее общих правил ниже */ }
 .wcard { padding: 16px; }
 .wbar { position: relative; height: 44px; border-radius: 22px; background: var(--track); overflow: hidden; }
 .wbar i { position: absolute; inset: 0 auto 0 0; border-radius: 22px; background: linear-gradient(90deg, color-mix(in srgb, var(--wtr) 75%, transparent), var(--wtr)); transition: width .9s var(--spring); }
@@ -204,19 +206,22 @@ button.cell:active { background: var(--fill); }
 /* нижнее меню — плавающее стекло: вкладки в капсуле, «+» отдельным кругом; при прокрутке вниз сжимается */
 .tabbar { position: fixed; z-index: 20; left: 0; right: 0; bottom: max(10px, calc(var(--safe-b) - 12px)); pointer-events: none; }
 .tabbar .in { max-width: 540px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.tabs { pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
-.tabs .lens { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 999px; background: var(--lens);
-  transition: transform .55s var(--spring), width .45s var(--spring); }
-.tab { position: relative; z-index: 1; width: 84px; height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  font-size: 10px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
+.tabs { --tw: 84px; flex: none; pointer-events: auto; display: flex; position: relative; padding: 4px; border-radius: 999px; transition: padding .4s var(--spring); }
+/* «линза» стоит по номеру вкладки (--i) и ширине вкладки (--tw) из CSS — едет вместе с вкладками, без замеров в JS и рывка в конце */
+.tabs .lens { position: absolute; top: 4px; bottom: 4px; left: 4px; width: var(--tw); border-radius: 999px; background: var(--lens);
+  transform: translateX(calc(var(--i, 0) * var(--tw))); will-change: transform; transition: transform .45s var(--spring), width .45s var(--spring); }
+body.min .tabs .lens { transform: none; } /* сжатое меню: видна только выбранная вкладка */
+.tab { position: relative; z-index: 1; width: var(--tw); height: 54px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  font-size: 11px; font-weight: 600; color: var(--text); transition: width .45s var(--spring), height .45s var(--spring), color .2s; }
 .tab:not([aria-current]) { color: var(--text-2); }
 .tab svg { width: 26px; height: 26px; transition: transform .35s var(--spring); }
-.tab:active svg { transform: scale(.86); }
+.tab:active svg { transform: scale(.9); }
 .tab span { transition: opacity .2s, max-height .3s; max-height: 14px; overflow: hidden; }
-.fab { pointer-events: auto; width: 62px; height: 62px; border-radius: 31px; display: grid; place-items: center; color: var(--text); transition: transform .45s var(--spring), width .45s var(--spring), height .45s var(--spring); }
+.fab { flex: none; pointer-events: auto; width: 62px; height: 62px; border-radius: 31px; display: grid; place-items: center; color: var(--text); transition: transform .45s var(--spring), width .45s var(--spring), height .45s var(--spring); }
 .fab svg { width: 26px; height: 26px; }
-.fab:active { transform: scale(.88); }
-body.min .tab { width: 62px; height: 46px; }
+.fab:active { transform: scale(.92); }
+body.min .tabs { --tw: 62px; }
+body.min .tab { height: 46px; }
 body.min .tab span { opacity: 0; max-height: 0; }
 body.min .tab:not([aria-current]) { width: 0; opacity: 0; pointer-events: none; }
 body.min .fab { width: 54px; height: 54px; }
@@ -252,12 +257,14 @@ body.min .fab { width: 54px; height: 54px; }
 .composer .send:disabled { opacity: .3; }
 body.kb .tabbar, body.kb .edge-bottom { opacity: 0; pointer-events: none; }
 body.kb .composer { bottom: calc(var(--kbh, 0px) + 8px); }
-.view.enter { animation: viewIn .4s var(--ios); }
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: .28s; animation-timing-function: cubic-bezier(.32,.72,0,1); }
+.view.enter { animation: appear .24s ease-out; }
+#actions.enter { animation: appear .24s ease-out; }
+@keyframes appear { from { opacity: 0; } }
+.view.swap .card { animation: fadeIn .3s var(--ios); } /* Неделя ↔ Месяц: графики меняются мягко */
+@keyframes fadeIn { from { opacity: .35; } }
 .sheet .list { content-visibility: auto; contain-intrinsic-size: auto 560px; } /* длинные списки в листе рисуются по мере прокрутки */
 .app .list, .card { contain: layout paint; }
 button, .cell { -webkit-touch-callout: none; }
-@keyframes viewIn { from { opacity: 0; transform: scale(.985); } }
 
 /* история */
 .card { background: var(--group); border-radius: 26px; padding: 18px; }
@@ -345,7 +352,7 @@ button, .cell { -webkit-touch-callout: none; }
 .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 12px; }
 .days button { height: 40px; border-radius: 999px; background: var(--fill); color: var(--text-2); font-size: 14px; font-weight: 600; transition: background .2s, color .2s, transform .35s var(--spring); }
 .days button[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); }
-.days button:active { transform: scale(.9); }
+.days button:active { transform: scale(.94); }
 
 /* фото */
 .shot { position: relative; height: 210px; border-radius: 28px; overflow: hidden; margin-top: 4px; background: var(--fill); }
@@ -362,14 +369,14 @@ button, .cell { -webkit-touch-callout: none; }
 .pi { gap: 10px; }
 .pi .n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
 .pi .check { width: 26px; height: 26px; border-radius: 13px; border: 1.5px solid var(--text-3); display: grid; place-items: center; flex: none; transition: background .2s, border-color .2s, transform .35s var(--spring); }
-.pi .check:active { transform: scale(.85); }
+.pi .check:active { transform: scale(.9); }
 .pi .check svg { width: 14px; height: 14px; color: var(--on-ink); opacity: 0; transition: opacity .2s; }
 .pi.on .check { background: var(--ink); border-color: var(--ink); }
 .pi.on .check svg { opacity: 1; }
 .pi:not(.on) .t, .pi:not(.on) .mini { opacity: .4; }
 .mini { display: flex; align-items: center; gap: 4px; }
 .mini button { width: 32px; height: 32px; border-radius: 16px; background: var(--fill); display: grid; place-items: center; transition: transform .35s var(--spring); }
-.mini button:active { transform: scale(.85); }
+.mini button:active { transform: scale(.9); }
 .mini button svg { width: 12px; height: 12px; }
 .mini .g { width: 52px; height: 32px; border: 0; border-radius: 10px; background: transparent; text-align: center; font-size: 17px; font-weight: 600; padding: 0; }
 .mini .g:focus { outline: none; background: var(--fill); }
@@ -398,6 +405,46 @@ button, .cell { -webkit-touch-callout: none; }
 .toast span { overflow: hidden; text-overflow: ellipsis; }
 .toast.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
 .toast button { color: var(--p); font-weight: 600; }
+
+
+/* ——— широкие экраны: iPad, ноутбук, монитор (правило Глеба 29.10 — нормальный вид на всех устройствах) ——— */
+.wkrow { display: flex; align-items: center; gap: 4px; }
+.wkrow .week { flex: 1; }
+.wk-nav { display: none; width: 36px; height: 36px; border-radius: 18px; place-items: center; color: var(--text-2); flex: none; }
+.wk-nav svg { width: 10px; height: 16px; }
+.wk-nav[disabled] { opacity: .25; pointer-events: none; }
+@media (hover: hover) and (pointer: fine) { /* мышь: стрелки недели, подсветка под курсором */
+  .wk-nav { display: grid; margin-top: 18px; }
+  .wk-nav:hover, .ibtn:hover, .hbtn:hover, .tab:hover, .chip:hover, .wb:hover, .starter:hover { background: var(--lens); }
+  button.cell:hover, .wd:hover { background: var(--fill); }
+  .btn:hover { opacity: .9; }
+  button, [role=button] { cursor: pointer; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: var(--fill-2); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
+}
+@media (min-width: 768px) { /* iPad и больше: окна — по центру, как на iPad */
+  .sheet, .sheet.short { top: 50%; bottom: auto; left: 50%; right: auto; width: min(600px, 92vw); max-width: none; margin: 0;
+    height: min(86dvh, 880px); border-radius: 38px; transform: translate(-50%, -46%) scale(.97); opacity: 0; transition: transform .45s var(--ios), opacity .3s; }
+  .sheet.short { height: auto; max-height: 86dvh; }
+  .sheet.on { transform: translate(-50%, -50%); opacity: 1; }
+  .sheet .head::before { display: none; }
+  .ring-wrap { width: 260px; }
+  .seg button { height: 38px; }
+}
+@media (min-width: 960px) { /* ноутбук и монитор: две колонки */
+  .app { max-width: 1180px; padding-left: 40px; padding-right: 40px; }
+  .tgrid { display: grid; grid-template-columns: minmax(360px, 440px) 1fr; gap: 48px; align-items: start; }
+  .tb > .sec:first-child { margin-top: 52px; }
+  .hgrid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 0 32px; align-items: start; }
+  .hgrid .hcal { grid-row: span 2; }
+  .view.chat { max-width: 760px; margin: 0 auto; }
+  .composer { width: min(728px, calc(100% - 32px)); }
+  .actions { right: max(40px, calc(50% - 550px)); }
+  .today-btn { left: max(40px, calc(50% - 550px)); }
+  .tabbar .in { justify-content: center; gap: 14px; }
+  .large { font-size: 40px; }
+}
+@media (min-width: 960px) and (min-height: 820px) { .ta { position: sticky; top: calc(64px + var(--safe-t)); } } /* левая колонка стоит, правая листается */
+@media (min-width: 1600px) { .app { max-width: 1320px; } .tgrid { grid-template-columns: 480px 1fr; gap: 64px; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
@@ -599,6 +646,7 @@ const I = {
   x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
   undo: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5L3 9l4 4"/><path d="M3 9h9a5 5 0 0 1 0 10H9"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.8h6V7M6.5 7l.9 12.2h9.2L17.5 7"/></svg>',
+  chevR: '<svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l8 8-8 8"/></svg>',
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
 };
 
@@ -698,16 +746,19 @@ addEventListener('scroll', () => { if (!scrollTick) { scrollTick = true; request
 function onScroll() {
   if (lockY != null) return; // лист открыт — меню и полосу не трогаем
   const y = scrollY, b = document.body.classList;
-  b.toggle('scrolled', y > 46);
-  if (y < 80 || y < lastY - 6) b.remove('min'); else if (y > lastY + 6) b.add('min');
-  if (Math.abs(y - lastY) > 6) { lastY = y; setTimeout(placeLens, 460); placeLens(); }
+  if (b.contains('scrolled') !== y > 46) b.toggle('scrolled', y > 46);
+  // меню сжимается после 40 px вниз и раскрывается после 60 px вверх (или у верха): мелкие рывки пальца,
+  // инерция и отскок у краёв страницы его больше не дёргают туда-сюда
+  const maxY = document.documentElement.scrollHeight - innerHeight;
+  if (y < 0 || y > maxY - 2) { lastY = Math.min(Math.max(y, 0), maxY); return; } // отскок у краёв
+  const min = b.contains('min'), dy = y - lastY;
+  if (y < 80) { if (min) b.remove('min'); lastY = y; }
+  else if (min ? dy < -60 : dy > 40) { b.toggle('min', !min); lastY = y; }
+  else if (min ? dy > 0 : dy < 0) lastY = y; // едем в «свою» сторону — отсчёт заново от этой точки
 }
-function placeLens() { // «линза» под выбранной вкладкой
-  const on = $('.tab[aria-current]'), l = $('#lens'); if (!on) return;
-  const first = !l.dataset.placed;
-  if (first) l.style.transition = 'none';
-  l.style.width = on.offsetWidth + 'px'; l.style.transform = `translateX(${on.offsetLeft}px)`;
-  if (first) { void l.offsetWidth; l.style.transition = ''; l.dataset.placed = 1; }
+function placeLens() { // «линза» под выбранной вкладкой: номер вкладки → --i, дальше едет CSS
+  const tabs = [...document.querySelectorAll('.tab[data-tab]')];
+  $('#tabs').style.setProperty('--i', Math.max(0, tabs.findIndex(t => t.dataset.tab === view)));
 }
 function placeSeg(seg, squish) { // «линза» сегментов; squish — пружинит при переезде
   if (!seg) return;
@@ -746,14 +797,16 @@ function renderToday(animate) {
   const metric = (k, n, val, goal, unit, color) => { const w = Math.min(100, (num(val) / goal) * 100 || 0); now[k] = w;
     return `<div class="metric" style="--dot:${color}"><div class="n">${n}</div>
     <div class="v num">${val}<small> / ${k === 's' ? dec(goal) : goal} ${unit}</small></div><div class="b"><i data-w="${w}%" style="width:${was[k] ?? (animate ? 0 : w)}%"></i></div></div>`; };
-  $('#app').innerHTML = `<div class="view${animate ? ' enter' : ''}">
+  $('#app').innerHTML = `<div class="view${animate ? ' enter' : ''}"><div class="tgrid"><div class="ta">
     <h1 class="large">${dateTitle(cur)}</h1>
     <div class="subtitle">${WEEK_FULL[wdi(cur)]}, ${x.getDate()} ${MONTHS[x.getMonth()]}${st > 1 ? `<span class="streak">${I.flame}${st} ${plural(st, 'день', 'дня', 'дней')} подряд</span>` : ''}</div>
+    <div class="wkrow"><button class="wk-nav press" id="wkPrev" aria-label="Прошлая неделя">${I.back}</button>
     <div class="week" id="week">${weekDays().map(dd => {
       const tt = totals(dd).kcal, gg = S.goals[dayType(dd)].kcal;
       return `<button class="wd${dd === today() ? ' today' : ''}" data-d="${dd}" ${dd === cur ? 'aria-current="date"' : ''} ${dd > today() ? 'disabled' : ''} aria-label="${dateTitle(dd)}">
         <span class="l">${WEEK[wdi(dd)]}</span>${ringSvg(tt / gg, 34, 4, 'var(--ink)')}</button>`;
     }).join('')}</div>
+    <button class="wk-nav press" id="wkNext" aria-label="Следующая неделя" ${weekDays()[6] >= today() ? 'disabled' : ''}>${I.chevR}</button></div>
     <div class="seg" id="seg"><span class="thumb"></span>
       <button data-type="train" aria-pressed="${type === 'train'}">Тренировка</button>
       <button data-type="rest" aria-pressed="${type === 'rest'}">Отдых</button></div>
@@ -770,6 +823,7 @@ function renderToday(animate) {
       ${metric('s', 'Соль', dec(t.salt), S.salt, 'г', salt > 1 ? 'var(--bad)' : salt > 0.8 ? 'var(--warn)' : 'var(--s)')}
     </div>
     ${waterCard()}
+    </div><div class="tb">
     ${MEALS.map(([m, n]) => {
       const its = d.items.filter(i => i.meal === m);
       const sum = its.reduce((a, i) => a + i.kcal, 0);
@@ -780,7 +834,7 @@ function renderToday(animate) {
           <span class="k num">${fmt(i.kcal)}</span></button></div>`).join('')}
           <button class="cell add" data-add="${m}">${I.plus}Добавить<span class="ph" data-photo="${m}" role="button" aria-label="По фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</span></button></div></section>`;
     }).join('')}
-  </div>`;
+  </div></div></div>`;
   lastAdded = null;
   placeThumb();
   countUp($('#left'), shown.left, Math.abs(left));
@@ -798,6 +852,8 @@ function renderToday(animate) {
   $('#camBtn').onclick = () => photoFlow(mealNow());
   $('#week').onclick = e => { const b = e.target.closest('[data-d]'); if (b && b.dataset.d !== cur) { cur = b.dataset.d; shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); } };
   swipeWeek($('#week'));
+  const wk = n => { const next = addDays(cur, n); cur = next > today() ? today() : next; shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); };
+  $('#wkPrev').onclick = () => wk(-7); $('#wkNext').onclick = () => wk(7); // мышью — стрелками (на телефоне — свайп)
   $('#seg').onclick = e => {
     const b = e.target.closest('button'), seg = $('#seg'); if (!b || b.getAttribute('aria-pressed') === 'true') return;
     seg.querySelectorAll('button').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz();
@@ -904,7 +960,8 @@ function countUp(el, from, to) {
 }
 
 /* ——— «История» ——— */
-function renderHistory(enter) {
+function renderHistory(enter, swap) { // swap — сменили Неделя/Месяц: переключатель тот же, графики мягко меняются
+  const oldSeg = swap && $('#seg');
   $('#navTitle').textContent = 'История';
   $('#todayBtn').hidden = true;
   setActions('');
@@ -937,12 +994,13 @@ function renderHistory(enter) {
     spark = `<div class="chart"><svg viewBox="0 0 340 74"><polyline points="${xy.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="var(--ink)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
       <circle cx="${xy[xy.length - 1][0].toFixed(1)}" cy="${xy[xy.length - 1][1].toFixed(1)}" r="4.5" fill="var(--ink)"/></svg></div>`;
   }
-  $('#app').innerHTML = `<div class="view${enter ? ' enter' : ''}">
+  $('#app').innerHTML = `<div class="view${enter ? ' enter' : swap ? ' swap' : ''}">
     <h1 class="large">История</h1>
     <div class="seg" id="seg"><span class="thumb"></span>
       <button data-r="7" aria-pressed="${histRange === 7}">Неделя</button>
       <button data-r="30" aria-pressed="${histRange === 30}">Месяц</button></div>
-    <section class="sec"><div class="sec-h"><h2>Калории</h2></div>
+    <div class="hgrid">
+    <section class="sec hcal"><div class="sec-h"><h2>Калории</h2></div>
       <div class="card">
         <div class="kpis">
           <div class="kpi"><div class="n">В среднем</div><div class="v num">${logged.length ? fmt(avg) : '—'}</div></div>
@@ -972,12 +1030,13 @@ function renderHistory(enter) {
       <div class="list" style="margin-top:14px"><button class="cell" id="addW"><span class="t"><div class="n">Записать вес</div></span>${I.chev}</button>
         ${ws.slice(-6).reverse().map(([d, w]) => `<div class="cell"><span class="t"><div class="n">${dateTitle(d)}</div></span><span class="k num">${dec(w)} кг</span></div>`).join('')}</div>
     </section>
-  </div>`;
+  </div></div>`;
+  if (oldSeg) $('#seg').replaceWith(oldSeg); // старая «линза» доезжает без рывка
   placeThumb();
   $('#seg').onclick = e => {
     const b = e.target.closest('button'), seg = $('#seg'); if (!b || +b.dataset.r === histRange) return;
     seg.querySelectorAll('button').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz();
-    histRange = +b.dataset.r; setTimeout(renderHistory, 260);
+    histRange = +b.dataset.r; setTimeout(() => renderHistory(false, true), 160);
   };
   $('#addW').onclick = openWeight;
 }
@@ -1141,7 +1200,7 @@ $('#scrim').onclick = closeSheet;
 $('#sheetClose').onclick = closeSheet;
 (() => { // лист тянется вниз пальцем
   const sh = $('#sheet'), head = sh.querySelector('.head'); let y0 = null, dy = 0;
-  head.addEventListener('touchstart', e => { if (e.target.closest('button')) return; y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
+  head.addEventListener('touchstart', e => { if (e.target.closest('button') || innerWidth >= 768) return; /* на iPad окно по центру — не тянется */ y0 = e.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
   head.addEventListener('touchmove', e => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); sh.style.transform = `translateY(${dy}px)`; }, { passive: true });
   const end = () => { if (y0 == null) return; y0 = null; sh.style.transition = ''; if (dy > 110) closeSheet(); else sh.style.transform = ''; };
   head.addEventListener('touchend', end); head.addEventListener('touchcancel', end);
@@ -1648,11 +1707,12 @@ function toast(text, action, fn) {
   toastT = setTimeout(() => t.classList.remove('on'), action ? 4000 : 2000);
 }
 
+function markTab() { document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')); placeLens(); }
 function render() {
-  document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
-  unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min'); placeLens();
+  markTab(); unlockScroll(); window.scrollTo(0, 0); document.body.classList.remove('scrolled', 'min');
   $('#composer').hidden = view !== 'chat';
   view === 'today' ? renderToday(true) : view === 'chat' ? renderChat(true) : renderHistory(true);
+  const a = $('#actions'); a.classList.remove('enter'); void a.offsetWidth; a.classList.add('enter'); // верхние кнопки проявляются вместе со страницей
 }
 if (window.visualViewport) visualViewport.addEventListener('resize', () => { // клавиатура не закрывает низкий лист
   const kb = Math.max(0, innerHeight - visualViewport.height - visualViewport.offsetTop);
@@ -1662,12 +1722,17 @@ if (window.visualViewport) visualViewport.addEventListener('resize', () => { // 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 $('#tabs').addEventListener('click', e => { // сжатое меню: нажатие раскрывает его, как в iOS
   if (!document.body.classList.contains('min')) return;
-  e.stopPropagation(); e.preventDefault(); document.body.classList.remove('min'); buzz(); setTimeout(placeLens, 460);
+  e.stopPropagation(); e.preventDefault(); document.body.classList.remove('min'); buzz();
 }, true);
-const smooth = fn => document.startViewTransition && !reduce() ? document.startViewTransition(fn) : fn();
+// смена вкладки: сначала линза и цвет вкладки (сразу, в этом кадре), страница — со следующего кадра,
+// чтобы тяжёлая отрисовка не задерживала отклик меню; без снимка всей страницы (startViewTransition) — он и дёргал меню
+let renderQ = 0;
 document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => {
-  if (view !== t.dataset.tab) { view = t.dataset.tab; buzz(); smooth(render); } else window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (view === t.dataset.tab) return window.scrollTo({ top: 0, behavior: 'smooth' });
+  view = t.dataset.tab; markTab(); buzz();
+  if (!renderQ) renderQ = requestAnimationFrame(() => setTimeout(() => { renderQ = 0; render(); }));
 });
+document.addEventListener('touchstart', () => {}, { passive: true }); // без этого iPhone не показывает нажатие (:active) на кнопках
 $('#addTab').onclick = () => { if (view !== 'today') { view = 'today'; render(); } buzz(); openAdd(); };
 $('#todayBtn').onclick = () => { cur = today(); shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); };
 addEventListener('resize', () => { placeThumb(); placeLens(); });
