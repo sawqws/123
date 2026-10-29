@@ -1,0 +1,12 @@
+{
+  "_": "Настройки «Пульта» (custom.txt). app-name — латиницей: оно же имя службы, папки и скриптов Windows.",
+  "app-name": "Pult",
+  "default-settings": {
+    "image-quality": "best",
+    "codec-preference": "auto"
+  },
+  "override-settings": {
+    "enable-check-update": "N",
+    "allow-auto-update": "N"
+  }
+}
