@@ -38,12 +38,21 @@ jobs:
           $f = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Пульт - ID и пароль.txt'
           Get-Content $f -Encoding UTF8
           if (-not (Select-String -Path $f -Pattern 'Test-Pult-42' -Quiet)) { throw 'нет пароля в файле' }
+      - name: Свой сервер связи прописан
+        shell: pwsh
+        run: |
+          $exe = "$env:ProgramFiles\RustDesk\rustdesk.exe"
+          $srv = (& $exe --option custom-rendezvous-server | Out-String).Trim()
+          $key = (& $exe --option key | Out-String).Trim()
+          "сервер: $srv"; "ключ: $key"
+          if ($srv -ne '2.27.206.165') { throw 'не свой сервер' }
+          if (!$key) { throw 'нет ключа' }
       - name: Настройки качества записаны
         shell: pwsh
         run: |
           $f = "$env:APPDATA\RustDesk\config\RustDesk_default.toml"
           Get-Content $f
-          foreach ($l in "image_quality = 'best'", "codec-preference = 'auto'") {
+          foreach ($l in "image_quality = 'custom'", "custom-fps = '60'", "codec-preference = 'auto'") {
             if (-not (Select-String -Path $f -SimpleMatch $l -Quiet)) { throw "нет строки: $l" }
           }
           # повторный запуск не плодит дубли
