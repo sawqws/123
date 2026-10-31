@@ -433,6 +433,28 @@ class RemoteTest(Base):
         return subprocess.run([sys.executable, os.path.join(HERE, "remote.py"), *args], env=env,
                               capture_output=True, text=True, timeout=30)
 
+    def test_ask_separate_key_text_only(self):
+        """/api/ask: свой ключ HUB_ASK_KEY, ключ Claude-входа не подходит, claude без инструментов."""
+        calls = []
+
+        def fake_run(cmd, **k):
+            calls.append((cmd, k))
+            return mock.Mock(stdout="  Ответ  ", returncode=0)
+
+        with mock.patch.dict(os.environ, {"HUB_ASK_KEY": "a" * 32}), mock.patch.object(hub.subprocess, "run", fake_run):
+            self.assertEqual(self.post("ask", {"prompt": "hi"})[0], 401)
+            self.assertEqual(self.post("ask", {"prompt": "hi"}, key="b" * 32)[0], 401)
+            st, d = self.post("ask", {"prompt": "привет"}, key="a" * 32)
+            self.assertEqual((st, d), (200, {"text": "Ответ"}))
+            self.assertEqual(self.post("ask", {}, key="a" * 32)[0], 400)
+            self.assertEqual(self.post("status", key="a" * 32)[0], 403)  # ask-ключ не открывает остальное API
+        cmd = calls[0][0]
+        self.assertEqual(cmd[:3], ["claude", "-p", "привет"])
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "")
+        self.assertIn("--strict-mcp-config", cmd)
+        with mock.patch.dict(os.environ, {"HUB_ASK_KEY": ""}):
+            self.assertEqual(self.post("ask", {"prompt": "x"}, key="")[0], 401)  # без ключа на сервере — закрыто
+
     def test_off_by_default_and_keys(self):
         self.assertEqual(self.post("status", key="x")[0], 403)
         hub.on_callback({"id": "1", "from": {"id": U}, "data": "cl|on", "message": {"chat": {"id": U}, "message_id": 3}})

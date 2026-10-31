@@ -36,6 +36,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -1863,6 +1864,28 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": str(e)})
 
+    def ask_api(self):
+        if not ask_key_ok(self.headers.get("Authorization") or ""):
+            return self.reply(401, {"error": "неверный ключ"})
+        now = time.time()
+        with ask_lock:
+            ask_times[:] = [t for t in ask_times if now - t < 60]
+            if len(ask_times) >= 20:
+                return self.reply(429, {"error": "слишком часто"})
+            ask_times.append(now)
+        try:
+            n = self.length()
+            body = json.loads(self.rfile.read(min(n, 100_000)) or b"{}") if n else {}
+            prompt = str(body.get("prompt") or "")[:30000]
+        except ValueError:
+            return self.reply(400, {"error": "bad json"})
+        if not prompt:
+            return self.reply(400, {"error": "нет prompt"})
+        try:
+            self.reply(200, {"text": ask_claude(prompt)})
+        except subprocess.TimeoutExpired:
+            self.reply(504, {"error": "timeout"})
+
     def length(self):
         """Content-Length; мусор или меньше нуля — ValueError (ответ 400): иначе read(-1) ждал бы конца соединения."""
         n = int(self.headers.get("Content-Length") or 0)
@@ -1939,6 +1962,8 @@ class Web(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": "bad json"})
             body = body if isinstance(body, dict) else {}
             return self.app_api(lambda b_: app_action(b_.get("action"), b_.get("arg")), body)
+        if self.path.rstrip("/") == "/api/ask":  # 💬 внешний помощник: только текст, отдельный ключ
+            return self.ask_api()
         now = time.time()
         with fails_lock:
             fails[:] = [t for t in fails if now - t < 3600]
@@ -1969,6 +1994,26 @@ class Web(BaseHTTPRequestHandler):
         except Exception as e:
             traceback.print_exc()
             self.reply(500, {"error": str(e)})
+
+
+ask_times = []
+ask_lock = threading.Lock()
+
+
+def ask_key_ok(header):
+    """Отдельный ключ HUB_ASK_KEY (не ключ Claude-входа): даёт только ответ текстом, без доступа к серверу."""
+    key = os.environ.get("HUB_ASK_KEY") or ""
+    got = header[7:].strip() if header.startswith("Bearer ") else ""
+    return len(key) >= 24 and bool(got) and hmac.compare_digest(hashlib.sha256(got.encode()).digest(),
+                                                                hashlib.sha256(key.encode()).digest())
+
+
+def ask_claude(prompt, timeout=150):
+    """claude -p без инструментов и MCP, в пустой папке: текст на вход — текст на выход."""
+    with tempfile.TemporaryDirectory() as d:
+        r = subprocess.run(["claude", "-p", prompt, "--tools", "", "--strict-mcp-config", "--output-format", "text"],
+                           capture_output=True, text=True, timeout=timeout, cwd=d)
+    return (r.stdout or "").strip()
 
 
 def serve():
