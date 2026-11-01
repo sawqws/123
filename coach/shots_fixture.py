@@ -4,7 +4,12 @@
   python3 coach/shots_fixture.py out.json [shots.json]
   node common/webapp/shots.js coach/webapp out.json /tmp/x/coach
 
+  python3 coach/shots_fixture.py --serve 8790 [--kcal-stub]   # локальный сервер для devcheck/perfcheck/своих сценариев
+
 shots.json — список снимков для shots.js ([{"name": ..., "click": [...], "wait": ...}]); без него — главная.
+--serve: http://127.0.0.1:<порт>/ — приложение как сайт (без Telegram), /api/… — эти же примеры, /kcal/ — «Калории»
+из docs/kcal (coach.kcal_static, как на сервере); пока в docs/kcal нет режима embed (или с --kcal-stub) — заглушка
+KCAL_STUB по договору coach/SYNC.md, п. 5 (сегменты сверху, отступ под меню Формы, тема, kcal-changed).
 Ответы на POST с телом здесь не различаются: shots.js отдаёт один ответ на путь. Свои /api/… разделов (f_*.py)
 добавляются сами: для каждого пути из EXTRA_PATHS вызывается route с пустым телом.
 """
@@ -100,7 +105,105 @@ def build(shots=None):
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
 
+# Заглушка встроенных «Калорий» (embed) для скриншотов и замеров, пока настоящие в этой ветке без режима embed
+KCAL_STUB = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Калории</title>
+<style>
+:root{--bg:#000;--card:#141415;--ink:#fff;--hint:rgba(235,235,245,.6);--fill:rgba(120,120,128,.24);color-scheme:dark}
+:root.lt{--bg:#fff;--card:#f2f2f7;--ink:#000;--hint:rgba(60,60,67,.6);--fill:rgba(120,120,128,.14);color-scheme:light}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);
+font:16px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:760px;margin:0 auto;padding:12px 16px calc(env(safe-area-inset-bottom) + 90px)}
+@media (min-width:1024px){main{max-width:1100px;padding:24px 32px 32px;display:grid;grid-template-columns:1fr 1fr;gap:0 24px}
+ .seg,h1{grid-column:1/-1}}
+.seg{position:sticky;top:0;z-index:2;display:flex;gap:4px;padding:3px;border-radius:999px;background:var(--fill);
+ -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);margin-bottom:14px}
+.seg button{flex:1;min-height:36px;border:0;border-radius:999px;background:none;color:var(--ink);font:600 14px/1 inherit}
+.seg button.on{background:var(--card);box-shadow:0 2px 8px rgba(0,0,0,.18)}
+h1{font-size:30px;margin:6px 4px 14px;letter-spacing:-.02em}
+.card{background:var(--card);border-radius:28px;padding:20px;margin-bottom:14px}
+.top{display:flex;gap:20px;align-items:center}.ring{flex:none;width:118px;height:118px;border-radius:50%;display:grid;place-items:center;
+ background:conic-gradient(var(--ink) 0 37%,var(--fill) 0);position:relative}
+.ring::after{content:"";position:absolute;inset:10px;border-radius:50%;background:var(--card)}
+.ring b{position:relative;z-index:1;font-size:24px;text-align:center}.ring b small{display:block;font-size:12px;color:var(--hint);font-weight:500}
+.m{flex:1}.m div{display:flex;justify-content:space-between;font-size:14px;color:var(--hint);margin:6px 0}.m b{color:var(--ink)}
+.row{display:flex;justify-content:space-between;align-items:center;min-height:52px;border-top:.5px solid var(--fill)}
+.row:first-of-type{border:0}.row span{color:var(--hint);font-size:13px;display:block}
+.add{width:100%;min-height:48px;border:0;border-radius:999px;background:var(--ink);color:var(--bg);font:600 16px/1 inherit;margin-top:8px}
+</style></head><body><main>
+<nav class="seg"><button class="on">Дневник</button><button>Неделя</button><button>Чат</button><button>Цели</button></nav>
+<h1>Сегодня</h1>
+<section class="card"><div class="top"><div class="ring"><b>2 158<small>ккал осталось</small></b></div>
+<div class="m"><div>Белок <b>88/130 г</b></div><div>Жиры <b>30/105 г</b></div><div>Углеводы <b>156/485 г</b></div><div>Соль <b>2,1/5 г</b></div></div></div>
+<button class="add" id="add">Добавить еду</button></section>
+<section class="card"><b>Завтрак</b><div class="row"><div>Овсянка с бананом<span>300 г · Б 12 · Ж 8 · У 74</span></div><b>420</b></div></section>
+<section class="card"><b>Обед</b><div class="row"><div>Гречка с курицей<span>350 г · Б 42 · Ж 12 · У 68</span></div><b>560</b></div></section>
+<section class="card"><b>Перекус</b><div class="row"><div>Творог 5% с ягодами<span>220 г · Б 34 · Ж 10 · У 14</span></div><b>262</b></div></section>
+<section class="card"><b>Ужин</b><div class="row"><div>Пока пусто<span>сфотографируй тарелку</span></div><b>—</b></div></section>
+<section class="card"><b>Вода</b><div class="row"><div>750 мл из 3 л<span>08:10 · 250 мл, 12:30 · 500 мл</span></div><b>25%</b></div></section>
+<section class="card"><b>Неделя</b><div class="row"><div>В среднем 2 940 ккал<span>белок 121 г в день</span></div><b>▲</b></div></section>
+</main><script>
+var q=new URLSearchParams(location.search);function th(t){document.documentElement.classList.toggle('lt',t==='light')}
+th(q.get('theme'));addEventListener('message',function(e){if(e.origin===location.origin&&e.data&&e.data.type==='forma-theme')th(e.data.theme)});
+document.getElementById('add').onclick=function(){parent.postMessage({type:'kcal-changed'},location.origin)};
+document.querySelectorAll('.seg button').forEach(function(b){b.onclick=function(){document.querySelectorAll('.seg button').forEach(function(x){x.classList.toggle('on',x===b)})}});
+</script></body></html>"""
+
+
+def serve(port, stub=False):
+    """Локальный сервер для проверки вида: приложение как сайт, /api/… — примеры, /kcal/ — «Калории» (или заглушка)."""
+    import re
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import urllib.parse
+    api = build()["api"]
+    api["/api/kcal/state"] = {"days": {}, "goals": None, "salt": None, "water": None}
+    index = os.path.join(coach.KCAL_DIR, "index.html")
+    stub = stub or not (os.path.isfile(index) and "embed" in open(index, encoding="utf-8").read())
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def send(self, code, body, ctype="application/json; charset=utf-8", headers=None):
+            body = body if isinstance(body, bytes) else (body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str)).encode()
+            self.send_response(code)
+            for k, v in {"Content-Type": ctype, "Content-Length": str(len(body)), "Cache-Control": "no-store", **(headers or {})}.items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.do_GET()
+
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path)
+            path = u.path
+            if path.startswith("/api/"):
+                return self.send(200, api.get(path, {}))
+            if path in ("/kcal/", "/kcal/index.html") and stub:
+                return self.send(200, KCAL_STUB, "text/html; charset=utf-8")
+            if path == "/kcal" or path.startswith("/kcal/"):
+                code, body, ctype, cache, extra = coach.kcal_static(path, u.query, self.headers)
+                return self.send(code, body, ctype, {**extra, "Cache-Control": cache})
+            name = "index.html" if path in ("/", "/site/") else os.path.basename(path)
+            file = os.path.join(coach.WEB, name)
+            if not name or not os.path.isfile(file):
+                return self.send(404, {"error": "not found"})
+            body = open(file, "rb").read()
+            if name == "index.html":
+                body = re.sub(rb'\s*<script src="https://telegram\.org/[^"]*"></script>', b"", body).replace(b"{{v}}", b"1")
+            ctype = coach.mimetypes.guess_type(name)[0] or "application/octet-stream"
+            return self.send(200, body, ctype + ("; charset=utf-8" if ctype.startswith("text/") or ctype.endswith("javascript") else ""))
+
+    print(f"http://127.0.0.1:{port}/  · «Калории»: {'заглушка' if stub else coach.KCAL_DIR}", flush=True)
+    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+
+
 if __name__ == "__main__":
+    if ARGS and ARGS[0] == "--serve":
+        serve(int(ARGS[1]) if len(ARGS) > 1 and ARGS[1].isdigit() else 8790, "--kcal-stub" in ARGS)
+        sys.exit()
     out = ARGS[0]
     shots = json.load(open(ARGS[1])) if len(ARGS) > 1 else None
     json.dump(build(shots), open(out, "w"), ensure_ascii=False, default=str)
