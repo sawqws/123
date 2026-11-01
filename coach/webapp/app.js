@@ -6,7 +6,7 @@
     const el = Kit.sheet(html, onClose), back = el.previousElementSibling;
     let y0 = null, t0 = 0, dy = 0, drag = false;
     el.addEventListener('touchstart', e => {
-      if (e.touches.length !== 1 || e.target.closest('input, textarea, select, .seg, .chips')) return;
+      if (e.touches.length !== 1 || e.target.closest('input, textarea, select, .seg, .chips, .rg-days') || matchMedia('(min-width: 1024px)').matches) return;  // на широком лист — окно по центру
       y0 = e.touches[0].clientY; t0 = performance.now(); dy = 0; drag = false;
     }, { passive: true });
     el.addEventListener('touchmove', e => {
@@ -201,7 +201,10 @@
   }
 
   // ---------- графики (SVG без библиотек) ----------
-  const chartW = () => Math.max(200, Math.min(($('#app') || view).clientWidth || 358, 800) - 40);  // карточка: padding 20 + 20
+  const chartW = () => {  // карточка: padding 20 + 20; на широком экране — ширина колонки
+    const w = ($('#app') || view).clientWidth || 358, cols = WIDE3.matches ? 3 : WIDE.matches ? 2 : 1;
+    return Math.max(200, Math.min((w - (cols - 1) * 24) / cols, 800) - 40);
+  };
   const CH = 112, LAB = 22;
   function xLabels(days, W, slot) {
     const n = days.length, fits = Math.max(2, Math.floor(W / (n <= 7 ? 30 : 58)));
@@ -269,18 +272,24 @@
   const TABS = [{ id: 'today', icon: I.home, label: 'Главная' }, { id: 'trends', icon: I.health, label: 'Здоровье' },
     { id: 'plus', icon: I.plus, label: 'Добавить' }, { id: 'food', icon: I.food, label: 'Питание' }, { id: 'coach', icon: I.coach, label: 'Тренер' }];
   let tabs;
+  // широкий экран (ноутбук, монитор, iPad боком): меню — колонкой слева, карточки — в 2–3 колонки (layout.css)
+  const WIDE = matchMedia('(min-width: 1024px)'), WIDE3 = matchMedia('(min-width: 1600px)');
+  const wide = () => WIDE.matches;
   // подложка активной вкладки переезжает пружиной (меню перерисовывается целиком — помним, откуда ехать)
   function tabInd() {
     const bar = $('#tabs'); if (!bar) return;
-    const on = bar.querySelector('button.on:not([data-tab="coach"]):not([data-tab="plus"])');
+    const side = wide();
+    const on = bar.querySelector(side ? 'button.on:not([data-tab="plus"])' : 'button.on:not([data-tab="coach"]):not([data-tab="plus"])');
     let ind = bar.querySelector('.tab-ind');
+    const place = () => { ind.style.transform = `translate(${S.indX}px,${S.indY}px)`; ind.style.width = S.indW + 'px'; ind.style.height = side ? S.indH + 'px' : ''; };
     if (!ind) {
       ind = document.createElement('i'); ind.className = 'tab-ind'; bar.append(ind);
-      if (S.indX != null) { ind.style.transition = 'none'; ind.style.transform = `translateX(${S.indX}px)`; ind.style.width = S.indW + 'px'; ind.style.opacity = S.indO; void ind.offsetWidth; ind.style.transition = ''; }
+      if (S.indX != null && S.indSide === side) { ind.style.transition = 'none'; place(); ind.style.opacity = S.indO; void ind.offsetWidth; ind.style.transition = ''; }
     }
     if (!on) { ind.style.opacity = 0; S.indO = 0; return; }
-    S.indX = on.offsetLeft; S.indW = on.offsetWidth; S.indO = 1;
-    ind.style.transform = `translateX(${S.indX}px)`; ind.style.width = S.indW + 'px'; ind.style.opacity = 1;
+    if (S.indSide !== side) { ind.style.transition = 'none'; requestAnimationFrame(() => { ind.style.transition = ''; }); }
+    S.indSide = side; S.indX = on.offsetLeft; S.indY = side ? on.offsetTop : 0; S.indW = on.offsetWidth; S.indH = on.offsetHeight; S.indO = 1;
+    place(); ind.style.opacity = 1;
   }
   function go(tab) {
     if (tab === 'plus') { tabs.set(S.tab); plusSheet(); return; }
@@ -346,17 +355,26 @@
       ${bar(pct(w.drank, w.target), 'var(--water)')}
       ${w.note ? `<p class="small muted">${esc(w.note)}</p>` : ''}
       <div class="btns">${q.map(([ml, k]) => `<button class="btn tonal water-b" data-a="water" data-v="${ml}"><b class="num">+${ml}</b><span>${k}</span></button>`).join('')}</div>
-      ${full && w.log.length ? `<div class="logs">${w.log.map(x => `<span class="pill num">${esc(x.time)} · ${x.ml} мл<button data-a="water-del" data-v="${x.id}" aria-label="Удалить">✕</button></span>`).join('')}</div>` : ''}
+      ${full && w.log.length ? `<div class="logs">${w.log.map(x => x.src === 'kcal'
+        ? `<span class="pill num kc" title="Записано в «Калориях»">${esc(x.time)} · ${x.ml} мл<i>Калории</i></span>`
+        : `<span class="pill num">${esc(x.time)} · ${x.ml} мл<button data-a="water-del" data-v="${x.id}" aria-label="Удалить">✕</button></span>`).join('')}</div>` : ''}
       ${full ? `<p class="small muted">Норма: ${esc(w.why)}. Боту можно писать «выпил 500 мл».</p>` : ''}</section>`;
   }
 
+  // цели дня: из «Калорий» (если связаны), иначе — наш расчёт по тратам
+  function foodGoals(t) {
+    const k = t.kcal && t.kcal.goals, n = t.nutrition;
+    if (k && k.kcal) return { kcal: k.kcal, protein: k.protein, fat: k.fat, carbs: k.carbs, salt: k.salt, water: k.water, src: 'kcal' };
+    return n ? { kcal: n.kcal, protein: n.protein, fat: n.fat, carbs: n.carbs, salt: null, water: n.water, src: 'forma' } : null;
+  }
   function foodMini(t) {
-    const n = t.nutrition, e = t.eaten;
+    const n = foodGoals(t), e = t.eaten;
     const right = n ? `<span class="num"><b>${big(e.kcal)}</b> / ${big(n.kcal)} ккал</span>` : `<span class="num"><b>${big(e.kcal)}</b> ккал</span>`;
     return `<section class="card rise tap" data-a="tab" data-v="food" role="button">${head(`<span class="hico" style="--hc:var(--food)">${I.food}</span>Питание`, right + '<span class="chev"></span>')}
       ${n ? bar(pct(e.kcal, n.kcal), 'var(--food)') : ''}
       <div class="macros num">${n ? `<span>Б <b>${e.protein}</b>/${n.protein}</span><span>Ж <b>${e.fat}</b>/${n.fat}</span><span>У <b>${e.carbs}</b>/${n.carbs} г</span>`
-        : `<span>${e.count ? `${e.count} ${plural(e.count, 'приём', 'приёма', 'приёмов')}` : 'Пока ничего — пришли фото еды'}</span>`}</div></section>`;
+        : `<span>${e.count ? `${e.count} ${plural(e.count, 'приём', 'приёма', 'приёмов')}` : 'Пока ничего — пришли фото еды'}</span>`}${e.salt != null ? `<span>соль <b>${num(e.salt, 1)}</b>${n && n.salt ? `/${num(n.salt, 0)}` : ''} г</span>` : ''}</div>
+      ${t.kcal ? `<p class="kc-from">из «Калорий»${t.kcal.updated ? ` · ${clock(t.kcal.updated)}` : ''}</p>` : ''}</section>`;
   }
 
   function delta(v, base, goodUp, unit = '') {
@@ -463,7 +481,7 @@
 
     // «Daily Outlook»: совет на день + «Узнать у тренера»
     const adv = advice(t);
-    h += `<section class="card outlook rise"><h3 class="ot">${r ? `<i class="zdot" style="background:${recC}"></i>${ZONE[z]}` : isToday ? 'Прогноз на день' : 'Разбор дня'}</h3>
+    h += `<section class="card outlook rise"><h3 class="ot">${r ? `<i class="zdot" style="background:var(--zone-${z}, ${recC})"></i>${ZONE[z]}` : isToday ? 'Прогноз на день' : 'Разбор дня'}</h3>
       ${S.briefing ? skel(2) : adv ? `<div class="prose advice">${adv}</div>`
         : `<p class="muted">${!isToday ? 'Разбора за этот день нет.' : d.morning === 'off' ? 'Утренний разбор выключен — время в профиле.' : `Разбор придёт утром, с ${esc(d.morning || '07:00')}, как только WHOOP посчитает сон.`}</p>`}
       ${isToday ? `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
@@ -895,24 +913,53 @@
   }
 
   // ---------- Питание ----------
+  const MEAL = { breakfast: 'Завтрак', lunch: 'Обед', dinner: 'Ужин', snack: 'Перекус' };
+  // «Калории» (отдельный сайт): связать в одно нажатие или открыть — /api/kcal/link → адрес с токеном
+  function kcalBlock(t) {
+    const k = t.kcal;
+    if (!k) return `<section class="card kc-invite rise"><div class="kc-ih"><span class="kc-ic">${I.flame}</span><span><b>Связать с Калориями</b>
+        <span class="muted">Еда, БЖУ, соль и вода из «Калорий» появятся здесь, а тренер будет их учитывать.</span></span></div>
+      <button class="btn primary" data-a="kcal-open">Связать с Калориями</button></section>`;
+    const items = k.items || [];
+    const rows = items.map(x => `<div class="row kc-row"><div class="main"><div class="title wrap">${esc(x.name)}</div>
+        <div class="meta num">${esc(MEAL[x.meal] || '')}${x.g ? `${MEAL[x.meal] ? ' · ' : ''}${Math.round(x.g)} г` : ''} · Б ${Math.round(x.p || 0)} · Ж ${Math.round(x.f || 0)} · У ${Math.round(x.c || 0)}</div></div>
+        <div class="end num"><b>${big(x.kcal)}</b></div></div>`).join('');
+    return `<div class="sec rise">${cap('Из Калорий', `<span class="num">${big((k.eaten || {}).kcal)} ккал</span>`)}
+      ${items.length ? `<div class="list kc-list">${rows}</div>` : '<section class="card"><p class="muted small">Сегодня в «Калориях» пока пусто.</p></section>'}
+      <button class="btn tonal kc-open" data-a="kcal-open">Открыть Калории${I.next}</button></div>`;
+  }
+  async function kcalOpen(el) {
+    haptic('tap');
+    // окно открываем сразу (по нажатию) — иначе браузер заблокирует его после ожидания ответа
+    const w = !tg ? window.open('', '_blank') : null;
+    try {
+      const r = await busy(el, () => api('/api/kcal/link', {}));
+      if (!r || !r.url) throw new Error('Калории не ответили — попробуй ещё раз');
+      if (tg && tg.openLink) tg.openLink(r.url); else if (w) { w.opener = null; w.location.href = r.url; } else location.href = r.url;
+    } catch (e) { if (w) w.close(); fail(e); }
+  }
   function foodView() {
-    const t = S.data.today, n = t.nutrition, e = t.eaten;
+    const t = S.data.today, n = foodGoals(t), e = t.eaten;
     let h = hero('Питание', `Сегодня, ${dateLine(t.day)}`);
     const left = n ? n.kcal - e.kcal : 0;
     h += `<section class="card feature rise"><div class="food-top">
       ${n ? ring(e.kcal / n.kcal, 'var(--food)', `<b class="num">${big(Math.abs(left))}</b><span>${left >= 0 ? 'ккал осталось' : 'ккал сверх'}</span>`, 118)
         : ring(0, 'var(--food)', `<b class="num">${big(e.kcal)}</b><span>ккал</span>`, 118)}
-      <div class="macro-list">${n ? [['Белок', e.protein, n.protein, 'var(--rec-green)'], ['Жиры', e.fat, n.fat, 'var(--rec-yellow)'], ['Углеводы', e.carbs, n.carbs, 'var(--strain)']].map(([k, v, g, col]) =>
-        `<div class="macro"><div class="mt"><span>${k}</span><span class="num"><b>${v}</b>/${g} г</span></div>${bar(pct(v, g), col)}</div>`).join('')
+      <div class="macro-list">${n ? [['Белок', e.protein, n.protein, 'var(--m-p, var(--rec-green))', 0], ['Жиры', e.fat, n.fat, 'var(--m-f, var(--rec-yellow))', 0], ['Углеводы', e.carbs, n.carbs, 'var(--m-c, var(--strain))', 0],
+          ...(e.salt != null ? [['Соль', e.salt, n.salt || 5, 'var(--m-s, var(--hint))', 1]] : [])].map(([k, v, g, col, d]) =>
+        `<div class="macro"><div class="mt"><span>${k}</span><span class="num"><b>${num(v, d)}</b>/${num(g, 0)} г</span></div>${bar(pct(v, g), col)}</div>`).join('')
         : '<p class="small muted">Добавь вес в профиле — посчитаю норму калорий и БЖУ.</p><button class="btn sm tonal" data-a="profile">Заполнить профиль</button>'}</div></div>
-      <button class="btn primary" data-a="photo" data-v="food" ${S.photo ? 'disabled' : ''}>${S.photo === 'food' ? 'Считаю калории…' : '📷 Сфотографировать еду'}</button>
+      <button class="btn primary" data-a="photo" data-v="food" ${S.photo ? 'disabled' : ''}>${S.photo === 'food' ? 'Считаю калории…' : 'Сфотографировать еду'}</button>
       <div class="ask"><textarea id="eat" rows="1" placeholder="Что съел?">${esc(S.eatDraft || '')}</textarea>
         <button class="send" data-a="eat" aria-label="Посчитать" ${S.eating ? 'disabled' : ''}>${S.eating ? '<span class="dots"><i></i><i></i><i></i></span>' : '↑'}</button></div>
-      ${n ? `<p class="small muted">Норма ${big(n.kcal)} ккал — ${esc(n.how)}.${n.teen ? ' В твоём возрасте калории не урезаем: рост важнее.' : ''}</p>` : ''}</section>`;
-    h += `<div class="label">Приёмы пищи${e.count ? `<span class="num">${big(e.kcal)} ккал</span>` : ''}</div>`;
+      ${n && n.src === 'kcal' ? `<p class="small muted">Цели — из «Калорий»${t.kcal.type === 'train' ? ', день тренировки' : t.kcal.type === 'rest' ? ', день отдыха' : ''}. Съедено — вместе с едой, записанной в Форме.</p>`
+        : t.nutrition ? `<p class="small muted">Норма ${big(t.nutrition.kcal)} ккал — ${esc(t.nutrition.how)}.${t.nutrition.teen ? ' В твоём возрасте калории не урезаем: рост важнее.' : ''}</p>` : ''}</section>`;
+    h += kcalBlock(t);
+    h += `<div class="label">${t.kcal ? 'Записано в Форме' : 'Приёмы пищи'}${t.meals.length ? `<span class="num">${big(t.meals.reduce((a, m) => a + (m.kcal || 0), 0))} ккал</span>` : ''}</div>`;
     h += t.meals.length ? `<div class="list rise">${t.meals.map(m => `<button class="row" data-a="meal-edit" data-v="${m.id}">
         <span class="ic time num">${esc(m.time)}</span><div class="main"><div class="title">${esc(m.title)}</div>
         <div class="meta num">Б ${Math.round(m.protein)} · Ж ${Math.round(m.fat)} · У ${Math.round(m.carbs)}</div></div><div class="end num"><b>${big(m.kcal)}</b></div></button>`).join('')}</div>`
+      : t.kcal ? '<p class="small muted kc-none">В Форме сегодня ничего не записано — вся еда в «Калориях».</p>'
       : `<div class="empty rise"><span class="e">${I.food}</span><b>Пока пусто</b>Сфотографируй тарелку или напиши, что съел.</div>`;
     h += `<button class="btn ghost" data-a="meal-new">＋ Добавить вручную</button>`;
     h += waterCard(t.water, true);
@@ -1128,6 +1175,7 @@
     else if (a === 'series-retry') { S.seriesErr = null; render(false); loadSeries(S.range); }
     else if (a === 'history-retry') { S.historyErr = false; render(false); loadHistory(); }
     else if (a === 'eat') eat();
+    else if (a === 'kcal-open') kcalOpen(el);
     else if (a === 'photo') pickPhoto(v);
     else if (a === 'ask') { const q = $('#q'); ask(q && q.value); }
     else if (a === 'suggest') ask(v);
@@ -1163,6 +1211,11 @@
     }
   });
   document.addEventListener('keydown', ev => {
+    const typing = ev.target.closest && ev.target.closest('input, textarea, select, [contenteditable]');
+    if (!typing && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !document.querySelector('.sheet')) {
+      if (ev.key === 'Escape' && S.screen) { ev.preventDefault(); closeScreen(); return; }
+      if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && !S.screen && S.tab === 'today') { ev.preventDefault(); shiftDay(ev.key === 'ArrowLeft' ? -1 : 1); return; }
+    }
     if (ev.key === 'Enter' && !ev.shiftKey && ev.target.tagName === 'TEXTAREA' && ev.target.closest('.ask')) {
       ev.preventDefault();
       if (ev.target.id === 'q') ask(ev.target.value);
@@ -1231,8 +1284,21 @@
     addEventListener('touchend', end); addEventListener('touchcancel', end);
   })();
   let rw = window.innerWidth;
-  window.addEventListener('resize', () => { if (Math.abs(window.innerWidth - rw) > 20 && S.tab === 'trends') { rw = window.innerWidth; render(false); } });
+  window.addEventListener('resize', () => { if (Math.abs(window.innerWidth - rw) > 20 && (S.tab === 'trends' || S.screen)) { rw = window.innerWidth; render(false); } });
+  [WIDE, WIDE3].forEach(m => m.addEventListener && m.addEventListener('change', () => { tabInd(); render(false); }));
 
+  function theme() {
+    const root = document.documentElement;
+    if (!root.classList.contains('mono')) { if (Kit.scheme) Kit.scheme(); return; }
+    const mq = matchMedia('(prefers-color-scheme: light)');
+    const light = tg && tg.colorScheme ? tg.colorScheme === 'light' : mq.matches;
+    root.classList.toggle('lt', light);
+    const m = document.querySelector('meta[name="color-scheme"]'); if (m) m.content = light ? 'light' : 'dark';
+    const tc = document.querySelector('meta[name="theme-color"]'); if (tc) tc.content = light ? '#ffffff' : '#000000';
+    if (Kit.scheme) Kit.scheme();  // шапка Telegram — в цвет фона
+  }
+  theme();
+  try { matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (!tg) { theme(); render(false); } }); } catch (e) { /* старый браузер */ }
   async function start() {
     const p = (new URLSearchParams(location.search).get('p') || '').replace(/^\//, '');
     if (['trends', 'health', 'food', 'coach'].includes(p)) S.tab = p === 'health' ? 'trends' : p;
@@ -1252,7 +1318,7 @@
     if (S.tab === 'coach') loadHistory();
     if (p === 'profile') profileSheet();
     if (p === 'summary') summarySheet('week');
-    if (tg && tg.onEvent) tg.onEvent('themeChanged', () => render(false));
+    if (tg && tg.onEvent) tg.onEvent('themeChanged', () => { theme(); render(false); });
     // данные обновляются сами, пока приложение открыто
     setInterval(async () => {
       if (document.hidden || document.querySelector('.sheet') || S.asking || S.eating || S.briefing || S.photo || S.dayData) return;
@@ -1264,7 +1330,7 @@
   Object.assign(F, { S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
     isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
     dHead, cap, head, hero, chartCard, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
-    summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav });
+    summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav, theme, wide });
   // вид WHOOP: «Прогноз на день» открывает совет дня листом (карточки над «Моим днём» у WHOOP нет)
   if (!F.actions.outlook) F.actions.outlook = () => { if (S.outlookHtml) sheet(`<h2>Прогноз на день</h2>${S.outlookHtml}`); else openScreen('rec'); };
   (window.FormaModules || []).forEach(m => { try { m(F); } catch (e) { console.error('модуль', e); } });

@@ -201,10 +201,20 @@ def week(app, uid, today, cfg=None, t=None):
     days = ins.by_day(app.db, uid, (mon - datetime.timedelta(days=45)).isoformat(), today.isoformat())
     t = t or ins.today(app.db, uid, today, profile, body)
     plan = planner(t, cfg, profile)
+    import f_regime  # режим настроен сам — «Сон сегодня» не спорит с ним: отбой и подъём из режима
+    if not cfg.get("wake") and f_regime.configured(app.db, uid):
+        rc = f_regime.load(app.db, uid, profile)
+        bed, _ = f_regime.bed_wake(rc, today)
+        _, wake = f_regime.bed_wake(rc, today + datetime.timedelta(days=1))
+        plan.update(bed=bed, wake=wake, wake_auto=False, regime=True,
+                    hours=round(_diff(_mins(bed), _mins(wake)) / 60, 2))
     water = app.db.water_days(uid, mon.isoformat(), sun.isoformat())
     meals = {}
     for m in app.db.meals(uid, mon.isoformat(), sun.isoformat()):
         meals.setdefault(m["day"], []).append(m)
+    for d, k in app.db.kcal_days(uid, mon.isoformat(), sun.isoformat()).items():  # еда из «Калорий» — тоже еда дня
+        if k.get("items"):
+            meals.setdefault(d, []).extend({"protein": x.get("p") or 0} for x in k["items"])
     out = []
 
     def day_of(d):

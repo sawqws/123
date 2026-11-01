@@ -233,10 +233,44 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
             "how": how, "goal": goal, "teen": teen}
 
 
-def eaten(meals):
+def eaten(meals, kcal=None):
+    """Съедено за день: еда Формы + еда «Калорий» (kcal — поле дня t.kcal или None); соль — только из «Калорий»."""
     t = {k: round(sum(m.get(k) or 0 for m in meals)) for k in ("kcal", "protein", "fat", "carbs")}
     t["count"] = len(meals)
+    t["salt"] = 0
+    if kcal:
+        for k in ("kcal", "protein", "fat", "carbs"):
+            t[k] = round(t[k] + kcal["eaten"][k])
+        t["salt"] = kcal["eaten"]["salt"]
+        t["count"] += len(kcal["items"])
     return t
+
+
+KCAL_KEYS = (("kcal", "kcal"), ("protein", "p"), ("fat", "f"), ("carbs", "c"), ("salt", "salt"))
+
+
+def kcal_goals_for(goals, kind):
+    """Цели «Калорий» на тип дня (train/rest) → {kcal, protein, fat, carbs, salt, water} или None."""
+    g = ((goals or {}).get("goals") or {}).get(kind)
+    if not g:
+        return None
+    out = {k: g.get(src) for k, src in KCAL_KEYS if k != "salt"}
+    out["salt"] = (goals or {}).get("salt")
+    out["water"] = ((goals or {}).get("water") or {}).get(kind)
+    return out
+
+
+def kcal_of(data, goals, trained=False):
+    """День «Калорий» (store.kcal_day) → поле дня t.kcal (договор coach/SYNC.md, п. 3) или None."""
+    if not data:
+        return None
+    items = [dict(x) for x in data.get("items") or [] if isinstance(x, dict)]
+    sums = {k: round(sum(x.get(src) or 0 for x in items), 1) for k, src in KCAL_KEYS}
+    for k in ("kcal", "protein", "fat", "carbs"):
+        sums[k] = round(sums[k])
+    kind = data.get("type") if data.get("type") in ("train", "rest") else ("train" if trained else "rest")
+    return {"items": items, "eaten": sums, "water": int(sum(data.get("water") or [])),
+            "goals": kcal_goals_for(goals, kind), "type": kind, "updated": data.get("updated")}
 
 
 # ---------- выводы ----------
@@ -350,12 +384,17 @@ def today(db, uid, day, profile, body):
     y_train = sum(w["minutes"] or 0 for w in y.get("workouts") or [])
     y_target, _ = water.norm(nutrition(profile, body, base, None, y_train), y_train)
     drinks = db.water(uid, day.isoformat())
+    kd = db.kcal_day(uid, day.isoformat())
+    kc = kcal_of(kd, db.kcal_goals(uid), bool(train_min))
+    # вода «Калорий» — в общий журнал с пометкой src: удаляется только на сайте «Калории»
+    log = drinks + [{"id": None, "time": "", "ml": int(ml), "src": "kcal"} for ml in (kd or {}).get("water") or [] if ml]
     return {
         "day": day.isoformat(), **d, "base": base, "ratio": ratio, "band": strain_band(d["recovery"]),
-        "tips": tips(d, base, ratio, profile, recent), "nutrition": nut, "eaten": eaten(food), "meals": food,
+        "tips": tips(d, base, ratio, profile, recent), "nutrition": nut, "eaten": eaten(food, kc), "meals": food,
+        "kcal": kc,
         "yesterday": {"strain": (y.get("cycle") or {}).get("strain"), "workouts": y.get("workouts") or []},
         "bedtime": bedtime(days, day, profile), "has_data": bool(days),
-        "water": {"drank": sum(w["ml"] for w in drinks), "target": target, "why": why, "log": drinks,
+        "water": {"drank": sum(w["ml"] for w in log), "target": target, "why": why, "log": log,
                   "trained": bool(train_min), "yesterday": db.water_total(uid, yday), "y_target": y_target},
     }
 
@@ -415,8 +454,11 @@ def text_context(db, uid, day, profile, body, n=14):
                  + (f"; вчера {water.day_line(wt['yesterday'], wt['y_target'])}" if wt["yesterday"] else "; вчера не записывал"))
     e = t["eaten"]
     if e["count"]:
-        lines.append(f"СЪЕДЕНО СЕГОДНЯ: {e['kcal']} ккал, Б {e['protein']}, Ж {e['fat']}, У {e['carbs']} — "
-                     + "; ".join(f"{m['time']} {m['title']}" for m in t["meals"]))
+        lines.append(f"СЪЕДЕНО СЕГОДНЯ (Форма + «Калории»): {e['kcal']} ккал, Б {e['protein']}, Ж {e['fat']}, У {e['carbs']}"
+                     + (" — " + "; ".join(f"{m['time']} {m['title']}" for m in t["meals"]) if t["meals"] else ""))
+    kl = kcal_line(t.get("kcal"))
+    if kl:
+        lines.append(kl)
     lines.append(f"ПОСЛЕДНИЕ {n} ДНЕЙ (день: восст% / ВСР / пульс покоя / сон ч / нагрузка / тренировки):")
     days = by_day(db, uid, (day - datetime.timedelta(days=n)).isoformat(), (day - datetime.timedelta(days=1)).isoformat())
     for d in sorted(days):
@@ -428,6 +470,21 @@ def text_context(db, uid, day, profile, body, n=14):
     if t["tips"]:
         lines.append("ВЫВОДЫ ПО ПРАВИЛАМ: " + " | ".join(x["text"] for x in t["tips"]))
     return "\n".join(lines), t
+
+
+def kcal_line(k):
+    """Строка для Claude: еда, соль и вода из «Калорий» (ведёт сам на сайте «Калории»)."""
+    if not k:
+        return ""
+    e, g = k["eaten"], k.get("goals") or {}
+
+    def of(v, key, unit=""):
+        return f"{v}{unit}" + (f" из {g[key]}{unit}" if g.get(key) else "")
+    names = "; ".join(str(x.get("name") or "")[:40] for x in k["items"][:12])
+    return (f"«КАЛОРИИ» СЕГОДНЯ (день {'тренировки' if k['type'] == 'train' else 'отдыха'}): {of(e['kcal'], 'kcal', ' ккал')}, "
+            f"Б {of(e['protein'], 'protein')}, Ж {of(e['fat'], 'fat')}, У {of(e['carbs'], 'carbs')} г, "
+            f"соль {of(str(e['salt']).replace('.', ','), 'salt', ' г')}, вода {of(k['water'], 'water', ' мл')}"
+            + (f" — {names}" if names else ""))
 
 
 def _bed_hour(s):

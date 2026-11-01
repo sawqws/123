@@ -551,7 +551,7 @@ class ApiTest(unittest.TestCase):
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
                     r = http(coach.Web, path + query, raw, init, method)
                 n += 1
-                if r.code not in (200, 400, 401, 403, 404, 413, 503) or out.getvalue().strip():
+                if r.code not in (200, 400, 401, 403, 404, 413, 429, 503) or out.getvalue().strip():  # 429 — защита от подбора кода, не сбой
                     bad.append(f"{method} {path}{query} {raw[:70]!r} -> {r.code} {r.body[:120]!r} {out.getvalue()[-300:]}")
         for q in ("", "?state=x&code=y", "?error=access_denied", "?state=&code=", "?state=a:b"):
             r = http(coach.Web, "/whoop/callback" + q, method="GET")

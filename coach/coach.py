@@ -13,6 +13,7 @@
   COACH_DB             файл базы (по умолчанию coach/data/coach.db)
   WHOOP_CLIENT_ID      из developer-dashboard.whoop.com (можно прислать боту: /whoop <id> <secret>)
   WHOOP_CLIENT_SECRET
+  KCAL_SITE            адрес сайта «Калории» для связи в одно нажатие (по умолчанию https://sawqws.github.io/123/kcal/)
 
 Только стандартная библиотека Python.
 """
@@ -55,8 +56,9 @@ import whoop  # noqa: E402
 import f_assess  # noqa: E402  оценки недели и месяца, календарь
 import f_journal  # noqa: E402  дневник: привычки «да/нет» и их влияние на восстановление
 import f_plan  # noqa: E402  мой план: цели недели, планер сна
+import f_regime  # noqa: E402  режим дня: отбой/подъём со сдвигом, тренировка и интенсивность, массаж, чек-лист вечера
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
-FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan}
+FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
@@ -664,13 +666,43 @@ def morning_brief(uid, chat=None, force=False):
             full = body = rule_brief(t)
             note = f"Claude недоступен: {esc(e)}"
         db.brief(uid, t["day"], "morning", full)
-        send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note, expand=False),
+        send(chat, box("☀️", "Доброе утро", [headline(t), body, regime_brief(uid, t)], note=note, expand=False),
              kb([app_button(uid, "📱 Открыть", style="primary"), btn("💬 Спросить", "q|")]))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
         return True
     finally:
         busy.discard(uid)
+
+
+def app_mod():
+    return sys.modules[__name__]
+
+
+def regime_brief(uid, t):
+    """Строки режима для утреннего разбора (отбой/подъём, тренировка и интенсивность, массаж) — если режим настроен."""
+    try:
+        if not f_regime.configured(db, uid):
+            return ""
+        p = f_regime.today(app_mod(), uid, datetime.date.fromisoformat(t["day"]), t)
+        return "\n".join(esc(x) for x in f_regime.brief_lines(p))
+    except Exception:  # режим сломался — разбор всё равно уходит
+        traceback.print_exc()
+        return ""
+
+
+def regime_remind(uid, day):
+    """За remind минут до отбоя по режиму: во сколько встать, тренировка завтра, что осталось сделать вечером."""
+    cfg = f_regime.load(db, uid, profile(uid))
+    bed, _ = f_regime.bed_wake(cfg, day)
+    nxt = day + datetime.timedelta(days=1)
+    lines = [f"Подъём завтра в <b>{f_regime.bed_wake(cfg, nxt)[1]}</b>"]
+    if f_regime.train_on(cfg, nxt):
+        lines.append(f"🏋️ Завтра тренировка в {esc(f_regime.train_time(cfg, nxt))}")
+    done = f_regime.checks(db, uid, day.isoformat())
+    left = [x for i, x in enumerate(cfg["evening"]) if f"e{i}" not in done]
+    lines += [f"• {esc(x)}" for x in left[:5 - len(lines)]]
+    send(uid, box("🌙", f"Отбой в {bed}", "\n".join(lines)), with_app(uid, [], "📱 Открыть"))
 
 
 def morning_early(uid):
@@ -1124,7 +1156,10 @@ def food_text(uid):
     lines = [f"• {esc(m['time'])} {esc(m['title'])} — {round(m['kcal'])}" for m in meals[-5:]]
     if len(meals) > 5:
         lines.insert(0, f"<i>…ещё {len(meals) - 5}</i>")
-    note = "" if meals else "Пришли фото еды или напиши «съел …»."
+    k = t.get("kcal")
+    if k and k["items"]:
+        lines.append(f"• «Калории»: {len(k['items'])} поз. — {k['eaten']['kcal']} ккал · соль {num(k['eaten']['salt'])} г")
+    note = "" if meals or (k and k["items"]) else "Пришли фото еды или напиши «съел …»."
     return box("🍽", "Питание сегодня", [top, "\n".join(lines)], note=note)
 
 
@@ -1138,12 +1173,15 @@ def water_text(uid, added=0, title=None):
     now = user_now(u)
     _, t = context(uid)
     wt = t["water"]
+    own = [w for w in wt["log"] if w.get("src") != "kcal"]  # вода «Калорий» удаляется только там
+    from_kcal = sum(w["ml"] for w in wt["log"] if w.get("src") == "kcal")
     log = "" if added or not wt["log"] else " · ".join(
-        f"{esc(w['time'])} {water.liters(w['ml'])}" for w in wt["log"][-4:])
+        [f"{esc(w['time'])} {water.liters(w['ml'])}" for w in own[-4:]]
+        + ([f"«Калории» {water.liters(from_kcal)}"] if from_kcal else []))
     note = None if added or wt["log"] else "Пиши «500 мл», «стакан воды» или жми кнопки."
     text = water.card(added, wt["drank"], wt["target"], wt["why"], now.hour + now.minute / 60, wt["trained"],
                       title=title, extra=log, note=note)
-    return text, (wt["log"][-1]["id"] if wt["log"] else None)
+    return text, (own[-1]["id"] if own else None)
 
 
 def log_water(chat, uid, ml, mid=None):
@@ -1676,6 +1714,13 @@ def tick():
                 maybe_morning(db.user(uid), now)
             except Exception as e:
                 print("morning:", uid, e)
+        try:  # режим: напоминание за remind минут до отбоя — раз в день, только если режим настроен
+            if f_regime.configured(db, uid):
+                rd = f_regime.due(f_regime.load(db, uid, u["profile"]), now)
+                if rd and db.once(f"regime:{uid}:{rd}"):
+                    bg(regime_remind, uid, rd)
+        except Exception as e:
+            print("regime:", uid, e)
         if now.hour == 20 and now.minute >= 30 and db.once(f"evening:{uid}:{now.date()}"):
             try:
                 evening(uid, now)
@@ -1777,7 +1822,7 @@ class Web(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "not found"})
         if self.headers.get("Origin") != KCAL_ORIGIN:
             return self.reply(403, {"error": "чужой сайт"})
-        self.reply(204, b"", headers={"Access-Control-Allow-Methods": "POST, OPTIONS",
+        self.reply(204, b"", headers={"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                                       "Access-Control-Allow-Headers": "Authorization, Content-Type",
                                       "Access-Control-Max-Age": "86400"})
 
@@ -1805,6 +1850,16 @@ class Web(BaseHTTPRequestHandler):
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
         key = hashlib.sha256(tok.encode()).hexdigest()
+        if path in ("/api/kcal/sync", "/api/kcal/forma"):
+            if not pwa.throttle(("kcalsync:" if path == "/api/kcal/sync" else "kcalforma:") + key, *SYNC_RATE):
+                return self.reply(429, {"error": "Много запросов подряд — попробуй через час"})
+            try:
+                return self.reply(200, kcal_sync(uid, body) if path == "/api/kcal/sync" else kcal_forma(uid))
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception:
+                traceback.print_exc()
+                return self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
         if path == "/api/kcal/chat":
             if not pwa.throttle("kcalchat:" + key, *CHAT_RATE):
                 return self.reply(429, {"error": "Много сообщений подряд — попробуй через час"})
@@ -1907,6 +1962,8 @@ class Web(BaseHTTPRequestHandler):
                               "text/html; charset=utf-8")
         if path == "/api/kcal/shop":  # «Калории»: продукты из магазинов (браузеру Open Food Facts не отдаёт CORS)
             return self.kcal_shop_get(dict(urllib.parse.parse_qsl(u.query)).get("q", ""))
+        if path == "/api/kcal/forma":  # «Калории»: день Формы (Bearer)
+            return self.kcal(path, {})
         if path.startswith("/api/"):
             return self.api(path, dict(urllib.parse.parse_qsl(u.query)))
         if path == "/site" or path.startswith("/site/"):
@@ -2026,7 +2083,9 @@ def day_payload(uid, day):
 
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
-KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat")
+KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat", "/api/kcal/sync", "/api/kcal/forma")
+SYNC_RATE = (120, 3600)  # /api/kcal/sync и /api/kcal/forma — каждому столько на токен в час
+KCAL_SITE = os.environ.get("KCAL_SITE") or "https://sawqws.github.io/123/kcal/"  # «Калории» в одно нажатие: + #pair=<токен>
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
 
@@ -2148,6 +2207,116 @@ def kcal_chat_input(uid, b):
 def kcal_chat(uid, b):
     """Чат «Калорий» одним ответом: совет и что съесть."""
     return ai.kcal_chat(*kcal_chat_input(uid, b))
+
+
+KCAL_DAYS = 14  # сколько дней «Калории» шлют за раз
+KCAL_ITEMS = 200  # позиций в дне
+KCAL_MEALS = ("breakfast", "lunch", "snack", "dinner")
+KCAL_BACK = 60  # дни старше — не принимаем (браузер с неверными часами)
+ITEM_MAX = {"g": 5000, "kcal": 10000, "p": 1000, "f": 1000, "c": 1000, "salt": 100}
+GOAL_MAX = {"kcal": 10000, "p": 1000, "f": 1000, "c": 2000}
+
+
+def knum(v, hi, nd=1):
+    """Число от 0 до hi (обрезаем), нечисло — 0."""
+    if isinstance(v, bool):
+        return 0
+    try:
+        x = float(v.replace(",", ".")) if isinstance(v, str) else float(v)
+    except (TypeError, ValueError):
+        return 0
+    if x != x or x in (float("inf"), float("-inf")):
+        return 0
+    x = round(max(0.0, min(x, float(hi))), nd)
+    return int(x) if x == int(x) else x
+
+
+def kcal_name(v, n=80):
+    """Название блюда: без управляющих символов и угловых скобок, пробелы схлопнуты, не длиннее n."""
+    return " ".join(re.sub(r"[\x00-\x1f\x7f<>]", " ", str(v if v is not None else "")).split())[:n]
+
+
+def kcal_clean(b, today):
+    """Тело POST /api/kcal/sync → ({день: {items, water, type}}, цели или None). Лишнее отбрасываем, числа обрезаем."""
+    days = b.get("days")
+    if days is not None and not isinstance(days, dict):
+        raise ValueError("days — объект {день: …}")
+    lo, hi = today - datetime.timedelta(days=KCAL_BACK), today + datetime.timedelta(days=1)
+    ok = []
+    for k, v in (days or {}).items():
+        if not isinstance(v, dict) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(k)):
+            continue
+        try:
+            d = datetime.date.fromisoformat(k)
+        except ValueError:
+            continue
+        if lo <= d <= hi:
+            ok.append(k)
+    out = {}
+    for k in sorted(ok, reverse=True)[:KCAL_DAYS]:
+        v = days[k]
+        items = []
+        for x in (v.get("items") if isinstance(v.get("items"), list) else [])[:KCAL_ITEMS]:
+            if not isinstance(x, dict):
+                continue
+            name = kcal_name(x.get("name"))
+            if not name:
+                continue
+            it = {"name": name, "meal": x.get("meal") if x.get("meal") in KCAL_MEALS else "snack"}
+            it.update({f: knum(x.get(f), top) for f, top in ITEM_MAX.items()})
+            items.append(it)
+        wl = v.get("water") if isinstance(v.get("water"), list) else []
+        drinks = [ml for ml in (knum(x, 5000, 0) for x in wl[:50]) if ml]
+        out[k] = {"items": items, "water": drinks, "type": v.get("type") if v.get("type") in ("train", "rest") else None}
+    goals = None
+    if any(k in b for k in ("goals", "salt", "water")):
+        g = b.get("goals") if isinstance(b.get("goals"), dict) else {}
+        w = b.get("water") if isinstance(b.get("water"), dict) else {}
+        goals = {"goals": {kind: {f: knum(g[kind].get(f), top, 0) for f, top in GOAL_MAX.items()}
+                           for kind in ("train", "rest") if isinstance(g.get(kind), dict)},
+                 "salt": knum(b["salt"], 50) if b.get("salt") is not None else None,
+                 "water": {kind: knum(w[kind], 10000, 0) for kind in ("train", "rest") if w.get(kind) is not None}}
+    return out, goals
+
+
+def kcal_sync(uid, b):
+    """«Калории» → сервер: дни целиком (последние 14) и цели. Ответ — {ok, forma: как GET /api/kcal/forma}."""
+    days, goals = kcal_clean(b, today_of(uid))
+    if days:
+        db.save_kcal_days(uid, days)
+    if goals is not None:  # присланное поверх прежнего: прислали только воду — цели еды не теряются
+        old = db.kcal_goals(uid) or {}
+        db.kcal_goals(uid, {"goals": {**(old.get("goals") or {}), **goals["goals"]},
+                            "salt": goals["salt"] if goals["salt"] is not None else old.get("salt"),
+                            "water": {**(old.get("water") or {}), **goals["water"]}})
+    return {"ok": True, "forma": kcal_forma(uid)}
+
+
+def kcal_forma(uid):
+    """Сервер → «Калории»: восстановление, сон, нагрузка, тренировки и записанное в самой Форме (не из «Калорий»)."""
+    day = today_of(uid)
+    t = insights.today(db, uid, day, profile(uid), whoop.body(db, uid))
+    r, s, c = t.get("recovery"), t.get("sleep"), t.get("cycle")
+    reg = None
+    try:
+        if f_regime.configured(db, uid):
+            reg = f_regime.today(app_mod(), uid, day, t)
+    except Exception:  # режим сломался — остальное «Калориям» всё равно нужно
+        traceback.print_exc()
+    return {
+        "day": day.isoformat(),
+        "recovery": {"score": r.get("score"), "hrv": r.get("hrv"), "rhr": r.get("rhr")} if r else None,
+        "sleep": {"hours": s.get("hours"), "performance": s.get("performance")} if s else None,
+        "strain": (c or {}).get("strain"),
+        "train_today": bool((reg or {}).get("train", {}).get("on")) or bool(t["workouts"]),
+        "workouts": [{"sport": w.get("sport"), "start": w.get("start"), "minutes": w.get("minutes"),
+                      "strain": w.get("strain")} for w in t["workouts"]],
+        "water_forma": sum(w["ml"] for w in db.water(uid, day.isoformat())),
+        "meals_forma": [{"time": m["time"], "title": m["title"], "kcal": round(m["kcal"] or 0),
+                         "p": round(m["protein"] or 0), "f": round(m["fat"] or 0), "c": round(m["carbs"] or 0)}
+                        for m in db.meals(uid, day.isoformat())],
+        "regime": reg,
+    }
 
 
 class NotFood(Exception):
@@ -2298,6 +2467,9 @@ def route(uid, path, b):
         if not db.token(uid):
             raise ValueError("вход в WHOOP истёк — подключи заново в профиле")
         return {"ok": True}
+    if path == "/api/kcal/link":  # «Калории» в одно нажатие: токен сайта без кода — тому, кто уже вошёл в Форму
+        tok = pwa.issue(db, uid, kind="kcal")
+        return {"token": tok, "url": KCAL_SITE + "#pair=" + tok}
     if path == "/api/connect":
         link = connect_link(uid)
         if not link:
