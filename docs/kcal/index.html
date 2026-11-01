@@ -10,6 +10,10 @@
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Калории</title>
+<script>/* ?embed=1 — внутри Формы (вкладка «Питание»), ?theme=dark|light — тема Формы; до первой отрисовки, без вспышки */
+(function () { try { var q = new URLSearchParams(location.search), h = document.documentElement, t = q.get('theme');
+  if (q.get('embed') === '1') h.classList.add('embed');
+  if (t === 'dark' || t === 'light') h.setAttribute('data-theme', t); } catch (e) {} })();</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -54,8 +58,20 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   color-scheme: dark;
 }
+/* светлая тема: по системе или явно (?theme=light / сообщение Формы); data-theme="dark" — тёмная при светлой системе */
+:root[data-theme="light"] {
+    --bg: #ffffff; --group: #f2f2f7; --sheet: #ffffff; --sheet-group: #f2f2f7;
+    --fill: rgba(118,118,128,.12); --fill-2: rgba(118,118,128,.2); --sep: rgba(60,60,67,.2);
+    --text: #000000; --text-2: rgba(60,60,67,.6); --text-3: rgba(60,60,67,.3);
+    --ink: #000000; --on-ink: #ffffff; --track: rgba(0,0,0,.07);
+    --p: #000000; --f: #48484a; --c: #8e8e93; --s: #aeaeb2; --wtr: #000000; --warn: #000000; --bad: #ff3b30;
+    --glass: rgba(255,255,255,.62); --glass-strong: rgba(250,250,252,.84); --glass-solid: #ffffff;
+    --rim: rgba(255,255,255,.95); --spec: rgba(255,255,255,1); --edge: rgba(0,0,0,.14); --lens: rgba(0,0,0,.07);
+    --drop: 0 10px 30px rgba(0,0,0,.13);
+    color-scheme: light;
+}
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --bg: #ffffff; --group: #f2f2f7; --sheet: #ffffff; --sheet-group: #f2f2f7;
     --fill: rgba(118,118,128,.12); --fill-2: rgba(118,118,128,.2); --sep: rgba(60,60,67,.2);
     --text: #000000; --text-2: rgba(60,60,67,.6); --text-3: rgba(60,60,67,.3);
@@ -88,7 +104,8 @@ svg { display: block; }
   box-shadow: 0 0 0 .5px var(--edge), inset 0 0 0 .5px var(--rim), inset 0 1.2px 0 var(--spec), var(--drop); }
 .glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
   background: radial-gradient(130% 70% at 25% -10%, rgba(255,255,255,.22), transparent 55%), linear-gradient(180deg, rgba(255,255,255,.08), transparent 40%); }
-@media (prefers-color-scheme: light) { .glass::before { background: radial-gradient(130% 70% at 25% -10%, rgba(255,255,255,.7), transparent 60%); } }
+:root[data-theme="light"] .glass::before { background: radial-gradient(130% 70% at 25% -10%, rgba(255,255,255,.7), transparent 60%); }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .glass::before { background: radial-gradient(130% 70% at 25% -10%, rgba(255,255,255,.7), transparent 60%); } }
 @media (prefers-reduced-transparency: reduce) {
   .glass, .sheet.short, .edge-top, .edge-bottom { background: var(--glass-solid) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 }
@@ -142,7 +159,8 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 .seg button[aria-pressed="true"] { font-weight: 600; }
 .seg .thumb { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 999px; background: var(--fill-2);
   box-shadow: inset 0 1px 0 var(--spec), 0 0 0 .5px var(--edge), 0 3px 10px rgba(0,0,0,.12); transition: transform .55s var(--spring), width .45s var(--spring); }
-@media (prefers-color-scheme: light) { .seg .thumb { background: #fff; } }
+:root[data-theme="light"] .seg .thumb { background: #fff; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .seg .thumb { background: #fff; } }
 .seg .thumb.squish { animation: squish .45s var(--ios); }
 @keyframes squish { 40% { scale: 1.05 .96; } }
 
@@ -469,6 +487,41 @@ button, .cell { -webkit-touch-callout: none; }
 @media (min-width: 960px) and (min-height: 820px) { .ta { position: sticky; top: calc(64px + var(--safe-t)); } } /* левая колонка стоит, правая листается */
 @media (min-width: 1600px) { .app { max-width: 1320px; } .tgrid { grid-template-columns: 480px 1fr; gap: 64px; } }
 
+/* ——— внутри Формы (?embed=1, coach/SYNC.md §5): своего нижнего меню нет — разделы сверху сегментами;
+   низ — над меню Формы (--emb), на ≥ 1024 px меню Формы сбоку — отступа нет ——— */
+.etop { display: none; }
+:root.embed { --emb: max(calc(env(safe-area-inset-bottom, 0px) + 90px), 110px); /* в рамке iOS отдаёт safe-area = 0 — с запасом */ --etop: calc(60px + var(--safe-t)); }
+@media (min-width: 1024px) { :root.embed { --emb: 0px; } }
+.embed .edge-top, .embed .edge-bottom, .embed .nav-t, .embed .today-btn, .embed .tabbar .tabs { display: none !important; }
+.embed .etop { display: block; position: fixed; z-index: 33; top: 0; left: 0; right: 0; pointer-events: none;
+  padding: calc(8px + var(--safe-t)) max(16px, env(safe-area-inset-right)) 14px max(16px, env(safe-area-inset-left));
+  background: linear-gradient(var(--bg) 72%, transparent); }
+.embed .etop .in { max-width: 540px; margin: 0 auto; pointer-events: auto; }
+.embed .etop .seg { margin: 0; }
+.embed .app { padding-top: var(--etop); padding-bottom: calc(var(--emb) + 92px); }
+.embed .large { margin-top: 14px; }
+.embed .actions { position: absolute; top: calc(var(--etop) + 12px); }
+.embed .tabbar { bottom: calc(var(--emb) + 12px); }
+.embed .tabbar .in { justify-content: flex-end; }
+.embed body[data-view="chat"] .tabbar { display: none; }
+.embed .composer { bottom: calc(var(--emb) + 12px); }
+.embed body.kb .composer { bottom: calc(var(--kbh, 0px) + 8px); }
+@media (max-width: 767px) { /* листы — над меню Формы, целиком видны */
+  .embed .sheet { bottom: var(--emb); height: calc(100dvh - 10px - var(--safe-t) - var(--emb)); border-radius: 38px; transform: translateY(calc(100% + var(--emb) + 20px)); }
+  .embed .sheet .body { padding-bottom: 24px; }
+  .embed .sheet.short { bottom: calc(max(var(--emb), var(--kb, 0px)) + 8px); height: auto; max-height: calc(100dvh - 24px - var(--safe-t) - var(--emb)); transform: translateY(calc(100% + var(--emb) + 40px)); }
+  .embed .sheet.on { transform: none; }
+}
+@media (min-width: 768px) {
+  .embed .sheet, .embed .sheet.short { top: calc(50% - var(--emb) / 2); max-height: calc(100dvh - 32px - var(--emb)); }
+}
+@media (min-width: 960px) {
+  .embed .etop .in { max-width: 420px; }
+  .embed .tb > .sec:first-child { margin-top: 64px; } /* над правой колонкой — кнопки фото и настроек */
+  .embed .tabbar .in { max-width: 1180px; padding: 0 40px; }
+}
+@media (min-width: 960px) and (min-height: 820px) { .embed .ta { top: calc(var(--etop) + 8px); } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
@@ -495,6 +548,9 @@ button, .cell { -webkit-touch-callout: none; }
       <svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M13 5v16M5 13h16"/></svg></button>
   </div>
 </nav>
+
+<div class="etop" id="etop"><div class="in"><div class="seg" id="eseg" role="tablist" aria-label="Разделы"><span class="thumb"></span>
+  <button data-tab="today" aria-pressed="true">Сегодня</button><button data-tab="history" aria-pressed="false">История</button><button data-tab="chat" aria-pressed="false">Чат</button></div></div></div>
 
 <div class="scrim" id="scrim" hidden></div>
 <section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
@@ -647,7 +703,9 @@ const MEALS = [['breakfast', 'Завтрак'], ['lunch', 'Обед'], ['snack',
 const WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const WEEK_FULL = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
 const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
-const API = 'https://coach.2-27-206-165.sslip.io';
+// на GitHub Pages — сервер Формы; на домене Формы (/kcal/) — свой же адрес (coach/SYNC.md §5)
+const API = location.hostname.endsWith('github.io') ? 'https://coach.2-27-206-165.sslip.io' : location.origin;
+const EMBED = document.documentElement.classList.contains('embed'); // внутри Формы: вход и меню — Формы
 const KEY = 'kcal.v1', TOKEN = 'kcal.token', FORMA = 'kcal.forma';
 const DEFAULT = {
   goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } },
@@ -656,6 +714,7 @@ const DEFAULT = {
   water: { train: 3400, rest: 2500 }, waterSet: false, // мл в день, посчитано под Глеба (29.10): отдых 2,5 л; бокс ~1,5 ч × ~0,6 л/ч пота → +0,9 л
   // waterSet — норму поменял сам в настройках; иначе берём этот расчёт
   chat: [], // переписка с нутрициологом (последние 60)
+  fullSync: false, syncU: 0, // вся история уже ушла на сервер; syncU — самая поздняя правка дня, которую сервер принял
 };
 const I = {
   plus: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>',
@@ -701,7 +760,8 @@ function clean(x) {
       ...(i.per100 && typeof i.per100 === 'object' ? { per100: per(i.per100), unit: unit(i.unit) } : {}) }));
     const water = (Array.isArray(d.water) ? d.water : []).map(num).filter(v => v > 0 && v <= 3000).map(Math.round);
     out.days[k] = { items, ...(water.length ? { water } : {}), ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}),
-      ...(d.ftype === 'train' || d.ftype === 'rest' ? { ftype: d.ftype } : {}) }; // ftype — тип дня по Форме (type — выбран вручную)
+      ...(d.ftype === 'train' || d.ftype === 'rest' ? { ftype: d.ftype } : {}), // ftype — тип дня по Форме (type — выбран вручную)
+      ...(num(d.u) > 0 ? { u: Math.round(num(d.u)) } : {}) }; // u — время последней правки дня (мс): при слиянии с сервером новее побеждает
   }
   const food = f => ({ name: String(f.name).slice(0, 80), ...per(f), unit: unit(f.unit) });
   out.custom = (Array.isArray(x.custom) ? x.custom : []).filter(f => f && f.name).map(food).slice(0, 200);
@@ -711,11 +771,43 @@ function clean(x) {
     role: m.role === 'user' ? 'user' : 'coach', text: m.text.slice(0, 2000),
     ...(Array.isArray(m.items) ? { items: m.items.filter(i => i && i.name).slice(0, 5).map(i => ({ name: String(i.name).slice(0, 80), g: pos(i.g), ...per(i) })) } : {}),
     ...(Array.isArray(m.added) ? { added: m.added.map(Boolean).slice(0, 5) } : {}) }));
+  out.fullSync = !!x.fullSync; out.syncU = num(x.syncU) > 0 ? Math.round(num(x.syncU)) : 0;
   return out;
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Не сохранилось: память недоступна'); } scheduleSync(); }
+/* правка дня → u = сейчас. Изменённые дни видно по слепку: ключ дня (еда, вода, ручной тип) сравнивается с прошлым сохранением.
+   ftype (тип по Форме) — не правка: такой день не перебивает чужие записи на сервере. */
+const dayKey = d => JSON.stringify([d.items, d.water || [], d.type || '']);
+const EMPTY_DAY = dayKey({ items: [] });
+let dayMemo = {};
+function memoDays() { dayMemo = {}; for (const [k, d] of Object.entries(S.days)) dayMemo[k] = dayKey(d); }
+function stampDays() { // u растёт строго: новая правка всегда новее всего, что уже ушло на сервер (S.syncU)
+  const ch = [];
+  let t = Math.max(Date.now(), S.syncU + 1);
+  for (const [k, d] of Object.entries(S.days)) {
+    const key = dayKey(d);
+    if ((d.u || 0) >= t) t = d.u + 1;
+    if (dayMemo[k] === key) continue;
+    if (dayMemo[k] !== undefined || key !== EMPTY_DAY) ch.push(d);
+    dayMemo[k] = key;
+  }
+  for (const d of ch) d.u = t++;
+}
+function persist() { try { localStorage.setItem(KEY, JSON.stringify(S)); return true; } catch (e) { return false; } }
+function save() {
+  stampDays();
+  if (!persist()) toast('Не сохранилось: память недоступна');
+  scheduleSync(EMBED ? 1000 : 2000);
+  notifyParent();
+}
+function authLost() { try { parent.postMessage({ type: 'kcal-auth' }, location.origin); } catch (e) {} }
+function notifyParent() { // Форма обновляет данные дня тихо
+  if (EMBED) try { parent.postMessage({ type: 'kcal-changed' }, location.origin); } catch (e) {}
+}
 const getToken = () => { try { return localStorage.getItem(TOKEN) || ''; } catch (e) { return ''; } };
-const setToken = t => { try { t ? localStorage.setItem(TOKEN, t) : localStorage.removeItem(TOKEN); } catch (e) {} };
+const setToken = t => {
+  if (t !== getToken()) { S.fullSync = false; S.syncU = 0; persist(); } // новая связка — вся история уйдёт заново
+  try { t ? localStorage.setItem(TOKEN, t) : localStorage.removeItem(TOKEN); } catch (e) {}
+};
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -733,6 +825,7 @@ const buzz = () => { try { navigator.vibrate && navigator.vibrate(8); } catch (e
 const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let S = load(); // после объявления num/r1 — load() ими пользуется
+memoDays();
 let F = loadForma(); // последний ответ Формы (сон, восстановление, тренировка, вода и еда из Формы) — сразу с прошлого раза, без прыжка
 let view = 'today', cur = today(), histRange = 7;
 
@@ -763,37 +856,95 @@ function cleanForma(x) { // ответ сервера → только изве�
   };
 }
 const formaFor = d => F && F.day === d && getToken() ? F : null; // данные Формы — только за их день и пока связано
-function syncBody() {
-  const days = {}, t = today(), r = v => r1(num(v));
-  for (let i = SYNC_DAYS - 1; i >= 0; i--) {
-    const k = addDays(t, -i), d = S.days[k]; if (!d) continue;
-    days[k] = { items: d.items.map(it => ({ name: it.name, meal: it.meal, g: r(it.g), kcal: r(it.kcal), p: r(it.p), f: r(it.f), c: r(it.c), salt: r(it.salt) })),
-      water: d.water || [], type: dayType(k) };
-  }
-  return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water });
+/* sync: обычный — 14 дней + старые дни, поправленные после прошлой отправки; полный (первая связка или нет S.fullSync) —
+   вся история до 400 дней кусками по 31 дню, потом флаг. При старте с токеном сначала GET /api/kcal/state и слияние по u. */
+const CHUNK = 31, KEEP_DAYS = 400;
+const blankDay = d => !d.items.length && !(d.water && d.water.length) && !d.type;
+function dayOut(k) {
+  const d = S.days[k], r = v => r1(num(v));
+  return { items: d.items.map(it => ({ name: it.name, meal: it.meal, g: r(it.g), kcal: r(it.kcal), p: r(it.p), f: r(it.f), c: r(it.c), salt: r(it.salt) })),
+    water: d.water || [], type: dayType(k), u: d.u || 0 };
 }
+function bodyFor(keys) { const days = {}; for (const k of keys) days[k] = dayOut(k); return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water }); }
+function syncKeys() { // обычная отправка; null — правок больше, чем влезает в запрос: нужна полная
+  const t = today(), from = addDays(t, -(SYNC_DAYS - 1)), min = addDays(t, -KEEP_DAYS), keys = [];
+  for (let i = SYNC_DAYS - 1; i >= 0; i--) { const k = addDays(t, -i); if (S.days[k]) keys.push(k); }
+  const old = Object.keys(S.days).filter(k => k < from && k >= min && (S.days[k].u || 0) > S.syncU).sort().reverse();
+  return keys.length + old.length > CHUNK ? null : keys.concat(old);
+}
+function fullChunks() { // вся история кусками по 31 дню (пустые дни без правок — не нужны)
+  const min = addDays(today(), -KEEP_DAYS), keys = Object.keys(S.days).filter(k => k >= min && !(blankDay(S.days[k]) && !S.days[k].u)).sort(), out = [];
+  for (let i = 0; i < keys.length; i += CHUNK) out.push(keys.slice(i, i + CHUNK));
+  return out.length ? out : [[]];
+}
+const syncBody = () => bodyFor(syncKeys() || []);
 function scheduleSync(ms = 2000) { if (!getToken()) return; clearTimeout(syncT); syncT = setTimeout(() => syncNow(false), ms); }
 async function syncNow(force, keepalive) { // ошибки сети и 429 — тихо: повтор при следующем сохранении (тело сравнивается с последним доставленным)
   clearTimeout(syncT); syncT = 0;
   const tok = getToken(); if (!tok) return;
   if (syncBusy) { syncAgain = true; return; }
-  const body = syncBody();
-  if (!force && body === syncLast) return;
+  const keys = S.fullSync ? syncKeys() : null, chunks = keys ? [keys] : fullChunks(), full = !keys;
+  const body = keys && bodyFor(keys);
+  if (!force && !full && body === syncLast) return;
   syncBusy = true;
-  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
   try {
-    const r = await fetch(API + '/api/kcal/sync', { method: 'POST', signal: ctl.signal, keepalive: !!keepalive && body.length < 60000,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body });
-    if (r.status === 401) return formaLost(tok);
-    if (!r.ok) return;
-    syncLast = body; syncAt = Date.now();
-    const j = await r.json().catch(() => null);
+    let maxU = 0, j = null, stale = false; // stale — дни, где на сервере версия новее
+    for (const ks of chunks) {
+      const b = body || bodyFor(ks);
+      const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
+      let r;
+      try {
+        r = await fetch(API + '/api/kcal/sync', { method: 'POST', signal: ctl.signal, keepalive: !!keepalive && chunks.length === 1 && b.length < 60000,
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: b });
+      } finally { clearTimeout(tm); }
+      if (r.status === 401) return formaLost(tok);
+      if (!r.ok) return; // полная отправка — без флага: в следующий раз заново
+      for (const k of ks) maxU = Math.max(maxU, S.days[k] ? S.days[k].u || 0 : 0);
+      j = await r.json().catch(() => null);
+      if (j && j.stale && (Array.isArray(j.stale) ? j.stale.length : Object.keys(j.stale).length)) stale = true;
+    }
+    if (getToken() !== tok) return;
+    syncLast = body || ''; syncAt = Date.now();
+    if (full) S.fullSync = true;
+    S.syncU = Math.max(S.syncU, maxU); persist();
     if (j && 'forma' in j) applyForma(j.forma);
+    if (stale) pullState(); // на сервере эти дни новее — взять их
   } catch (e) { /* нет сети — повтор при следующем сохранении */ } finally {
-    clearTimeout(tm); syncBusy = false;
+    syncBusy = false;
     if (syncAgain) { syncAgain = false; scheduleSync(); }
   }
 }
+async function pullState() { // всё, что сохранено на сервере (с других устройств и доменов), → слить по дням
+  const tok = getToken(); if (!tok) return;
+  try {
+    const r = await fetch(API + '/api/kcal/state', { headers: { Authorization: 'Bearer ' + tok } });
+    if (r.status === 401) return formaLost(tok);
+    if (r.ok && getToken() === tok) mergeState(await r.json());
+  } catch (e) {}
+}
+function mergeState(x) { // у кого u больше — тот прав; дня нет — добавить; нормы, соль, вода — с сервера, если свои по умолчанию
+  if (!x || typeof x !== 'object') return 0;
+  const c = clean({ goals: x.goals && typeof x.goals === 'object' ? x.goals : {}, days: x.days && typeof x.days === 'object' ? x.days : {}, salt: x.salt, water: x.water, waterSet: true });
+  if (!c) return 0;
+  const min = addDays(today(), -KEEP_DAYS), same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  let n = 0;
+  for (const [k, sd] of Object.entries(c.days)) {
+    if (k < min) continue;
+    const ld = S.days[k], su = sd.u || 0, lu = ld ? ld.u || 0 : -1;
+    if (ld && !(su > lu || su === lu && blankDay(ld) && !blankDay(sd))) continue;
+    sd.items = sd.items.map((it, i) => ({ ...it, id: `s${k.replace(/-/g, '')}-${i}`, // с сервера — без состава на 100 г: восстановить из граммов
+      ...(!it.per100 && it.g > 0 ? { per100: { kcal: it.kcal * 100 / it.g, p: it.p * 100 / it.g, f: it.f * 100 / it.g, c: it.c * 100 / it.g, salt: it.salt * 100 / it.g }, unit: null } : {}) }));
+    if (sd.type) { sd.ftype = sd.type; delete sd.type; } // тип дня с сервера — как подсказка (ручной выбор здесь сильнее)
+    if (ld && ld.ftype && !sd.ftype) sd.ftype = ld.ftype;
+    S.days[k] = sd; dayMemo[k] = dayKey(sd); n++;
+  }
+  if (x.goals && same(S.goals, DEFAULT.goals) && !same(c.goals, S.goals)) { S.goals = c.goals; n++; }
+  if (num(x.salt) > 0 && S.salt === DEFAULT.salt && c.salt !== S.salt) { S.salt = c.salt; n++; }
+  if (!S.waterSet && x.water && !same(c.water, DEFAULT.water)) { S.water = c.water; S.waterSet = true; n++; }
+  if (n) { persist(); refreshView(); }
+  return n;
+}
+async function startSync() { if (!getToken()) return; await pullState(); syncNow(true); } // при старте: сначала чужое, потом своё
 async function getForma() {
   const tok = getToken(); if (!tok) return;
   try {
@@ -818,13 +969,18 @@ function formaLost(tok) { // токен больше не принимают —
   setToken(''); F = null; syncLast = '';
   try { localStorage.removeItem(FORMA); } catch (e) {}
   refreshToday();
-  toast('Связь с Формой потеряна', 'Связать', () => openPair(() => { closeSheet(); }));
+  if (EMBED) authLost(); // вход — у Формы: она выдаст новый токен и перезагрузит рамку
+  else toast('Связь с Формой потеряна', 'Связать', () => openPair(() => { closeSheet(); }));
 }
 function unlinkForma() { setToken(''); F = null; syncLast = ''; try { localStorage.removeItem(FORMA); } catch (e) {} }
 function refreshToday() { // новые данные Формы → перерисовать день (если открыт лист — после его закрытия)
   if (view !== 'today') return;
   if ($('#sheet').classList.contains('on')) { formaPending = true; return; }
   renderToday(false);
+}
+function refreshView() { // пришли дни с сервера — перерисовать открытую вкладку
+  if (view === 'today') return refreshToday();
+  if (view === 'history' && !$('#sheet').classList.contains('on')) renderHistory();
 }
 
 function day(d) { return S.days[d] || { items: [] }; }
@@ -870,7 +1026,7 @@ function onScroll() {
   if (b.contains('scrolled') !== y > 46) b.toggle('scrolled', y > 46);
 }
 function placeLens() { // «линза» под выбранной вкладкой: номер вкладки → --i, дальше едет CSS
-  const tabs = [...document.querySelectorAll('.tab[data-tab]')];
+  const tabs = [...document.querySelectorAll('.tab[data-tab]')]; if (!$('#tabs')) return;
   $('#tabs').style.setProperty('--i', Math.max(0, tabs.findIndex(t => t.dataset.tab === view)));
 }
 function placeSeg(seg, squish) { // «линза» сегментов; squish — пружинит при переезде
@@ -1223,7 +1379,7 @@ function renderChat(enter) {
         ${m.items.length > 1 && !(m.added || []).every(Boolean) ? `<button class="btn soft all" data-all="${i}">Добавить всё в дневник</button>` : ''}</div>` : ''}</div>`;
   $('#app').innerHTML = `<div class="view chat${enter ? ' enter' : ''}">
     <h1 class="large">Чат</h1><div class="subtitle">Спроси, что съесть и что добрать — нутрициолог видит твой дневник за сегодня</div>
-    ${!getToken() ? `<div class="card" style="margin-top:18px"><div class="lead" style="margin:0 0 12px;text-align:left">Чат отвечает через твоего Тренера. Подключи один раз — кодом из <b>/site</b>.</div><button class="btn" id="chatPair">Подключить</button></div>` : ''}
+    ${!getToken() && !EMBED ? `<div class="card" style="margin-top:18px"><div class="lead" style="margin:0 0 12px;text-align:left">Чат отвечает через твоего Тренера. Подключи один раз — кодом из <b>/site</b>.</div><button class="btn" id="chatPair">Подключить</button></div>` : ''}
     ${S.chat.length ? `<div class="chat-list" id="msgs">${S.chat.map(msg).join('')}</div>`
       : `<div class="starters">${STARTERS.map(([q, h]) => `<button class="starter" data-q="${esc(q)}">${esc(q)}<span>${h}</span></button>`).join('')}</div>`}
     ${chatBusy ? (chatLive ? `<div class="msg ai live" id="live">${chatText(chatLive)}</div>` : `<div class="typing" aria-label="Пишет"><i></i><i></i><i></i></div>`) : ''}
@@ -1276,7 +1432,7 @@ async function sendChat(q, retry) {
     const hist = S.chat.slice(0, S.chat.lastIndexOf(last)).slice(-12).map(m => ({ role: m.role, text: m.text }));
     const r = await fetch(API + '/api/kcal/chat', { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
       body: JSON.stringify({ question: last.text, messages: hist, context: chatContext(), stream: true }) });
-    if (r.status === 401) { setToken(''); throw new Error('Нужно подключить заново'); }
+    if (r.status === 401) { setToken(''); if (EMBED) authLost(); throw new Error(EMBED ? 'Обновляю вход — секунду' : 'Нужно подключить заново'); }
     let j = null;
     if (r.ok && (r.headers.get('content-type') || '').includes('event-stream') && r.body) { // ответ печатается по мере готовности
       const rd = r.body.getReader(), td = new TextDecoder(); let buf = '';
@@ -1656,7 +1812,7 @@ async function recognize(shots, meal, hint = '') {
       body: JSON.stringify({ image: url, images: shots.slice(1), text: hint }) });
     const j = await r.json().catch(() => ({}));
     if (photoReq !== ctl) return;
-    if (r.status === 401) { setToken(''); return openPair(() => recognize(shots, meal, hint)); }
+    if (r.status === 401) { setToken(''); if (EMBED) { closeSheet(); return authLost(); } return openPair(() => recognize(shots, meal, hint)); }
     if (!r.ok) throw new Error(j.error || 'Не получилось распознать');
     const items = (Array.isArray(j.items) ? j.items : []).filter(i => i && i.name && num(i.g) > 0 && (num(i.kcal) > 0 || num(i.salt) > 0));
     if (!items.length) throw new Error('Не нашёл на фото еду');
@@ -1734,6 +1890,7 @@ function showFound(url, items, comment, meal) {
   }, {});
 }
 function openPair(then) {
+  if (EMBED) return toast('Нет связи с Формой — открой «Питание» заново'); // вход — у Формы: кода и второго входа здесь нет
   const html = `<div class="hero-ico">${I.cam}</div>
     <div class="portion"><div class="title">Еда по фото</div></div>
     <div class="lead">Фото разбирает твой Тренер. Напиши ему <b>/site</b> в Telegram — он пришлёт код из 6 цифр.</div>
@@ -1750,7 +1907,7 @@ function openPair(then) {
         const r = await fetch(API + '/api/kcal/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: inp.value }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.token) throw new Error(j.error || 'Неверный или старый код');
-        setToken(j.token); syncLast = ''; buzz(); toast('Связано с Формой'); then(); syncNow(true);
+        setToken(j.token); syncLast = ''; buzz(); toast('Связано с Формой'); then(); startSync();
       } catch (e) {
         toast(e instanceof TypeError ? 'Нет связи с сервером' : e.message); b.textContent = 'Подключить'; b.disabled = false; inp.select();
       } finally { busy = false;
@@ -1794,13 +1951,13 @@ function openSettings() {
     <div class="foot">ВОЗ советует меньше 5 г соли в день — это около чайной ложки вместе с солью в готовой еде.</div>
     <div class="group-t">Дни тренировок</div><div class="list"><div class="days" id="days">${WEEK.map((w, i) => `<button data-d="${i}" aria-pressed="${S.trainDays.includes(i)}">${w}</button>`).join('')}</div></div>
     <div class="foot">В эти дни сразу стоит «Тренировка».</div>
-    <div class="group-t">Форма</div><div class="list"><button class="cell" id="pairBtn"><span class="t"><div class="n">${paired ? 'Связано с Формой' : 'Связать с Формой'}</div><div class="m">Сон, тренировки, еда по фото и чат</div></span>${paired ? '<span class="k">Отвязать</span>' : I.chev}</button></div>
-    <div class="foot">${paired ? 'Дневник за 14 дней уходит Тренеру — он видит, что ты ешь и пьёшь.' : 'Код — у Тренера в Telegram: напиши ему /site. Или нажми «Калории» в Форме.'}</div>
+    ${EMBED ? '' : `<div class="group-t">Форма</div><div class="list"><button class="cell" id="pairBtn"><span class="t"><div class="n">${paired ? 'Связано с Формой' : 'Связать с Формой'}</div><div class="m">Сон, тренировки, еда по фото и чат</div></span>${paired ? '<span class="k">Отвязать</span>' : I.chev}</button></div>
+    <div class="foot">${paired ? 'Дневник за 14 дней уходит Тренеру — он видит, что ты ешь и пьёшь.' : 'Код — у Тренера в Telegram: напиши ему /site. Или нажми «Калории» в Форме.'}</div>`}
     <div class="group-t">Данные</div><div class="list">
       <button class="cell" id="exp"><span class="t"><div class="n">Сохранить копию</div></span>${I.chev}</button>
       <button class="cell" id="imp"><span class="t"><div class="n">Загрузить копию</div></span>${I.chev}</button>
       <button class="cell" id="wipe"><span class="t"><div class="n" style="color:var(--bad)">Удалить все записи</div></span></button></div>
-    <div class="foot">Всё хранится на этом телефоне. Состав продуктов — средние значения из таблиц, для упаковок точнее этикетка.</div>
+    <div class="foot">${getToken() ? 'Всё хранится на этом устройстве и у Тренера — откроется на любом.' : 'Всё хранится на этом телефоне.'} Состав продуктов — средние значения из таблиц, для упаковок точнее этикетка.</div>
     <input type="file" id="file" accept="application/json,.json" hidden>`;
   openSheet('Настройки', html, body => {
     body.querySelectorAll('[data-t]').forEach(inp => inp.onchange = () => {
@@ -1819,7 +1976,7 @@ function openSettings() {
       S.trainDays = on ? S.trainDays.filter(x => x !== i) : S.trainDays.concat(i).sort();
       b.setAttribute('aria-pressed', !on); save(); buzz();
     };
-    $('#pairBtn', body).onclick = () => {
+    if ($('#pairBtn', body)) $('#pairBtn', body).onclick = () => {
       if (getToken()) { if (confirm('Отвязать от Формы на этом телефоне?')) { unlinkForma(); openSettings(); toast('Отвязано'); } }
       else openPair(() => { openSettings(); });
     };
@@ -1834,13 +1991,15 @@ function openSettings() {
       try {
         const x = clean(JSON.parse(await e.target.files[0].text()));
         if (!x) throw 0;
-        S = x; save(); closeSheet(); render(); toast('Копия загружена');
+        S = x; memoDays(); S.fullSync = false; save(); closeSheet(); render(); toast('Копия загружена'); // вся история уйдёт на сервер заново
       } catch (err) { toast('Это не копия из «Калорий»'); }
       e.target.value = ''; // тот же файл можно выбрать ещё раз
     };
     $('#wipe', body).onclick = () => {
       if (!confirm('Удалить всю еду и вес? Нормы останутся.')) return;
-      S.days = {}; S.weights = {}; S.recent = []; save(); closeSheet(); render(); toast('Записи удалены');
+      if (getToken()) for (const k in S.days) S.days[k] = { items: [] }; // связано: дни остаются пустыми с новым u — так удаление дойдёт и до сервера
+      else S.days = {};
+      S.weights = {}; S.recent = []; save(); closeSheet(); render(); toast('Записи удалены');
     };
   });
   onSheetClose = () => view === 'today' && renderToday(false);
@@ -1860,7 +2019,11 @@ function toast(text, action, fn) {
   toastT = setTimeout(() => t.classList.remove('on'), action ? 4000 : 2000);
 }
 
-function markTab() { document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')); placeLens(); }
+function markTab(squish) {
+  document.querySelectorAll('.tab[data-tab]').forEach(t => t.dataset.tab === view ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current')); placeLens();
+  const es = $('#eseg'); if (es) { es.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tab === view)); placeSeg(es, squish); }
+  document.body.dataset.view = view;
+}
 function render(from) { // from — вкладка, с которой ушли (смена вкладки); без него — первый показ
   markTab(); unlockScroll();
   if (from) scrollMem[from] = scrollY; // до того, как старая страница уйдёт (иначе высота схлопнется и прокрутка станет 0)
@@ -1888,20 +2051,30 @@ if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 // смена вкладки: сначала линза и цвет вкладки (сразу, в этом кадре), страница — со следующего кадра,
 // чтобы тяжёлая отрисовка не задерживала отклик меню; без снимка всей страницы (startViewTransition) — он и дёргал меню
 let renderQ = 0;
-document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => {
-  if (view === t.dataset.tab) return window.scrollTo({ top: 0, behavior: 'smooth' });
-  const from = view; view = t.dataset.tab; markTab(); buzz();
+if (EMBED) $('#tabs').remove(); else $('#etop').remove(); // внутри Формы — разделы сегментами сверху, меню снизу — у Формы
+function goTab(tab) {
+  if (view === tab) { // ещё раз на «Сегодня», когда открыт другой день, — вернуться к сегодня
+    if (tab === 'today' && cur !== today() && EMBED) return $('#todayBtn').onclick();
+    return window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  const from = view; view = tab; markTab(true); buzz();
   if (!renderQ) renderQ = requestAnimationFrame(() => setTimeout(() => { renderQ = 0; if (from !== view) render(from); }));
+}
+document.querySelectorAll('.tab[data-tab]').forEach(t => t.onclick = () => goTab(t.dataset.tab));
+if (EMBED) $('#eseg').onclick = e => { const b = e.target.closest('[data-tab]'); if (b) goTab(b.dataset.tab); };
+if (EMBED) addEventListener('message', e => { // Форма сменила тему
+  if (e.origin !== location.origin || !e.data || e.data.type !== 'forma-theme' || !['dark', 'light'].includes(e.data.theme)) return;
+  document.documentElement.setAttribute('data-theme', e.data.theme);
 });
 document.addEventListener('touchstart', () => {}, { passive: true }); // без этого iPhone не показывает нажатие (:active) на кнопках
 $('#addTab').onclick = () => { if (view !== 'today') { view = 'today'; render(); } buzz(); openAdd(); };
 $('#todayBtn').onclick = () => { cur = today(); shown.left = shown.pct = shown.w = null; buzz(); renderToday(true); };
-addEventListener('resize', () => { placeThumb(); placeLens(); });
+addEventListener('resize', () => { placeThumb(); placeLens(); placeSeg($('#eseg')); });
 let onToday = true;
 document.addEventListener('visibilitychange', () => { // открыли на следующий день — показать новый день
   if (document.hidden) { onToday = cur === today(); if (syncT) syncNow(false, true); return; } // уходим — несохранённое у Тренера отправить сразу
   if (onToday && cur !== today() && view === 'today' && !$('#sheet').classList.contains('on')) { cur = today(); shown.left = shown.pct = shown.w = null; renderToday(true); }
-  if (getToken() && Date.now() - syncAt > 15000) syncBody() !== syncLast ? syncNow(false) : getForma(); // вернулись — свежие сон и восстановление
+  if (getToken() && Date.now() - syncAt > 15000) pullState().then(() => syncBody() !== syncLast || !S.fullSync ? syncNow(false) : getForma()); // вернулись — правки с других устройств, свежие сон и восстановление
 });
 function takePair() { // ссылка из Формы: …/kcal/#pair=<токен> → связать, убрать токен из адреса
   const m = /^#pair=(.*)$/.exec(location.hash); if (!m) return false;
@@ -1910,12 +2083,13 @@ function takePair() { // ссылка из Формы: …/kcal/#pair=<токе�
   if (!/^[\w.~-]{6,200}$/.test(t)) { toast('Ссылка не подошла — возьми новую в Форме'); return false; }
   setToken(t); syncLast = ''; F = null; toast('Связано с Формой'); return true;
 }
-addEventListener('hashchange', () => { if (takePair()) syncNow(true); });
+addEventListener('hashchange', () => { if (takePair()) startSync(); });
 const paired = takePair();
 render();
-if (getToken()) setTimeout(() => syncNow(true), paired ? 0 : 400); // при открытии — дневник Тренеру, в ответ свежая Форма
+if (getToken()) setTimeout(startSync, paired ? 0 : 400); // при открытии — дневник с сервера, потом свой Тренеру, в ответ свежая Форма
 (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => loadWorld()); // база блюд грузится заранее, без рывка при первом поиске
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+// офлайн-копия — только как отдельный сайт; внутри Формы свой service worker не нужен (область — папка kcal/)
+if (!EMBED && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>
