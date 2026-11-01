@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Калории">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Калории</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -16,8 +16,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-/* Вид — Liquid Glass iOS 27: стекло только у навигации и кнопок поверх контента (меню, кнопки, листы, тосты);
-   стекло матовое, с тёмным краем и ярким бликом сверху. Контент — непрозрачный. */
+/* Вид — Liquid Glass iOS 26: стекло только у навигации и кнопок поверх контента (меню, кнопки, листы, тосты);
+   стекло матовое, с тёмным краем и ярким бликом сверху. Контент — непрозрачный.
+   Цвета — только чёрный, белый и серые (Глеб 01.11); цвет — точечно, где без него теряется смысл (соль сверх нормы, зона восстановления). */
 :root {
   --bg: #000000;
   --group: #1c1c1e;
@@ -32,12 +33,12 @@
   --ink: #ffffff;
   --on-ink: #000000;
   --track: rgba(255,255,255,.11);
-  --p: #6aa8ff;
-  --f: #ffb547;
-  --c: #5ed39b;
-  --s: #bba8ff;
-  --wtr: #4cc2ff;
-  --warn: #ff9f0a;
+  --p: #ffffff;
+  --f: #d1d1d6;
+  --c: #98989d;
+  --s: #636366;
+  --wtr: #ffffff;
+  --warn: #ffffff;
   --bad: #ff453a;
   --glass: rgba(44,44,48,.58);
   --glass-strong: rgba(36,36,40,.78);
@@ -55,11 +56,11 @@
 }
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f2f2f7; --group: #ffffff; --sheet: #f2f2f7; --sheet-group: #ffffff;
+    --bg: #ffffff; --group: #f2f2f7; --sheet: #ffffff; --sheet-group: #f2f2f7;
     --fill: rgba(118,118,128,.12); --fill-2: rgba(118,118,128,.2); --sep: rgba(60,60,67,.2);
     --text: #000000; --text-2: rgba(60,60,67,.6); --text-3: rgba(60,60,67,.3);
     --ink: #000000; --on-ink: #ffffff; --track: rgba(0,0,0,.07);
-    --p: #2c7cf0; --f: #e8940f; --c: #1fa86b; --s: #7a5af5; --wtr: #1a9ee8; --warn: #f08c00; --bad: #ff3b30;
+    --p: #000000; --f: #48484a; --c: #8e8e93; --s: #aeaeb2; --wtr: #000000; --warn: #000000; --bad: #ff3b30;
     --glass: rgba(255,255,255,.62); --glass-strong: rgba(250,250,252,.84); --glass-solid: #ffffff;
     --rim: rgba(255,255,255,.95); --spec: rgba(255,255,255,1); --edge: rgba(0,0,0,.14); --lens: rgba(0,0,0,.07);
     --drop: 0 10px 30px rgba(0,0,0,.13);
@@ -166,16 +167,42 @@ body.scrolled .nav-t { opacity: 1; transform: translate(-50%, 0); }
 .wcard { padding: 16px; }
 .wbar { position: relative; height: 44px; border-radius: 22px; background: var(--track); overflow: hidden; }
 .wbar i { position: absolute; inset: 0 auto 0 0; border-radius: 22px; background: linear-gradient(90deg, color-mix(in srgb, var(--wtr) 75%, transparent), var(--wtr)); transition: width .9s var(--spring); }
-.wbar span { position: relative; display: flex; align-items: center; height: 100%; padding: 0 16px; font-size: 15px; font-weight: 600; }
-.wbar.full span { color: #fff; }
+.wbar span { position: relative; display: flex; align-items: center; height: 100%; padding: 0 16px; font-size: 15px; font-weight: 600; color: #fff; mix-blend-mode: difference; }
 .wbtns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
 .wb { height: 58px; border-radius: 20px; background: var(--fill); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
-.wb b { font-size: 17px; font-weight: 700; color: var(--wtr); }
+.wb b { font-size: 17px; font-weight: 700; color: var(--text); }
 .wb span { font-size: 11px; color: var(--text-2); }
 .wb svg { width: 18px; height: 18px; color: var(--text-2); }
 .wb[disabled] { opacity: .35; pointer-events: none; }
 .metric .b { height: 4px; border-radius: 2px; background: var(--track); margin-top: 8px; overflow: hidden; }
 .metric .b i { display: block; height: 100%; border-radius: 2px; background: var(--dot); transform-origin: left; transition: transform .9s var(--ios), background .3s; }
+
+/* «Форма»: восстановление, сон, нагрузка, тренировка, режим — из бота-тренера */
+.fcard { margin-top: 18px; padding: 16px 18px; }
+.fcard.fin { animation: fadeUp .5s var(--ios); }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } }
+.frow { display: flex; align-items: center; gap: 16px; }
+.fring { position: relative; width: 66px; height: 66px; flex: none; }
+.fring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.fring .arc { transition: stroke-dashoffset 1s var(--ios); }
+.fring .in { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.fring b { font-size: 20px; line-height: 1; font-weight: 700; letter-spacing: -.6px; }
+.zdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.fstats { flex: 1; min-width: 0; display: grid; grid-template-columns: 1.3fr 1fr; gap: 6px 12px; }
+.fhd { grid-column: 1 / -1; font-size: 15px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fhd b { color: var(--text); font-weight: 600; }
+.fst .n { font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fst .v { margin-top: 1px; font-size: 19px; font-weight: 600; letter-spacing: -.5px; white-space: nowrap; }
+.fst .v small { font-size: 13px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
+.fline { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: .5px solid var(--sep); font-size: 15px; color: var(--text-2); }
+.fline + .fline { margin-top: 0; padding-top: 10px; border-top: 0; }
+.fline svg { width: 18px; height: 18px; flex: none; color: var(--text-2); }
+.fline .t { flex: 1; min-width: 0; line-height: 1.3; } /* на узком экране — в две строки, без обрезки */
+.fline b { color: var(--text); font-weight: 600; }
+.fline .r { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.wfoot { margin: 8px 6px 0; font-size: 13px; color: var(--text-2); }
+.cell.ro { min-height: 52px; }
+@media (max-width: 370px) { .fring { width: 58px; height: 58px; } .fring b { font-size: 18px; } .fst .v { font-size: 16px; } .fstats { gap: 4px 8px; } }
 
 /* списки (контент — без стекла) */
 .sec { margin-top: 30px; }
@@ -235,7 +262,7 @@ button.cell:active { background: var(--fill); }
 .typing i { width: 8px; height: 8px; border-radius: 4px; background: var(--text-2); animation: dot 1.2s infinite; }
 .typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
 .chat-err { color: var(--bad); font-size: 15px; display: flex; align-items: center; gap: 10px; }
-.chat-err button { color: var(--p); font-weight: 600; }
+.chat-err button { color: var(--text); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .starters { display: grid; gap: 8px; margin-top: 22px; }
 .starter { text-align: left; padding: 14px 18px; border-radius: 22px; background: var(--group); font-size: 16px; transition: transform .35s var(--spring); }
 .starter:active { transform: scale(.97); }
@@ -400,7 +427,7 @@ button, .cell { -webkit-touch-callout: none; }
   font-size: 15px; font-weight: 600; transition: opacity .3s, transform .6s var(--spring); white-space: nowrap; pointer-events: none; }
 .toast span { overflow: hidden; text-overflow: ellipsis; }
 .toast.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
-.toast button { color: var(--p); font-weight: 600; }
+.toast button { color: var(--text); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 
 
 /* ——— широкие экраны: iPad, ноутбук, монитор (правило Глеба 29.10 — нормальный вид на всех устройствах) ——— */
@@ -621,7 +648,7 @@ const WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const WEEK_FULL = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
 const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const API = 'https://coach.2-27-206-165.sslip.io';
-const KEY = 'kcal.v1', TOKEN = 'kcal.token';
+const KEY = 'kcal.v1', TOKEN = 'kcal.token', FORMA = 'kcal.forma';
 const DEFAULT = {
   goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } },
   salt: 5, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {},
@@ -644,6 +671,8 @@ const I = {
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.8h6V7M6.5 7l.9 12.2h9.2L17.5 7"/></svg>',
   chevR: '<svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l8 8-8 8"/></svg>',
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
+  bolt: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M11.2 2.5L4.5 11.2h5l-1 6.3 6.9-8.8h-5.1z"/></svg>',
+  moon: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M16.5 12.4A6.8 6.8 0 0 1 7.6 3.5a6.8 6.8 0 1 0 8.9 8.9z"/></svg>',
 };
 
 function load() {
@@ -671,7 +700,8 @@ function clean(x) {
       name: String(i.name || 'Без названия').slice(0, 80), g: pos(i.g), ...per(i),
       ...(i.per100 && typeof i.per100 === 'object' ? { per100: per(i.per100), unit: unit(i.unit) } : {}) }));
     const water = (Array.isArray(d.water) ? d.water : []).map(num).filter(v => v > 0 && v <= 3000).map(Math.round);
-    out.days[k] = { items, ...(water.length ? { water } : {}), ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}) };
+    out.days[k] = { items, ...(water.length ? { water } : {}), ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}),
+      ...(d.ftype === 'train' || d.ftype === 'rest' ? { ftype: d.ftype } : {}) }; // ftype — тип дня по Форме (type — выбран вручную)
   }
   const food = f => ({ name: String(f.name).slice(0, 80), ...per(f), unit: unit(f.unit) });
   out.custom = (Array.isArray(x.custom) ? x.custom : []).filter(f => f && f.name).map(food).slice(0, 200);
@@ -683,7 +713,7 @@ function clean(x) {
     ...(Array.isArray(m.added) ? { added: m.added.map(Boolean).slice(0, 5) } : {}) }));
   return out;
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Не сохранилось: память недоступна'); } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Не сохранилось: память недоступна'); } scheduleSync(); }
 const getToken = () => { try { return localStorage.getItem(TOKEN) || ''; } catch (e) { return ''; } };
 const setToken = t => { try { t ? localStorage.setItem(TOKEN, t) : localStorage.removeItem(TOKEN); } catch (e) {} };
 
@@ -703,17 +733,112 @@ const buzz = () => { try { navigator.vibrate && navigator.vibrate(8); } catch (e
 const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let S = load(); // после объявления num/r1 — load() ими пользуется
+let F = loadForma(); // последний ответ Формы (сон, восстановление, тренировка, вода и еда из Формы) — сразу с прошлого раза, без прыжка
 let view = 'today', cur = today(), histRange = 7;
 
+/* ——— связь с Формой (бот-тренер): договор — coach/SYNC.md ———
+   POST /api/kcal/sync — дневник за 14 дней, нормы, соль, вода (через ~2 с после сохранения и при открытии);
+   ответ и GET /api/kcal/forma — восстановление, сон, нагрузка, тренировка, режим, вода и еда, записанные в Форме. */
+const SYNC_DAYS = 14;
+let syncT = 0, syncBusy = false, syncAgain = false, syncLast = '', syncAt = 0, formaPending = false, formaShown = false;
+function loadForma() { try { return cleanForma(JSON.parse(localStorage.getItem(FORMA))); } catch (e) { return null; } }
+function cleanForma(x) { // ответ сервера → только известные поля; числа ≥ 0, строки короткие (рисуется через esc)
+  if (!x || typeof x !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(x.day)) return null;
+  const n = v => typeof v === 'number' && isFinite(v) && v >= 0 ? v : null;
+  const tm = v => typeof v === 'string' && /^\d{1,2}:\d{2}$/.test(v) ? v : '';
+  const str = (v, k) => typeof v === 'string' ? v.slice(0, k) : '';
+  const o = (v) => v && typeof v === 'object' ? v : null;
+  const rec = o(x.recovery), sl = o(x.sleep), rg = o(x.regime), tr = rg && o(rg.train);
+  return {
+    day: x.day,
+    recovery: rec && n(rec.score) != null ? { score: Math.min(100, Math.round(rec.score)) } : null,
+    sleep: sl && (n(sl.hours) != null || n(sl.performance) != null) ? { hours: n(sl.hours), performance: n(sl.performance) } : null,
+    strain: n(x.strain),
+    train_today: typeof x.train_today === 'boolean' ? x.train_today : null,
+    workouts: (Array.isArray(x.workouts) ? x.workouts : []).filter(o).slice(0, 5).map(w => ({ sport: str(w.sport, 30), start: tm(w.start), minutes: n(w.minutes), strain: n(w.strain) })),
+    water: Math.min(10000, Math.round(n(x.water_forma) || 0)),
+    meals: (Array.isArray(x.meals_forma) ? x.meals_forma : []).filter(o).slice(0, 30).map(m => ({ time: tm(m.time), title: str(m.title, 80) || 'Еда',
+      kcal: n(m.kcal) || 0, p: n(m.p) || 0, f: n(m.f) || 0, c: n(m.c) || 0 })),
+    regime: rg ? { bed: tm(rg.bed), wake: tm(rg.wake), train: tr && tr.on ? { time: tm(tr.time), minutes: n(tr.minutes), intensity: ['full', 'light', 'rest'].includes(tr.intensity) ? tr.intensity : '' } : null } : null,
+  };
+}
+const formaFor = d => F && F.day === d && getToken() ? F : null; // данные Формы — только за их день и пока связано
+function syncBody() {
+  const days = {}, t = today(), r = v => r1(num(v));
+  for (let i = SYNC_DAYS - 1; i >= 0; i--) {
+    const k = addDays(t, -i), d = S.days[k]; if (!d) continue;
+    days[k] = { items: d.items.map(it => ({ name: it.name, meal: it.meal, g: r(it.g), kcal: r(it.kcal), p: r(it.p), f: r(it.f), c: r(it.c), salt: r(it.salt) })),
+      water: d.water || [], type: dayType(k) };
+  }
+  return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water });
+}
+function scheduleSync(ms = 2000) { if (!getToken()) return; clearTimeout(syncT); syncT = setTimeout(() => syncNow(false), ms); }
+async function syncNow(force, keepalive) { // ошибки сети и 429 — тихо: повтор при следующем сохранении (тело сравнивается с последним доставленным)
+  clearTimeout(syncT); syncT = 0;
+  const tok = getToken(); if (!tok) return;
+  if (syncBusy) { syncAgain = true; return; }
+  const body = syncBody();
+  if (!force && body === syncLast) return;
+  syncBusy = true;
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch(API + '/api/kcal/sync', { method: 'POST', signal: ctl.signal, keepalive: !!keepalive && body.length < 60000,
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body });
+    if (r.status === 401) return formaLost(tok);
+    if (!r.ok) return;
+    syncLast = body; syncAt = Date.now();
+    const j = await r.json().catch(() => null);
+    if (j && 'forma' in j) applyForma(j.forma);
+  } catch (e) { /* нет сети — повтор при следующем сохранении */ } finally {
+    clearTimeout(tm); syncBusy = false;
+    if (syncAgain) { syncAgain = false; scheduleSync(); }
+  }
+}
+async function getForma() {
+  const tok = getToken(); if (!tok) return;
+  try {
+    const r = await fetch(API + '/api/kcal/forma', { headers: { Authorization: 'Bearer ' + tok } });
+    if (r.status === 401) return formaLost(tok);
+    if (r.ok) { syncAt = Date.now(); applyForma(await r.json()); }
+  } catch (e) {}
+}
+function applyForma(raw) {
+  const f = cleanForma(raw), was = JSON.stringify(F);
+  F = f;
+  try { f ? localStorage.setItem(FORMA, JSON.stringify(f)) : localStorage.removeItem(FORMA); } catch (e) {}
+  let typed = false;
+  if (f && f.train_today != null) { // тип дня — по Форме, если не выбран вручную
+    const t = f.train_today ? 'train' : 'rest', d = S.days[f.day] || { items: [] };
+    if (d.ftype !== t) { d.ftype = t; S.days[f.day] = d; typed = true; save(); }
+  }
+  if (typed || was !== JSON.stringify(F)) refreshToday();
+}
+function formaLost(tok) { // токен больше не принимают — связь потеряна
+  if (getToken() !== tok) return;
+  setToken(''); F = null; syncLast = '';
+  try { localStorage.removeItem(FORMA); } catch (e) {}
+  refreshToday();
+  toast('Связь с Формой потеряна', 'Связать', () => openPair(() => { closeSheet(); }));
+}
+function unlinkForma() { setToken(''); F = null; syncLast = ''; try { localStorage.removeItem(FORMA); } catch (e) {} }
+function refreshToday() { // новые данные Формы → перерисовать день (если открыт лист — после его закрытия)
+  if (view !== 'today') return;
+  if ($('#sheet').classList.contains('on')) { formaPending = true; return; }
+  renderToday(false);
+}
+
 function day(d) { return S.days[d] || { items: [] }; }
-function dayType(d) {
+function dayType(d) { // выбран вручную → по Форме (день бокса или тренировка WHOOP) → по дням недели из настроек
   const x = S.days[d];
   if (x && x.type) return x.type;
+  if (x && x.ftype) return x.ftype;
   return S.trainDays.includes(wdi(d)) ? 'train' : 'rest';
 }
-function totals(d) {
+function totals(d) { // своё + съеденное, записанное в самой Форме
   const t = { kcal: 0, p: 0, f: 0, c: 0, salt: 0 };
   for (const it of day(d).items) { t.kcal += it.kcal; t.p += it.p; t.f += it.f; t.c += it.c; t.salt += it.salt || 0; }
+  const fm = formaFor(d);
+  if (fm) for (const m of fm.meals) { t.kcal += m.kcal; t.p += m.p; t.f += m.f; t.c += m.c; }
   return t;
 }
 function dateTitle(d) {
@@ -775,7 +900,7 @@ function weekDays() {
 function renderToday(animate) {
   const t = totals(cur), type = dayType(cur), g = S.goals[type], d = day(cur);
   const left = g.kcal - t.kcal, over = left < 0, pct = t.kcal / g.kcal;
-  const x = parseIso(cur), st = streak();
+  const x = parseIso(cur), st = streak(), fm = formaFor(cur);
   $('#navTitle').textContent = dateTitle(cur);
   $('#todayBtn').hidden = cur === today();
   setActions(`<button class="ibtn press" id="camBtn" aria-label="Еда по фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</button>
@@ -795,6 +920,7 @@ function renderToday(animate) {
         <span class="l">${WEEK[wdi(dd)]}</span>${ringSvg(tt / gg, 34, 4, 'var(--ink)')}</button>`;
     }).join('')}</div>
     <button class="wk-nav press" id="wkNext" aria-label="Следующая неделя" ${weekDays()[6] >= today() ? 'disabled' : ''}>${I.chevR}</button></div>
+    ${formaCard(fm, animate)}
     <div class="seg" id="seg"><span class="thumb"></span>
       <button data-type="train" aria-pressed="${type === 'train'}">Тренировка</button>
       <button data-type="rest" aria-pressed="${type === 'rest'}">Отдых</button></div>
@@ -822,17 +948,23 @@ function renderToday(animate) {
           <span class="k num">${fmt(i.kcal)}</span></button></div>`).join('')}
           <button class="cell add" data-add="${m}">${I.plus}Добавить<span class="ph" data-photo="${m}" role="button" aria-label="По фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</span></button></div></section>`;
     }).join('')}
+    ${fm && fm.meals.length ? `<section class="sec" id="fmeals"><div class="sec-h"><h2>Из Формы</h2><span class="num">${fmt(fm.meals.reduce((a, m) => a + m.kcal, 0))} ккал</span></div>
+      <div class="list">${fm.meals.map(m => `<div class="cell ro"><span class="t"><div class="n">${esc(m.title)}</div>
+        <div class="m num">${m.time ? m.time + ' · ' : ''}Б ${Math.round(m.p)} · Ж ${Math.round(m.f)} · У ${Math.round(m.c)}</div></span><span class="k num">${fmt(m.kcal)}</span></div>`).join('')}</div>
+      <div class="foot">Записано в Форме — там и правится.</div></section>` : ''}
   </div></div></div>`;
+  formaShown = !!fm;
   lastAdded = null;
   placeThumb();
   countUp($('#left'), shown.left, Math.abs(left));
   shown.left = Math.abs(left);
   const app = $('#app');
   shown.w = now;
-  const grow = animate || shown.pct !== pct || Object.keys(now).some(k => was[k] !== undefined && was[k] !== now[k]);
+  const grow = animate || !!$('#fring.grow') || shown.pct !== pct || Object.keys(now).some(k => was[k] !== undefined && was[k] !== now[k]);
   shown.pct = pct;
   if (grow) requestAnimationFrame(() => requestAnimationFrame(() => { // с прежнего значения до нового — плавно
     app.querySelectorAll('[data-w]').forEach(el => el.style.transform = `scaleX(${el.dataset.w})`);
+    const fa = $('#fring .arc'); if (fa) fa.style.strokeDashoffset = fa.dataset.off;
     const arc = $('#ring .arc'); if (!arc) return; const c = +arc.getAttribute('stroke-dasharray');
     arc.style.strokeDashoffset = pct > 0 ? Math.min(c * (1 - Math.min(1, pct)), c - 0.01) : c;
   }));
@@ -857,17 +989,48 @@ function renderToday(animate) {
   bindWater();
 }
 let lastAdded = null;
+/* ——— карточка «Форма» ——— */
+const SPORTS = { boxing: 'Бокс', running: 'Бег', cycling: 'Велосипед', swimming: 'Плавание', walking: 'Ходьба', weightlifting: 'Силовая',
+  functional_fitness: 'Функциональная', hiit: 'Интервалы', yoga: 'Йога', football: 'Футбол', soccer: 'Футбол', basketball: 'Баскетбол',
+  stretching: 'Растяжка', martial_arts: 'Единоборства', kickboxing: 'Кикбоксинг', hiking: 'Поход', tennis: 'Теннис', activity: 'Активность' };
+const sportName = s => SPORTS[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ') : 'Тренировка');
+const ZONES = [[67, '#16EC06', 'высокое'], [34, '#FFDE00', 'среднее'], [0, '#FF0026', 'низкое']]; // цвета зон WHOOP — только точкой
+const INTENS = { full: 'полная', light: 'лёгкая', rest: 'отдых' };
+const mins = m => m >= 60 ? `${Math.floor(m / 60)} ч${m % 60 ? ' ' + Math.round(m % 60) + ' мин' : ''}` : `${Math.round(m)} мин`;
+function formaCard(fm, animate) {
+  if (!fm) return '';
+  const sc = fm.recovery ? fm.recovery.score : null, z = sc == null ? null : ZONES.find(q => sc >= q[0]);
+  const fresh = !animate && !formaShown; // появилась сейчас (пришёл ответ) — мягко проявляется, кольцо дорастает
+  const size = 66, st = 6, r = (size - st) / 2, c = 2 * Math.PI * r, off = sc == null ? c : Math.max(0.01, c * (1 - sc / 100));
+  const sl = fm.sleep, w = fm.workouts, rg = fm.regime;
+  const lines = w.map(x => `<div class="fline">${I.bolt}<span class="t"><b>${esc(sportName(x.sport))}</b>${x.start ? ' · ' + x.start : ''}${x.minutes ? ' · ' + mins(x.minutes) : ''}</span>${x.strain != null ? `<span class="r">${dec(x.strain)}</span>` : ''}</div>`);
+  if (!w.length && fm.train_today && !(rg && rg.train)) lines.push(`<div class="fline">${I.bolt}<span class="t"><b>Сегодня тренировка</b></span></div>`);
+  if (!w.length && fm.train_today === false && !(rg && rg.train)) lines.push(`<div class="fline">${I.bolt}<span class="t">Сегодня без тренировки</span></div>`);
+  if (rg && (rg.bed || rg.train)) lines.push(`<div class="fline">${I.moon}<span class="t">${rg.bed ? `Отбой <b>${rg.bed}</b>` : ''}${rg.train ? `${rg.bed ? ' · ' : ''}тренировка${rg.train.time ? ` <b>${rg.train.time}</b>` : ''}${INTENS[rg.train.intensity] ? ' · ' + INTENS[rg.train.intensity] : ''}` : ''}</span></div>`);
+  return `<section class="card fcard${fresh ? ' fin' : ''}" id="forma" aria-label="Форма">
+    <div class="frow"><div class="fring${fresh || animate ? ' grow' : ''}" id="fring" role="img" aria-label="Восстановление ${sc == null ? 'нет данных' : sc + '%, ' + z[2]}">
+      <svg viewBox="0 0 ${size} ${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--track)" stroke-width="${st}"/>
+        <circle class="arc" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--ink)" stroke-width="${st}" stroke-linecap="round"
+          stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${(fresh || animate ? c : off).toFixed(2)}" data-off="${off.toFixed(2)}"/></svg>
+      <div class="in"><b class="num">${sc == null ? '—' : sc}</b>${z ? `<i class="zdot" style="background:${z[1]}"></i>` : ''}</div></div>
+      <div class="fstats">
+        <div class="fhd">Восстановление${z ? ` <b>${z[2]}</b>` : ''}</div>
+        <div class="fst"><div class="n">Сон</div><div class="v num">${sl && sl.hours != null ? dec(sl.hours) + '<small> ч</small>' : '—'}${sl && sl.performance != null ? `<small> · ${Math.round(sl.performance)}%</small>` : ''}</div></div>
+        <div class="fst"><div class="n">Нагрузка</div><div class="v num">${fm.strain == null ? '—' : dec(fm.strain)}</div></div>
+      </div></div>${lines.join('')}</section>`;
+}
 /* ——— вода ——— */
-const waterOf = d => (day(d).water || []).reduce((a, v) => a + v, 0);
+const waterOf = d => (day(d).water || []).reduce((a, v) => a + v, 0) + ((formaFor(d) || {}).water || 0); // своя вода + выпитое, записанное в Форме
 const waterGoal = d => S.water[dayType(d)];
 const liters = ml => dec(ml / 1000);
 function waterCard() {
-  const w = waterOf(cur), goal = waterGoal(cur), pct = Math.min(100, w / goal * 100), n = (day(cur).water || []).length;
+  const w = waterOf(cur), goal = waterGoal(cur), pct = Math.min(100, w / goal * 100), n = (day(cur).water || []).length, fw = (formaFor(cur) || {}).water || 0;
   return `<section class="sec" id="water"><div class="sec-h"><h2>Вода</h2><span class="num">${liters(w)} из ${liters(goal)} л</span></div>
     <div class="card wcard"><div class="wbar${w >= goal ? ' full' : ''}"><i style="width:${pct}%"></i><span class="num">${w >= goal ? 'Норма выпита' : 'Ещё ' + liters(goal - w) + ' л'}</span></div>
       <div class="wbtns"><button class="wb press" data-ml="250"><b>+250</b><span>стакан</span></button><button class="wb press" data-ml="500"><b>+500</b><span>бутылка</span></button>
         <button class="wb press" data-ml="other"><b>…</b><span>другое</span></button>
-        <button class="wb press undo" data-ml="undo" ${n ? '' : 'disabled'} aria-label="Убрать последнее">${I.undo}<span>отмена</span></button></div></div></section>`;
+        <button class="wb press undo" data-ml="undo" ${n ? '' : 'disabled'} aria-label="Убрать последнее">${I.undo}<span>отмена</span></button></div></div>
+    ${fw ? `<div class="wfoot num">Из них ${liters(fw)} л записано в Форме</div>` : ''}</section>`;
 }
 function addWater(ml) {
   const before = waterOf(cur), d = S.days[cur] = day(cur);
@@ -1183,6 +1346,7 @@ function closeSheet() {
   photoReq && photoReq.abort(); photoReq = null;
   clearTimeout(shopTimer); shopReq && shopReq.abort(); shopReq = null;
   const f = onSheetClose; onSheetClose = null; f && f();
+  if (formaPending) { formaPending = false; if (view === 'today') renderToday(false); } // пока был открыт лист, пришли данные Формы
 }
 $('#scrim').onclick = closeSheet;
 $('#sheetClose').onclick = closeSheet;
@@ -1586,7 +1750,7 @@ function openPair(then) {
         const r = await fetch(API + '/api/kcal/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: inp.value }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.token) throw new Error(j.error || 'Неверный или старый код');
-        setToken(j.token); buzz(); toast('Фото подключено'); then();
+        setToken(j.token); syncLast = ''; buzz(); toast('Связано с Формой'); then(); syncNow(true);
       } catch (e) {
         toast(e instanceof TypeError ? 'Нет связи с сервером' : e.message); b.textContent = 'Подключить'; b.disabled = false; inp.select();
       } finally { busy = false;
@@ -1630,12 +1794,13 @@ function openSettings() {
     <div class="foot">ВОЗ советует меньше 5 г соли в день — это около чайной ложки вместе с солью в готовой еде.</div>
     <div class="group-t">Дни тренировок</div><div class="list"><div class="days" id="days">${WEEK.map((w, i) => `<button data-d="${i}" aria-pressed="${S.trainDays.includes(i)}">${w}</button>`).join('')}</div></div>
     <div class="foot">В эти дни сразу стоит «Тренировка».</div>
-    <div class="group-t">Еда по фото</div><div class="list"><button class="cell" id="pairBtn"><span class="t"><div class="n">${paired ? 'Подключено' : 'Подключить'}</div><div class="m">Через Тренера в Telegram</div></span>${paired ? '<span class="k">Отключить</span>' : I.chev}</button></div>
+    <div class="group-t">Форма</div><div class="list"><button class="cell" id="pairBtn"><span class="t"><div class="n">${paired ? 'Связано с Формой' : 'Связать с Формой'}</div><div class="m">Сон, тренировки, еда по фото и чат</div></span>${paired ? '<span class="k">Отвязать</span>' : I.chev}</button></div>
+    <div class="foot">${paired ? 'Дневник за 14 дней уходит Тренеру — он видит, что ты ешь и пьёшь.' : 'Код — у Тренера в Telegram: напиши ему /site. Или нажми «Калории» в Форме.'}</div>
     <div class="group-t">Данные</div><div class="list">
       <button class="cell" id="exp"><span class="t"><div class="n">Сохранить копию</div></span>${I.chev}</button>
       <button class="cell" id="imp"><span class="t"><div class="n">Загрузить копию</div></span>${I.chev}</button>
       <button class="cell" id="wipe"><span class="t"><div class="n" style="color:var(--bad)">Удалить все записи</div></span></button></div>
-    <div class="foot">Всё хранится только на этом телефоне. Состав продуктов — средние значения из таблиц, для упаковок точнее этикетка.</div>
+    <div class="foot">Всё хранится на этом телефоне. Состав продуктов — средние значения из таблиц, для упаковок точнее этикетка.</div>
     <input type="file" id="file" accept="application/json,.json" hidden>`;
   openSheet('Настройки', html, body => {
     body.querySelectorAll('[data-t]').forEach(inp => inp.onchange = () => {
@@ -1655,7 +1820,7 @@ function openSettings() {
       b.setAttribute('aria-pressed', !on); save(); buzz();
     };
     $('#pairBtn', body).onclick = () => {
-      if (getToken()) { if (confirm('Отключить еду по фото на этом телефоне?')) { setToken(''); openSettings(); toast('Отключено'); } }
+      if (getToken()) { if (confirm('Отвязать от Формы на этом телефоне?')) { unlinkForma(); openSettings(); toast('Отвязано'); } }
       else openPair(() => { openSettings(); });
     };
     $('#exp', body).onclick = () => {
@@ -1734,10 +1899,21 @@ $('#todayBtn').onclick = () => { cur = today(); shown.left = shown.pct = shown.w
 addEventListener('resize', () => { placeThumb(); placeLens(); });
 let onToday = true;
 document.addEventListener('visibilitychange', () => { // открыли на следующий день — показать новый день
-  if (document.hidden) { onToday = cur === today(); return; }
+  if (document.hidden) { onToday = cur === today(); if (syncT) syncNow(false, true); return; } // уходим — несохранённое у Тренера отправить сразу
   if (onToday && cur !== today() && view === 'today' && !$('#sheet').classList.contains('on')) { cur = today(); shown.left = shown.pct = shown.w = null; renderToday(true); }
+  if (getToken() && Date.now() - syncAt > 15000) syncBody() !== syncLast ? syncNow(false) : getForma(); // вернулись — свежие сон и восстановление
 });
+function takePair() { // ссылка из Формы: …/kcal/#pair=<токен> → связать, убрать токен из адреса
+  const m = /^#pair=(.*)$/.exec(location.hash); if (!m) return false;
+  history.replaceState(null, '', location.pathname + location.search);
+  let t = ''; try { t = decodeURIComponent(m[1]); } catch (e) {}
+  if (!/^[\w.~-]{6,200}$/.test(t)) { toast('Ссылка не подошла — возьми новую в Форме'); return false; }
+  setToken(t); syncLast = ''; F = null; toast('Связано с Формой'); return true;
+}
+addEventListener('hashchange', () => { if (takePair()) syncNow(true); });
+const paired = takePair();
 render();
+if (getToken()) setTimeout(() => syncNow(true), paired ? 0 : 400); // при открытии — дневник Тренеру, в ответ свежая Форма
 (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => loadWorld()); // база блюд грузится заранее, без рывка при первом поиске
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>

@@ -25,13 +25,18 @@ async function newPage(browser, opts = {}) {
   const ctx = await browser.newContext({ ...devices[opts.device || 'iPhone 14'], colorScheme: opts.scheme || 'dark', serviceWorkers: opts.sw ? 'allow' : 'block' });
   await ctx.clock.setFixedTime(opts.now || NOW);
   await ctx.route(API + '/api/kcal/shop?*', r => r.fulfill({ status: 200, contentType: 'application/json', body: '{"items":[]}' })); // магазины — пусто, на сервер не ходим
+  ctx.syncs = []; // все POST /api/kcal/sync: { body, auth, t }
+  await ctx.route(API + '/api/kcal/sync', r => { ctx.syncs.push({ body: JSON.parse(r.request().postData()), auth: r.request().headers().authorization, t: Date.now() });
+    return opts.sync ? opts.sync(r) : r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"forma":null}' }); });
+  await ctx.route(API + '/api/kcal/forma', r => opts.forma ? opts.forma(r) : r.fulfill({ status: 200, contentType: 'application/json', body: 'null' }));
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
   page.on('console', m => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && page.errors.push(m.text()));
   page.on('dialog', d => d.accept());
   if (opts.seed) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('kcal.v1', s); sessionStorage.setItem('seeded', 1); } }, JSON.stringify(opts.seed));
-  await page.goto(URL);
+  if (opts.init) await ctx.addInitScript(opts.init);
+  await page.goto(URL + (opts.hash || ''));
   await sleep(700);
   return { ctx, page };
 }
@@ -161,7 +166,7 @@ async function addFood(page, q, grams, meal) {
       await page.fill('#qk', '650'); await page.click('#qsave'); await sleep(600);
       ok((await items(page))[1].kcal === 650, 'правка сохранена');
       const saltBar = await page.evaluate(() => getComputedStyle(document.querySelectorAll('.metric')[3]).getPropertyValue('--dot'));
-      ok(/bba8ff|--s\b/.test(saltBar), 'соль 2,5 из 5 — обычный цвет', saltBar);
+      ok(/636366|--s\b/.test(saltBar), 'соль 2,5 из 5 — обычный (серый) цвет', saltBar); // монохром (Глеб 01.11)
       await page.click('#addTab'); await sleep(500); await page.click('#quick'); await sleep(500);
       await page.fill('#qk', '3000'); await page.fill('#qs', '3'); await page.click('#qsave'); await sleep(250);
       ok((await toastText(page)).includes('Норма на сегодня закрыта'), 'перебор нормы — «Норма закрыта»', await toastText(page));
@@ -593,6 +598,94 @@ async function addFood(page, q, grams, meal) {
       await page.click('[data-tab=today]'); await sleep(500);
       ok(!(await page.isVisible('#composer')), 'на «Сегодня» поля чата нет');
       ok(page.errors.length === 0, 'нет ошибок в консоли (чат)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 14. Связь с Формой (coach/SYNC.md): #pair, sync с debounce, карточка, авто-тип дня, вода и еда Формы, 401, нет сети */
+    const FORMA = { day: '2026-10-21', recovery: { score: 32, hrv: 85, rhr: 63 }, sleep: { hours: 7.6, performance: 84 }, strain: 2.9, train_today: false,
+      workouts: [{ sport: 'boxing', start: '10:20', minutes: 98, strain: 13.4 }], water_forma: 500,
+      meals_forma: [{ time: '13:10', title: 'Плов <b>', kcal: 600, p: 20, f: 25, c: 70 }],
+      regime: { day: '2026-10-21', mode: 'vacation', bed: '23:45', wake: '08:30', train: { on: true, time: '10:00', minutes: 90, intensity: 'light', why: '' } } };
+    const okForma = r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, forma: FORMA }) });
+    {
+      // без связи: ничего не уходит, карточки нет (даже если в памяти остался прошлый ответ), в настройках — «Связать с Формой»
+      const { ctx, page } = await newPage(browser, { sync: okForma });
+      await page.evaluate(f => localStorage.setItem('kcal.forma', f), JSON.stringify({ ...FORMA, water: 500, meals: FORMA.meals_forma })); await page.reload(); await sleep(600);
+      await addFood(page, 'банан', 120, 'snack'); await page.click('#water [data-ml="250"]'); await sleep(2600);
+      ok(ctx.syncs.length === 0, 'без токена sync не отправляется', String(ctx.syncs.length));
+      ok(!(await page.$('#forma')) && !(await page.$('#fmeals')), 'без токена карточки Формы нет');
+      await page.click('#gear'); await sleep(500);
+      ok((await text(page, '#pairBtn')).includes('Связать с Формой'), 'в настройках — «Связать с Формой»', await text(page, '#pairBtn'));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (Форма, без связи)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      // вход по ссылке #pair → токен, хэш убран, тост, сразу sync; ответ → карточка
+      const { ctx, page } = await newPage(browser, { hash: '#pair=tok123456', sync: okForma, seed: { goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } }, days: {} } });
+      ok(await page.evaluate(() => localStorage.getItem('kcal.token')) === 'tok123456', '#pair → токен сохранён');
+      ok(await page.evaluate(() => location.hash === '' && !location.href.includes('tok')), 'токен убран из адреса');
+      ok((await toastText(page)).includes('Связано с Формой'), 'тост «Связано с Формой»', await toastText(page));
+      ok(ctx.syncs.length >= 1 && ctx.syncs[0].auth === 'Bearer tok123456', 'сразу sync с токеном', JSON.stringify(ctx.syncs.map(x => x.auth)));
+      const b0 = ctx.syncs[0] && ctx.syncs[0].body;
+      ok(b0 && b0.goals.train.kcal === 3400 && b0.goals.rest.c === 360 && b0.salt === 5 && b0.water.train === 3400 && b0.water.rest === 2500 && typeof b0.days === 'object', 'в sync — нормы, соль, вода', JSON.stringify(b0));
+      await sleep(300);
+      const card = await text(page, '#forma');
+      ok(['32', 'низкое', '7,6 ч', '84%', '2,9', 'Бокс', '10:20', '1 ч 38 мин', '13,4', 'Отбой 23:45', 'тренировка 10:00', 'лёгкая'].every(w => card.includes(w)), 'карточка Формы: восстановление, сон, нагрузка, тренировка, режим', card);
+      ok(await page.$eval('#forma .zdot', e => getComputedStyle(e).backgroundColor) === 'rgb(255, 0, 38)', 'восстановление 32 — красная точка зоны');
+      ok((await page.getAttribute('#seg [data-type=rest]', 'aria-pressed')) === 'true', 'среда, но Форма: тренировки нет → «Отдых» сам');
+      ok((await text(page, '#left')) === '2 200', 'еда Формы в итогах: 2 800 − 600 = 2 200', await text(page, '#left'));
+      const fm = await text(page, '#fmeals');
+      ok(fm.includes('Из Формы') && fm.includes('Плов <b>') && fm.includes('600') && fm.includes('13:10'), 'секция «Из Формы» (только просмотр, имя как текст)', fm);
+      ok(!(await page.$('#fmeals button')), 'еда из Формы не правится');
+      ok((await text(page, '#water .sec-h')).includes('0,5 из 2,5 л'), 'вода: своя 0 + из Формы 0,5', await text(page, '#water .sec-h'));
+      await shot(page, '14-forma');
+      await sleep(2300); // тип дня по Форме уходит следующим sync
+      let n = ctx.syncs.length, last = ctx.syncs[n - 1].body;
+      ok(last.days['2026-10-21'] && last.days['2026-10-21'].type === 'rest', 'тип дня по Форме уходит в sync', JSON.stringify(last.days));
+      // debounce: два нажатия подряд → один запрос через ~2 с
+      await page.click('#water [data-ml="250"]'); await sleep(150); await page.click('#water [data-ml="500"]'); await sleep(1000);
+      ok(ctx.syncs.length === n, 'через 1 с после сохранения ещё не отправлено (debounce)', `${ctx.syncs.length} vs ${n}`);
+      await sleep(1700);
+      ok(ctx.syncs.length === n + 1, 'два сохранения подряд → один sync', `${ctx.syncs.length} vs ${n + 1}`);
+      last = ctx.syncs[ctx.syncs.length - 1].body.days['2026-10-21'];
+      ok(last && JSON.stringify(last.water) === '[250,500]', 'в sync своя вода (без воды Формы)', JSON.stringify(last));
+      ok((await text(page, '#water .sec-h')).includes('1,3 из 2,5 л'), 'общий итог воды 0,75 + 0,5 ≈ 1,3 л', await text(page, '#water .sec-h'));
+      await addFood(page, 'банан', 120, 'snack'); await sleep(2400);
+      last = ctx.syncs[ctx.syncs.length - 1].body.days['2026-10-21'];
+      const it = last && last.items[0];
+      ok(it && it.name === 'Банан' && it.meal === 'snack' && it.g === 120 && it.kcal === 114 && it.p === 1.8 && 'f' in it && 'c' in it && it.salt === 0 && !('id' in it) && !('per100' in it), 'в sync еда: name/meal/g/kcal/p/f/c/salt', JSON.stringify(it));
+      ok(last.items.length === 1, 'еда из Формы обратно не уходит');
+      ok((await text(page, '#left')) === '2 086', 'итог: 2 800 − 600 − 114 = 2 086', await text(page, '#left'));
+      // ручной выбор дня сильнее Формы
+      await page.click('#seg [data-type=train]'); await sleep(600); await page.reload(); await sleep(900);
+      ok((await page.getAttribute('#seg [data-type=train]', 'aria-pressed')) === 'true', 'выбрал «Тренировка» сам — Форма не перебивает');
+      // другой день — без карточки
+      await page.click('.wd[data-d="2026-10-20"]'); await sleep(500);
+      ok(!(await page.$('#forma')) && !(await page.$('#fmeals')), 'вчера — карточки и еды Формы нет');
+      await page.click('#todayBtn'); await sleep(500);
+      ok(await page.isVisible('#forma'), 'сегодня — карточка снова');
+      await page.setViewportSize({ width: 1920, height: 1080 }); await sleep(400);
+      await shot(page, '14-forma-1920');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (Форма)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      // 401 → токен сброшен, «связь потеряна», карточки нет
+      const { ctx, page } = await newPage(browser, { hash: '#pair=tok123456', sync: r => r.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"нужен вход"}' }) });
+      ok(await page.evaluate(() => localStorage.getItem('kcal.token')) === null, '401 → токен сброшен');
+      ok((await toastText(page)).includes('Связь с Формой потеряна'), '401 → «Связь с Формой потеряна»', await toastText(page));
+      ok(!(await page.$('#forma')), '401 → карточки нет');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (401)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      // нет сети → тихо; при следующем сохранении — повтор
+      let net = false;
+      const { ctx, page } = await newPage(browser, { hash: '#pair=tok123456', sync: r => net ? okForma(r) : r.abort() });
+      await sleep(1600);
+      ok(!(await toastText(page)).includes('связ') && !(await page.isVisible('#toast.on')) && !(await page.$('#forma')), 'нет сети — без ошибок на экране');
+      net = true; await page.click('#water [data-ml="250"]'); await sleep(2600);
+      ok(ctx.syncs.length === 2 && await page.isVisible('#forma'), 'повтор при следующем сохранении → карточка', String(ctx.syncs.length));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (нет сети)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {
