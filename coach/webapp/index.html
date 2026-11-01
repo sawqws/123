@@ -4,20 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#283339">
+  <meta name="theme-color" content="#000000">
   <title>Форма</title>
-  <script>/* вид WHOOP 5.0 по умолчанию; «iOS-стекло» — в «Ещё» → «Вид» */ try { if (localStorage.getItem('forma-skin') !== 'ios') document.documentElement.classList.add('wh'); } catch (e) { document.documentElement.classList.add('wh'); }</script>
   <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+  <script>/* вид по умолчанию — ч/б iOS 26 (mono.css), тёмный или светлый как в Telegram / системе; прежний «как WHOOP» — «Ещё» → «Вид» */
+    (function () { var r = document.documentElement, s = null; try { s = localStorage.getItem('forma-skin'); } catch (e) { /* без хранилища */ }
+      if (s === 'whoop') { r.classList.add('wh'); return; }
+      r.classList.add('mono'); var tg = window.Telegram && Telegram.WebApp;
+      if (tg && tg.colorScheme ? tg.colorScheme === 'light' : matchMedia('(prefers-color-scheme: light)').matches) r.classList.add('lt'); })();</script>
   <link rel="preload" href="f-inter-cyrillic-4ee8fc.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="fonts.css?v={{v}}">
   <link rel="stylesheet" href="kit.css?v={{v}}">
   <link rel="stylesheet" href="app.css?v={{v}}">
   <link rel="stylesheet" href="journal.css?v={{v}}">
   <link rel="stylesheet" href="plan.css?v={{v}}">
+  <link rel="stylesheet" href="regime.css?v={{v}}">
   <link rel="stylesheet" href="assess.css?v={{v}}">
   <link rel="stylesheet" href="activity.css?v={{v}}">
   <link rel="stylesheet" href="more.css?v={{v}}">
   <link rel="stylesheet" href="whoop.css?v={{v}}">
+  <link rel="stylesheet" href="mono.css?v={{v}}">
+  <link rel="stylesheet" href="layout.css?v={{v}}">
 </head>
 <body data-support="/api/support">
   <div id="aura" aria-hidden="true"></div>
@@ -35,6 +42,7 @@
   <script src="kit.js?v={{v}}"></script>
   <script src="journal.js?v={{v}}"></script>
   <script src="plan.js?v={{v}}"></script>
+  <script src="regime.js?v={{v}}"></script>
   <script src="assess.js?v={{v}}"></script>
   <script src="activity.js?v={{v}}"></script>
   <script src="more.js?v={{v}}"></script>

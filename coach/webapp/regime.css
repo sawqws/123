@@ -1,0 +1,83 @@
+/* regime — «Режим на сегодня» на главной, экран «Режим» (неделя, настройки) и лист настроек. Цвета — токенами темы. */
+.rg-card { display: grid; gap: 14px; padding-bottom: 0; }
+.rg-times { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rg-times > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 12px; border-radius: 18px; background: var(--card-2); }
+.rg-times b { font: 700 22px/1.1 var(--num); letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.rg-train { display: flex; align-items: center; gap: 12px; }
+.rg-tm { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rg-tm b { font: 600 16px/1.25 var(--head); }
+.rg-tm .muted { font-size: 13.5px; line-height: 1.35; }
+/* интенсивность: полная — залитый круг, лёгкая — половина, отдых — пустой (без цвета) */
+.rg-int { flex: none; width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px var(--ink); }
+.rg-int.full { background: var(--ink); }
+.rg-int.light { background: linear-gradient(90deg, var(--ink) 50%, transparent 50%); }
+.rg-int.rest { box-shadow: inset 0 0 0 1.6px var(--hint); }
+
+.rg-line { display: flex; align-items: center; gap: 10px; font: 500 15px/1.3 var(--head); }
+.rg-line .ico { width: 20px; height: 20px; color: var(--hint); }
+.rg-food { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; color: var(--hint); }
+.rg-food b { color: var(--ink); font-weight: 700; }
+
+.rg-ev { display: grid; gap: 2px; }
+.rg-evh { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; font: 600 13px var(--head); color: var(--hint); }
+.rg-evh b { font: 600 13px var(--num); color: var(--hint); }
+.rg-ck { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 6px 0; border: 0; background: none; color: var(--ink);
+  font: 400 16px/1.3 var(--head); text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform .45s var(--spring-bounce, ease); }
+.rg-ck:active { transform: scale(.97); transition-duration: .12s; }
+.rg-box { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px var(--hint);
+  transition: background-color .3s var(--ios, ease), box-shadow .3s var(--ios, ease); }
+.rg-box .ico { width: 15px; height: 15px; stroke-width: 2.6; color: var(--bg-2); opacity: 0; transform: scale(.4);
+  transition: opacity .2s, transform .45s var(--spring-bounce, ease); }
+.rg-ck.on .rg-box { background: var(--ink); box-shadow: inset 0 0 0 1.6px var(--ink); }
+.rg-ck.on .rg-box .ico { opacity: 1; transform: none; }
+.rg-ct { min-width: 0; transition: color .3s; }
+.rg-ck.on .rg-ct { color: var(--hint); text-decoration: line-through; text-decoration-color: var(--hint); }
+
+.rg-tips { display: grid; gap: 6px; }
+.rg-tips p { margin: 0; padding-left: 14px; position: relative; font-size: 14.5px; line-height: 1.4; color: var(--hint); }
+.rg-tips p::before { content: ""; position: absolute; left: 0; top: .6em; width: 5px; height: 5px; border-radius: 50%; background: var(--hint); }
+.rg-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 -18px; padding: 15px 18px; border: 0;
+  border-top: .5px solid var(--sep); background: none; color: var(--hint); font: 500 15px var(--head); text-align: left; cursor: pointer; }
+
+/* неделя */
+.rg-week .row { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 52px; }
+.rg-wd { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rg-wd b { font: 600 15px var(--head); }
+.rg-wd span { font-size: 12.5px; color: var(--hint); }
+.rg-wr.on .rg-wd b { font-weight: 800; }
+.rg-wt { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14.5px; white-space: nowrap; overflow: hidden; }
+.rg-m { display: inline-grid; color: var(--hint); }
+.rg-m .ico { width: 17px; height: 17px; }
+.rg-ws { font-size: 14.5px; color: var(--hint); white-space: nowrap; }
+
+/* лист настроек */
+.rg-g { margin: 0 0 18px; }
+.rg-g > .label { margin: 0 4px 10px; }
+.rg-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.rg-days button { min-height: 40px; border: 0; border-radius: 999px; background: var(--card-2); color: var(--ink); font: 600 14px var(--head); cursor: pointer;
+  transition: background-color .25s var(--ios, ease), color .25s, transform .4s var(--spring-bounce, ease); }
+.rg-days button:active { transform: scale(.94); transition-duration: .1s; }
+.rg-days button.on { background: var(--ink); color: var(--bg-2); }
+.rg-f { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-top: 10px; font: 500 13px var(--head); color: var(--hint); }
+.rg-f input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 0 14px; font: 500 16px var(--num); color: var(--ink); }
+.rg-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.rg-3 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+.rg-3 > :last-child { grid-column: 1 / -1; }
+.rg-2 { gap: 0 10px !important; }
+.rg-fr { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 12px; font: 500 15px var(--head); color: var(--ink); }
+.rg-fr .pl-step { flex: none; }
+.rg-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 4px 0; font-size: 12.5px; color: var(--hint); }
+.rg-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.rg-legend .rg-int { width: 11px; height: 11px; }
+.rg-legend .ico { width: 15px; height: 15px; }
+.rg-sw { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rg-sw .pl-gm { display: flex; flex-direction: column; gap: 2px; }
+.rg-sw b { font: 600 16px var(--head); color: var(--ink); }
+.rg-sw .muted { font-size: 13px; }
+.rg-step { margin: 0; }
+.rg-evl { margin-bottom: 10px; }
+.rg-evl .btn.icon { min-height: 36px; width: 36px; padding: 0; }
+@media (max-width: 380px) { .rg-times b { font-size: 19px; } .rg-times .tk { font-size: 12px !important; } }
+@media (prefers-reduced-motion: reduce) { .rg-box, .rg-box .ico, .rg-ck, .rg-days button { transition: none; } }

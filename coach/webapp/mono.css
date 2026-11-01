@@ -1,0 +1,200 @@
+/* ===================== Ч/Б iOS 26 — вид по умолчанию (Глеб 01.11) =====================
+   Действует при html.mono (ставит index.html; прежний «как WHOOP» — «Ещё» → «Вид», html.wh). Светлая тема — html.mono.lt
+   (как в Telegram, на сайте — как в системе). Только чёрный, белый и серые; цвет — одна мелкая деталь там, где без него
+   теряется смысл: точка зоны восстановления и стрелки ▲▼ к норме (--zone-*). Скругления iOS: карточки 28, плитки 24,
+   мелкое — капсулы; рамок и бликов нет, воздуха больше. Плавность: размытие только у меню и полосы навигации (всегда
+   включено, не переключается при прокрутке), листы и фон листа — без размытия, всё движение — transform/opacity. */
+html.mono, html.mono[data-scheme] {
+  --fx: 255, 255, 255;
+  --bg: #000; --bg-2: #000;
+  --card: #141415; --card-2: #232325; --card-3: #2c2c2e; --sheet-bg: #1c1c1e; --in-sheet: #2c2c2e;
+  --fill: rgba(118, 118, 128, .24); --fill-2: rgba(118, 118, 128, .36); --seg-on: #636366;
+  --ink: #fff; --text: #fff; --on-ink: #000;
+  --hint: rgba(235, 235, 245, .6); --hint-2: rgba(235, 235, 245, .3);
+  --sep: rgba(84, 84, 88, .55); --sep-ios: rgba(84, 84, 88, .55); --line: rgba(255, 255, 255, .08);
+  --field: #1c1c1e; --trk: rgba(255, 255, 255, .14);
+  --bar: rgba(22, 22, 24, .72); --bar-line: rgba(255, 255, 255, .1);
+  --accent: #fff; --teal: #fff; --sleep: #fff; --strain: #fff; --water: #fff; --food: #fff; --periw: #fff; --orange: #fff;
+  --rec-green: #fff; --rec-yellow: #8e8e93; --rec-red: #5a5a5e; --rec-blue: #fff;  /* зоны — уровнями серого: светлее = лучше */
+  --z1: #48484a; --z2: #636366; --z3: #8e8e93; --z4: #c7c7cc; --z5: #fff;
+  --st-awake: #f2f2f7; --st-rem: #c7c7cc; --st-light: #8e8e93; --st-deep: #48484a;
+  --m-p: #fff; --m-f: #c7c7cc; --m-c: #8e8e93; --m-s: #636366;
+  --zone-green: #30d158; --zone-yellow: #ffd60a; --zone-red: #ff453a;
+  --ok: #fff; --warn: #fff; --err: #ff453a; --link: #fff; --gold: #fff; --gold-ink: #fff;
+  --accent-soft: rgba(255, 255, 255, .1); --accent-line: rgba(255, 255, 255, .28); --accent-deep: #fff; --accent-pastel: rgba(255, 255, 255, .2);
+  --glass: var(--card); --glass-2: var(--card-2); --glass-hi: none; --glass-shadow: none; --hl: none; --shadow: none;
+  --shadow-lg: 0 18px 40px -16px rgba(0, 0, 0, .8);
+  --zc: #fff;
+  color-scheme: dark;
+}
+html.mono.lt, html.mono.lt[data-scheme] {
+  --fx: 0, 0, 0;
+  --bg: #fff; --bg-2: #fff;
+  --card: #f2f2f7; --card-2: #e5e5ea; --card-3: #d1d1d6; --sheet-bg: #fff; --in-sheet: #f2f2f7;
+  --fill: rgba(118, 118, 128, .12); --fill-2: rgba(118, 118, 128, .2); --seg-on: #fff;
+  --ink: #000; --text: #000; --on-ink: #fff;
+  --hint: rgba(60, 60, 67, .6); --hint-2: rgba(60, 60, 67, .3);
+  --sep: rgba(60, 60, 67, .16); --sep-ios: rgba(60, 60, 67, .16); --line: rgba(0, 0, 0, .07);
+  --field: #f2f2f7; --trk: rgba(0, 0, 0, .09);
+  --bar: rgba(250, 250, 252, .78); --bar-line: rgba(0, 0, 0, .07);
+  --accent: #000; --teal: #000; --sleep: #000; --strain: #000; --water: #000; --food: #000; --periw: #000; --orange: #000;
+  --rec-green: #000; --rec-yellow: #8e8e93; --rec-red: #c7c7cc; --rec-blue: #000;
+  --z1: #d1d1d6; --z2: #aeaeb2; --z3: #8e8e93; --z4: #48484a; --z5: #000;
+  --st-awake: #d1d1d6; --st-rem: #aeaeb2; --st-light: #636366; --st-deep: #1c1c1e;
+  --m-p: #000; --m-f: #48484a; --m-c: #8e8e93; --m-s: #aeaeb2;
+  --zone-green: #34c759; --zone-yellow: #ffcc00; --zone-red: #ff3b30;
+  --ok: #000; --warn: #000; --err: #ff3b30; --link: #000; --gold: #000; --gold-ink: #000;
+  --accent-soft: rgba(0, 0, 0, .06); --accent-line: rgba(0, 0, 0, .2); --accent-deep: #000; --accent-pastel: rgba(0, 0, 0, .12);
+  --shadow-lg: 0 18px 40px -18px rgba(0, 0, 0, .25);
+  --zc: #000;
+  color-scheme: light;
+}
+
+/* фон — ровный чёрный / белый, без живых пятен */
+html.mono { background: var(--bg) !important; }
+html.mono body { background: var(--bg); color: var(--ink); }
+html.mono #aura { display: none; }
+
+/* поверхности: ровная заливка, без бликов, кантов и теней */
+html.mono :is(.card, .tile, .mon, .wcon, .list, .outrow, .mepill, .datecap, .stat, details.about, .msg.them, .cfoot, .winsight, .monitor) {
+  background: var(--card) !important; box-shadow: none !important; border: 0 !important; }
+html.mono :is(.card, .tile, .mon, .list, .outrow, .mepill, .datecap, .stat, .wcon)::after { content: none !important; }
+html.mono :is(.card .stat, .card .list, .tonight > div, .card .card) { background: var(--card-2) !important; box-shadow: none !important; }
+html.mono .card { padding: 20px; }
+html.mono .card .list { margin: 0; }
+html.mono .sec { margin: 30px 0 16px; }
+html.mono .card { margin-bottom: 16px; }
+
+/* заливки мелкого: кнопки, поля, сегменты, иконки строк */
+html.mono :is(.seg, .chip, .send.alt, .avatar, .btn:not(.primary):not(.danger), .row .ic, .addsq, .dc-t, .mepill .avatar, .act-ic, .se-ic, .feat-ic, .hico, .pl-ic, .pl-step button) {
+  background: var(--fill) !important; color: var(--ink) !important; box-shadow: none !important; }
+html.mono :is(input, textarea, select) { background: var(--field) !important; color: var(--ink); border: 0 !important; box-shadow: none !important; }
+html.mono .card :is(input, textarea, select), html.mono .sheet :is(input, textarea, select) { background: var(--fill) !important; }
+html.mono :is(input, textarea, select):focus { box-shadow: 0 0 0 2px var(--hint-2) !important; }
+html.mono :is(input, textarea)::placeholder { color: var(--hint-2); }
+html.mono .seg { padding: 2px !important; }
+html.mono .seg button { color: var(--ink) !important; }
+html.mono .seg button.on { background: var(--seg-on) !important; color: var(--ink) !important; box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .04) !important; }
+html.mono :is(.btn.primary, .send, .coach-link, .msg.me, .chip.on, .jr-yn button.on.yes) { background: var(--ink) !important; color: var(--on-ink) !important; box-shadow: none !important; text-shadow: none !important; }
+html.mono .btn.primary .ico, html.mono .send .ico { color: var(--on-ink); }
+html.mono .btn.tonal, html.mono .btn.ghost { color: var(--ink) !important; }
+html.mono .btn.ghost { background: transparent !important; }
+html.mono .btn.danger { background: var(--fill) !important; color: var(--err) !important; box-shadow: none !important; }
+html.mono :is(.link, .wlink, a) { color: var(--ink) !important; }
+html.mono .link { font-weight: 600 !important; }
+html.mono .switch { background: var(--fill-2) !important; }
+html.mono .switch.on { background: var(--ink) !important; }
+html.mono .switch.on::after { background: var(--on-ink); }
+html.mono .note { background: var(--fill) !important; color: var(--ink); }
+html.mono .chev::after, html.mono .pl-more .chev::after { color: var(--hint-2) !important; }
+html.mono .muted, html.mono .hint { color: var(--hint); }
+html.mono .sk { background: linear-gradient(100deg, rgba(var(--fx), .05) 30%, rgba(var(--fx), .1) 50%, rgba(var(--fx), .05) 70%) 0 0 / 300% 100%; }
+html.mono :is(.bar, .rtrack) { background: var(--trk) !important; }
+html.mono .bar > i { background: var(--ink); }
+html.mono :is(.dial .trk, .wtrk, .kring .trk) { stroke: var(--trk) !important; }
+html.mono .wband { stroke: var(--hint-2) !important; }
+html.mono .rtrack .mid { background: var(--hint-2); }
+
+/* текст и иконки, которые были «белыми навсегда» */
+html.mono :is(.datecap .pg, .wbtn, .mini-r, #navbar button, .cic, .wring-in > span, .card.outlook .advice p, .card.outlook .advice p:first-child b, .co-hello p) { color: var(--ink) !important; }
+html.mono :is(.cic, .card.outlook .advice p, .wring-in > span) { color: var(--hint) !important; }
+html.mono .wbtn.info { box-shadow: inset 0 0 0 1.6px var(--hint) !important; }
+html.mono .wtick { stroke: var(--ink); }
+html.mono .crow { border-bottom-color: var(--sep) !important; }
+html.mono .mepill .fl .ico { fill: currentColor; }
+html.mono .mepill .fl { color: var(--ink); }
+html.mono .hico { --hc: var(--ink); }
+
+/* стрелки к норме и зона восстановления — единственная цветная мелочь */
+html.mono .vs.up, html.mono .vs.down, html.mono .up, html.mono .down { color: var(--ink); }
+html.mono .vs.up i { color: var(--zone-green); } html.mono .vs.down i { color: var(--zone-red); }
+html.mono .zdot { box-shadow: none !important; }
+
+/* модули: план, дневник, оценки, «Ещё» */
+html.mono .as-ei { background: var(--fill) !important; color: var(--ink) !important; }
+html.mono .co-hello { background: var(--card) !important; }
+html.mono .pl-opt.on { background: var(--card-2) !important; box-shadow: inset 0 0 0 1.5px var(--ink) !important; }
+html.mono .pl-done { background: var(--ink) !important; box-shadow: none !important; }
+html.mono .pl-today { border-color: var(--ink) !important; background: transparent !important; }
+html.mono .pl-miss { background: transparent !important; border-color: var(--hint-2) !important; }
+html.mono :is(.pl-future, .pl-nodata) { background: var(--hint-2) !important; }
+html.mono .pl-on { border-color: var(--hint-2) !important; }
+html.mono :is(.pl-c.done, .pl-gc.done) { color: var(--ink) !important; }
+html.mono .pl-eg.off .pl-ic { background: var(--fill) !important; }
+html.mono .jr-yn { background: var(--fill) !important; }
+html.mono .jr-yn button.on.no { background: var(--seg-on) !important; color: var(--ink) !important; }
+html.mono .jr-mid { background: var(--hint-2) !important; }
+html.mono .jr-box { border-color: var(--hint-2) !important; }
+html.mono .as-mark { background: var(--ink) !important; }
+html.mono .as-zp > i { background: var(--hint-2) !important; }
+html.mono .as-cd:not(.has) .as-cc { border-color: var(--hint-2) !important; }
+html.mono .more-head:active { background: var(--fill); }
+html.mono .co-s { background: var(--fill) !important; color: var(--ink) !important; box-shadow: none !important; }
+html.mono .composer .ask textarea { background: var(--card) !important; border: 0 !important; }
+html.mono .co-chat .msg.them { background: none !important; }
+
+/* нижнее меню — стеклянная капсула (размытие включено всегда), круг тренера рядом */
+html.mono .tabbar { background: var(--bar) !important; -webkit-backdrop-filter: blur(24px) saturate(180%) !important; backdrop-filter: blur(24px) saturate(180%) !important;
+  box-shadow: inset 0 0 0 .5px var(--bar-line), 0 10px 30px rgba(0, 0, 0, .18) !important; }
+html.mono .tabbar button { color: var(--hint) !important; }
+html.mono .tabbar button.on { color: var(--ink) !important; }
+html.mono .tabbar .tab-ind { background: var(--fill-2) !important; box-shadow: none !important; }
+html.mono .tabbar button[data-tab="coach"] { color: var(--ink) !important; background: var(--bar) !important;
+  box-shadow: inset 0 0 0 .5px var(--bar-line), 0 10px 30px rgba(0, 0, 0, .18) !important; }
+html.mono .tabbar button[data-tab="coach"].on { background: var(--ink) !important; color: var(--on-ink) !important; }
+html.mono .tabbar button[data-tab="coach"] .ico { fill-opacity: 0; }
+
+/* шапка: не становится стеклом при прокрутке (это дорого) — вместо неё полоса #navbar с маленьким заголовком */
+html.mono :is(.wbar, .wtop, .dhead) { position: relative !important; background: none !important; box-shadow: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+html.mono #navbar { background: var(--bar); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); box-shadow: inset 0 -.5px 0 var(--bar-line); }
+
+/* листы: непрозрачные, без размытия (и у фона), выезжают кривой iOS */
+html.mono .sheet { background: var(--sheet-bg) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, .25) !important; color: var(--ink); }
+html.mono .sheet::before { background: var(--hint-2) !important; opacity: 1; }
+html.mono .sheet-backdrop { background: rgba(0, 0, 0, .4) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+html.mono :is(.sheet .card, .sheet .list, .sheet .stat, .sheet .card .stat) { background: var(--in-sheet) !important; }
+html.mono .sheet-x { background: var(--fill) !important; color: var(--hint) !important; }
+html.mono .toast { background: var(--sheet-bg) !important; color: var(--ink); -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .25), inset 0 0 0 .5px var(--bar-line) !important; }
+
+/* нажатия — мягкий отклик ~0.97 */
+html.mono :is(.btn, .tile, .mon, .act, .outrow, .chip, .addsq, .card.tap, .row.tap, .row[data-a], .mepill, .syncpill, .coach-link, .send, .avatar, .summary-entry, .co-s):active {
+  transform: scale(.97); }
+
+/* «Калории» в Питании */
+.kc-from { margin: 10px 0 0; font-size: 12.5px; color: var(--hint); }
+.kc-invite .kc-ih { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
+.kc-invite .kc-ih > span:last-child { display: flex; flex-direction: column; gap: 4px; }
+.kc-invite b { font: 600 17px/1.25 var(--head); }
+.kc-invite .muted { font-size: 14.5px; line-height: 1.4; }
+.kc-ic { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 30%; background: var(--fill, rgba(255, 255, 255, .1)); color: var(--ink); }
+.kc-row { min-height: 56px; }
+.kc-row .end b { font: 600 17px var(--num); }
+.kc-open { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 12px; }
+.kc-open .ico { width: 16px; height: 16px; }
+.kc-none { margin: 4px 4px 14px; }
+.logs .pill.kc { padding-right: 11px; }
+.logs .pill.kc i { font-style: normal; font-size: 11px; color: var(--hint); margin-left: 6px; }
+
+/* сенсорные цели ≥ 36 px и текст ≥ 11 px (common/devcheck.js), шапка влезает в 320 px */
+html.mono .wbar { gap: 6px; min-width: 0; }
+html.mono .wbar > * { min-width: 0; }
+html.mono .datecap .pg { width: 36px; height: 36px; }
+html.mono .dc-t { min-width: 0; padding: 8px 12px; }
+html.mono .syncpill { min-height: 40px; min-width: 36px; justify-content: center; padding: 0 4px; }
+html.mono .addsq { width: 36px !important; height: 36px !important; }
+html.mono .link { min-height: 36px; display: inline-flex; align-items: center; }
+html.mono .vs i { display: inline-block; font-size: 11px; transform: scale(.72); margin-right: 1px; }
+html.mono .tabbar button { font-size: 11px !important; }
+html.mono .seg button { min-height: 36px !important; }
+html.mono .sheet-x { width: 36px; height: 36px; }
+html.mono .switch { box-sizing: content-box; border: 3px solid transparent; background-clip: padding-box !important; }  /* вид 51×31 как в iOS, нажимается 56×36 */
+html.mono .chart .norm-t { font-size: 11px; }
+html.mono .kring-in > span { font-size: 11px !important; }
+html.mono .more-st span { font-size: 11px; }
+@media (max-width: 374px) {
+  html.mono .mepill .fl { display: none; }
+  html.mono .mepill { padding-right: 3px; }
+  html.mono .syncpill .num { display: none; }
+}
