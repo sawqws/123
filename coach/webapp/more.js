@@ -70,7 +70,7 @@
     const morning = d.morning === 'off' ? 'выкл' : esc(d.morning || '07:00');
     h += group('Тренер',
       row({ a: 'more-edit', ic: I.sun, col: 'var(--rec-yellow)', title: 'Утренний разбор', meta: d.morning === 'off' ? 'выключен — включи в профиле' : 'план на день после сна', end: `<b class="num">${morning}</b>` })
-      + row({ a: 'skin', ic: I.spark, title: 'Вид', meta: 'как приложение WHOOP или стекло iOS', end: `<span>${document.documentElement.classList.contains('wh') ? 'WHOOP' : 'iOS'}</span>` })
+      + row({ a: 'skin', ic: I.spark, title: 'Вид', meta: 'чёрно-белый iOS или прежний «как WHOOP»', end: `<span>${document.documentElement.classList.contains('wh') ? 'WHOOP' : 'Ч/Б'}</span>` })
       + row({ a: 'tochat', ic: I.chat, title: 'Режим', meta: d.mode === 'chat' ? 'режим чата уже включён' : 'всё кнопками в чате', end: `<span>${d.mode === 'chat' ? 'чат' : 'приложение'}</span>` }));
     const synced = d.synced ? new Date(d.synced).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     h += group('WHOOP',
@@ -88,9 +88,12 @@
   F.screens.more = moreScreen;
   // аватар в шапке — экран «Ещё»; «Заполнить профиль» в Питании и др. — сразу лист профиля
   F.actions.profile = el => el.classList.contains('avatar') || el.classList.contains('mepill') ? F.openScreen('more') : F.profileSheet();
-  F.actions.skin = () => {  // вид: WHOOP 5.0 (по умолчанию) ⇄ «жидкое стекло» iOS
-    const wh = !document.documentElement.classList.toggle('wh') ? 'ios' : 'whoop';
-    try { localStorage.setItem('forma-skin', wh); } catch (e) { /* без хранилища — до перезапуска */ }
+  F.actions.skin = () => {  // вид: ч/б iOS 26 (по умолчанию, mono.css) ⇄ прежний «как WHOOP» (whoop.css)
+    const r = document.documentElement, wh = !r.classList.contains('wh');
+    r.classList.toggle('wh', wh); r.classList.toggle('mono', !wh);
+    if (wh) r.classList.remove('lt');
+    try { localStorage.setItem('forma-skin', wh ? 'whoop' : 'mono'); } catch (e) { /* без хранилища — до перезапуска */ }
+    F.theme();
     F.haptic('select'); F.render(false);
   };
   F.actions['more-edit'] = () => {
