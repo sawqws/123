@@ -289,13 +289,38 @@ class Store:
     # ---------- «Калории» (сайт на GitHub Pages шлёт свой дневник: POST /api/kcal/sync) ----------
 
     def save_kcal_days(self, uid, days):
-        """days — {день: уже очищенные данные дня} (coach.kcal_clean). День заменяется целиком."""
-        now = now_iso()
+        """days — {день: уже очищенные данные дня} (coach.kcal_clean). День заменяется целиком, но если у присланного
+        есть u (время правки, мс), а у сохранённого u больше — остаётся сохранённый. → список таких пропущенных дней."""
+        now, stale = now_iso(), []
         with self.lock:
             for d, data in days.items():
+                if data.get("u") is not None:
+                    row = self.db.execute("SELECT data FROM kcal_days WHERE user=? AND day=?", (uid, str(d))).fetchone()
+                    try:
+                        old = json.loads(row[0] or "{}") if row else {}
+                    except ValueError:
+                        old = {}
+                    old_u = old.get("u") if isinstance(old, dict) else None
+                    if isinstance(old_u, int) and old_u > data["u"]:
+                        stale.append(str(d))
+                        continue
                 self.db.execute("INSERT OR REPLACE INTO kcal_days VALUES (?,?,?,?)",
                                 (uid, str(d), json.dumps(data, ensure_ascii=False), now))
             self.db.commit()
+        return sorted(stale)
+
+    def kcal_last(self, uid, n=400):
+        """Последние n сохранённых дней «Калорий» → {день: данные дня} (по дате, старые — первыми)."""
+        rows = self.q("SELECT day, data FROM kcal_days WHERE user=? ORDER BY day DESC LIMIT ?", (uid, int(n)))
+        out = {}
+        for r in reversed(rows):
+            try:
+                data = json.loads(r["data"] or "{}")
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                out[r["day"]] = data
+        return out
 
     def kcal_days(self, uid, since, until=None):
         """{день: данные дня + "updated"} за период."""

@@ -1571,12 +1571,13 @@ class SiteTest(unittest.TestCase):
         self.assertEqual(site_call("/site/../coach.py").code, 404)
 
 
-def kcal_call(path, body=None, token="", origin="https://sawqws.github.io", method="POST"):
+def kcal_call(path, body=None, token="", origin="https://sawqws.github.io", method="POST", headers=None):
     """Запрос сайта «Калории» с GitHub Pages: Bearer-токен, Origin, без cookie и подписи Telegram."""
     h = coach.Web.__new__(coach.Web)
     raw = json.dumps(body).encode() if body is not None else b""
     h.headers = {"Content-Length": str(len(raw)), "Content-Type": "application/json",
-                 **({"Origin": origin} if origin else {}), **({"Authorization": f"Bearer {token}"} if token else {})}
+                 **({"Origin": origin} if origin else {}), **({"Authorization": f"Bearer {token}"} if token else {}),
+                 **(headers or {})}
     h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
     h.path = path
     out = Resp()
@@ -1919,9 +1920,9 @@ class KcalTest(unittest.TestCase):
                          {"name": ""}, "строка", {"name": "Банан", "meal": "snack", "kcal": 90}] + [{"name": f"x{i}"} for i in range(300)]}})
         out, goals = coach.kcal_clean({"days": days}, today)
         self.assertIsNone(goals)
-        self.assertEqual(len(out), 14)
+        self.assertEqual(len(out), 20)  # 26 ключей ≤ 31: все верные дни, мусор и будущее — мимо
         self.assertEqual(max(out), today.isoformat())
-        self.assertEqual(min(out), (today - datetime.timedelta(days=13)).isoformat())
+        self.assertEqual(min(out), (today - datetime.timedelta(days=19)).isoformat())
         d = out[today.isoformat()]
         self.assertIsNone(d["type"])
         self.assertEqual(d["water"], [250, 300, 5000])
@@ -1981,6 +1982,191 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(t["kcal"]["eaten"]["kcal"], 0)
         self.assertEqual(t["kcal"]["type"], "train" if t["workouts"] else "rest")
         self.assertEqual(t["eaten"]["count"], 1)
+
+    def day(self, i, u=None, kcal=100):
+        d = {"items": [{"name": f"Еда {kcal}", "meal": "lunch", "kcal": kcal}], "water": [250], "type": "rest"}
+        return {**d, "u": u} if u is not None else d
+
+    def test_sync_limits(self):
+        tok = self.pair()
+        iso = lambda i: (TODAY - datetime.timedelta(days=i)).isoformat()  # noqa: E731
+        # не больше 31 дня за запрос — иначе 400 (а не тихая потеря старых дней)
+        r = self.run_today(lambda: kcal_call("/api/kcal/sync", {"days": {iso(i): self.day(i) for i in range(32)}}, token=tok))
+        self.assertEqual(r.code, 400)
+        self.assertIn("31", r.json["error"])
+        self.assertEqual(self.db.kcal_last(U), {})
+        r = self.run_today(lambda: kcal_call("/api/kcal/sync", {"days": {iso(i): self.day(i) for i in range(31)}}, token=tok))
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(len(self.db.kcal_last(U)), 31)
+        # история до 400 дней назад: 400-й принят, 401-й — нет
+        out, _ = coach.kcal_clean({"days": {iso(400): self.day(0), iso(401): self.day(0)}}, TODAY)
+        self.assertEqual(list(out), [iso(400)])
+        # u — целое число мс ≥ 0; дробное без дробной части — тоже
+        for bad in (-1, "1730000000000", True, 1.5, None, 2 ** 60, [1]):
+            with self.assertRaises(ValueError, msg=bad):
+                coach.kcal_clean({"days": {iso(0): {**self.day(0), "u": bad}}}, TODAY)
+        self.assertEqual(self.run_today(lambda: kcal_call("/api/kcal/sync", {"days": {iso(0): self.day(0, u=-5)}}, token=tok)).code, 400)
+        out, _ = coach.kcal_clean({"days": {iso(0): self.day(0, u=1.73e12)}}, TODAY)
+        self.assertEqual(out[iso(0)]["u"], 1730000000000)
+        self.assertIsInstance(out[iso(0)]["u"], int)
+        self.assertNotIn("u", coach.kcal_clean({"days": {iso(0): self.day(0)}}, TODAY)[0][iso(0)])
+
+    def test_sync_u(self):
+        """Старая версия дня (меньше u) не затирает новую; без u — как раньше, перезаписывает."""
+        tok = self.pair()
+        d = TODAY.isoformat()
+        sync = lambda day: self.run_today(lambda: kcal_call("/api/kcal/sync", {"days": {d: day}}, token=tok))  # noqa: E731
+        r = sync(self.day(0, u=200, kcal=200))
+        self.assertEqual((r.code, r.json["stale"]), (200, []))
+        r = sync(self.day(0, u=100, kcal=100))  # старый телефон прислал старую версию
+        self.assertEqual((r.code, r.json["stale"]), (200, [d]))
+        self.assertEqual(self.db.kcal_day(U, d)["items"][0]["kcal"], 200)
+        self.assertEqual(self.db.kcal_day(U, d)["u"], 200)
+        sync(self.day(0, u=200, kcal=210))  # то же u — принимаем (≥)
+        self.assertEqual(self.db.kcal_day(U, d)["items"][0]["kcal"], 210)
+        sync(self.day(0, u=300, kcal=300))
+        self.assertEqual(self.db.kcal_day(U, d)["items"][0]["kcal"], 300)
+        r = sync(self.day(0, kcal=50))  # без u (старая страница) — перезаписывает, как раньше
+        self.assertEqual(r.json["stale"], [])
+        self.assertEqual(self.db.kcal_day(U, d)["items"][0]["kcal"], 50)
+        self.assertNotIn("u", self.db.kcal_day(U, d))
+        sync(self.day(0, u=1, kcal=60))  # у сохранённого нет u — любое u новее
+        self.assertEqual(self.db.kcal_day(U, d)["items"][0]["kcal"], 60)
+        # в одном запросе: свежий день сохраняется, старый — нет
+        y = (TODAY - datetime.timedelta(days=1)).isoformat()
+        both = self.run_today(lambda: kcal_call("/api/kcal/sync", {"days": {d: self.day(0, u=0, kcal=1), y: self.day(1, u=5, kcal=7)}}, token=tok))
+        self.assertEqual(both.json["stale"], [d])
+        self.assertEqual(self.db.kcal_day(U, d)["items"][0]["kcal"], 60)
+        self.assertEqual(self.db.kcal_day(U, y)["items"][0]["kcal"], 7)
+        # t.kcal Формы — без u (договор п. 3 не меняется)
+        t = self.run_today(lambda: call("/api/all").json)["today"]
+        self.assertEqual(set(t["kcal"]), {"items", "eaten", "water", "goals", "type", "updated"})
+
+    def test_state(self):
+        tok = self.pair()
+        self.assertEqual(kcal_call("/api/kcal/state", method="GET").code, 401)
+        r = kcal_call("/api/kcal/state", token=tok, method="GET")
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None})
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        day = {**self.SYNC["days"][TODAY.isoformat()], "u": 1730000000123}
+        self.run_today(lambda: kcal_call("/api/kcal/sync", {**self.SYNC, "days": {TODAY.isoformat(): day}}, token=tok))
+        old = (TODAY - datetime.timedelta(days=3)).isoformat()
+        self.db.save_kcal_days(U, {old: {"items": [], "water": [300], "type": None}})  # прислан до u
+        st = kcal_call("/api/kcal/state", token=tok, method="GET").json
+        self.assertEqual(list(st["days"]), [old, TODAY.isoformat()])
+        today = st["days"][TODAY.isoformat()]
+        self.assertEqual(set(today), {"items", "water", "type", "u"})
+        self.assertEqual(today["u"], 1730000000123)
+        self.assertEqual(today["water"], [250, 500])
+        self.assertEqual(today["items"][0]["name"], "Гречка")
+        self.assertEqual(st["days"][old], {"items": [], "water": [300], "type": None, "u": 0})
+        self.assertEqual(st["goals"]["train"]["kcal"], 3400)
+        self.assertEqual((st["salt"], st["water"]), (5, {"train": 3000, "rest": 2500}))
+        self.assertEqual(kcal_call("/api/kcal/state", {}, token=tok).json, st)  # POST — то же
+        # не больше 400 последних дней
+        self.db.save_kcal_days(U, {(TODAY - datetime.timedelta(days=i)).isoformat(): {"items": [], "water": [], "u": i}
+                                   for i in range(410)})
+        days = kcal_call("/api/kcal/state", token=tok, method="GET").json["days"]
+        self.assertEqual(len(days), 400)
+        self.assertEqual(min(days), (TODAY - datetime.timedelta(days=399)).isoformat())
+        self.assertEqual(max(days), TODAY.isoformat())
+        # чужие сайты — нет; свой счётчик запросов; preflight для GitHub Pages
+        self.assertEqual(kcal_call("/api/kcal/state", token=tok, origin="https://evil.example", method="GET").code, 403)
+        self.assertEqual(kcal_call("/api/kcal/state", method="OPTIONS").code, 204)
+        coach.pwa._hits.clear()
+        n = coach.SYNC_RATE[0]
+        codes = [kcal_call("/api/kcal/state", token=tok, method="GET").code for _ in range(n + 1)]
+        self.assertEqual(codes[-2:], [200, 429])
+        self.assertEqual(kcal_call("/api/kcal/forma", token=tok, method="GET").code, 200)
+
+    def test_same_origin(self):
+        """Встроенные «Калории» (/kcal/ на домене Формы): Origin = свой домен — можно, без CORS-заголовков."""
+        tok = self.pair()
+        host, own = "https://coach.1-2-3-4.sslip.io", {"Host": "coach.1-2-3-4.sslip.io"}
+        for path, method in (("/api/kcal/state", "GET"), ("/api/kcal/forma", "GET"), ("/api/kcal/sync", "POST")):
+            body = {} if method == "POST" else None
+            r = self.run_today(lambda: kcal_call(path, body, token=tok, method=method, origin=host, headers=own))
+            self.assertEqual(r.code, 200, (path, r.json))
+            self.assertNotIn("Access-Control-Allow-Origin", r.headers)
+            r = self.run_today(lambda: kcal_call(path, body, token=tok, method=method, origin="", headers=own))
+            self.assertEqual(r.code, 200, path)  # GET с того же домена браузер шлёт без Origin
+            for evil in ("https://evil.example", host + ".evil.example", "http://coach.1-2-3-4.sslip.io:8080"):
+                r = kcal_call(path, body, token=tok, method=method, origin=evil, headers=own)
+                self.assertEqual(r.code, 403, (path, evil))
+        # Host потерялся по дороге — свой адрес из COACH_URL
+        with mock.patch.object(coach, "public_url", "https://coach.example.org"):
+            self.assertEqual(kcal_call("/api/kcal/state", token=tok, method="GET", origin="https://coach.example.org").code, 200)
+        with mock.patch.object(coach, "kcal_shop", lambda q: {"items": []}):
+            self.assertEqual(kcal_call("/api/kcal/shop?q=x", method="GET", origin=host, headers=own).code, 200)
+            self.assertEqual(kcal_call("/api/kcal/shop?q=x", method="GET", origin="https://evil.example", headers=own).code, 403)
+        with mock.patch.object(ai, "claude", return_value="Ешь гречку."), \
+                mock.patch.object(coach, "context", return_value=("", None)):
+            r = kcal_call("/api/kcal/chat", {"question": "а?"}, token=tok, origin=host, headers=own)
+            self.assertEqual(r.code, 200, r.json)
+        # pair со своего домена тоже (если «Калории» откроют без токена и попросят код)
+        code, _ = coach.pwa.new_code(self.db, U)
+        self.assertEqual(kcal_call("/api/kcal/pair", {"code": code}, origin=host, headers=own).code, 200)
+
+    def test_static(self):
+        """/kcal/ — сайт «Калории» из KCAL_DIR: только его файлы, верные типы и кэш."""
+        root = tempfile.mkdtemp()
+        kd = os.path.join(root, "kcal")
+        os.makedirs(os.path.join(kd, "sub"))
+        files = {"index.html": "<!doctype html><title>Калории</title>" + "x" * 2000, "sw.js": "self.x=1;",
+                 "foods.json": json.dumps([{"n": "Гречка"}] * 400, ensure_ascii=False), "manifest.webmanifest": "{}",
+                 "icon-192.png": "PNG", "logo.svg": "<svg/>", "f.woff2": "WOFF", ".secret.js": "s", "sub/x.js": "x",
+                 "notes.txt": "t", "run.py": "p"}
+        for n, v in files.items():
+            with open(os.path.join(kd, n), "w") as f:
+                f.write(v)
+        with open(os.path.join(root, "outside.js"), "w") as f:
+            f.write("secret")
+        os.symlink(os.path.join(root, "outside.js"), os.path.join(kd, "link.js"))
+        get = lambda p, **h: kcal_call(p, method="GET", origin="", headers=h)  # noqa: E731
+        with mock.patch.object(coach, "KCAL_DIR", kd):
+            r = get("/kcal")
+            self.assertEqual((r.code, r.headers["Location"]), (302, "/kcal/"))
+            self.assertEqual(get("/kcal?embed=1&theme=light").headers["Location"], "/kcal/?embed=1&theme=light")
+            r = get("/kcal/")
+            self.assertEqual(r.code, 200)
+            self.assertEqual(r.body.decode(), files["index.html"])
+            self.assertEqual(r.headers["Content-Type"], "text/html; charset=utf-8")
+            self.assertEqual(r.headers["Cache-Control"], "no-cache")
+            self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
+            self.assertNotIn("Content-Encoding", r.headers)
+            self.assertEqual(get("/kcal/?embed=1&theme=dark").body, r.body)
+            self.assertEqual(get("/kcal/index.html").body, r.body)
+            r = get("/kcal/sw.js")
+            self.assertEqual((r.headers["Content-Type"], r.headers["Cache-Control"], r.headers["Service-Worker-Allowed"]),
+                             ("text/javascript; charset=utf-8", "no-cache", "/kcal/"))
+            self.assertNotIn("Service-Worker-Allowed", get("/kcal/").headers)
+            for name, ctype in (("foods.json", "application/json; charset=utf-8"),
+                                ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
+                                ("icon-192.png", "image/png"), ("logo.svg", "image/svg+xml"), ("f.woff2", "font/woff2")):
+                r = get("/kcal/" + name)
+                self.assertEqual((r.code, r.headers["Content-Type"]), (200, ctype), name)
+            self.assertEqual(get("/kcal/icon-192.png").headers["Cache-Control"], "public, max-age=86400")
+            # сжатие: большой текст — gzip, если браузер умеет; ETag → 304
+            r = get("/kcal/foods.json", **{"Accept-Encoding": "gzip, br"})
+            self.assertEqual(r.headers["Content-Encoding"], "gzip")
+            self.assertEqual(__import__("gzip").decompress(r.body).decode(), files["foods.json"])
+            self.assertLess(len(r.body), len(files["foods.json"].encode()) // 5)
+            self.assertEqual(r.headers["Vary"], "Accept-Encoding")
+            self.assertEqual(get("/kcal/foods.json").body.decode(), files["foods.json"])
+            self.assertNotIn("Content-Encoding", get("/kcal/icon-192.png", **{"Accept-Encoding": "gzip"}).headers)
+            r304 = get("/kcal/foods.json", **{"If-None-Match": r.headers["ETag"]})
+            self.assertEqual((r304.code, r304.body), (304, b""))
+            # чужое, скрытое, подпапки, выход наружу, неизвестные типы, файлы самой Формы — 404
+            for bad in ("/kcal/../coach.py", "/kcal/%2e%2e/coach.py", "/kcal/..%2fcoach.py", "/kcal/.secret.js",
+                        "/kcal/sub/x.js", "/kcal/sub/", "/kcal/notes.txt", "/kcal/run.py", "/kcal/link.js",
+                        "/kcal/nope.js", "/kcal/app.js", "/kcal/kit.css", "/kcal//etc/passwd", "/kcal/index.html/"):
+                self.assertEqual(get(bad).code, 404, bad)
+        # по умолчанию — docs/kcal этого репозитория
+        self.assertEqual(os.path.realpath(coach.KCAL_DIR), os.path.realpath(os.path.join(coach.REPO, "docs", "kcal")))
+        r = get("/kcal/")
+        self.assertEqual(r.code, 200)
+        self.assertIn(b"<html", r.body[:400].lower())
 
     def test_link(self):
         r = call("/api/kcal/link", {})
