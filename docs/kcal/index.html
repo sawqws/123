@@ -12,7 +12,7 @@
 <title>Калории</title>
 <script>/* ?embed=1 — внутри Формы (вкладка «Питание»), ?theme=dark|light — тема Формы; до первой отрисовки, без вспышки */
 (function () { try { var q = new URLSearchParams(location.search), h = document.documentElement, t = q.get('theme');
-  if (q.get('embed') === '1') h.classList.add('embed');
+  if (q.get('embed') === '1') { h.classList.add('embed'); if (!location.hostname.endsWith('github.io')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/fonts.css'; document.head.appendChild(l); } }
   if (t === 'dark' || t === 'light') h.setAttribute('data-theme', t); } catch (e) {} })();</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -85,6 +85,8 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
+/* внутри Формы — шрифт Формы (SF Pro на iPhone, Inter с её домена на Windows/Android), чтобы был один сайт */
+html.embed body, html.embed input, html.embed button, html.embed textarea { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Helvetica Neue", sans-serif; }
 body {
   font: 17px/1.35 ui-rounded, "SF Pro Rounded", Nunito, -apple-system, BlinkMacSystemFont, system-ui, sans-serif; /* мягкий круглый шрифт: на iPhone — SF Pro Rounded */
   letter-spacing: -.2px; -webkit-font-smoothing: antialiased; overscroll-behavior-y: none;
