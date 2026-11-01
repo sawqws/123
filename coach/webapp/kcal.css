@@ -1,0 +1,37 @@
+/* Вкладка «Питание» = встроенные «Калории» (kcal.js). Рамка — на всю область вкладки: телефон — от верха (под чёлкой)
+   до низа экрана, нижнее меню Формы лежит поверх (у «Калорий» в embed свой отступ снизу +90 px — содержимое не уходит
+   под меню); ≥1024 px — справа от бокового меню, на всю высоту. Рамка непрозрачная (фон вида) — Форма под ней
+   не просвечивает. Скрыта — visibility (не display): документ, прокрутка и состояние «Калорий» живут. */
+#kcal-pane { position: fixed; z-index: 6; left: 0; right: 0; top: var(--top, 0px); bottom: 0; background: var(--bg, #000);
+  visibility: hidden; pointer-events: none; contain: layout paint; overscroll-behavior: contain; }
+body.tab-food #kcal-pane { visibility: visible; pointer-events: auto; animation: kp-in .26s var(--ease-out, cubic-bezier(.16, 1, .3, 1)) both; }
+@keyframes kp-in { from { opacity: 0; } }
+body.tab-food #navbar { display: none; }  /* у «Калорий» своя шапка */
+.kp-hold { height: 0; }
+.kp-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: var(--bg, #000);
+  opacity: 0; transition: opacity .34s var(--ease-out, cubic-bezier(.16, 1, .3, 1)); }
+#kcal-pane.ready .kp-frame { opacity: 1; }
+#kcal-pane.err .kp-frame { visibility: hidden; }
+
+/* скелетон, пока «Калории» грузятся: сегменты, кольцо дня, карточки */
+.kp-sk { position: absolute; inset: 0; padding: 12px 16px; max-width: 760px; margin: 0 auto; transition: opacity .3s ease, visibility 0s .3s; }
+#kcal-pane.ready .kp-sk, #kcal-pane.err .kp-sk { opacity: 0; visibility: hidden; }
+.kp-seg { display: flex; gap: 6px; padding: 4px; border-radius: 999px; background: var(--card, #141415); }
+.kp-seg i { flex: 1; height: 30px; border-radius: 999px; }
+.kp-hero { display: flex; gap: 20px; align-items: center; margin: 22px 0; padding: 20px; border-radius: 28px; background: var(--card, #141415); }
+.kp-ring { flex: none; width: 118px; height: 118px; border-radius: 50%; }
+.kp-lines { flex: 1; min-width: 0; display: grid; gap: 12px; }
+.kp-lines .line { height: 12px; }
+.kp-card { height: 132px; border-radius: 28px; margin-bottom: 14px; }
+.kp-card.short { height: 76px; }
+.kp-err { position: absolute; left: 16px; right: 16px; top: 30%; max-width: 420px; margin: 0 auto; }
+.kp-err[hidden] { display: none; }
+.kp-msg { display: block; }
+
+@media (min-width: 700px) and (max-width: 1023px) { .kp-sk { padding-top: 20px; } }
+@media (min-width: 1024px) {
+  #kcal-pane { left: 248px; top: 0; }
+  .kp-sk { padding: 28px 32px; max-width: 1180px; }
+  .kp-hero { max-width: 560px; }
+}
+@media (prefers-reduced-motion: reduce) { .kp-frame, .kp-sk { transition: none; } body.tab-food #kcal-pane { animation: none; } }

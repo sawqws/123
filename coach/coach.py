@@ -14,12 +14,14 @@
   WHOOP_CLIENT_ID      из developer-dashboard.whoop.com (можно прислать боту: /whoop <id> <secret>)
   WHOOP_CLIENT_SECRET
   KCAL_SITE            адрес сайта «Калории» для связи в одно нажатие (по умолчанию https://sawqws.github.io/123/kcal/)
+  KCAL_DIR             папка сайта «Калории», который Форма отдаёт по /kcal/ (по умолчанию <репо>/docs/kcal)
 
 Только стандартная библиотека Python.
 """
 import datetime
 import functools
 import base64
+import gzip
 import hashlib
 import hmac
 import html
@@ -1810,6 +1812,16 @@ class Web(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def foreign(self):
+        """Запрос браузера с чужой страницы: Origin есть, но это не «Калории» на GitHub Pages и не свой домен
+        (встроенные «Калории» /kcal/ и сама Форма). Без Origin — не браузер (curl) или свой же GET."""
+        origin = self.headers.get("Origin")
+        if not origin or origin == KCAL_ORIGIN:
+            return False
+        own = urllib.parse.urlparse(origin).netloc.lower()
+        hosts = {(self.headers.get("Host") or "").lower(), urllib.parse.urlparse(public_url).netloc.lower()} - {""}
+        return own not in hosts
+
     def cors(self):
         """CORS только для сайта «Калории» и только на его пути."""
         if urllib.parse.urlparse(getattr(self, "path", "")).path not in KCAL_PATHS:
@@ -1828,8 +1840,7 @@ class Web(BaseHTTPRequestHandler):
 
     def kcal(self, path, body):
         """Сайт «Калории»: /api/kcal/pair — код из /site → Bearer-токен; /api/kcal/photo — фото → позиции."""
-        origin = self.headers.get("Origin")
-        if origin and origin != KCAL_ORIGIN:  # браузер с чужой страницы; без Origin — не браузер (curl)
+        if self.foreign():  # браузер с чужой страницы (GitHub Pages и свой домен — можно)
             return self.reply(403, {"error": "чужой сайт"})
         if path == "/api/kcal/pair":
             try:
@@ -1850,11 +1861,13 @@ class Web(BaseHTTPRequestHandler):
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
         key = hashlib.sha256(tok.encode()).hexdigest()
-        if path in ("/api/kcal/sync", "/api/kcal/forma"):
-            if not pwa.throttle(("kcalsync:" if path == "/api/kcal/sync" else "kcalforma:") + key, *SYNC_RATE):
+        if path in ("/api/kcal/sync", "/api/kcal/forma", "/api/kcal/state"):
+            if not pwa.throttle(f"kcal{path.rsplit('/', 1)[1]}:" + key, *SYNC_RATE):
                 return self.reply(429, {"error": "Много запросов подряд — попробуй через час"})
             try:
-                return self.reply(200, kcal_sync(uid, body) if path == "/api/kcal/sync" else kcal_forma(uid))
+                fn = {"/api/kcal/sync": lambda: kcal_sync(uid, body), "/api/kcal/forma": lambda: kcal_forma(uid),
+                      "/api/kcal/state": lambda: kcal_state(uid)}[path]
+                return self.reply(200, fn())
             except ValueError as e:
                 return self.reply(400, {"error": str(e)})
             except Exception:
@@ -1935,8 +1948,7 @@ class Web(BaseHTTPRequestHandler):
                 pass
 
     def kcal_shop_get(self, q):
-        origin = self.headers.get("Origin")
-        if origin and origin != KCAL_ORIGIN:
+        if self.foreign():
             return self.reply(403, {"error": "чужой сайт"})
         ip = (self.headers.get("X-Forwarded-For") or getattr(self, "client_address", ("?",))[0]).split(",")[0].strip()
         if not pwa.throttle("shop:" + ip, *SHOP_RATE):
@@ -1962,8 +1974,11 @@ class Web(BaseHTTPRequestHandler):
                               "text/html; charset=utf-8")
         if path == "/api/kcal/shop":  # «Калории»: продукты из магазинов (браузеру Open Food Facts не отдаёт CORS)
             return self.kcal_shop_get(dict(urllib.parse.parse_qsl(u.query)).get("q", ""))
-        if path == "/api/kcal/forma":  # «Калории»: день Формы (Bearer)
+        if path in ("/api/kcal/forma", "/api/kcal/state"):  # «Калории»: день Формы, весь дневник (Bearer)
             return self.kcal(path, {})
+        if path == "/kcal" or path.startswith("/kcal/"):  # «Калории» внутри Формы: тот же домен, один вход
+            code, body, ctype, cache, extra = kcal_static(path, u.query, self.headers)
+            return self.reply(code, body, ctype, cache, headers=extra)
         if path.startswith("/api/"):
             return self.api(path, dict(urllib.parse.parse_qsl(u.query)))
         if path == "/site" or path.startswith("/site/"):
@@ -2083,8 +2098,9 @@ def day_payload(uid, day):
 
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
-KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat", "/api/kcal/sync", "/api/kcal/forma")
-SYNC_RATE = (120, 3600)  # /api/kcal/sync и /api/kcal/forma — каждому столько на токен в час
+KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat", "/api/kcal/sync", "/api/kcal/forma",
+              "/api/kcal/state")
+SYNC_RATE = (120, 3600)  # /api/kcal/sync, /forma и /state — каждому столько на токен в час (у каждого свой счётчик)
 KCAL_SITE = os.environ.get("KCAL_SITE") or "https://sawqws.github.io/123/kcal/"  # «Калории» в одно нажатие: + #pair=<токен>
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
@@ -2209,10 +2225,11 @@ def kcal_chat(uid, b):
     return ai.kcal_chat(*kcal_chat_input(uid, b))
 
 
-KCAL_DAYS = 14  # сколько дней «Калории» шлют за раз
+KCAL_DAYS = 31  # дней за один запрос /api/kcal/sync (история уходит кусками по 31)
 KCAL_ITEMS = 200  # позиций в дне
 KCAL_MEALS = ("breakfast", "lunch", "snack", "dinner")
-KCAL_BACK = 60  # дни старше — не принимаем (браузер с неверными часами)
+KCAL_BACK = 400  # дни старше — не принимаем; столько же отдаёт /api/kcal/state
+U_MAX = 2 ** 53  # u — время правки дня в мс (Date.now() в браузере), больше — не время
 ITEM_MAX = {"g": 5000, "kcal": 10000, "p": 1000, "f": 1000, "c": 1000, "salt": 100}
 GOAL_MAX = {"kcal": 10000, "p": 1000, "f": 1000, "c": 2000}
 
@@ -2236,11 +2253,22 @@ def kcal_name(v, n=80):
     return " ".join(re.sub(r"[\x00-\x1f\x7f<>]", " ", str(v if v is not None else "")).split())[:n]
 
 
+def kcal_u(v, day=""):
+    """u дня — целое число мс ≥ 0 (дробное без дробной части тоже), иначе ValueError."""
+    if isinstance(v, float) and v == v and v.is_integer():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= U_MAX:
+        raise ValueError(f"u у дня {day} — время правки в мс (целое ≥ 0)")
+    return v
+
+
 def kcal_clean(b, today):
     """Тело POST /api/kcal/sync → ({день: {items, water, type}}, цели или None). Лишнее отбрасываем, числа обрезаем."""
     days = b.get("days")
     if days is not None and not isinstance(days, dict):
         raise ValueError("days — объект {день: …}")
+    if len(days or {}) > KCAL_DAYS:
+        raise ValueError(f"не больше {KCAL_DAYS} дней за запрос — шли кусками")
     lo, hi = today - datetime.timedelta(days=KCAL_BACK), today + datetime.timedelta(days=1)
     ok = []
     for k, v in (days or {}).items():
@@ -2253,7 +2281,7 @@ def kcal_clean(b, today):
         if lo <= d <= hi:
             ok.append(k)
     out = {}
-    for k in sorted(ok, reverse=True)[:KCAL_DAYS]:
+    for k in sorted(ok, reverse=True):
         v = days[k]
         items = []
         for x in (v.get("items") if isinstance(v.get("items"), list) else [])[:KCAL_ITEMS]:
@@ -2268,6 +2296,8 @@ def kcal_clean(b, today):
         wl = v.get("water") if isinstance(v.get("water"), list) else []
         drinks = [ml for ml in (knum(x, 5000, 0) for x in wl[:50]) if ml]
         out[k] = {"items": items, "water": drinks, "type": v.get("type") if v.get("type") in ("train", "rest") else None}
+        if "u" in v:  # время правки дня: на сервере остаётся более свежая версия (coach/SYNC.md, п. 5)
+            out[k]["u"] = kcal_u(v["u"], k)
     goals = None
     if any(k in b for k in ("goals", "salt", "water")):
         g = b.get("goals") if isinstance(b.get("goals"), dict) else {}
@@ -2280,16 +2310,69 @@ def kcal_clean(b, today):
 
 
 def kcal_sync(uid, b):
-    """«Калории» → сервер: дни целиком (последние 14) и цели. Ответ — {ok, forma: как GET /api/kcal/forma}."""
+    """«Калории» → сервер: дни целиком (до 31 за раз, до 400 дней назад) и цели. День с u сохраняется, только если
+    его u не меньше сохранённого; такие пропущенные дни — в stale. Ответ — {ok, stale, forma: как GET /api/kcal/forma}."""
     days, goals = kcal_clean(b, today_of(uid))
-    if days:
-        db.save_kcal_days(uid, days)
+    stale = db.save_kcal_days(uid, days) if days else []
     if goals is not None:  # присланное поверх прежнего: прислали только воду — цели еды не теряются
         old = db.kcal_goals(uid) or {}
         db.kcal_goals(uid, {"goals": {**(old.get("goals") or {}), **goals["goals"]},
                             "salt": goals["salt"] if goals["salt"] is not None else old.get("salt"),
                             "water": {**(old.get("water") or {}), **goals["water"]}})
-    return {"ok": True, "forma": kcal_forma(uid)}
+    return {"ok": True, "stale": stale, "forma": kcal_forma(uid)}
+
+
+def kcal_state(uid):
+    """Сервер → «Калории»: весь сохранённый дневник (≤ 400 последних дней) и цели — для слияния по u на любом устройстве.
+    День без u (прислан до 01.11) — с u = 0: любая правка в браузере новее."""
+    days = {d: {"items": v.get("items") or [], "water": v.get("water") or [], "type": v.get("type"), "u": v.get("u") or 0}
+            for d, v in db.kcal_last(uid, KCAL_BACK).items()}
+    g = db.kcal_goals(uid) or {}
+    return {"days": days, "goals": g.get("goals") or None, "salt": g.get("salt"), "water": g.get("water") or None}
+
+
+# ---------- «Калории» внутри Формы: сайт docs/kcal по адресу /kcal/ (тот же домен — один вход, общий localStorage) ----------
+KCAL_DIR = os.environ.get("KCAL_DIR") or os.path.join(REPO, "docs", "kcal")
+KCAL_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+              ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json; charset=utf-8",
+              ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2"}
+KCAL_FRESH = (".html", ".js", ".json", ".webmanifest")  # меняются с каждой выкаткой — проверять у сервера (ETag)
+_kcal_gz = {}  # (файл, mtime, размер) → сжатое: foods.json ~600 КБ → ~100 КБ, сжимаем один раз
+
+
+def kcal_static(path, query="", headers=None):
+    """GET /kcal и /kcal/<файл> → (код, тело, тип, Cache-Control, заголовки). Только файлы из самой папки KCAL_DIR
+    (без подпапок, «..», скрытых и ссылок наружу) и только известных типов; остальное — 404."""
+    headers = headers or {}
+    nf = (404, {"error": "not found"}, "application/json; charset=utf-8", "no-store", {})
+    if path == "/kcal":
+        return 302, "", "text/plain; charset=utf-8", "no-store", {"Location": "/kcal/" + ("?" + query if query else "")}
+    name = path[len("/kcal/"):] or "index.html"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", name) or ".." in name:
+        return nf
+    ext = os.path.splitext(name)[1].lower()
+    root = os.path.realpath(KCAL_DIR)
+    file = os.path.realpath(os.path.join(root, name))
+    if ext not in KCAL_TYPES or os.path.dirname(file) != root or not os.path.isfile(file):
+        return nf
+    st = os.stat(file)
+    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    extra = {"ETag": etag, "Vary": "Accept-Encoding"}
+    if name == "sw.js":
+        extra["Service-Worker-Allowed"] = "/kcal/"
+    cache = "no-cache" if ext in KCAL_FRESH else "public, max-age=86400"
+    if etag in [t.strip() for t in (headers.get("If-None-Match") or "").split(",")]:
+        return 304, b"", KCAL_TYPES[ext], cache, extra
+    with open(file, "rb") as f:
+        body = f.read()
+    if ext in KCAL_FRESH + (".svg",) and len(body) > 1024 and "gzip" in (headers.get("Accept-Encoding") or ""):
+        key = (file, st.st_mtime_ns, st.st_size)
+        if key not in _kcal_gz:
+            if len(_kcal_gz) > 32:
+                _kcal_gz.clear()
+            _kcal_gz[key] = gzip.compress(body, 6, mtime=0)
+        body, extra["Content-Encoding"] = _kcal_gz[key], "gzip"
+    return 200, body, KCAL_TYPES[ext], cache, extra
 
 
 def kcal_forma(uid):

@@ -44,7 +44,7 @@
       healthTop: [], healthAfterMonitor: [], healthBottom: [], sleep: [], rec: [], strain: [], coachTop: [], plus: [] } };
   const slot = (name, ...args) => F.slots[name].map(fn => { try { return fn(...args) || ''; } catch (e) { console.error(name, e); return ''; } }).join('');
   const S = { data: null, tab: 'today', dayData: null, range: 30, series: {}, history: null, progress: undefined,
-    asking: false, eating: false, briefing: false, progressing: false, photo: false };
+    asking: false, briefing: false, progressing: false, photo: false };
 
   const WD = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
   const WD_S = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -294,15 +294,17 @@
   function go(tab) {
     if (tab === 'plus') { tabs.set(S.tab); plusSheet(); return; }
     if (S.tab === tab && !S.screen) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    const from = S.tab;
     S.tab = tab; S.screen = null; tabs.set(tab);
-    nav('tab', () => { render(true); window.scrollTo(0, 0); });
+    // «Питание» — живая рамка «Калорий» (kcal.js): без снимка всей страницы с рамкой, она сама проявляется (kcal.css)
+    nav('tab', () => { render(true); window.scrollTo(0, 0); }, from === 'food' || tab === 'food');
     if (tab === 'trends' && !S.series[S.range]) loadSeries(S.range);
     if (tab === 'trends' && S.progress === undefined) loadProgress();
     if (tab === 'coach' && !S.history) loadHistory();
   }
   function render(anim) {
     if (!S.data) return;
-    const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: foodView, coach: coachView }[S.tab])();
+    const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: () => '', coach: coachView }[S.tab])();
     view.removeAttribute('aria-busy');
     const rz = (S.dayData || S.data.today || {}).recovery;  // цвет восстановления — в живой фон
     document.documentElement.style.setProperty('--zc', rz ? C[rz.zone] : 'var(--rec-blue)');
@@ -312,6 +314,7 @@
     const cls = [S.inVT ? 'enter vt' : S.navKind ? `enter nav-${S.navKind}` : anim ? 'enter' : '', moving ? '' : 'calm'].join(' ').trim();
     view.innerHTML = `<div class="${cls}">${html}</div>`;
     document.body.classList.toggle('tab-coach', S.tab === 'coach' && !S.screen);
+    document.body.classList.toggle('tab-food', S.tab === 'food' && !S.screen);  // рамка «Калорий» (kcal.js) видна только на своей вкладке
     if (moving) stagger();
     animate(document, !moving);
     if (F.navSync) F.navSync();
@@ -912,59 +915,7 @@
     S.progressing = false; if (S.tab === 'trends') render(false);
   }
 
-  // ---------- Питание ----------
-  const MEAL = { breakfast: 'Завтрак', lunch: 'Обед', dinner: 'Ужин', snack: 'Перекус' };
-  // «Калории» (отдельный сайт): связать в одно нажатие или открыть — /api/kcal/link → адрес с токеном
-  function kcalBlock(t) {
-    const k = t.kcal;
-    if (!k) return `<section class="card kc-invite rise"><div class="kc-ih"><span class="kc-ic">${I.flame}</span><span><b>Связать с Калориями</b>
-        <span class="muted">Еда, БЖУ, соль и вода из «Калорий» появятся здесь, а тренер будет их учитывать.</span></span></div>
-      <button class="btn primary" data-a="kcal-open">Связать с Калориями</button></section>`;
-    const items = k.items || [];
-    const rows = items.map(x => `<div class="row kc-row"><div class="main"><div class="title wrap">${esc(x.name)}</div>
-        <div class="meta num">${esc(MEAL[x.meal] || '')}${x.g ? `${MEAL[x.meal] ? ' · ' : ''}${Math.round(x.g)} г` : ''} · Б ${Math.round(x.p || 0)} · Ж ${Math.round(x.f || 0)} · У ${Math.round(x.c || 0)}</div></div>
-        <div class="end num"><b>${big(x.kcal)}</b></div></div>`).join('');
-    return `<div class="sec rise">${cap('Из Калорий', `<span class="num">${big((k.eaten || {}).kcal)} ккал</span>`)}
-      ${items.length ? `<div class="list kc-list">${rows}</div>` : '<section class="card"><p class="muted small">Сегодня в «Калориях» пока пусто.</p></section>'}
-      <button class="btn tonal kc-open" data-a="kcal-open">Открыть Калории${I.next}</button></div>`;
-  }
-  async function kcalOpen(el) {
-    haptic('tap');
-    // окно открываем сразу (по нажатию) — иначе браузер заблокирует его после ожидания ответа
-    const w = !tg ? window.open('', '_blank') : null;
-    try {
-      const r = await busy(el, () => api('/api/kcal/link', {}));
-      if (!r || !r.url) throw new Error('Калории не ответили — попробуй ещё раз');
-      if (tg && tg.openLink) tg.openLink(r.url); else if (w) { w.opener = null; w.location.href = r.url; } else location.href = r.url;
-    } catch (e) { if (w) w.close(); fail(e); }
-  }
-  function foodView() {
-    const t = S.data.today, n = foodGoals(t), e = t.eaten;
-    let h = hero('Питание', `Сегодня, ${dateLine(t.day)}`);
-    const left = n ? n.kcal - e.kcal : 0;
-    h += `<section class="card feature rise"><div class="food-top">
-      ${n ? ring(e.kcal / n.kcal, 'var(--food)', `<b class="num">${big(Math.abs(left))}</b><span>${left >= 0 ? 'ккал осталось' : 'ккал сверх'}</span>`, 118)
-        : ring(0, 'var(--food)', `<b class="num">${big(e.kcal)}</b><span>ккал</span>`, 118)}
-      <div class="macro-list">${n ? [['Белок', e.protein, n.protein, 'var(--m-p, var(--rec-green))', 0], ['Жиры', e.fat, n.fat, 'var(--m-f, var(--rec-yellow))', 0], ['Углеводы', e.carbs, n.carbs, 'var(--m-c, var(--strain))', 0],
-          ...(e.salt != null ? [['Соль', e.salt, n.salt || 5, 'var(--m-s, var(--hint))', 1]] : [])].map(([k, v, g, col, d]) =>
-        `<div class="macro"><div class="mt"><span>${k}</span><span class="num"><b>${num(v, d)}</b>/${num(g, 0)} г</span></div>${bar(pct(v, g), col)}</div>`).join('')
-        : '<p class="small muted">Добавь вес в профиле — посчитаю норму калорий и БЖУ.</p><button class="btn sm tonal" data-a="profile">Заполнить профиль</button>'}</div></div>
-      <button class="btn primary" data-a="photo" data-v="food" ${S.photo ? 'disabled' : ''}>${S.photo === 'food' ? 'Считаю калории…' : 'Сфотографировать еду'}</button>
-      <div class="ask"><textarea id="eat" rows="1" placeholder="Что съел?">${esc(S.eatDraft || '')}</textarea>
-        <button class="send" data-a="eat" aria-label="Посчитать" ${S.eating ? 'disabled' : ''}>${S.eating ? '<span class="dots"><i></i><i></i><i></i></span>' : '↑'}</button></div>
-      ${n && n.src === 'kcal' ? `<p class="small muted">Цели — из «Калорий»${t.kcal.type === 'train' ? ', день тренировки' : t.kcal.type === 'rest' ? ', день отдыха' : ''}. Съедено — вместе с едой, записанной в Форме.</p>`
-        : t.nutrition ? `<p class="small muted">Норма ${big(t.nutrition.kcal)} ккал — ${esc(t.nutrition.how)}.${t.nutrition.teen ? ' В твоём возрасте калории не урезаем: рост важнее.' : ''}</p>` : ''}</section>`;
-    h += kcalBlock(t);
-    h += `<div class="label">${t.kcal ? 'Записано в Форме' : 'Приёмы пищи'}${t.meals.length ? `<span class="num">${big(t.meals.reduce((a, m) => a + (m.kcal || 0), 0))} ккал</span>` : ''}</div>`;
-    h += t.meals.length ? `<div class="list rise">${t.meals.map(m => `<button class="row" data-a="meal-edit" data-v="${m.id}">
-        <span class="ic time num">${esc(m.time)}</span><div class="main"><div class="title">${esc(m.title)}</div>
-        <div class="meta num">Б ${Math.round(m.protein)} · Ж ${Math.round(m.fat)} · У ${Math.round(m.carbs)}</div></div><div class="end num"><b>${big(m.kcal)}</b></div></button>`).join('')}</div>`
-      : t.kcal ? '<p class="small muted kc-none">В Форме сегодня ничего не записано — вся еда в «Калориях».</p>'
-      : `<div class="empty rise"><span class="e">${I.food}</span><b>Пока пусто</b>Сфотографируй тарелку или напиши, что съел.</div>`;
-    h += `<button class="btn ghost" data-a="meal-new">＋ Добавить вручную</button>`;
-    h += waterCard(t.water, true);
-    return h;
-  }
+  // ---------- Питание — встроенные «Калории»: kcal.js (F.views.food) ----------
 
   // ---------- Тренер ----------
   const SUGGEST = ['Готов ли я к спаррингу?', 'Что съесть перед тренировкой?', 'Почему упало восстановление?', 'Как улучшить сон?', 'План на неделю'];
@@ -1010,27 +961,18 @@
       return new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = bad; r.readAsDataURL(file); });
     } finally { URL.revokeObjectURL(url); }
   }
-  function pickPhoto(mode) {
+  function pickPhoto() {  // фото к вопросу тренеру (еда по фото — в «Калориях», вкладка «Питание»)
     const inp = $('#pick');
     inp.value = '';
     inp.onchange = async () => {
       const f = inp.files && inp.files[0];
       if (!f) return;
       haptic('tap');
-      if (mode === 'ask') {
-        const text = ($('#q') || {}).value || '';
-        S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; render();
-        try { const r = await api('/api/photo', { image: await shrink(f), mode: 'ask', text: text.trim() }); S.history = r.history; haptic('success'); }
-        catch (e) { fail(e); }
-        S.asking = false; if (S.tab === 'coach') render();
-        return;
-      }
-      S.photo = 'food'; render(false);
-      try {
-        const r = await api('/api/photo', { image: await shrink(f), mode: 'food' });
-        S.data.today = r.day; haptic('success'); toast(`${r.meal.title} · ${big(r.meal.kcal)} ккал`, 'ok');
-      } catch (e) { fail(e); }
-      S.photo = false; render(false);
+      const text = ($('#q') || {}).value || '';
+      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; render();
+      try { const r = await api('/api/photo', { image: await shrink(f), mode: 'ask', text: text.trim() }); S.history = r.history; haptic('success'); }
+      catch (e) { fail(e); }
+      S.asking = false; if (S.tab === 'coach') render();
     };
     inp.click();
   }
@@ -1079,23 +1021,6 @@
       });
     });
   }
-  function mealSheet(m) {
-    m = m || { title: '', kcal: '', protein: '', fat: '', carbs: '' };
-    haptic('tap');
-    const f = (k, label, type = 'number') => `<label class="field"><span>${label}</span><input name="${k}" type="text" inputmode="${type === 'number' ? 'decimal' : 'text'}" value="${esc(m[k] === '' ? '' : type === 'number' ? Math.round(m[k]) : m[k])}"></label>`;
-    const el = sheet(`<h2>${m.id ? 'Изменить' : 'Добавить еду'}</h2><form id="mf">${f('title', 'Что', 'text')}<div class="grid2">${f('kcal', 'Ккал')}${f('protein', 'Белки, г')}${f('fat', 'Жиры, г')}${f('carbs', 'Углеводы, г')}</div>
-      <button class="btn primary" type="submit">Сохранить</button>${m.id ? '<button class="btn danger" type="button" data-del="1">Удалить</button>' : ''}</form>`);
-    $('#mf', el).addEventListener('submit', async ev => {
-      ev.preventDefault();
-      const fd = Object.fromEntries(new FormData(ev.target).entries());
-      if (m.id) fd.id = m.id;
-      try { const r = await api('/api/meal', fd); S.data.today = r.day; el.close(); haptic('success'); render(false); } catch (e) { fail(e); }
-    });
-    const del = $('[data-del]', el);
-    if (del) del.addEventListener('click', async () => {
-      try { S.data.today = (await api('/api/meal/delete', { id: m.id })).day; el.close(); haptic('success'); render(false); } catch (e) { fail(e); }
-    });
-  }
   function progressSheet() {
     if (!S.progress) return;
     sheet(`<h2>Разбор прогресса</h2><p class="small muted">от ${dateLine(S.progress.day)}</p><div class="prose">${tgHtml(S.progress.text)}</div>`);
@@ -1107,8 +1032,7 @@
     const d = S.data, row = (a, v, ic, col, t, m) => `<button class="row tap" data-a="${a}" data-v="${v}"><span class="ic" style="color:${col}">${ic}</span>
       <span class="main"><div class="title">${t}</div><div class="meta">${m}</div></span><span class="end chev"></span></button>`;
     const el = sheet(`<h2>Добавить</h2><div class="list">
-      ${row('photo', 'food', I.cam, 'var(--food)', 'Еда по фото', 'посчитаю ккал и БЖУ')}
-      ${row('meal-new', '', I.food, 'var(--food)', 'Еда вручную', 'название и цифры')}
+      ${row('tab', 'food', I.food, 'var(--food)', 'Еда', 'фото, поиск, БЖУ и соль')}
       ${row('water', '250', I.drop, 'var(--water)', 'Вода +250 мл', 'стакан')}
       ${row('water', '500', I.drop, 'var(--water)', 'Вода +500 мл', 'бутылка')}
       ${row('tab', 'coach', I.coach, 'var(--teal)', 'Спросить тренера', 'по твоим данным WHOOP')}
@@ -1122,14 +1046,6 @@
   // ---------- действия ----------
   async function refresh() {
     try { S.data = await api('/api/all'); S.dayData = null; render(false); } catch (e) { fail(e); }
-  }
-  async function eat() {
-    const el = $('#eat'), text = el ? el.value.trim() : '';
-    if (!text || S.eating) return;
-    S.eating = true; S.eatDraft = text; haptic('tap'); render(false);
-    try { const r = await api('/api/meal/estimate', { text }); S.data.today = r.day; S.eatDraft = ''; haptic('success'); toast(`${r.meal.title} · ${big(r.meal.kcal)} ккал`, 'ok'); }
-    catch (e) { fail(e); }
-    S.eating = false; render(false);
   }
   async function brief() {
     if (S.briefing) return;
@@ -1174,8 +1090,6 @@
     else if (a === 'range') { if (S.range === Number(v)) return; S.range = Number(v); haptic('select'); render(false); if (!S.series[S.range]) loadSeries(S.range); }
     else if (a === 'series-retry') { S.seriesErr = null; render(false); loadSeries(S.range); }
     else if (a === 'history-retry') { S.historyErr = false; render(false); loadHistory(); }
-    else if (a === 'eat') eat();
-    else if (a === 'kcal-open') kcalOpen(el);
     else if (a === 'photo') pickPhoto(v);
     else if (a === 'ask') { const q = $('#q'); ask(q && q.value); }
     else if (a === 'suggest') ask(v);
@@ -1188,9 +1102,7 @@
     } else if (a === 'water-del') {
       haptic('tap');
       try { S.data.today = (await api('/api/water/delete', { id: Number(v) })).day; render(false); } catch (e) { fail(e); }
-    } else if (a === 'meal-new') mealSheet();
-    else if (a === 'meal-edit') mealSheet(S.data.today.meals.find(m => String(m.id) === v));
-    else if (a === 'sync') {
+    } else if (a === 'sync') {
       await busy(el, async () => {
         try { await api('/api/sync', {}); await refresh(); haptic('success'); toast('Данные обновлены', 'ok'); } catch (e) { fail(e); }
       });
@@ -1207,7 +1119,6 @@
     if (ev.target.tagName === 'TEXTAREA' && ev.target.closest('.ask')) {
       ev.target.style.height = 'auto'; ev.target.style.height = Math.min(140, ev.target.scrollHeight) + 'px';
       if (ev.target.id === 'q') S.qDraft = ev.target.value;
-      if (ev.target.id === 'eat') S.eatDraft = ev.target.value;
     }
   });
   document.addEventListener('keydown', ev => {
@@ -1220,7 +1131,6 @@
       ev.preventDefault();
       if (ev.target.id === 'q') ask(ev.target.value);
       else if (ev.target.id === 'goal-new') { if (ev.target.value.trim()) goalApi('/api/goal', { text: ev.target.value.trim() }); }
-      else eat();
     }
   });
   // шапка становится стеклянной, когда под ней поехало содержимое; большой заголовок уехал — маленький появляется в полосе (как iOS)
@@ -1321,7 +1231,7 @@
     if (tg && tg.onEvent) tg.onEvent('themeChanged', () => { theme(); render(false); });
     // данные обновляются сами, пока приложение открыто
     setInterval(async () => {
-      if (document.hidden || document.querySelector('.sheet') || S.asking || S.eating || S.briefing || S.photo || S.dayData) return;
+      if (document.hidden || document.querySelector('.sheet') || S.asking || S.briefing || S.photo || S.dayData) return;
       if (document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName)) return;
       try { S.data = await api('/api/all'); F.onData.forEach(fn => { try { fn(S.data); } catch (e) { console.error(e); } }); if (S.tab !== 'coach' && !S.screen) render(false); } catch (e) { /* тихо */ }
     }, 120000);

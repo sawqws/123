@@ -9,7 +9,8 @@ const os = require('os');
 const ROOT = path.join(__dirname, '..', 'docs');
 const PORT = 8771;
 const URL = `http://localhost:${PORT}/kcal/`;
-const API = 'https://coach.2-27-206-165.sslip.io';
+const API = `http://localhost:${PORT}`; // на своём домене «Калории» ходят на свой же адрес (coach/SYNC.md §5)
+const FORMA_API = 'https://coach.2-27-206-165.sslip.io'; // на github.io — сервер Формы
 const SHOTS = process.argv[2] || '';
 const NOW = new Date('2026-10-21T12:00:00');  // среда — день тренировки по умолчанию
 const results = [];
@@ -29,6 +30,8 @@ async function newPage(browser, opts = {}) {
   await ctx.route(API + '/api/kcal/sync', r => { ctx.syncs.push({ body: JSON.parse(r.request().postData()), auth: r.request().headers().authorization, t: Date.now() });
     return opts.sync ? opts.sync(r) : r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"forma":null}' }); });
   await ctx.route(API + '/api/kcal/forma', r => opts.forma ? opts.forma(r) : r.fulfill({ status: 200, contentType: 'application/json', body: 'null' }));
+  ctx.states = 0; // GET /api/kcal/state — всё сохранённое на сервере
+  await ctx.route(API + '/api/kcal/state', r => { ctx.states++; return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(opts.state || { days: {} }) }); });
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -36,7 +39,7 @@ async function newPage(browser, opts = {}) {
   page.on('dialog', d => d.accept());
   if (opts.seed) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('kcal.v1', s); sessionStorage.setItem('seeded', 1); } }, JSON.stringify(opts.seed));
   if (opts.init) await ctx.addInitScript(opts.init);
-  await page.goto(URL + (opts.hash || ''));
+  await page.goto((opts.url || URL) + (opts.hash || ''));
   await sleep(700);
   return { ctx, page };
 }
@@ -46,6 +49,7 @@ const shot = async (page, name, full) => SHOTS && page.screenshot({ path: path.j
 const items = async page => (await state(page))?.days['2026-10-21']?.items || [];
 const sum = (arr, k) => arr.reduce((a, i) => a + (i[k] || 0), 0);
 const toastText = page => page.textContent('#toast');
+const dayTypeOf = (S, d) => S.days[d].type || S.days[d].ftype;
 
 async function addFood(page, q, grams, meal) {
   if (meal) await page.click(`[data-add="${meal}"] >> nth=0`, { position: { x: 30, y: 20 } }); else await page.click('#addTab');
@@ -686,6 +690,192 @@ async function addFood(page, q, grams, meal) {
       net = true; await page.click('#water [data-ml="250"]'); await sleep(2600);
       ok(ctx.syncs.length === 2 && await page.isVisible('#forma'), 'повтор при следующем сохранении → карточка', String(ctx.syncs.length));
       ok(page.errors.length === 0, 'нет ошибок в консоли (нет сети)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 16. Внутри Формы (?embed=1, coach/SYNC.md §5): разделы сверху, тема Формы, без входа и своего меню, всё над меню Формы */
+    {
+      const { ctx, page } = await newPage(browser, { url: URL + '?embed=1&theme=light', sw: true,
+        init: () => { window.__msgs = []; addEventListener('message', e => window.__msgs.push(e.data)); } });
+      const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+      ok(!(await page.$('#tabs')) && await page.isVisible('#eseg') && (await page.locator('#eseg [data-tab]').count()) === 3, 'embed: своего нижнего меню нет, разделы сверху сегментами');
+      ok(await page.isVisible('#addTab'), 'embed: круг «+» остаётся');
+      ok(await bg() === 'rgb(255, 255, 255)', 'embed: theme=light — светлая, хотя система тёмная', await bg());
+      await shot(page, '16-embed-light');
+      await page.evaluate(() => window.postMessage({ type: 'forma-theme', theme: 'dark' }, location.origin)); await sleep(200);
+      ok(await bg() === 'rgb(0, 0, 0)', 'embed: сообщение Формы forma-theme → тёмная', await bg());
+      await page.evaluate(() => window.postMessage({ type: 'forma-theme', theme: 'red' }, location.origin)); await sleep(150);
+      ok(await page.evaluate(() => document.documentElement.dataset.theme) === 'dark', 'embed: неизвестная тема не применяется');
+      const H = await page.evaluate(() => innerHeight);
+      const pb = await page.$eval('#app', e => parseFloat(getComputedStyle(e).paddingBottom));
+      ok(pb >= 90 + 80, 'embed: снизу отступ над меню Формы (≥ 90 px)', String(pb));
+      const fab = await page.locator('#addTab').boundingBox();
+      ok(fab.y + fab.height <= H - 90, 'embed: «+» выше меню Формы', JSON.stringify(fab));
+      ok(!(await page.textContent('body')).includes('Домой'), 'embed: без подсказок «На экран Домой»');
+      ok(await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(r => r.length)) === 0, 'embed: свой service worker не регистрируется');
+      // лист добавления целиком виден над меню Формы
+      await page.click('#addTab'); await sleep(700);
+      let sh = await page.locator('#sheet').boundingBox();
+      ok(sh.y >= 0 && sh.y + sh.height <= H - 90 + 1, 'embed: лист «Добавить» целиком над меню Формы', JSON.stringify(sh));
+      await page.fill('#q', 'банан'); await sleep(150); await page.click('#results [data-k] >> nth=0'); await sleep(500);
+      const okb = await page.locator('#ok').boundingBox();
+      ok(okb && okb.y + okb.height <= H - 90, 'embed: кнопка «Добавить» в листе не под меню Формы', JSON.stringify(okb));
+      await page.click('#ok'); await sleep(700);
+      ok((await page.evaluate(() => window.__msgs)).some(m => m && m.type === 'kcal-changed'), 'embed: после сохранения — kcal-changed наверх', JSON.stringify(await page.evaluate(() => window.__msgs)));
+      // без связи: фото — без кода, в настройках и чате — без «Связать/Подключить»
+      await page.click('#camBtn'); await sleep(500);
+      ok(!(await page.isVisible('#code')) && (await toastText(page)).includes('Форм'), 'embed: фото без токена — без второго входа', await toastText(page));
+      await page.click('#gear'); await sleep(600);
+      ok(!(await page.$('#pairBtn')), 'embed: в настройках нет «Связать с Формой»');
+      sh = await page.locator('#sheet').boundingBox();
+      ok(sh.y >= 0 && sh.y + sh.height <= H - 90 + 1, 'embed: высокий лист «Настройки» над меню Формы', JSON.stringify(sh));
+      await page.click('#sheetClose'); await sleep(600);
+      // разделы: сегменты, линза едет, прилипают при прокрутке
+      const th0 = await page.$eval('#eseg .thumb', e => e.style.transform);
+      await page.click('#eseg [data-tab=history]'); await sleep(700);
+      ok((await text(page, '.large')) === 'История' && (await page.getAttribute('#eseg [data-tab=history]', 'aria-pressed')) === 'true', 'embed: сегмент «История» открывает раздел');
+      ok(await page.$eval('#eseg .thumb', e => e.style.transform) !== th0, 'embed: линза сегментов переехала');
+      await page.click('#addW'); await sleep(600);
+      sh = await page.locator('#sheet').boundingBox();
+      ok(sh.y + sh.height <= H - 90, 'embed: низкий лист (вес) над меню Формы', JSON.stringify(sh));
+      await page.click('#sheetClose'); await sleep(600);
+      await page.click('#eseg [data-tab=chat]'); await sleep(700);
+      ok(!(await page.$('#chatPair')) && await page.isVisible('#composer') && !(await page.isVisible('#addTab')), 'embed: чат без «Подключить», «+» не мешает полю');
+      const cb = await page.locator('#composer').boundingBox();
+      ok(cb.y + cb.height <= H - 90, 'embed: поле чата над меню Формы', JSON.stringify(cb));
+      await page.click('#eseg [data-tab=today]'); await sleep(700);
+      await page.mouse.wheel(0, 900); await sleep(400);
+      const et = await page.locator('#eseg').boundingBox();
+      ok(await page.evaluate(() => scrollY) > 200 && et.y >= 0 && et.y < 40, 'embed: при прокрутке сегменты остаются сверху', JSON.stringify(et));
+      await page.mouse.wheel(0, -2000); await sleep(400);
+      await page.click('.wd[data-d="2026-10-19"]'); await sleep(500);
+      await page.click('#eseg [data-tab=today]'); await sleep(600);
+      ok((await text(page, '.large')) === 'Сегодня', 'embed: ещё раз «Сегодня» — назад к сегодняшнему дню', await text(page, '.large'));
+      await page.evaluate(() => window.postMessage({ type: 'forma-theme', theme: 'dark' }, location.origin)); await sleep(200);
+      await shot(page, '16-embed-dark');
+      await page.setViewportSize({ width: 1280, height: 800 }); await sleep(400);
+      ok(await page.$eval('#app', e => parseFloat(getComputedStyle(e).paddingBottom)) < 120, 'embed ≥ 1024: без отступа под меню Формы');
+      await shot(page, '16-embed-1280');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (embed)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      // вне embed — всё как раньше: меню снизу, сегментов сверху нет, service worker есть
+      const { ctx, page } = await newPage(browser, { sw: true });
+      await sleep(800);
+      ok(await page.isVisible('#tabs') && !(await page.$('#eseg')), 'обычный режим: нижнее меню, без верхних разделов');
+      ok(await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(r => r.length)) === 1, 'обычный режим: service worker регистрируется');
+      ok(await page.evaluate(() => API) === `http://localhost:${PORT}`, 'на своём домене API = свой адрес (location.origin)');
+      await ctx.close();
+    }
+    {
+      // на github.io — сервер Формы
+      const ctx = await browser.newContext({ ...devices['iPhone 14'], serviceWorkers: 'block' });
+      await ctx.clock.setFixedTime(NOW);
+      const KC = path.join(ROOT, 'kcal'), hits = [];
+      await ctx.route('https://sawqws.github.io/123/kcal/**', r => { const f = new globalThis.URL(r.request().url()).pathname.replace('/123/kcal/', '') || 'index.html';
+        const fp = path.join(KC, path.basename(f)); return fs.existsSync(fp) ? r.fulfill({ path: fp }) : r.fulfill({ status: 404, body: '' }); });
+      await ctx.route(FORMA_API + '/api/**', r => { hits.push(new globalThis.URL(r.request().url()).pathname);
+        return r.fulfill({ status: 200, contentType: 'application/json', body: r.request().url().endsWith('/state') ? '{"days":{}}' : '{"ok":true,"forma":null}' }); });
+      await ctx.addInitScript(() => localStorage.setItem('kcal.token', 'tokgh'));
+      const page = await ctx.newPage(); await page.goto('https://sawqws.github.io/123/kcal/'); await sleep(1500);
+      ok(hits.includes('/api/kcal/state') && hits.includes('/api/kcal/sync'), 'на github.io — запросы на сервер Формы', JSON.stringify(hits));
+      await ctx.close();
+    }
+    {
+      // embed: токен протух (401) → kcal-auth наверх (Форма выдаст новый), без своего экрана связи
+      const { ctx, page } = await newPage(browser, { url: URL + '?embed=1&theme=dark', init: () => { localStorage.setItem('kcal.token', 'old'); window.__msgs = []; addEventListener('message', e => window.__msgs.push(e.data)); },
+        sync: r => r.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"нужен вход"}' }) });
+      await sleep(500);
+      ok((await page.evaluate(() => window.__msgs)).some(m => m && m.type === 'kcal-auth'), 'embed: 401 → kcal-auth Форме', JSON.stringify(await page.evaluate(() => window.__msgs)));
+      ok(!(await page.$('#toast button')) && !(await page.isVisible('#code')), 'embed: 401 — без «Связать» и кода');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (embed 401)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      // ответ sync со stale (на сервере новее) → сразу забрать state
+      const st = { days: { '2026-10-20': { items: [{ name: 'Новее на сервере', meal: 'lunch', g: 100, kcal: 100, p: 1, f: 1, c: 1, salt: 0 }], u: 9e12 } } };
+      const { ctx, page } = await newPage(browser, { init: () => localStorage.setItem('kcal.token', 'tok'), seed: { goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } }, fullSync: true, days: {} },
+        state: { days: {} }, sync: r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, forma: null, stale: ['2026-10-20'] }) }) });
+      await ctx.unroute(API + '/api/kcal/state');
+      await ctx.route(API + '/api/kcal/state', r => { ctx.states++; return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(st) }); }); // теперь на сервере день новее
+      await page.click('#water [data-ml="250"]'); await sleep(2600);
+      const S2 = await state(page);
+      ok(ctx.states >= 1 && S2.days['2026-10-20'] && S2.days['2026-10-20'].items[0].name === 'Новее на сервере', 'stale в ответе sync → день взят с сервера', JSON.stringify(S2.days['2026-10-20']));
+      await ctx.close();
+    }
+    /* 17. Данные на любом устройстве: u у дня, слияние со state (новее побеждает), полная история кусками по 31, флаг */
+    const G = { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } };
+    const food = (name, kcal) => ({ id: 'x' + name.length + kcal, meal: 'lunch', name, g: 100, kcal, p: 1, f: 1, c: 1, salt: 0 });
+    {
+      const seed = { goals: G, fullSync: true, days: {
+        '2026-10-20': { items: [food('Местное старое', 100)], u: 1000 }, '2026-10-19': { items: [food('Местное новое', 200)], u: 5000 } } };
+      const st = { days: { '2026-10-20': { items: [{ name: 'С сервера', meal: 'dinner', g: 200, kcal: 300, p: 20, f: 10, c: 30, salt: 1 }], water: [500], type: 'rest', u: 2000 },
+        '2026-10-19': { items: [{ name: 'Серверное старое', meal: 'lunch', g: 100, kcal: 1, p: 0, f: 0, c: 0, salt: 0 }], u: 3000 },
+        '2026-10-18': { items: [{ name: 'Только на сервере', meal: 'snack', g: 50, kcal: 80, p: 1, f: 2, c: 3, salt: 0 }], u: 100 },
+        '2024-01-01': { items: [{ name: 'Слишком старое', meal: 'snack', g: 50, kcal: 80, p: 1, f: 2, c: 3, salt: 0 }], u: 100 } },
+        goals: { train: { kcal: 3000, p: 140, f: 100, c: 400 }, rest: { kcal: 2500, p: 120, f: 90, c: 300 } }, salt: 6, water: { train: 3200, rest: 2600 } };
+      const { ctx, page } = await newPage(browser, { seed, state: st, init: () => localStorage.setItem('kcal.token', 'tok') });
+      await sleep(600);
+      let S1 = await state(page);
+      ok(ctx.states === 1, 'при старте с токеном — GET /api/kcal/state', String(ctx.states));
+      ok(S1.days['2026-10-20'].items[0].name === 'С сервера' && S1.days['2026-10-20'].u === 2000, 'слияние: на сервере новее — берём серверный день', JSON.stringify(S1.days['2026-10-20']));
+      ok(S1.days['2026-10-19'].items[0].name === 'Местное новое' && S1.days['2026-10-19'].u === 5000, 'слияние: старый серверный день не затирает новый свой');
+      ok(S1.days['2026-10-18'] && S1.days['2026-10-18'].items[0].name === 'Только на сервере', 'слияние: дня нет у себя — добавлен');
+      ok(!S1.days['2024-01-01'], 'слияние: дни старше 400 дней не берём');
+      const it = S1.days['2026-10-20'].items[0];
+      ok(it.per100 && Math.round(it.per100.kcal) === 150 && JSON.stringify(S1.days['2026-10-20'].water) === '[500]' && dayTypeOf(S1, '2026-10-20') === 'rest', 'серверный день: состав на 100 г, вода, тип', JSON.stringify(S1.days['2026-10-20']));
+      ok(S1.goals.train.kcal === 3000 && S1.salt === 6 && S1.water.rest === 2600, 'нормы, соль и вода — с сервера (свои были по умолчанию)', JSON.stringify([S1.goals.train, S1.salt, S1.water]));
+      ok((await text(page, '#left')) === '3 000', 'новая норма сразу на экране', await text(page, '#left'));
+      const b0 = ctx.syncs[0] && ctx.syncs[0].body;
+      ok(b0 && b0.days['2026-10-19'].u === 5000 && b0.days['2026-10-20'].u === 2000 && b0.days['2026-10-20'].items[0].name === 'С сервера', 'sync после слияния: дни с u', JSON.stringify(b0 && Object.keys(b0.days)));
+      // правка дня → u = время правки, другие дни не трогаются
+      await addFood(page, 'банан', 120, 'snack'); await sleep(1200);
+      S1 = await state(page);
+      ok(S1.days['2026-10-21'].u === NOW.getTime() && S1.days['2026-10-19'].u === 5000 && S1.days['2026-10-20'].u === 2000, 'u ставится только изменённому дню', JSON.stringify([S1.days['2026-10-21'].u, S1.days['2026-10-19'].u]));
+      await sleep(1500);
+      const bl = ctx.syncs[ctx.syncs.length - 1].body;
+      ok(bl.days['2026-10-21'] && bl.days['2026-10-21'].u === NOW.getTime(), 'sync шлёт u изменённого дня');
+      // тип дня от Формы — не правка (u не меняется)
+      await page.evaluate(() => { S.days['2026-10-18'].ftype = 'train'; save(); });
+      ok((await state(page)).days['2026-10-18'].u === 100, 'тип дня по Форме не меняет u');
+      // старый день (> 14 дней) поправлен — уходит обычным sync
+      await page.evaluate(() => { S.days['2026-09-01'] = { items: [{ id: 'old1', meal: 'lunch', name: 'Давнее', g: 0, kcal: 500, p: 0, f: 0, c: 0, salt: 0 }] }; save(); });
+      await sleep(2600);
+      const bo = ctx.syncs[ctx.syncs.length - 1].body;
+      ok(bo.days['2026-09-01'] && bo.days['2026-09-01'].items[0].name === 'Давнее', 'поправленный давний день уходит в sync', JSON.stringify(Object.keys(bo.days)));
+      // «Удалить все записи» при связи — дни пустые с новым u (удаление дойдёт до сервера)
+      await page.click('#gear'); await sleep(500); await page.click('#wipe'); await sleep(600);
+      S1 = await state(page);
+      ok(S1.days['2026-10-19'] && !S1.days['2026-10-19'].items.length && S1.days['2026-10-19'].u > NOW.getTime(), 'удаление при связи — пустые дни с новым u', JSON.stringify(S1.days['2026-10-19']));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (слияние)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      // полная история: первый раз (нет флага) — кусками по 31 дню, дни старше 400 — нет; ошибка куска — без флага
+      const days = {};
+      for (let i = 0; i < 70; i++) { const d = new Date(2026, 9, 21 - i); days[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`] = { items: [food('Е' + i, 100 + i)] }; }
+      days['2025-01-01'] = { items: [food('Давно', 100)] };
+      let n = 0, fail = true;
+      const { ctx, page } = await newPage(browser, { seed: { goals: G, days }, init: () => localStorage.setItem('kcal.token', 'tok'),
+        sync: r => (++n === 2 && fail) ? r.fulfill({ status: 503, body: '' }) : r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"forma":null}' }) });
+      await sleep(800);
+      ok(ctx.syncs.length === 2 && !(await state(page)).fullSync, 'кусок не принят — флага нет, остальное не шлём', String(ctx.syncs.length));
+      fail = false; ctx.syncs.length = 0;
+      await page.reload(); await sleep(1200);
+      const sent = ctx.syncs.map(x => Object.keys(x.body.days));
+      const all = [].concat(...sent);
+      ok(sent.length === 3 && sent.every(k => k.length <= 31) && sent[0].length === 31, 'вся история — кусками по 31 дню', JSON.stringify(sent.map(k => k.length)));
+      ok(all.length === 70 && new Set(all).size === 70 && !all.includes('2025-01-01'), 'ушли все 70 дней, старше 400 — нет', String(all.length));
+      ok(ctx.syncs.every(x => x.body.goals && x.body.salt === 5 && x.auth === 'Bearer tok'), 'в каждом куске — нормы и токен');
+      ok((await state(page)).fullSync === true, 'после полной отправки — флаг S.fullSync');
+      ctx.syncs.length = 0;
+      await page.reload(); await sleep(1200);
+      ok(ctx.syncs.length === 1 && Object.keys(ctx.syncs[0].body.days).length <= 14, 'с флагом — обычный sync (14 дней)', JSON.stringify(ctx.syncs.map(x => Object.keys(x.body.days).length)));
+      // новая связка (другой токен) — история уходит заново
+      ctx.syncs.length = 0;
+      await page.evaluate(() => { location.hash = '#pair=newtok123'; }); await sleep(1500);
+      ok(ctx.syncs.length === 3 && ctx.syncs[0].auth === 'Bearer newtok123', 'новая связка — вся история заново', String(ctx.syncs.length));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (полная история)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {

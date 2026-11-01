@@ -162,18 +162,8 @@ html.mono .toast { background: var(--sheet-bg) !important; color: var(--ink); -w
 html.mono :is(.btn, .tile, .mon, .act, .outrow, .chip, .addsq, .card.tap, .row.tap, .row[data-a], .mepill, .syncpill, .coach-link, .send, .avatar, .summary-entry, .co-s):active {
   transform: scale(.97); }
 
-/* «Калории» в Питании */
+/* «Калории» на главной (мини-карточка «Питание», вода); сама вкладка «Питание» — kcal.css */
 .kc-from { margin: 10px 0 0; font-size: 12.5px; color: var(--hint); }
-.kc-invite .kc-ih { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
-.kc-invite .kc-ih > span:last-child { display: flex; flex-direction: column; gap: 4px; }
-.kc-invite b { font: 600 17px/1.25 var(--head); }
-.kc-invite .muted { font-size: 14.5px; line-height: 1.4; }
-.kc-ic { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 30%; background: var(--fill, rgba(255, 255, 255, .1)); color: var(--ink); }
-.kc-row { min-height: 56px; }
-.kc-row .end b { font: 600 17px var(--num); }
-.kc-open { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 12px; }
-.kc-open .ico { width: 16px; height: 16px; }
-.kc-none { margin: 4px 4px 14px; }
 .logs .pill.kc { padding-right: 11px; }
 .logs .pill.kc i { font-style: normal; font-size: 11px; color: var(--hint); margin-left: 6px; }
 
