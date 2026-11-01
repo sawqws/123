@@ -220,3 +220,8 @@ html.mono .wtop, html.mono #navbar { grid-template-columns: 1fr auto 1fr !import
 html.mono .wtop > :first-child, html.mono #navbar > :first-child { justify-self: start; }
 html.mono .wtop > :last-child, html.mono #navbar > span { justify-self: end; }
 html.mono .wtop > :nth-child(2), html.mono #navbar > b { max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* крестик листа рисуем сами (кнопку создаёт общий kit.js с символом «✕» — его не трогаем): символ скрыт, крест — маской цвета текста */
+html.mono .sheet-x { font-size: 0 !important; line-height: 0 !important; color: var(--ink) !important; display: grid !important; place-items: center !important; }
+html.mono .sheet-x::before { content: ''; display: block; width: 15px; height: 15px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 3.5l9 9M12.5 3.5l-9 9' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 3.5l9 9M12.5 3.5l-9 9' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat; }
