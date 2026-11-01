@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS goals (
 CREATE TABLE IF NOT EXISTS water (
   id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, time TEXT DEFAULT '', ml INTEGER NOT NULL, created TEXT
 );
+CREATE TABLE IF NOT EXISTS kcal_days (user INTEGER NOT NULL, day TEXT NOT NULL, data TEXT, updated TEXT,
+  PRIMARY KEY (user, day));
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS records_day ON records (user, kind, day);
@@ -74,6 +76,11 @@ def morning_value(v):
         if 3 <= h <= 13 and 0 <= m <= 59:
             return f"{h:02d}:{m:02d}"
     raise ValueError("время утра в виде 07:30 (с 03:00 до 13:59) или «выкл»")
+
+
+def kcal_water(data):
+    """Вода дня «Калорий» в мл (0, если дня нет)."""
+    return int(sum(x for x in ((data or {}).get("water") or []) if isinstance(x, (int, float))))
 
 
 class Store:
@@ -261,15 +268,63 @@ class Store:
         return self.q("SELECT * FROM water WHERE user=? AND day=? ORDER BY time, id", (uid, str(day)))
 
     def water_total(self, uid, day):
-        return int(self.q("SELECT COALESCE(SUM(ml), 0) AS s FROM water WHERE user=? AND day=?", (uid, str(day)))[0]["s"])
+        """Вода за день: записанная в Форме + из «Калорий»."""
+        own = int(self.q("SELECT COALESCE(SUM(ml), 0) AS s FROM water WHERE user=? AND day=?", (uid, str(day)))[0]["s"])
+        return own + kcal_water(self.kcal_day(uid, day))
 
     def water_days(self, uid, since, until):
+        """{день: мл} — Форма + «Калории»."""
         rows = self.q("SELECT day, SUM(ml) AS s FROM water WHERE user=? AND day>=? AND day<=? GROUP BY day",
                       (uid, str(since), str(until)))
-        return {r["day"]: int(r["s"]) for r in rows}
+        out = {r["day"]: int(r["s"]) for r in rows}
+        for d, data in self.kcal_days(uid, since, until).items():
+            ml = kcal_water(data)
+            if ml:
+                out[d] = out.get(d, 0) + ml
+        return out
 
     def delete_water(self, uid, wid):
         return self.x("DELETE FROM water WHERE id=? AND user=?", (wid, uid)).rowcount > 0
+
+    # ---------- «Калории» (сайт на GitHub Pages шлёт свой дневник: POST /api/kcal/sync) ----------
+
+    def save_kcal_days(self, uid, days):
+        """days — {день: уже очищенные данные дня} (coach.kcal_clean). День заменяется целиком."""
+        now = now_iso()
+        with self.lock:
+            for d, data in days.items():
+                self.db.execute("INSERT OR REPLACE INTO kcal_days VALUES (?,?,?,?)",
+                                (uid, str(d), json.dumps(data, ensure_ascii=False), now))
+            self.db.commit()
+
+    def kcal_days(self, uid, since, until=None):
+        """{день: данные дня + "updated"} за период."""
+        rows = self.q("SELECT day, data, updated FROM kcal_days WHERE user=? AND day>=? AND day<=? ORDER BY day",
+                      (uid, str(since), str(until or since)))
+        out = {}
+        for r in rows:
+            try:
+                data = json.loads(r["data"] or "{}")
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                out[r["day"]] = {**data, "updated": r["updated"]}
+        return out
+
+    def kcal_day(self, uid, day):
+        return self.kcal_days(uid, day).get(str(day))
+
+    def kcal_goals(self, uid, goals=None):
+        """Цели «Калорий» ({goals: {train, rest}, salt, water: {train, rest}}) — meta kcal:goals:<uid>."""
+        key = f"kcal:goals:{uid}"
+        if goals is not None:
+            self.meta(key, json.dumps(goals, ensure_ascii=False))
+            return goals
+        try:
+            v = json.loads(self.meta(key) or "null")
+        except ValueError:
+            return None
+        return v if isinstance(v, dict) else None
 
     # ---------- тренер ----------
 

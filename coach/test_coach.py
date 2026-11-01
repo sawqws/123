@@ -1817,7 +1817,7 @@ class KcalTest(unittest.TestCase):
             r = kcal_call(path, method="OPTIONS")
             self.assertEqual(r.code, 204)
             self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
-            self.assertEqual(r.headers["Access-Control-Allow-Methods"], "POST, OPTIONS")
+            self.assertEqual(r.headers["Access-Control-Allow-Methods"], "GET, POST, OPTIONS")
             self.assertEqual(r.headers["Access-Control-Allow-Headers"], "Authorization, Content-Type")
             self.assertGreater(int(r.headers["Access-Control-Max-Age"]), 0)
             bad = kcal_call(path, method="OPTIONS", origin="https://evil.example")
@@ -1826,6 +1826,174 @@ class KcalTest(unittest.TestCase):
             self.assertNotIn("Access-Control-Allow-Origin", kcal_call(path, method="OPTIONS", origin="").headers)
         self.assertEqual(kcal_call("/api/all", method="OPTIONS").code, 404)
         self.assertNotIn("Access-Control-Allow-Origin", kcal_call("/api/all", {}).headers)  # остальному API — без CORS
+        self.assertEqual(kcal_call("/api/kcal/link", method="OPTIONS").code, 404)  # link — только из самой Формы
+
+    # ---------- синхронизация «Калории» ↔ Форма (coach/SYNC.md) ----------
+
+    SYNC = {"days": {TODAY.isoformat(): {"items": [
+        {"name": "Гречка", "meal": "lunch", "g": 200, "kcal": 220, "p": 8, "f": 2, "c": 44, "salt": 0.5},
+        {"name": "Курица", "meal": "dinner", "g": 150, "kcal": 250, "p": 35.5, "f": 10, "c": 0, "salt": 1.2}],
+        "water": [250, 500], "type": "train"}},
+        "goals": {"train": {"kcal": 3400, "p": 130, "f": 105, "c": 485}, "rest": {"kcal": 2800, "p": 125, "f": 95, "c": 360}},
+        "salt": 5, "water": {"train": 3000, "rest": 2500}}
+
+    def at_today(self):
+        now = datetime.datetime.combine(TODAY, datetime.time(13, 30), tzinfo=coach.ZoneInfo("Europe/Moscow"))
+        return [mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: TODAY)]
+
+    def run_today(self, fn):
+        ps = self.at_today()
+        for p in ps:
+            p.start()
+        try:
+            return fn()
+        finally:
+            for p in ps:
+                p.stop()
+
+    def test_sync_and_forma(self):
+        tok = self.pair()
+        self.db.save_meal(U, {"title": "Плов", "kcal": 600, "protein": 20, "fat": 25, "carbs": 70, "day": TODAY.isoformat(), "time": "13:10"})
+        self.db.add_water(U, TODAY.isoformat(), "09:00", 500)
+        r = self.run_today(lambda: kcal_call("/api/kcal/sync", self.SYNC, token=tok))
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        self.assertTrue(r.json["ok"])
+        f = r.json["forma"]
+        self.assertEqual(set(f), {"day", "recovery", "sleep", "strain", "train_today", "workouts", "water_forma",
+                                  "meals_forma", "regime"})
+        self.assertEqual(f["day"], TODAY.isoformat())
+        self.assertEqual(f["recovery"]["score"], 82)
+        self.assertEqual(set(f["recovery"]), {"score", "hrv", "rhr"})
+        self.assertEqual(set(f["sleep"]), {"hours", "performance"})
+        self.assertEqual(f["water_forma"], 500)  # только записанное в Форме — без воды «Калорий»
+        self.assertEqual(f["meals_forma"], [{"time": "13:10", "title": "Плов", "kcal": 600, "p": 20, "f": 25, "c": 70}])
+        self.assertIsNone(f["regime"])  # режим не настроен
+        self.assertEqual(f["train_today"], bool(f["workouts"]))
+        for w in f["workouts"]:
+            self.assertEqual(set(w), {"sport", "start", "minutes", "strain"})
+        day = self.db.kcal_day(U, TODAY.isoformat())
+        self.assertEqual(len(day["items"]), 2)
+        self.assertEqual(day["water"], [250, 500])
+        self.assertEqual(self.db.kcal_goals(U)["goals"]["train"]["kcal"], 3400)
+        g = self.run_today(lambda: kcal_call("/api/kcal/forma", token=tok, method="GET"))
+        self.assertEqual(g.code, 200)
+        self.assertEqual(g.json, f)
+        self.assertEqual(g.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        # режим настроен — в ответе его день, train_today по режиму
+        coach.f_regime.save(self.db, U, {"train_days": list(range(7))})
+        f = self.run_today(lambda: kcal_call("/api/kcal/forma", token=tok, method="GET")).json
+        self.assertEqual(f["regime"]["day"], TODAY.isoformat())
+        self.assertTrue(f["train_today"])
+        self.assertEqual(f["regime"]["kcal"], 3400)  # цель «Калорий» на день тренировки
+        # прислали только воду — цели еды и соль не теряются
+        self.run_today(lambda: kcal_call("/api/kcal/sync", {"water": {"rest": 2600}}, token=tok))
+        self.assertEqual(self.db.kcal_goals(U), {"goals": self.db.kcal_goals(U)["goals"], "salt": 5,
+                                                 "water": {"train": 3000, "rest": 2600}})
+        self.assertEqual(self.db.kcal_goals(U)["goals"]["rest"]["kcal"], 2800)
+
+    def test_sync_auth_cors_rate(self):
+        self.assertEqual(kcal_call("/api/kcal/sync", self.SYNC).code, 401)
+        self.assertEqual(kcal_call("/api/kcal/forma", method="GET").code, 401)
+        self.assertEqual(kcal_call("/api/kcal/forma", token="x" * 40, method="GET").code, 401)
+        tok = self.pair()
+        self.assertEqual(kcal_call("/api/kcal/sync", self.SYNC, token=tok, origin="https://evil.example").code, 403)
+        self.assertEqual(kcal_call("/api/kcal/forma", token=tok, origin="https://evil.example", method="GET").code, 403)
+        site_tok = coach.pwa.issue(self.db, U, kind="site")  # cookie-сессия Формы — не Bearer «Калорий»
+        self.assertEqual(kcal_call("/api/kcal/forma", token=site_tok, method="GET").code, 401)
+        self.assertEqual(kcal_call("/api/kcal/sync", {"days": [1, 2]}, token=tok).code, 400)
+        coach.pwa._hits.clear()
+        n = coach.SYNC_RATE[0]
+        codes = [kcal_call("/api/kcal/sync", {}, token=tok).code for _ in range(n + 1)]
+        self.assertEqual(codes, [200] * n + [429])
+        self.assertEqual(kcal_call("/api/kcal/forma", token=tok, method="GET").code, 200)  # свой счётчик
+
+    def test_sync_clean(self):
+        today = TODAY
+        days = {(today - datetime.timedelta(days=i)).isoformat(): {"items": [], "water": [100]} for i in range(20)}
+        days.update({"2026-02-30": {"items": []}, "11.10.2026": {"items": []}, "2020-01-01": {"items": []},
+                     (today + datetime.timedelta(days=5)).isoformat(): {"items": []}, "2026-10-01x": {},
+                     today.isoformat(): {"type": "gym", "water": [250, -5, "300", "abc", 99999, True], "items": [
+                         {"name": "  Очень\n<b>длинное</b> " + "я" * 100, "meal": "brunch", "g": -10, "kcal": "1e9",
+                          "p": "12,5", "f": None, "c": float("nan") if False else "nan", "salt": 0.123, "extra": "x"},
+                         {"name": ""}, "строка", {"name": "Банан", "meal": "snack", "kcal": 90}] + [{"name": f"x{i}"} for i in range(300)]}})
+        out, goals = coach.kcal_clean({"days": days}, today)
+        self.assertIsNone(goals)
+        self.assertEqual(len(out), 14)
+        self.assertEqual(max(out), today.isoformat())
+        self.assertEqual(min(out), (today - datetime.timedelta(days=13)).isoformat())
+        d = out[today.isoformat()]
+        self.assertIsNone(d["type"])
+        self.assertEqual(d["water"], [250, 300, 5000])
+        self.assertEqual(len(d["items"]), coach.KCAL_ITEMS - 2)  # из первых 200: пустое имя и строка — мимо
+        it = d["items"][0]
+        self.assertEqual(it["meal"], "snack")
+        self.assertEqual(len(it["name"]), 80)
+        self.assertNotIn("<", it["name"])
+        self.assertNotIn("\n", it["name"])
+        self.assertEqual((it["g"], it["kcal"], it["p"], it["f"], it["c"], it["salt"]), (0, 10000, 12.5, 0, 0, 0.1))
+        self.assertNotIn("extra", it)
+        _, goals = coach.kcal_clean({"goals": {"train": {"kcal": -1, "p": "130"}, "rest": "x"}, "salt": "abc",
+                                     "water": {"train": 99999}}, today)
+        self.assertEqual(goals, {"goals": {"train": {"kcal": 0, "p": 130, "f": 0, "c": 0}}, "salt": 0, "water": {"train": 10000}})
+        with self.assertRaises(ValueError):
+            coach.kcal_clean({"days": "сегодня"}, today)
+        self.assertEqual(coach.kcal_clean({}, today), ({}, None))
+
+    def test_day_merge(self):
+        tok = self.pair()
+        self.db.save_meal(U, {"title": "Плов", "kcal": 600, "protein": 20, "fat": 25, "carbs": 70, "day": TODAY.isoformat(), "time": "13:10"})
+        own = self.db.add_water(U, TODAY.isoformat(), "09:00", 500)
+        # без «Калорий»: kcal — null, соль 0
+        t = self.run_today(lambda: call("/api/all").json)["today"]
+        self.assertIsNone(t["kcal"])
+        self.assertEqual(t["eaten"], {"kcal": 600, "protein": 20, "fat": 25, "carbs": 70, "count": 1, "salt": 0})
+        self.assertEqual(t["water"]["drank"], 500)
+        self.run_today(lambda: kcal_call("/api/kcal/sync", self.SYNC, token=tok))
+        t = self.run_today(lambda: call("/api/all").json)["today"]
+        k = t["kcal"]
+        self.assertEqual(set(k), {"items", "eaten", "water", "goals", "type", "updated"})
+        self.assertEqual(k["eaten"], {"kcal": 470, "protein": 44, "fat": 12, "carbs": 44, "salt": 1.7})
+        self.assertEqual(k["water"], 750)
+        self.assertEqual(k["goals"], {"kcal": 3400, "protein": 130, "fat": 105, "carbs": 485, "salt": 5, "water": 3000})
+        self.assertEqual(k["type"], "train")
+        self.assertEqual(t["eaten"], {"kcal": 1070, "protein": 64, "fat": 37, "carbs": 114, "count": 3, "salt": 1.7})
+        self.assertEqual(t["water"]["drank"], 1250)
+        self.assertEqual([w.get("src") for w in t["water"]["log"]], [None, "kcal", "kcal"])
+        self.assertEqual(t["water"]["log"][1], {"id": None, "time": "", "ml": 250, "src": "kcal"})
+        self.assertEqual(self.run_today(lambda: call("/api/day", {"d": TODAY.isoformat()}).json)["day"]["kcal"], k)
+        self.assertEqual(self.db.water_total(U, TODAY.isoformat()), 1250)
+        # тренер видит еду, соль и воду из «Калорий»
+        ctx = self.run_today(lambda: coach.context(U, TODAY)[0])
+        self.assertIn("«КАЛОРИИ» СЕГОДНЯ (день тренировки): 470 ккал из 3400 ккал", ctx)
+        self.assertIn("соль 1,7 г из 5 г, вода 750 мл из 3000 мл — Гречка; Курица", ctx)
+        self.assertIn("СЪЕДЕНО СЕГОДНЯ (Форма + «Калории»): 1070 ккал", ctx)
+        # чат: питание и вода; «↩️ Отменить» — только своя запись
+        food = self.run_today(lambda: coach.food_text(U))
+        self.assertIn("«Калории»: 2 поз. — 470 ккал · соль 1,7 г", food)
+        text, last = self.run_today(lambda: coach.water_text(U))
+        self.assertEqual(last, own["id"])
+        self.assertIn("«Калории» 750 мл", text)
+        self.assertIn("1,2 л", text)
+        # день без позиций и типа: цели по тренировке WHOOP, пустая еда
+        self.db.save_kcal_days(U, {TODAY.isoformat(): {"items": [], "water": [], "type": None}})
+        t = self.run_today(lambda: call("/api/all").json)["today"]
+        self.assertEqual(t["kcal"]["eaten"]["kcal"], 0)
+        self.assertEqual(t["kcal"]["type"], "train" if t["workouts"] else "rest")
+        self.assertEqual(t["eaten"]["count"], 1)
+
+    def test_link(self):
+        r = call("/api/kcal/link", {})
+        self.assertEqual(r.code, 200, r.json)
+        tok = r.json["token"]
+        self.assertTrue(r.json["url"].startswith("https://sawqws.github.io/123/kcal/#pair="))
+        self.assertEqual(r.json["url"], coach.KCAL_SITE + "#pair=" + tok)
+        self.assertEqual(coach.pwa.session_uid(self.db, tok, "kcal"), U)
+        self.assertIsNone(coach.pwa.session_uid(self.db, tok, "site"))  # не открывает API Формы
+        self.assertEqual(kcal_call("/api/kcal/forma", token=tok, method="GET").code, 200)
+        self.assertEqual(call("/api/kcal/link", {}, init="").code, 401)  # без сессии Формы — нельзя
+        with mock.patch.object(coach, "KCAL_SITE", "https://example.org/k/"):
+            self.assertTrue(call("/api/kcal/link", {}).json["url"].startswith("https://example.org/k/#pair="))
 
 
 if __name__ == "__main__":

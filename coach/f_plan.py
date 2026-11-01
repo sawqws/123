@@ -205,6 +205,9 @@ def week(app, uid, today, cfg=None, t=None):
     meals = {}
     for m in app.db.meals(uid, mon.isoformat(), sun.isoformat()):
         meals.setdefault(m["day"], []).append(m)
+    for d, k in app.db.kcal_days(uid, mon.isoformat(), sun.isoformat()).items():  # еда из «Калорий» — тоже еда дня
+        if k.get("items"):
+            meals.setdefault(d, []).extend({"protein": x.get("p") or 0} for x in k["items"])
     out = []
 
     def day_of(d):

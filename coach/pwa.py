@@ -72,11 +72,22 @@ def login(db, code, now=None, kind="site"):
         if rec["uses"] <= 0:
             codes.pop(_h(code))
         db.meta("site:codes", json.dumps(codes))
-        token = secrets.token_urlsafe(32)
-        sess = {k: v for k, v in _load(db, f"{kind}:sessions").items() if v["exp"] > now}
-        sess[_h(token)] = {"uid": rec["uid"], "exp": now + SESSION_TTL}
-        db.meta(f"{kind}:sessions", json.dumps(sess))
+        return _session(db, rec["uid"], kind, now)
+
+
+def _session(db, uid, kind, now):
+    """Новая сессия kind для uid → токен (вызывать под _lock)."""
+    token = secrets.token_urlsafe(32)
+    sess = {k: v for k, v in _load(db, f"{kind}:sessions").items() if v["exp"] > now}
+    sess[_h(token)] = {"uid": uid, "exp": now + SESSION_TTL}
+    db.meta(f"{kind}:sessions", json.dumps(sess))
     return token
+
+
+def issue(db, uid, kind="kcal", now=None):
+    """Токен сессии без кода — для того, кто уже вошёл в Форму (POST /api/kcal/link: «Калории» в одно нажатие)."""
+    with _lock:
+        return _session(db, uid, kind, now or time.time())
 
 
 def logout(db, token, kind="site"):
