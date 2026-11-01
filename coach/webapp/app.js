@@ -609,7 +609,7 @@
     S.screen = null;
     nav('pop', () => { S.popping = true; try { render(false); } finally { S.popping = false; } window.scrollTo(0, S.scrollY || 0); }, swiped === true);
   }
-  const dHead = (title, sub, color) => `<header class="dhead"><button class="avatar ghost" data-a="back" aria-label="Назад">${I.back}</button>
+  const dHead = (title, sub, color) => `<header class="dhead"><button class="avatar ghost bk" data-a="back" aria-label="Назад">${I.back}<span class="bk-t">Назад</span></button>
     <div class="titles"><h1 style="--c:${color}">${title}</h1><div class="sub">${sub}</div></div></header>`;
   const lastRows = n => (S.data.series || []).slice(-n);
   const dNoData = (title, text) => `<div class="empty"><span class="e">${I.moon}</span><b>${title}</b>${text}</div>`;
@@ -625,7 +625,7 @@
   }
 
   // ---------- разборы как в WHOOP: дата по центру и «i», большое кольцо, «что влияет» с уголком к кольцу, вывод в рамке ----------
-  const dTop = (t, kind) => `<header class="wtop"><button class="wbtn" data-a="back" aria-label="Назад">${I.back}</button>
+  const dTop = (t, kind) => `<header class="wtop"><button class="wbtn bk" data-a="back" aria-label="Назад">${I.back}<span class="bk-t">Назад</span></button>
     <b class="wtop-t">${esc(dateWord(t.day))}</b><button class="wbtn info" data-a="about" data-v="${kind}" aria-label="Что это">i</button></header>`;
   function bigRing(p, color, value, label, band) {
     const w = 7, r = 50 - w / 2, c = 2 * Math.PI * r, off = c * (1 - Math.max(0, Math.min(1, p || 0)));
@@ -1135,7 +1135,7 @@
   });
   // шапка становится стеклянной, когда под ней поехало содержимое; большой заголовок уехал — маленький появляется в полосе (как iOS)
   const navbar = document.createElement('header');
-  navbar.id = 'navbar'; navbar.innerHTML = `<button type="button" data-a="back" aria-label="Назад">${I.back}</button><b></b><span></span><div class="mini"></div>`;
+  navbar.id = 'navbar'; navbar.innerHTML = `<button type="button" class="bk" data-a="back" aria-label="Назад">${I.back}<span class="bk-t">Назад</span></button><b></b><span></span><div class="mini"></div>`;
   document.body.append(navbar);
   let scTick = false;
   function navSync() {
