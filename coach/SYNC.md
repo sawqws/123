@@ -1,0 +1,69 @@
+# Форма ↔ Калории ↔ Режим — общий договор (01.11)
+
+Три части делаются параллельно: сервер (`coach/*.py`), сайт Формы (`coach/webapp/*`, `coach/shots_fixture.py`),
+«Калории» (`docs/kcal/*`, `site/kcal_test.js`). Формат ниже — общий, менять только вместе.
+
+## 1. Калории → сервер: `POST /api/kcal/sync` (Bearer — токен «Калорий», как у /api/kcal/photo)
+```json
+{"days": {"2026-11-01": {"items": [{"name": "Гречка", "meal": "lunch", "g": 200, "kcal": 220, "p": 8, "f": 2, "c": 44, "salt": 0.5}],
+                          "water": [250, 500], "type": "train"}},
+ "goals": {"train": {"kcal": 3400, "p": 130, "f": 105, "c": 485}, "rest": {"kcal": 2800, "p": 125, "f": 95, "c": 360}},
+ "salt": 5, "water": {"train": 3000, "rest": 2500}}
+```
+- Шлёт последние 14 дней (только дни с изменениями можно, но целиком день), через ~2 с после сохранения и при открытии.
+- Сервер: не больше 14 дней, 200 позиций в дне, числа ≥ 0 (обрезать), имена ≤ 80 символов; хранит таблицу
+  `kcal_days(user, day, data, updated)` (+ цели в `meta kcal:goals:<uid>`). Ответ — `{"ok": true, "forma": <как GET ниже>}`.
+- 120 запросов/час на токен (429).
+
+## 2. Сервер → Калории: `GET /api/kcal/forma` (Bearer)
+```json
+{"day": "2026-11-01",
+ "recovery": {"score": 32, "hrv": 85, "rhr": 63} | null,
+ "sleep": {"hours": 7.6, "performance": 84} | null,
+ "strain": 2.9 | null,
+ "train_today": true,
+ "workouts": [{"sport": "boxing", "start": "10:20", "minutes": 98, "strain": 13.4}],
+ "water_forma": 500,
+ "meals_forma": [{"time": "13:10", "title": "Плов", "kcal": 600, "p": 20, "f": 25, "c": 70}],
+ "regime": <today из п. 4> | null}
+```
+- `water_forma`, `meals_forma` — записанное в самой Форме (не из Калорий), чтобы не считать дважды.
+- `train_today` — по режиму (день бокса) или по тренировке WHOOP сегодня.
+
+## 3. Калории внутри Формы (поле дня `t.kcal` в `/api/all` и `/api/day`)
+```json
+"kcal": {"items": [{"name", "meal", "g", "kcal", "p", "f", "c", "salt"}],
+         "eaten": {"kcal": 1800, "protein": 90, "fat": 60, "carbs": 220, "salt": 4.1},
+         "water": 750, "goals": {"kcal": 3400, "protein": 130, "fat": 105, "carbs": 485, "salt": 5, "water": 3000},
+         "type": "train", "updated": "2026-11-01T12:00:00"} | null
+```
+- `t.eaten` = еда Формы + еда Калорий (kcal/protein/fat/carbs) и ещё `salt`.
+- `t.water.drank` = вода Формы + вода Калорий; в `t.water.log` записи Калорий с `"src": "kcal"` (без удаления в Форме).
+- Контекст тренера (Claude) — строка про еду, соль и воду из Калорий.
+- Связать в одно нажатие: `POST /api/kcal/link` (сессия Формы, как другие /api/*) → `{"token", "url"}`,
+  `url = KCAL_SITE + "#pair=" + token` (`KCAL_SITE` по умолчанию `https://sawqws.github.io/123/kcal/`).
+  Калории читают `#pair=…`, сохраняют токен, убирают хэш из адреса.
+
+## 4. Режим (модуль `coach/f_regime.py`, раздел FEATURES `regime`)
+Настройки (`meta regime:<uid>`, всё меняется в приложении):
+```json
+{"train_days": [0, 1, 2, 5], "train_time": "18:00", "train_minutes": 90,
+ "school_days": [0, 1, 2, 3, 4], "school_start": "09:00", "school_end": "16:40",
+ "wake": "06:45", "bed": "22:00", "weekend_wake": "08:00", "massage_days": [3],
+ "vacation": {"from": "2026-10-26", "to": "2026-11-08", "train_time": "10:00", "massage_days": [3, 6]},
+ "shift": {"from": "2026-11-01", "bed": "23:45", "wake": "08:30", "step": 30, "every": 2},
+ "evening": ["Душ и умыть лицо", "Ужин: белок и углеводы", "Крем на лицо", "Телефон в сторону"],
+ "remind": 45}
+```
+- По умолчанию (новый пользователь): тренировки из профиля или пусто, school Пн–Пт 09:00–16:00, bed 22:00, wake 07:00, без каникул и сдвига.
+- `shift`: от `from` отбой/подъём сдвигаются на `step` минут раньше каждые `every` дня, пока не дойдут до `bed`/`wake` (в каникулы — к началу учёбы).
+- `today` (`POST /api/regime {}` → `{"cfg", "today", "week": [7 дней как today]}`; `/api/regime/save` — cfg; `/api/regime/check {"id", "done"}`):
+```json
+{"day": "2026-11-01", "mode": "vacation|school|weekend", "bed": "23:45", "wake": "08:30",
+ "train": {"on": true, "time": "10:00", "minutes": 90, "intensity": "full|light|rest", "why": "3-й день бокса подряд — техника"},
+ "massage": false, "kcal": 3400, "protein": 130, "water": 3000,
+ "checklist": [{"id": "e0", "text": "Душ и умыть лицо", "done": false}],
+ "tips": ["Сегодня восстановление 32% — без тяжёлой работы"]}
+```
+- intensity: recovery < 34 → light; 3-й день тренировок подряд → light; иначе full; нет тренировки → rest.
+- Бот: напоминание за `remind` минут до отбоя (раз в день, таблица sent), в утреннем разборе — строки режима (context_lines).
