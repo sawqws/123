@@ -53,7 +53,7 @@
     return `<div class="rg-times">
         <div><span class="tk">Отбой</span><b class="num">${esc(d.bed || '—')}</b></div>
         <div><span class="tk">Подъём</span><b class="num">${esc(d.wake || '—')}</b></div>
-        <div><span class="tk">Тренировка</span><b class="num">${on ? esc(d.train.time || '—') : '—'}</b></div></div>
+        <div><span class="tk">Спорт</span><b class="num">${on ? esc(d.train.time || '—') : '—'}</b></div></div>
       ${trainRow(d.train)}
       ${d.massage ? `<div class="rg-line">${I.hand}<span>Массаж сегодня</span></div>` : ''}
       <div class="rg-food num"><span><b>${kcal(d.kcal)}</b> ккал</span><span>белок <b>${d.protein == null ? '—' : d.protein}</b> г</span><span>вода <b>${litres(d.water)}</b></span></div>

@@ -949,7 +949,7 @@
           ...(e.salt != null ? [['Соль', e.salt, n.salt || 5, 'var(--m-s, var(--hint))', 1]] : [])].map(([k, v, g, col, d]) =>
         `<div class="macro"><div class="mt"><span>${k}</span><span class="num"><b>${num(v, d)}</b>/${num(g, 0)} г</span></div>${bar(pct(v, g), col)}</div>`).join('')
         : '<p class="small muted">Добавь вес в профиле — посчитаю норму калорий и БЖУ.</p><button class="btn sm tonal" data-a="profile">Заполнить профиль</button>'}</div></div>
-      <button class="btn primary" data-a="photo" data-v="food" ${S.photo ? 'disabled' : ''}>${S.photo === 'food' ? 'Считаю калории…' : '📷 Сфотографировать еду'}</button>
+      <button class="btn primary" data-a="photo" data-v="food" ${S.photo ? 'disabled' : ''}>${S.photo === 'food' ? 'Считаю калории…' : 'Сфотографировать еду'}</button>
       <div class="ask"><textarea id="eat" rows="1" placeholder="Что съел?">${esc(S.eatDraft || '')}</textarea>
         <button class="send" data-a="eat" aria-label="Посчитать" ${S.eating ? 'disabled' : ''}>${S.eating ? '<span class="dots"><i></i><i></i><i></i></span>' : '↑'}</button></div>
       ${n && n.src === 'kcal' ? `<p class="small muted">Цели — из «Калорий»${t.kcal.type === 'train' ? ', день тренировки' : t.kcal.type === 'rest' ? ', день отдыха' : ''}. Съедено — вместе с едой, записанной в Форме.</p>`

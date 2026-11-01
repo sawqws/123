@@ -197,4 +197,12 @@ html.mono .more-st span { font-size: 11px; }
   html.mono .mepill .fl { display: none; }
   html.mono .mepill { padding-right: 3px; }
   html.mono .syncpill .num { display: none; }
+  /* iPhone SE: подписи колец и меню не наезжают друг на друга */
+  html.mono .dial { min-width: 0; }
+  html.mono .dial-k { font-size: 11px !important; letter-spacing: -.2px; max-width: none; overflow: visible; white-space: nowrap; }
+  html.mono .dial-k .chev-s { display: none; }
+  /* узкий экран: меню только значками (подпись остаётся для экранного диктора), заголовки плиток — в 2 строки */
+  html.mono .tabbar button > span:not(.i) { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html.mono .mon-k { font-size: 13px !important; white-space: normal !important; line-height: 1.2; }
+  html.mono .tabbar button { padding-left: 0 !important; padding-right: 0 !important; letter-spacing: -.5px; white-space: nowrap; min-width: 0; }
 }

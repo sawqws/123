@@ -44,6 +44,20 @@ class PlanTest(unittest.TestCase):
 
     # ---------- неделя ----------
 
+    def test_planner_follows_regime(self):
+        import f_regime
+        r = self.call("/api/plan")
+        self.assertNotIn("regime", r["planner"])  # режим не настраивал — свой планер
+        f_regime.save(self.db, T.U, {"cfg": {"bed": "22:00", "wake": "06:45", "weekend_wake": "08:00"}})
+        try:
+            p = self.call("/api/plan")["planner"]
+            self.assertTrue(p["regime"])
+            cfg = f_regime.load(self.db, T.U)
+            self.assertEqual(p["bed"], f_regime.bed_wake(cfg, T.TODAY)[0])
+            self.assertEqual(p["wake"], f_regime.bed_wake(cfg, T.TODAY + datetime.timedelta(days=1))[1])
+        finally:
+            self.db.meta(f"regime:{T.U}", "")
+
     def test_week_bounds_and_dots(self):
         r = self.call("/api/plan")
         self.assertEqual(r["week"][0], "2026-10-05")  # понедельник
