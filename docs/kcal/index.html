@@ -348,6 +348,10 @@ button, .cell { -webkit-touch-callout: none; }
 .hbtn { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; color: var(--text); }
 .hbtn svg { width: 16px; height: 16px; }
 .hbtn.r { justify-self: end; }
+/* понятные кнопки выхода (Глеб 01.11): «Назад» — капсула с подписью, крестик — заметный круг */
+.hbtn.bk { width: auto; padding: 0 14px 0 9px; gap: 3px; display: inline-flex; align-items: center; font: 600 16px/1 inherit; font-weight: 600; letter-spacing: -.2px; justify-self: start; }
+.hbtn.bk svg { width: 15px; height: 15px; }
+#sheetClose svg { width: 15px; height: 15px; }
 .sheet .body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 4px 16px calc(24px + var(--safe-b)); }
 .sheet.short .body { padding-bottom: 20px; }
 .sheet .body.slide { animation: slideIn .45s var(--ios); }
@@ -1481,7 +1485,7 @@ function unlockScroll() {
 function openSheet(title, html, after, opts = {}) {
   const sh = $('#sheet'), sc = $('#scrim'), body = $('#sheetBody');
   $('#sheetTitle').textContent = title;
-  $('#sheetBack').innerHTML = opts.back ? `<button class="hbtn glass press" id="backBtn" aria-label="Назад">${I.back}</button>` : '';
+  $('#sheetBack').innerHTML = opts.back ? `<button class="hbtn bk glass press" id="backBtn" aria-label="Назад">${I.back}<span>Назад</span></button>` : '';
   if (opts.back) $('#backBtn').onclick = opts.back;
   sh.classList.toggle('short', !!opts.short);
   body.innerHTML = html; body.scrollTop = 0;
