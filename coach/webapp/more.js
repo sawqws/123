@@ -205,7 +205,7 @@
         h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
           : `<div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them prose">${F.md(m.text)}</div>`;
       });
-      if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them"><span class="dots"><i></i><i></i><i></i></span></div>`;
+      if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them${S.askLive ? ' prose' : ''}">${S.askLive ? F.md(S.askLive) : '<span class="dots"><i></i><i></i><i></i></span>'}</div>`;
       h += '</div>';
     }
     const wh = document.documentElement.classList.contains('wh');  // в виде WHOOP подсказки всегда капсулами над полем

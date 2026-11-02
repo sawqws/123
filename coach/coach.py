@@ -1934,6 +1934,44 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
 
+    def ask_stream(self, uid, body):
+        """Вопрос тренеру потоком (text/event-stream): {"t": кусок}…, в конце {"done", "text", "history"} или {"error"}.
+        Вопрос и ответ сохраняются в историю только целиком (Глеб 02.11: «чат очень баговый» — долго ждать пустой экран)."""
+        q = str(body.get("text") or "").strip()[:2000]
+        if not q:
+            return self.reply(400, {"error": "пустой вопрос"})
+        ctx, _ = context(uid)
+        prompt = ai.chat_prompt(ctx, db.history(uid), q, full=True)
+        self.send_response(200)
+        for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
+            self.send_header(k, v)
+        self.end_headers()
+
+        def ev(obj):
+            self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+        full = ""
+        try:
+            try:
+                for t in ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None):
+                    full += t
+                    ev({"t": t})
+            except ai.AIError:
+                if full:
+                    raise
+                full = ai.claude(prompt)  # быстрая модель недоступна — обычная, одним куском
+                ev({"t": full})
+            full = full.strip()
+            if not full:
+                raise ai.AIError("Тренер не ответил")
+            db.say(uid, "user", q)
+            db.say(uid, "coach", full)
+            ev({"done": True, "text": full, "history": db.history(uid, 40)})
+        except ai.AIError as e:
+            ev({"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):  # закрыл приложение — ответ не сохраняем наполовину
+            pass
+
     def summary_stream(self, uid, body):
         """«Итог и советы» потоком (text/event-stream): {"t": кусок}…, в конце {"done", "text"} или {"error"}; готовый
         текст сохраняется в кэш дня (briefs sum-<период>), как у POST /api/summary {make}."""
@@ -2105,6 +2143,8 @@ class Web(BaseHTTPRequestHandler):
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
         db.user(uid, user.get("first_name"))
+        if path == "/api/ask/stream":  # вопрос тренеру в приложении — ответ по кусочкам
+            return self.ask_stream(uid, body)
         if path == "/api/summary/stream":  # «Итог и советы» по кусочкам — первые слова через пару секунд
             return self.summary_stream(uid, body)
         try:

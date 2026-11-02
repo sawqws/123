@@ -500,6 +500,26 @@ class BotTest(unittest.TestCase):
         self.assertEqual(asked, ["week"])
         self.assertEqual(call("/api/summary", {"period": "year"}).code, 400)
 
+    def test_ask_stream(self):
+        n0 = len(self.db.history(U, 200)) if hasattr(self.db, "history") else 0
+        with mock.patch.object(ai, "claude_stream", return_value=iter(["Ложись ", "в 23:15."])) as cs, \
+                mock.patch.object(coach, "context", return_value=("", None)):
+            r = call("/api/ask/stream", {"text": "Во сколько лечь?"})
+        self.assertEqual(r.code, 200)
+        evs = [json.loads(x[6:]) for x in r.body.decode().split("\n\n") if x.startswith("data: ")]
+        self.assertEqual("".join(e.get("t", "") for e in evs), "Ложись в 23:15.")
+        self.assertTrue(evs[-1]["done"])
+        self.assertEqual(evs[-1]["history"][-1], {**evs[-1]["history"][-1], "role": "coach", "text": "Ложись в 23:15."})
+        self.assertEqual(evs[-1]["history"][-2]["text"], "Во сколько лечь?")
+        self.assertEqual(cs.call_args.kwargs["model"], ai.CHAT_MODEL)
+        with mock.patch.object(ai, "claude_stream", side_effect=ai.AIError("лимит")), \
+                mock.patch.object(ai, "claude", side_effect=ai.AIError("у Claude закончился лимит")), \
+                mock.patch.object(coach, "context", return_value=("", None)):
+            evs = [json.loads(x[6:]) for x in call("/api/ask/stream", {"text": "а?"}).body.decode().split("\n\n") if x.startswith("data: ")]
+        self.assertEqual(evs[-1], {"error": "у Claude закончился лимит"})
+        self.assertEqual(call("/api/ask/stream", {"text": " "}).code, 400)
+        self.assertEqual(call("/api/ask/stream", {"text": "а"}, init="").code, 401)
+
     def test_summary_stream(self):
         parts = ["**Итог** — ", "неделя лучше.\n", "- Спи 9 ч"]
         with mock.patch.object(ai, "claude_stream", return_value=iter(parts)) as cs:

@@ -448,4 +448,8 @@ def context_lines(app, uid, today_):
             + ("; массаж" if p["massage"] else "")
             + (f"; цель {p['kcal']} ккал, белок {p['protein']} г, вода {p['water']} мл" if p["kcal"] else ""))
     nxt = bed_wake(load(app.db, uid, app.profile(uid)), today_ + datetime.timedelta(days=1))[1]
-    return [line, f"Завтра подъём {nxt}. Советуй с учётом режима (отбой, интенсивность тренировки)."]
+    cfg = load(app.db, uid, app.profile(uid))
+    shift = (f" Сон сдвигается постепенно (на {cfg['shift']['step']} мин раз в {cfg['shift']['every']} дн.) к отбою {cfg['bed']} — "
+             "не советуй ложиться намного раньше сегодняшнего отбоя по плану: резкий сдвиг хуже засыпается; можно на 15–30 мин раньше."
+             if cfg.get("shift") else "")
+    return [line, f"Завтра подъём {nxt}. Советуй с учётом режима (отбой, интенсивность тренировки).{shift}"]

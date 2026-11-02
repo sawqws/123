@@ -243,3 +243,9 @@ html.mono .wlink { min-height: 36px; }
 /* символ «✕» от kit.js — прозрачный, но обычного размера (проверка «текст ≥ 11 px» не спотыкается о 0 px); крест — маской */
 html.mono .sheet-x { font-size: 11px !important; color: transparent !important; }
 html.mono .sheet-x::before { background: var(--ink); }
+/* чат тренера (Глеб 02.11: «чат баговый»): подсказки не уезжают за экран — переносятся строками (на телефоне до 3),
+   под палец ≥ 36 px; подпись «Тренер» не мельче 11 px */
+html.mono .composer .chips { flex-wrap: wrap !important; overflow: visible !important; margin: 0 0 10px !important; padding: 0 !important; }
+html.mono .composer .chip { min-height: 36px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 700px) { html.mono .composer .chips .chip:nth-child(n+4) { display: none; } }
+html.mono .co-who { font-size: 11px !important; }
