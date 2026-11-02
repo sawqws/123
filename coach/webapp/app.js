@@ -829,8 +829,9 @@
         <p class="small muted num">🟢 ${x.green} · 🟡 ${x.yellow} · 🔴 ${x.red} из ${x.days} дн. · отбой в среднем ${x.bed != null ? esc(clockH(x.bed)) : '—'}${x.bed_spread != null ? ` ±${num(x.bed_spread * 60)} мин` : ''}</p>`;
     }
     h += `<div class="label">Итог и советы</div>`;
-    if (z.text) h += `<div class="card prose">${md(z.text)}</div><button class="btn sm ghost" data-a="sum-make" data-v="${per}">Обновить советы</button>`;
-    else if (z.making) h += `<div class="card">${skel(3)}<p class="small muted">Разбираю данные — 20–40 секунд…</p></div>`;
+    if (z.making && z.live) h += `<div class="card prose sum-live">${md(z.live)}</div>`;
+    else if (z.making) h += `<div class="card sum-live">${skel(3)}<p class="small muted">Разбираю данные — пара секунд…</p></div>`;
+    else if (z.text) h += `<div class="card prose">${md(z.text)}</div><button class="btn sm ghost" data-a="sum-make" data-v="${per}">Обновить советы</button>`;
     else h += `<button class="btn primary" data-a="sum-make" data-v="${per}">Получить советы</button>`;
     return h;
   }
@@ -842,23 +843,51 @@
       <div id="sum-body">${sumBody(sumPer)}</div>`;
   }
   function sumRender() { const b = sumEl && sumEl.querySelector('#sum-body'); if (b) { morph(b, sumBody(sumPer)); animate(); } }
+  // «Итог и советы» приходят по кусочкам: дописываем только карточку текста раз в кадр — лист не перерисовывается
+  async function sumStream(per, z) {
+    const headers = { 'X-Init-Data': (tg && tg.initData) || '', 'Content-Type': 'application/json' };
+    if (!headers['X-Init-Data']) headers['X-Site'] = '1';
+    const r = await fetch('/api/summary/stream', { method: 'POST', headers, body: JSON.stringify({ period: per }) });
+    if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Не получилось — попробуй ещё раз'); }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '', live = '', queued = false, done = null;
+    const paint = () => { queued = false; if (per !== sumPer || !sumEl) return; const c = sumEl.querySelector('.sum-live'); if (!c) return sumRender(); c.classList.add('prose'); c.innerHTML = md(live); };
+    for (;;) {
+      const { value, done: end } = await rd.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i).replace(/^data: ?/, ''); buf = buf.slice(i + 2);
+        let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.error) throw new Error(ev.error);
+        if (ev.t) { live += ev.t; z.live = live; if (!queued) { queued = true; requestAnimationFrame(paint); } }
+        if (ev.done) done = ev.text;
+      }
+    }
+    if (done == null) throw new Error('Ответ оборвался — попробуй ещё раз');
+    return done;
+  }
   async function sumLoad(per, make) {
     const z = S.sum[per] = S.sum[per] || {};
-    if (make) { if (z.making) return; z.making = true; } else z.loading = true;
+    if (make) { if (z.making) return; z.making = true; z.live = ''; } else z.loading = true;
     if (per === sumPer) sumRender();
     try {
-      const r = await api('/api/summary', make ? { period: per, make: 1 } : { period: per });
-      Object.assign(z, { summary: r.summary, text: r.text, error: null });
-      if (make) haptic('success');
-      else if (!r.text && (r.summary.stats.days || (r.summary.day && r.summary.day.cycle))) { z.loading = false; return sumLoad(per, true); }  // советы — сразу, без лишней кнопки
-    } catch (e) { z.error = e.message || String(e); if (make) fail(e); }
-    z.loading = false; z.making = false;
+      if (make) { z.text = await sumStream(per, z); z.error = null; haptic('success'); }
+      else {
+        const r = await api('/api/summary', { period: per });
+        Object.assign(z, { summary: r.summary, text: r.text, error: null });
+        if (!r.text && (r.summary.stats.days || (r.summary.day && r.summary.day.cycle))) { z.loading = false; return sumLoad(per, true); }  // советы — сразу, без лишней кнопки
+      }
+    } catch (e) { if (make) fail(e); else z.error = e.message || String(e); }
+    z.loading = false; z.making = false; z.live = '';
     if (per === sumPer) sumRender();
   }
   function summarySheet(per) {
     haptic('tap');
     sumPer = per || 'day';
     sumEl = sheet(sumHtml());
+    sumEl.classList.add('sum-sheet');  // постоянная высота: при загрузке и смене периода лист не прыгает
     sumEl.addEventListener('click', ev => {
       const b = ev.target.closest('[data-a]');
       if (!b) return;

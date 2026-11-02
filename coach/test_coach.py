@@ -493,6 +493,24 @@ class BotTest(unittest.TestCase):
         self.assertEqual(asked, ["week"])
         self.assertEqual(call("/api/summary", {"period": "year"}).code, 400)
 
+    def test_summary_stream(self):
+        parts = ["**Итог** — ", "неделя лучше.\n", "- Спи 9 ч"]
+        with mock.patch.object(ai, "claude_stream", return_value=iter(parts)) as cs:
+            r = call("/api/summary/stream", {"period": "week"})
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.headers["Content-Type"], "text/event-stream; charset=utf-8")
+        evs = [json.loads(x[6:]) for x in r.body.decode().split("\n\n") if x.startswith("data: ")]
+        self.assertEqual("".join(e.get("t", "") for e in evs), "".join(parts))
+        self.assertEqual(evs[-1], {"done": True, "text": "".join(parts)})
+        self.assertEqual(cs.call_args.kwargs["model"], ai.CHAT_MODEL)  # быстрая модель
+        self.assertIn("Итог", call("/api/summary", {"period": "week"}).json["text"])  # сохранено в кэш дня
+        with mock.patch.object(ai, "claude_stream", side_effect=ai.AIError("нет модели")), \
+                mock.patch.object(ai, "claude", return_value="**Итог** — запасной ответ"):
+            evs = [json.loads(x[6:]) for x in call("/api/summary/stream", {"period": "month"}).body.decode().split("\n\n") if x.startswith("data: ")]
+        self.assertEqual(evs[-1], {"done": True, "text": "**Итог** — запасной ответ"})
+        self.assertEqual(call("/api/summary/stream", {"period": "year"}).code, 400)
+        self.assertEqual(call("/api/summary/stream", {"period": "week"}, init="").code, 401)
+
     def test_support_from_app_and_menu(self):
         import support
         sup = support.Support.__new__(support.Support)  # без потоков и Telegram; start — заглушка

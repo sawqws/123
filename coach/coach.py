@@ -1919,6 +1919,46 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
 
+    def summary_stream(self, uid, body):
+        """«Итог и советы» потоком (text/event-stream): {"t": кусок}…, в конце {"done", "text"} или {"error"}; готовый
+        текст сохраняется в кэш дня (briefs sum-<период>), как у POST /api/summary {make}."""
+        period = str(body.get("period") or "week")
+        today = today_of(uid)
+        try:
+            s = insights.summary(db, uid, today, period)
+            if not s["stats"]["days"] and not (s.get("day") or {}).get("cycle"):
+                raise ValueError("за этот период нет данных WHOOP")
+            prompt = ai.summary_prompt(insights.summary_context(s, profile(uid), whoop.body(db, uid)), period)
+        except (ValueError, KeyError) as e:
+            return self.reply(400, {"error": str(e).strip("'")})
+        self.send_response(200)
+        for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
+            self.send_header(k, v)
+        self.end_headers()
+
+        def ev(obj):
+            self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+        full = ""
+        try:
+            try:
+                for t in ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None):
+                    full += t
+                    ev({"t": t})
+            except ai.AIError:
+                if full:
+                    raise
+                full = ai.summary(insights.summary_context(s, profile(uid), whoop.body(db, uid)), period)  # одним куском
+                ev({"t": full})
+            if not full.strip():
+                raise ai.AIError("Claude не ответил")
+            db.brief(uid, today.isoformat(), f"sum-{period}", full.strip())
+            ev({"done": True, "text": full.strip()})
+        except ai.AIError as e:
+            ev({"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):  # закрыл лист — ответ всё равно не сохраняем наполовину
+            pass
+
     def kcal_chat_stream(self, uid, body):
         """Ответ чата по кусочкам (text/event-stream): {"t": кусок}…, в конце {"done", "text", "items"} или {"error"}.
         Строку «ITEMS: […]» не показываем — из неё в конце собираются блюда."""
@@ -2050,6 +2090,8 @@ class Web(BaseHTTPRequestHandler):
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
         db.user(uid, user.get("first_name"))
+        if path == "/api/summary/stream":  # «Итог и советы» по кусочкам — первые слова через пару секунд
+            return self.summary_stream(uid, body)
         try:
             self.reply(200, route(uid, path, body))
         except PermissionError as e:
