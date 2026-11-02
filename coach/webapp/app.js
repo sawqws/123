@@ -524,8 +524,8 @@
     },
     hrv(rows, prev, n) {
       const b = baseNow().hrv, fmt = v => `${Math.round(v)} мс`;
-      return chBlock(`Отдых нервов за ${PER[n]}`, chartLead(rows, prev, 'hrv', { fmt, goodUp: true, base: b }),
-        line(rows, 'hrv', 'var(--rec-blue)', b, { fmt, label: `Отдых нервов за ${PER[n]}` }), '<span>Выше — лучше: нервная система отдохнула</span>');
+      return chBlock(`Запас сил за ${PER[n]}`, chartLead(rows, prev, 'hrv', { fmt, goodUp: true, base: b }),
+        line(rows, 'hrv', 'var(--rec-blue)', b, { fmt, label: `Запас сил за ${PER[n]}` }), '<span>Выше — лучше: нервная система отдохнула</span>');
     },
     rhr(rows, prev, n) {
       const b = baseNow().rhr, fmt = v => `${Math.round(v)} уд/мин`;
@@ -789,7 +789,7 @@
   function dashboard(t) {
     const r = t.recovery || {}, s = t.sleep || {}, c = t.cycle || {}, b = t.base || {};
     return `<div class="sec rise">${cap('Моя панель', 'к норме за 30 дней')}<div class="tiles">
-      ${tile({ k: 'Отдых нервов', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv' })}
+      ${tile({ k: 'Запас сил', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv' })}
       ${tile({ k: 'Пульс покоя', v: r.rhr, unit: 'уд/мин', base: b.rhr, goodUp: false, ex: 'rhr' })}
       ${tile({ k: 'Дыхание во сне', v: s.resp, d: 1, unit: 'в мин', base: b.resp, goodUp: null, ex: 'resp' })}
       ${tile({ k: 'Кислород в крови', v: r.spo2, d: 1, unit: '%', goodUp: true, ex: 'spo2', sub: 'норма 95–100%' })}
@@ -867,7 +867,7 @@
 
   // ---------- расшифровки: что значит цифра и как она у тебя ----------
   const ABOUT = {
-    rec: { t: 'Что это', p: ['Восстановление — насколько организм отдохнул и готов к нагрузке сегодня. WHOOP считает его ночью по отдыху нервов, пульсу в покое, дыханию и сну.',
+    rec: { t: 'Что это', p: ['Восстановление — насколько организм отдохнул и готов к нагрузке сегодня. WHOOP считает его ночью по запасу сил, пульсу в покое, дыханию и сну.',
       '🟢 67–100% — можно тренироваться в полную силу, 🟡 34–66% — умеренно, 🔴 0–33% — лучше лёгкий день и отдых.'] },
     sleep: { t: 'Что это', p: ['Сон — сколько ты спал и сколько тебе было нужно (с учётом вчерашней нагрузки и недосыпа). «Выполнение» — сколько процентов от нужного ты поспал: 85% и выше — хорошо.',
       'Глубокий сон восстанавливает мышцы, REM — голову и память. Режим — насколько ровно ты ложишься и встаёшь каждый день.'] },
@@ -881,7 +881,7 @@
     sheet(`<h2>${{ sleep: 'Сон', rec: 'Восстановление', strain: 'Нагрузка' }[kind]}</h2>${A.p.map(x => `<p>${esc(x)}</p>`).join('')}`);
   }
   function explainHrv(v, b) {
-    if (v == null) return 'Сегодня отдых нервов ещё не посчитан — это делается ночью.';
+    if (v == null) return 'Сегодня запас сил ещё не посчитан — это делается ночью.';
     if (b == null) return `Сейчас ${Math.round(v)} мс. Норма появится, когда наберётся хотя бы неделя данных.`;
     const p = (v - b) / b * 100;
     if (p >= 10) return `Выше твоей нормы на ${Math.round(p)}% — нервная система хорошо отдохнула, организм готов к нагрузке. 💪`;
@@ -906,9 +906,9 @@
       <div class="stat"><div class="k">Твоя норма</div><div class="v num">${base == null ? '—' : num(base, dec)}<small>${unit}</small></div><div class="d">${base == null ? '' : goodUp == null ? (v == null ? '' : `${v - base > 0 ? '↑' : '↓'} ${num(Math.abs(v - base), dec)}`) : delta(v, base, goodUp)}</div></div></div>`;
     let h = '';
     if (kind === 'hrv') {
-      h = `<h2>Отдых нервов</h2>${norm(r.hrv, b.hrv, ' мс', true)}
+      h = `<h2>Запас сил</h2>${norm(r.hrv, b.hrv, ' мс', true)}
         <div class="note"><span>${r.hrv != null && b.hrv != null && r.hrv >= b.hrv ? '🟢' : '🟡'}</span><span>${esc(explainHrv(r.hrv, b.hrv))}</span></div>
-        ${box('Что это', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. Чем сильнее они «гуляют», тем лучше отдохнула нервная система. WHOOP меряет это ночью (в самом WHOOP это называется HRV).</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
+        ${box('Что это', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. Чем сильнее они «гуляют», тем лучше отдохнула нервная система. WHOOP меряет это ночью (в самом WHOOP это называется HRV).</p><p><b>Что за число в мс:</b> на сколько тысячных секунды в среднем меняется промежуток между ударами сердца ночью. Само число у всех своё — смотри на стрелку: ▲ больше твоей нормы — организм отдохнул, ▼ меньше — устал.</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
         ${box('Как поднять', '<ul><li>Спать 8–9 ч и ложиться в одно время</li><li>После тяжёлого дня — лёгкий</li><li>Пить воду в течение дня</li><li>Не есть плотно за 2–3 ч до сна, вечером без экрана</li></ul>')}`;
     } else if (kind === 'rhr') {
       h = `<h2>Пульс покоя</h2>${norm(r.rhr, b.rhr, ' уд/мин', false)}
@@ -1049,11 +1049,11 @@
     h += bigRing(r.score / 100, C[r.zone], `${cnt(r.score)}<small>%</small>`, 'Восстановление');
     if (r.calibrating) h += '<div class="note rise"><span>⏳</span><span>WHOOP ещё калибруется — первые недели цифры неточные.</span></div>';
     const perfs = (d.series || []).filter(x => x.day < t.day).map(x => x.perf).filter(x => x != null), pb = perfs.length >= 5 ? perfs.reduce((a, x) => a + x, 0) / perfs.length : null;
-    h += `<section class="wcon rise">${crow(I.hrv, 'Отдых нервов', r.hrv != null ? `${Math.round(r.hrv)}<small>мс</small>` : '—', tri(r.hrv, b.hrv, true), 'hrv')}
+    h += `<section class="wcon rise">${crow(I.hrv, 'Запас сил', r.hrv != null ? `${Math.round(r.hrv)}<small>мс</small>` : '—', tri(r.hrv, b.hrv, true), 'hrv')}
       ${crow(I.rhr, 'Пульс покоя', r.rhr != null ? `${r.rhr}<small>уд/мин</small>` : '—', tri(r.rhr, b.rhr, false), 'rhr')}
       ${crow(I.lungs, 'Дыхание во сне', s.resp != null ? `${num(s.resp, 1)}<small>в мин</small>` : '—', tri(s.resp, b.resp, null, 1), 'resp')}
       ${crow(I.moon, 'Сон от нужного', s.performance != null ? s.performance + '%' : '—', tri(s.performance, pb, true))}${vsFoot}</section>`;
-    const parts = [cmpWord(r.hrv, b.hrv, (b.hrv || 0) * .07, 'Отдых нервов лучше обычного', 'Отдых нервов хуже обычного', 'Отдых нервов как обычно'),
+    const parts = [cmpWord(r.hrv, b.hrv, (b.hrv || 0) * .07, 'Запас сил больше обычного', 'Запас сил меньше обычного', 'Запас сил как обычно'),
       cmpWord(r.rhr, b.rhr, 2, 'пульс покоя выше', 'пульс покоя ниже', 'пульс покоя обычный')].filter(Boolean);
     h += insight(`${parts.length ? parts.join(', ') + ' — ' : ''}${{ green: 'организм готов к нагрузке сегодня', yellow: 'сегодня лучше умеренная нагрузка', red: 'сегодня день восстановления' }[r.zone]}.`.replace(/^./, x => x.toUpperCase()),
       'Разобрать восстановление', `Почему у меня восстановление ${r.score}% и что с этим делать сегодня?`);
@@ -1122,7 +1122,7 @@
     const stV = per === 'day' ? (dd.cycle ? dd.cycle.strain : null) : x.strain;
     let h = `<p class="small muted">${range} · сравнение: ${esc(s.prev_label)}</p>
       <div class="grid2">${tile('Восстановление', recV != null ? Math.round(recV) + '%' : '—', cmp(recV, p.recovery, true, '%'))}
-      ${tile('Отдых нервов', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true, ' мс'))}
+      ${tile('Запас сил', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true, ' мс'))}
       ${tile('Пульс покоя', rhrV != null ? Math.round(rhrV) + ' уд/мин' : '—', cmp(rhrV, p.rhr, false, ' уд/мин'))}
       ${tile('Сон', hHuman(slV), cmp(slV != null ? slV * 60 : null, p.sleep != null ? p.sleep * 60 : null, true, ' мин'))}
       ${tile('Нагрузка', stV != null ? num(stV, 1) + ' из 21' : '—', cmp(stV, p.strain, null, '', 1))}
@@ -1213,7 +1213,7 @@
   // «Health Monitor»: каждый показатель против твоего обычного уровня. Точных границ WHOOP не публикует —
   // здесь наши: «в норме» — в пределах tol от нормы за 30 дней, «заметно» — до 2×tol, дальше — «сильно».
   const MONITOR = [
-    { k: 'Отдых нервов', ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
+    { k: 'Запас сил', ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
     { k: 'Пульс покоя', ex: 'rhr', unit: 'уд/мин', get: t => (t.recovery || {}).rhr, base: b => b.rhr, tol: () => 3 },
     { k: 'Дыхание во сне', ex: 'resp', unit: 'в мин', d: 1, get: t => (t.sleep || {}).resp, base: b => b.resp, tol: () => 1 },
     { k: 'Кислород в крови', ex: 'spo2', unit: '%', d: 1, get: t => (t.recovery || {}).spo2, base: () => 97.5, tol: () => 2.5, range: '95–100' },

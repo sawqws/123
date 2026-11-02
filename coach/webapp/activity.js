@@ -159,7 +159,7 @@
     const r = t.recovery, b = t.base || {}, qs = [];
     if (r) qs.push(`Почему восстановление ${r.score}%?`);
     qs.push(isToday(t) ? 'Сколько тренироваться сегодня?' : 'Как восстановление влияет на тренировки?');
-    if (r && b.hrv != null && r.hrv != null && r.hrv < b.hrv * .9) qs.push('Почему отдых нервов хуже нормы?');
+    if (r && b.hrv != null && r.hrv != null && r.hrv < b.hrv * .9) qs.push('Почему запас сил ниже нормы?');
     qs.push(r && r.zone === 'green' ? 'Готов ли я к спаррингу?' : 'Как быстрее восстановиться?');
     return qs;
   }

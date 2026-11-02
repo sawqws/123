@@ -564,7 +564,7 @@ def headline(t):
     if r:
         line = f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>"
         if r.get("hrv"):
-            line += f" · отдых нервов {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else "")
+            line += f" · запас сил {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else "")
         if r.get("rhr"):
             line += f" · пульс покоя {r['rhr']}"
         lines.append(line)

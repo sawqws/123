@@ -165,7 +165,7 @@
     const w = (v, u = '') => has && v != null ? `${v}${u}` : null;
     return `<div class="sec rise">${F.cap('Было → стало')}<div class="tiles as-cmp">
       ${tile('Восстановление', num(c.recovery), '%', chg(c.recovery, p.recovery, { unit: '%', good: true }), w(num(p.recovery), '%'))}
-      ${tile('Отдых нервов', num(c.hrv), 'мс', chg(c.hrv, p.hrv, { unit: `${NB}мс`, good: true }), w(num(p.hrv), `${NB}мс`))}
+      ${tile('Запас сил', num(c.hrv), 'мс', chg(c.hrv, p.hrv, { unit: `${NB}мс`, good: true }), w(num(p.hrv), `${NB}мс`))}
       ${tile('Пульс покоя', num(c.rhr), 'уд/мин', chg(c.rhr, p.rhr, { good: false }), w(num(p.rhr)))}
       ${tile('Сон за ночь', durS(c.sleep), '', chg(c.sleep != null ? Math.round(c.sleep * 60) : null, p.sleep != null ? Math.round(p.sleep * 60) : null, { unit: `${NB}мин`, good: true, eps: 3 }), w(durS(p.sleep)))}
       ${tile('Нагрузка в день', num(c.strain, 1), 'из 21', chg(c.strain, p.strain, { d: 1 }), w(num(p.strain, 1)))}
@@ -243,7 +243,7 @@
       h += stateCard(a.state) + sleepCard(a.sleep) + daysCard(a) + weekdayCard(a) + zonesCard(a) + compareCard(a) + tips;
     } else {
       h += recCard(a) + sleepCard(a.sleep) + weeksSleepCard(a) + zonesCard(a) + weekdayCard(a)
-        + trendCard(a, 'hrv', 'Отдых нервов', 'мс', true, 'Чем выше, тем лучше отдохнула нервная система.')
+        + trendCard(a, 'hrv', 'Запас сил', 'мс', true, 'Чем выше, тем лучше отдохнула нервная система.')
         + trendCard(a, 'rhr', 'Пульс покоя', 'уд/мин', false, 'Чем ниже, тем легче сердцу.')
         + compareCard(a) + tips;
     }
@@ -295,7 +295,7 @@
     const st = w && w.enough ? `<b style="color:${STATE_C[w.state.key] || 'var(--hint)'}">${esc(w.state.word)}</b><small>сон: ${esc((w.sleep.word || '').toLowerCase())}</small>` : '<b class="muted">Неделя</b><small>за 7 полных дней</small>';
     return `<div class="sec rise">${F.cap('Оценки')}<div class="as-entries">
       <button class="tile as-entry" data-a="as-open" data-v="week"><span class="as-ei">${IC.week}</span><span class="tile-k">Оценка недели${w ? `<br><span class="as-el">${esc(w.label)}</span>` : ''}</span><span class="as-ev">${st}</span>${dots}</button>
-      <button class="tile as-entry" data-a="as-open" data-v="month"><span class="as-ei">${IC.month}</span><span class="tile-k">Оценка месяца</span><span class="as-ev"><b>30 дней</b><small>сон, пульс, отдых нервов — против прошлых 30 дней</small></span></button>
+      <button class="tile as-entry" data-a="as-open" data-v="month"><span class="as-ei">${IC.month}</span><span class="tile-k">Оценка месяца</span><span class="as-ev"><b>30 дней</b><small>сон, пульс, запас сил — против прошлых 30 дней</small></span></button>
       <button class="tile as-entry as-cal" data-a="as-open" data-v="calendar"><span class="as-ei">${IC.cal}</span><span class="tile-k">Календарь</span><span class="as-ev"><b>По дням</b><small>восстановление за полгода</small></span></button>
     </div></div>`;
   });
