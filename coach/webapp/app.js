@@ -718,6 +718,7 @@
   }
   // серия: сколько дней подряд браслет на руке (есть сон, восстановление или нагрузка), как «Streak» в WHOOP
   function streak() {
+    if (S.data.streak && S.data.streak.n != null) return { n: S.data.streak.n, full: false, since: S.data.streak.since };  // сервер считает по всей истории
     const ser = S.data.series || [], has = r => r.recovery != null || r.sleep != null || r.strain != null;
     let i = ser.length - 1, n = 0;
     if (i >= 0 && !has(ser[i])) i--;  // сегодня WHOOP мог ещё не прислать — серия не рвётся

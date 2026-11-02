@@ -399,6 +399,20 @@ def today(db, uid, day, profile, body):
     }
 
 
+def wear_streak(db, uid, day):
+    """Сколько дней подряд браслет на руке (есть цикл, сон или восстановление) по всей истории, как «Streak» в WHOOP.
+    Сегодня WHOOP мог ещё не прислать — серия не рвётся. Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням)."""
+    rows = db.q("SELECT DISTINCT day FROM records WHERE user=? AND kind IN ('cycle','sleep','recovery') AND day<=?",
+                (uid, day.isoformat()))
+    days = {r["day"] for r in rows}
+    d = day if day.isoformat() in days else day - datetime.timedelta(days=1)
+    n = 0
+    while d.isoformat() in days:
+        n += 1
+        d -= datetime.timedelta(days=1)
+    return {"n": n, "since": (d + datetime.timedelta(days=1)).isoformat() if n else None}
+
+
 def series(db, uid, day, n):
     since = day - datetime.timedelta(days=n - 1)
     days = by_day(db, uid, since.isoformat(), day.isoformat())
