@@ -182,9 +182,15 @@ STORE = re.compile(r"/store/[tp]/[0-9a-f]{32}")
 # Файлы самого сайта платформы: имя с хэшем (index-DJ0UYpRl.js) не меняется — держим у себя и отдаём с кэшем на год.
 # Платформа их отдаёт без Cache-Control, а сам сайт — ~70–80 файлов на страницу (Глеб 19.10: «чтобы сайт работал
 # сильно быстрее»). Найденные внутри скриптов имена других файлов качаются заранее — весь сайт оседает на сервере.
-ASSET = re.compile(r"/student/(?:(?:assets/[\w.-]+|tinymce/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|webp|jpe?g|gif)|"
+# MathJax (формулы, своя копия платформы 3.2.2) — тоже здесь: 02.11 🪞 Дозор, «Typesetting failed: Cannot read
+# properties of null (reading 'nextSibling')» ×20 на задании. Страница из памяти зеркала рисовалась за ~2 с, а MathJax
+# шёл с платформы ещё 0,5–2,3 с; платформа тем временем перерисовывает задание, и формулы, ждавшие MathJax, вёрстывались
+# в уже снятых элементах (better-react-mathjax: typesetPromise([null])). На платформе MathJax успевает раньше.
+ASSET = re.compile(r"/student/(?:(?:assets/[\w.-]+|(?:tinymce|mathjax)/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|otf|webp|jpe?g|gif)|"
                    r"i18n/[\w-]+/[\w-]+\.json\?v=[\w@.-]+)")  # i18n: тексты страниц, версия сайта — в адресе
 CHUNK = re.compile(r"(?<![\w.-])([A-Za-z_][\w.]*(?:-[\w]+)*-[A-Za-z0-9_-]{8}\.(?:js|css|png|svg|woff2?|webp))(?![\w])")
+# MathJax скрипты сайта зовут без /student/ и хэша («mathjax/tex-mml-chtml.js» в editor-….js) — качаем его заранее
+VENDOR = re.compile(r"[\"'`](mathjax/[\w./-]+\.js)[\"'`]")
 IMMUTABLE = "public, max-age=31536000, immutable"
 CACHE = os.path.join(REPO, "horo", "tmp", "mirror_cache")
 CACHE_MAX = 1024 * 2**20
@@ -299,6 +305,7 @@ class Store:
         paths = set(STORE.findall(text)) | set(ASSET.findall(text))
         if base:
             paths |= {base + n for n in CHUNK.findall(text) if ASSET.fullmatch(base + n)}
+            paths |= {"/student/" + n for n in VENDOR.findall(text) if ASSET.fullmatch("/student/" + n)}
         for path in paths:
             with self.lock:
                 if path in self.busy:

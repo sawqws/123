@@ -62,6 +62,14 @@ class Upstream(BaseHTTPRequestHandler):
         if self.path == "/student/assets/Topic-XyZ98765.js":
             Upstream.chunk = getattr(Upstream, "chunk", 0) + 1
             return self.answer(200, b"export default 1", "application/javascript")
+        if self.path == "/student/assets/editor-CfOs1Rfs.js":  # как у платформы: адрес MathJax без /student/ и хэша
+            return self.answer(200, b'const o="mathjax/tex-mml-chtml.js",t=n=>`${location.origin}/student/${n}`;',
+                               "application/javascript")
+        if self.path == "/student/mathjax/tex-mml-chtml.js":
+            Upstream.mathjax = getattr(Upstream, "mathjax", 0) + 1
+            time.sleep(0.3)  # платформа отдаёт его не сразу (0,5–2,3 с)
+            return self.answer(200, gzip.compress(b"window.MathJax={version:'3.2.2'}"), "application/javascript",
+                               [("Content-Encoding", "gzip")])
         if self.path == "/api/schools/v1/current/settings":
             Upstream.settings = getattr(Upstream, "settings", 0) + 1
             return self.answer(200, json.dumps({"n": Upstream.settings}).encode(), "application/json")
@@ -223,6 +231,29 @@ class MirrorTest(unittest.TestCase):
         self.assertTrue(mirror._store.get("/student/assets/Topic-XyZ98765.js"))  # найден в скрипте и уже скачан
         self.assertEqual(self.req("GET", "/student/assets/Topic-XyZ98765.js")[2], b"export default 1")
         self.assertEqual(Upstream.chunk, 1)
+
+    def test_mathjax_cached_and_warmed(self):
+        """02.11, 🪞 Дозор: «Typesetting failed: … 'nextSibling'» ×20 на задании. MathJax шёл с платформы, когда всё
+        остальное — уже из памяти зеркала: задание успевало перерисоваться, и формулы вёрстывались в снятых элементах.
+        Теперь MathJax — как файлы сайта: скачан заранее по ссылке из скрипта сайта, отдаётся сразу, с кэшем на год."""
+        Upstream.mathjax = 0
+        path = "/student/mathjax/tex-mml-chtml.js"
+        self.assertTrue(mirror.ASSET.fullmatch(path))
+        self.assertTrue(mirror.ASSET.fullmatch("/student/mathjax/output/chtml/fonts/woff-v2/MathJax_Zero.woff"))
+        self.req("GET", "/student/assets/editor-CfOs1Rfs.js")
+        for _ in range(50):
+            if mirror._store.get(path):
+                break
+            time.sleep(0.05)
+        self.assertTrue(mirror._store.get(path))  # найден в скрипте сайта и скачан до запроса браузера
+        for _ in range(2):
+            t = time.time()
+            code, h, body = self.req("GET", path)
+            self.assertLess(time.time() - t, 0.25)  # из кэша, без 0,3 с платформы
+            self.assertEqual((code, gzip.decompress(body)), (200, b"window.MathJax={version:'3.2.2'}"))
+            self.assertEqual(h["Content-Encoding"], "gzip")
+            self.assertIn("immutable", h["Cache-Control"])
+        self.assertEqual(Upstream.mathjax, 1)
 
     def test_settings_from_memory_then_refreshed(self):
         """Редкие ответы (настройки школы): второй раз — сразу из памяти, свежие берутся в фоне."""
