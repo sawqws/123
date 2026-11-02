@@ -219,7 +219,7 @@ class InsightsTest(unittest.TestCase):
         day = {"recovery": {"zone": "red", "hrv": 70, "rhr": 58, "skin_temp": 33.8, "calibrating": False},
                "sleep": {"hours": 6.0, "consistency": 50, "resp": 16.5}}
         texts = " ".join(x["text"] for x in insights.tips(day, base, 1.5, {"age": 14}, []))
-        for w in ("ВСР на 30%", "Пульс покоя 58", "Температура", "дыхания", "8–10 часов", "Режим сна", "1,5 раза"):
+        for w in ("Отдых нервов на 30%", "Пульс покоя 58", "Температура", "дыхания", "8–10 часов", "Режим сна", "1,5 раза"):
             self.assertIn(w, texts)
         good = insights.tips({"recovery": {"zone": "green", "hrv": 101, "rhr": 50, "calibrating": False}, "sleep": None},
                              base, 1.0, {}, [])
@@ -625,7 +625,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(kind, "brief")
         m = self.mornings()
         self.assertEqual(len(m), 1)
-        for w in ("Восстановление <b>82%</b>", "ВСР", "пульс покоя", "Сон <b>", "Нагрузка вчера"):
+        for w in ("Восстановление <b>82%</b>", "отдых нервов", "пульс покоя", "Сон <b>", "Нагрузка вчера"):
             self.assertIn(w, m[0])
         self.assertLess(len(m[0]), 700)  # коротко: цифры и 3–4 строки
         self.assertIn("ОТБОЙ СЕГОДНЯ", c.call_args[0][0])

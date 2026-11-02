@@ -483,11 +483,11 @@
   function dashboard(t) {
     const r = t.recovery || {}, s = t.sleep || {}, c = t.cycle || {}, b = t.base || {};
     return `<div class="sec rise">${cap('Моя панель', 'к норме за 30 дней')}<div class="tiles">
-      ${tile({ k: 'ВСР', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv' })}
+      ${tile({ k: 'Отдых нервов', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv' })}
       ${tile({ k: 'Пульс покоя', v: r.rhr, unit: 'уд/мин', base: b.rhr, goodUp: false, ex: 'rhr' })}
-      ${tile({ k: 'Дыхание', v: s.resp, d: 1, unit: 'в мин', base: b.resp, goodUp: null, ex: 'resp' })}
-      ${tile({ k: 'SpO₂', v: r.spo2, d: 1, unit: '%', goodUp: true, ex: 'spo2', sub: 'норма 95–100%' })}
-      ${tile({ k: 'Темп. кожи', v: r.skin_temp, d: 1, unit: '°C', base: b.skin_temp, goodUp: null, ex: 'temp' })}
+      ${tile({ k: 'Дыхание во сне', v: s.resp, d: 1, unit: 'в мин', base: b.resp, goodUp: null, ex: 'resp' })}
+      ${tile({ k: 'Кислород в крови', v: r.spo2, d: 1, unit: '%', goodUp: true, ex: 'spo2', sub: 'норма 95–100%' })}
+      ${tile({ k: 'Температура кожи', v: r.skin_temp, d: 1, unit: '°C', base: b.skin_temp, goodUp: null, ex: 'temp' })}
       ${tile({ k: 'Калории', v: c.kcal, unit: 'ккал', base: b.kcal, goodUp: null, ex: 'kcal' })}</div></div>`;
   }
 
@@ -561,7 +561,7 @@
 
   // ---------- расшифровки: что значит цифра и как она у тебя ----------
   const ABOUT = {
-    rec: { t: 'Что это', p: ['Восстановление — насколько организм отдохнул и готов к нагрузке сегодня. WHOOP считает его ночью по ВСР, пульсу покоя, дыханию и сну.',
+    rec: { t: 'Что это', p: ['Восстановление — насколько организм отдохнул и готов к нагрузке сегодня. WHOOP считает его ночью по отдыху нервов, пульсу в покое, дыханию и сну.',
       '🟢 67–100% — можно тренироваться в полную силу, 🟡 34–66% — умеренно, 🔴 0–33% — лучше лёгкий день и отдых.'] },
     sleep: { t: 'Что это', p: ['Сон — сколько ты спал и сколько тебе было нужно (с учётом вчерашней нагрузки и недосыпа). «Выполнение» — сколько процентов от нужного ты поспал: 85% и выше — хорошо.',
       'Глубокий сон восстанавливает мышцы, REM — голову и память. Режим — насколько ровно ты ложишься и встаёшь каждый день.'] },
@@ -575,7 +575,7 @@
     sheet(`<h2>${{ sleep: 'Сон', rec: 'Восстановление', strain: 'Нагрузка' }[kind]}</h2>${A.p.map(x => `<p>${esc(x)}</p>`).join('')}`);
   }
   function explainHrv(v, b) {
-    if (v == null) return 'Сегодня ВСР ещё не посчитана — это делается ночью.';
+    if (v == null) return 'Сегодня отдых нервов ещё не посчитан — это делается ночью.';
     if (b == null) return `Сейчас ${Math.round(v)} мс. Норма появится, когда наберётся хотя бы неделя данных.`;
     const p = (v - b) / b * 100;
     if (p >= 10) return `Выше твоей нормы на ${Math.round(p)}% — нервная система хорошо отдохнула, организм готов к нагрузке. 💪`;
@@ -600,9 +600,9 @@
       <div class="stat"><div class="k">Твоя норма</div><div class="v num">${base == null ? '—' : num(base, dec)}<small>${unit}</small></div><div class="d">${base == null ? '' : goodUp == null ? (v == null ? '' : `${v - base > 0 ? '↑' : '↓'} ${num(Math.abs(v - base), dec)}`) : delta(v, base, goodUp)}</div></div></div>`;
     let h = '';
     if (kind === 'hrv') {
-      h = `<h2>ВСР — вариабельность пульса</h2>${norm(r.hrv, b.hrv, ' мс', true)}
+      h = `<h2>Отдых нервов</h2>${norm(r.hrv, b.hrv, ' мс', true)}
         <div class="note"><span>${r.hrv != null && b.hrv != null && r.hrv >= b.hrv ? '🟢' : '🟡'}</span><span>${esc(explainHrv(r.hrv, b.hrv))}</span></div>
-        ${box('Что это', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. ВСР показывает, насколько они разные, — WHOOP меряет её ночью.</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
+        ${box('Что это', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. Чем сильнее они «гуляют», тем лучше отдохнула нервная система. WHOOP меряет это ночью (в самом WHOOP это называется HRV).</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
         ${box('Как поднять', '<ul><li>Спать 8–9 ч и ложиться в одно время</li><li>После тяжёлого дня — лёгкий</li><li>Пить воду в течение дня</li><li>Не есть плотно за 2–3 ч до сна, вечером без экрана</li></ul>')}`;
     } else if (kind === 'rhr') {
       h = `<h2>Пульс покоя</h2>${norm(r.rhr, b.rhr, ' уд/мин', false)}
@@ -621,7 +621,7 @@
         ${box('Что это', '<p>Сколько вдохов в минуту ты делаешь во сне. У здорового человека она очень стабильна — обычно 12–18.</p><p>Заметный рост (на 1–2 и больше) бывает при простуде, жаре в комнате или сильной усталости. Важна не сама цифра, а отклонение от твоей нормы.</p>')}
         ${box('Что делать', '<ul><li>Проветривай комнату, спи в прохладе (18–20 °C)</li><li>Если дыхание выше нормы вместе с пульсом — сегодня без тяжёлой тренировки</li></ul>')}`;
     } else if (kind === 'spo2') {
-      h = `<h2>SpO₂ — кислород в крови</h2>${norm(r.spo2, null, ' %', true, 1)}
+      h = `<h2>Кислород в крови</h2>${norm(r.spo2, null, ' %', true, 1)}
         ${box('Что это', '<p>Какая часть крови несёт кислород. Норма — 95–100%. WHOOP меряет её ночью.</p><p>Если несколько ночей подряд ниже 94% — стоит показаться врачу, особенно при храпе или усталости с утра.</p>')}
         ${box('Что делать', '<ul><li>Спи на боку, с проветренной комнатой</li><li>Не ложись сразу после плотной еды</li></ul>')}`;
     } else if (kind === 'temp') {
@@ -727,7 +727,7 @@
           <span class="stbar"><span style="margin-left:${(i * 3).toFixed(0)}%;width:0;background:${col}" data-w="${Math.max(1.5, p).toFixed(1)}%"></span></span>
           <span class="stv num"><b>${hm(v)}</b><small>${p.toFixed(0)}%</small></span></div>`;
       }).join('')}</div><p class="small muted">Восстанавливающий сон — глубокий ${hm(s.deep)} + REM ${hm(s.rem)} = ${hm(rest)}.</p></section>`;
-    h += `<div class="grid2 metrics rise">${metric('Дыхание', s.resp != null ? num(s.resp, 1) : '—', b.resp != null ? `обычно ${num(b.resp, 1)} в мин` : 'в минуту')}
+    h += `<div class="grid2 metrics rise">${metric('Дыхание во сне', s.resp != null ? num(s.resp, 1) : '—', b.resp != null ? `обычно ${num(b.resp, 1)} в мин` : 'в минуту')}
       ${metric('Пробуждения', s.disturbances != null ? s.disturbances : '—', s.cycles != null ? `${s.cycles} ${plural(s.cycles, 'цикл', 'цикла', 'циклов')} сна` : '')}</div>`;
     h += chartCard('Сон за 14 дней', `<span class="num"><i class="tick"></i>нужно</span>`, bars(lastRows(14), 'sleep', { color: 'var(--sleep)', ref: 'need' }));
     return h;
@@ -744,13 +744,13 @@
       ${crow(I.rhr, 'Пульс покоя', r.rhr != null ? r.rhr : '—', tri(r.rhr, b.rhr, false), 'rhr')}
       ${crow(I.lungs, 'Частота дыхания', s.resp != null ? num(s.resp, 1) : '—', tri(s.resp, b.resp, null, 1), 'resp')}
       ${crow(I.moon, 'Выполнение сна', s.performance != null ? s.performance + '%' : '—', tri(s.performance, pb, true))}${vsFoot}</section>`;
-    const parts = [cmpWord(r.hrv, b.hrv, (b.hrv || 0) * .07, 'ВСР выше обычного', 'ВСР ниже обычного', 'ВСР как обычно'),
+    const parts = [cmpWord(r.hrv, b.hrv, (b.hrv || 0) * .07, 'Отдых нервов лучше обычного', 'Отдых нервов хуже обычного', 'Отдых нервов как обычно'),
       cmpWord(r.rhr, b.rhr, 2, 'пульс покоя выше', 'пульс покоя ниже', 'пульс покоя обычный')].filter(Boolean);
     h += insight(`${parts.length ? parts.join(', ') + ' — ' : ''}${{ green: 'организм готов к нагрузке сегодня', yellow: 'сегодня лучше умеренная нагрузка', red: 'сегодня день восстановления' }[r.zone]}.`.replace(/^./, x => x.toUpperCase()),
       'Разобрать восстановление', `Почему у меня восстановление ${r.score}% и что с этим делать сегодня?`);
     const rows = lastRows(14);
     h += chartCard('Восстановление, 14 дней', b.recovery != null ? `<span class="num">обычно ${num(b.recovery)}%</span>` : '', bars(rows, 'recovery', { max: 100, color: r2 => C[r2.zone] || 'var(--hint)' }));
-    h += chartCard('ВСР, 14 дней', '<span>выше — лучше</span>', line(rows, 'hrv', 'var(--rec-blue)', b.hrv));
+    h += chartCard('Отдых нервов, 14 дней', '<span>выше — лучше</span>', line(rows, 'hrv', 'var(--rec-blue)', b.hrv));
     h += chartCard('Пульс покоя, 14 дней', '<span>ниже — лучше</span>', line(rows, 'rhr', 'var(--rec-blue)', b.rhr));
     if (t.brief) h += `<div class="label rise">Разбор тренера</div><div class="card prose rise">${tgHtml(t.brief)}</div>`;
     if ((t.tips || []).length) h += `<div class="label rise">Сигналы тела</div><div class="card tips rise">${t.tips.map(x => `<div class="tip ${x.tone}"><i></i><p>${esc(x.text)}</p></div>`).join('')}</div>`;
@@ -818,7 +818,7 @@
     const stV = per === 'day' ? (dd.cycle ? dd.cycle.strain : null) : x.strain;
     let h = `<p class="small muted">${range} · сравнение: ${esc(s.prev_label)}</p>
       <div class="grid2">${tile('Восстановление', recV != null ? Math.round(recV) + '%' : '—', cmp(recV, p.recovery, true, '%'))}
-      ${tile('ВСР', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true))}
+      ${tile('Отдых нервов', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true))}
       ${tile('Пульс покоя', rhrV != null ? Math.round(rhrV) : '—', cmp(rhrV, p.rhr, false))}
       ${tile('Сон', hm(slV), cmp(slV != null ? slV * 60 : null, p.sleep != null ? p.sleep * 60 : null, true, ' мин'))}
       ${tile('Нагрузка', stV != null ? num(stV, 1) : '—', cmp(stV, p.strain, null, '', 1))}
@@ -906,11 +906,11 @@
   // «Health Monitor»: каждый показатель против твоего обычного уровня. Точных границ WHOOP не публикует —
   // здесь наши: «в норме» — в пределах tol от нормы за 30 дней, «заметно» — до 2×tol, дальше — «сильно».
   const MONITOR = [
-    { k: 'ВСР', ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
+    { k: 'Отдых нервов', ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
     { k: 'Пульс покоя', ex: 'rhr', unit: 'уд/мин', get: t => (t.recovery || {}).rhr, base: b => b.rhr, tol: () => 3 },
-    { k: 'Дыхание', ex: 'resp', unit: 'в мин', d: 1, get: t => (t.sleep || {}).resp, base: b => b.resp, tol: () => 1 },
-    { k: 'SpO₂', ex: 'spo2', unit: '%', d: 1, get: t => (t.recovery || {}).spo2, base: () => 97.5, tol: () => 2.5, range: '95–100' },
-    { k: 'Темп. кожи', ex: 'temp', unit: '°C', d: 1, get: t => (t.recovery || {}).skin_temp, base: b => b.skin_temp, tol: () => .5 },
+    { k: 'Дыхание во сне', ex: 'resp', unit: 'в мин', d: 1, get: t => (t.sleep || {}).resp, base: b => b.resp, tol: () => 1 },
+    { k: 'Кислород в крови', ex: 'spo2', unit: '%', d: 1, get: t => (t.recovery || {}).spo2, base: () => 97.5, tol: () => 2.5, range: '95–100' },
+    { k: 'Температура кожи', ex: 'temp', unit: '°C', d: 1, get: t => (t.recovery || {}).skin_temp, base: b => b.skin_temp, tol: () => .5 },
   ];
   function monStat(t) {
     const b = t.base || {};
@@ -964,7 +964,7 @@
     h += card('Сон', hm(avg(rows, 'sleep')), 'в среднем', '<i class="tick"></i>нужно', bars(rows, 'sleep', { color: 'var(--sleep)', ref: 'need' }), 'var(--sleep)');
     const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);
     h += card('Нагрузка', num(avg(rows, 'strain'), 1), 'в среднем', `<span class="num">${wk} ${plural(wk, 'тренировка', 'тренировки', 'тренировок')}</span>`, bars(rows, 'strain', { max: 21, color: 'var(--strain)' }), 'var(--strain)');
-    h += card('ВСР', num(avg(rows, 'hrv')), 'мс', 'выше — лучше', line(rows, 'hrv', 'var(--rec-blue)', avg(rows, 'hrv')));
+    h += card('Отдых нервов', num(avg(rows, 'hrv')), 'мс', 'выше — лучше', line(rows, 'hrv', 'var(--rec-blue)', avg(rows, 'hrv')));
     h += card('Пульс покоя', num(avg(rows, 'rhr')), 'уд/мин', 'ниже — лучше', line(rows, 'rhr', 'var(--rec-blue)', avg(rows, 'rhr')));
     h += slot('healthBottom', t, rows);
     return h;

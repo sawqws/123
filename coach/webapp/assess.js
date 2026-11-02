@@ -112,7 +112,7 @@
     const c = a.cur, p = a.prev.days ? a.prev : {};
     return `<div class="sec rise">${F.cap(`Против ${a.period === 'week' ? 'прошлой недели' : 'прошлого месяца'}`, esc(a.prev_label))}<div class="tiles as-cmp">
       ${tile('Восстановление', num(c.recovery), '%', arrow(c.recovery, p.recovery, true, 0, '%'))}
-      ${tile('ВСР', num(c.hrv), 'мс', arrow(c.hrv, p.hrv, true, 0, ' мс'))}
+      ${tile('Отдых нервов', num(c.hrv), 'мс', arrow(c.hrv, p.hrv, true, 0, ' мс'))}
       ${tile('Пульс покоя', num(c.rhr), 'уд/мин', arrow(c.rhr, p.rhr, false))}
       ${tile('Сон', hm(c.sleep), '', arrowH(c.sleep, p.sleep))}
       ${tile('Нагрузка', num(c.strain, 1), 'в день', arrow(c.strain, p.strain, null, 1))}
@@ -164,7 +164,7 @@
       h += stateCard(a.state) + sleepCard(a.sleep) + daysCard(a) + weekdayCard(a, 'Нагрузка по дням') + zonesCard(a, 'эта неделя') + compareCard(a) + tips;
     } else {
       h += recCard(a) + sleepCard(a.sleep) + weeksSleepCard(a) + zonesCard(a, 'этот месяц') + weekdayCard(a, 'Нагрузка: пн–вс')
-        + trendCard(a, 'hrv', 'ВСР', 'мс', 'выше — лучше') + trendCard(a, 'rhr', 'Пульс покоя', 'уд/мин', 'ниже — лучше')
+        + trendCard(a, 'hrv', 'Отдых нервов', 'мс', 'выше — лучше') + trendCard(a, 'rhr', 'Пульс покоя', 'уд/мин', 'ниже — лучше')
         + compareCard(a) + tips;
     }
     grow();
