@@ -29,7 +29,7 @@ import coach  # noqa: E402
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
-               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/skin/rate"]
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/skin/rate", "/api/reviews"]
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -126,6 +126,30 @@ def seed_skin(today):
     coach.f_skin.put_doc(coach.db, T.U, today.isoformat(), {"m": am, "r": 4, "t": "", "a": True, "p": False, "ok": False})
 
 
+# Разборы за сегодня — нейтральный пример: утро (уже открыт) и после тренировки (новый); вечер ещё впереди
+REVIEWS = [
+    ("morning", "07:40", "Восстановление 82%", "",
+     "Восстановление **82%** · сон **7:40** из 8:10 · запас сил 98 (обычно 90) · пульс в покое 53\n\n"
+     "**Хороший день — можно тренироваться в полную силу.**\n- Тренировка: нагрузка 12–14, разминка 15 мин\n"
+     "- Вода 2,5 л, белок 120 г; после тренировки — творог или курица с рисом\n- Лечь до 23:00, подъём в 07:30\n"
+     "- Отбой 23:00 · подъём 07:30 · выходной", True),
+    ("workout", "12:20", "Бокс · 75 мин", "w-demo",
+     "Нагрузка **13,4** · 75 мин · пульс 148/186 · 640 ккал · тяжёлых минут (зоны 4–5) 18\n\n"
+     "**Тяжёлая, но посильная тренировка для сегодняшнего восстановления.**\n"
+     "- 18 минут почти на максимуме — это раунды; остальное — ровная работа\n"
+     "- Завтра восстановление, скорее всего, будет ниже — запланируй лёгкий день\n"
+     "- В ближайший час: 500 мл воды, 30 г белка и углеводы (рис, банан)\n"
+     "- Лечь сегодня до 23:00 — сну нужно больше обычного, около 8:30", False),
+]
+
+
+def seed_reviews(today):
+    for kind, at, title, ref, text, seen in REVIEWS:
+        rid = coach.f_reviews.add(coach.db, T.U, today.isoformat(), kind, title, text, at, ref=ref)
+        if seen:
+            coach.f_reviews.seen(coach.db, T.U, rid)
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
     coach.db = db
@@ -136,6 +160,7 @@ def build(shots=None):
         db.add_goal(T.U, "ложиться до 23:00")
         seed_habits(today)
         seed_skin(today)
+        seed_reviews(today)
         allp = coach.route(T.U, "/api/all", {})
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]

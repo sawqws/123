@@ -467,7 +467,7 @@ class ButtonsTest(unittest.TestCase):
         out = [("утренний разбор", lambda: coach.morning_brief(U)), ("утро без сна", lambda: coach.morning_early(U)),
                ("утро по расписанию", lambda: coach.maybe_morning(self.db.user(U), NOW.replace(hour=7, minute=35)), True),
                ("после тренировки", lambda: coach.workout_note(U, insights.workout_of(wk))),
-               ("вечер: питание", lambda: coach.evening(U, NOW.replace(hour=20, minute=40)), True),
+               ("вечерний итог", lambda: coach.evening(U, NOW.replace(hour=21, minute=0)), True),
                ("итог недели", lambda: coach.progress_report(U, U, True)),
                ("сводка за месяц", lambda: coach.summary_report(U, U, "month")),
                ("WHOOP подключён", lambda: coach.first_sync(U)),

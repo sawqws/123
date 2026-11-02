@@ -647,8 +647,7 @@ class BotTest(unittest.TestCase):
         return kind, c
 
     def test_morning_once_after_sleep(self):
-        self.assertIsNone(self.run_morning(self.at(6, 59))[0])  # раньше времени — ничего
-        kind, c = self.run_morning(self.at(7, 0))
+        kind, c = self.run_morning(self.at(6, 59))  # WHOOP посчитал сон — сразу, не дожидаясь /morning 07:00
         self.assertEqual(kind, "brief")
         m = self.mornings()
         self.assertEqual(len(m), 1)
@@ -656,7 +655,7 @@ class BotTest(unittest.TestCase):
             self.assertIn(w, m[0])
         self.assertLess(len(m[0]), 700)  # коротко: цифры и 3–4 строки
         self.assertIn("ОТБОЙ СЕГОДНЯ", c.call_args[0][0])
-        for hm in ((7, 1), (9, 30), (12, 0)):
+        for hm in ((7, 0), (7, 1), (9, 30), (12, 0)):
             self.assertIsNone(self.run_morning(self.at(*hm))[0])
         self.assertEqual(len(self.mornings()), 1)
         # назавтра — снова (данных за 12-е нет: к 10:00 короткий план)
@@ -695,8 +694,7 @@ class BotTest(unittest.TestCase):
         self.db.save_profile(U, {"morning": "выкл"})
         self.assertIsNone(self.run_morning(self.at(7, 30))[0])
         self.db.save_profile(U, {"morning": "8:30"})
-        self.assertIsNone(self.run_morning(self.at(8, 0))[0])
-        self.assertEqual(self.run_morning(self.at(8, 30))[0], "brief")
+        self.assertEqual(self.run_morning(self.at(8, 0))[0], "brief")  # встал — разбор сразу, не дожидаясь 08:30
 
     def test_morning_busy_and_retry(self):
         coach.busy.add(U)
@@ -729,7 +727,7 @@ class BotTest(unittest.TestCase):
     def test_morning_command(self):
         msg = lambda t: {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "text": t}  # noqa: E731
         coach.on_message(msg("/morning"))
-        self.assertIn("с <b>07:00</b>", self.texts()[-1])
+        self.assertIn("до <b>07:00</b>", self.texts()[-1])
         self.assertIn("10:00", self.texts()[-1])
         coach.on_message(msg("/morning 8.30"))
         self.assertEqual(self.db.user(U)["profile"]["morning"], "08:30")

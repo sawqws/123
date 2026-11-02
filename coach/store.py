@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS water (
 CREATE TABLE IF NOT EXISTS kcal_days (user INTEGER NOT NULL, day TEXT NOT NULL, data TEXT, updated TEXT,
   PRIMARY KEY (user, day));
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT);
+CREATE TABLE IF NOT EXISTS reviews (id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL,
+  ref TEXT NOT NULL DEFAULT '', at TEXT, title TEXT, text TEXT, seen INTEGER NOT NULL DEFAULT 0, created TEXT,
+  UNIQUE (user, day, kind, ref));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS records_day ON records (user, kind, day);
 CREATE INDEX IF NOT EXISTS meals_day ON meals (user, day);
