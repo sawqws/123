@@ -331,7 +331,7 @@ LONG = "\n".join(["**Итог** — восстановление <82%> & сон 
                  [f"- пункт {i}: " + "слово " * 30 for i in range(14)])
 
 
-def fake_claude(prompt, image=None, timeout=240, images=None):
+def fake_claude(prompt, image=None, timeout=240, images=None, **kw):
     """Claude: еда — JSON, видео — JSON разбора, остальное — длинный Markdown (чтобы была кнопка «Полностью»)."""
     if "Пришло видео" in prompt:
         return json.dumps({"kind": "exercise", "title": "Джеб <левый> & кросс", "text": LONG})
@@ -416,7 +416,7 @@ class ButtonsTest(unittest.TestCase):
             mock.patch.dict(coach.STYLES, {"ok": True}), mock.patch.object(coach, "SUP", sup),
             mock.patch.object(coach, "busy", set()), mock.patch.object(coach, "DATA", self.tmp),
             mock.patch.object(coach.threading, "Thread", tc.SyncThread),
-            mock.patch.object(coach, "user_now", lambda u: NOW), mock.patch.object(ai, "claude", fake_claude),
+            mock.patch.object(coach, "user_now", lambda u: NOW), mock.patch.object(ai, "claude", fake_claude), mock.patch.object(ai, "claude_stream", lambda *a, **k: iter(["**Итог** — проверка"])),
             mock.patch.object(whoop.Client, "get", tc.FakeWhoop(tc.fake_whoop(40)).get),
             mock.patch.object(whoop, "_post_form", no_network),
             mock.patch.object(coach.media, "voice_text", side_effect=lambda tok, m: voice[(m.get("voice") or {}).get("n", 0)]),
@@ -578,7 +578,7 @@ class ApiTest(unittest.TestCase):
                     mock.patch.object(coach, "ALLOWED", set()), mock.patch.object(coach, "SUP", sup), \
                     mock.patch.object(coach, "DATA", tmp), mock.patch.object(coach, "busy", set()), \
                     mock.patch.object(coach.threading, "Thread", tc.SyncThread), \
-                    mock.patch.object(coach, "user_now", lambda u: NOW), mock.patch.object(ai, "claude", fake_claude), \
+                    mock.patch.object(coach, "user_now", lambda u: NOW), mock.patch.object(ai, "claude", fake_claude), mock.patch.object(ai, "claude_stream", lambda *a, **k: iter(["**Итог** — проверка"])), \
                     mock.patch.object(whoop.Client, "get", tc.FakeWhoop(tc.fake_whoop(40)).get), \
                     mock.patch.object(whoop, "_post_form", no_network), \
                     mock.patch.object(urllib.request, "urlopen", no_network), \
