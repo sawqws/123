@@ -131,6 +131,7 @@
   }
   // сон и потребность по неделям месяца: столбик сна (тёмная часть — глубокий+REM), черта — сколько было нужно
   function weeksSleepCard(a) {
+    if (!Array.isArray(a.weeks) || !a.weeks.length) return '';  // мало данных за месяц — карточку не рисуем (раньше экран падал)
     const top = Math.max(1, ...a.weeks.map(w => Math.max(w.sleep || 0, w.need || 0))) * 1.08;
     return `<section class="card rise">${F.cap('Сон и потребность', '<i class="tick"></i>нужно')}
       <div class="as-cols as-ws">${a.weeks.map(w => `<div class="as-col">

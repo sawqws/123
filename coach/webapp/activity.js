@@ -254,7 +254,7 @@
   function redraw(kind) {
     const el = document.getElementById(`actv-trend-${kind}`);
     if (!el) return F.render(false);
-    el.outerHTML = trendCard(kind, false);
+    F.morph(el, trendCard(kind, false), true);
     F.animate();
   }
   F.actions['actv-range'] = (el, v) => {

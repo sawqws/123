@@ -302,6 +302,40 @@
     if (tab === 'trends' && S.progress === undefined) loadProgress();
     if (tab === 'coach' && !S.history) loadHistory();
   }
+  // Тихое обновление без мигания (Глеб 02.11: «проверь все панели на дёргания»): вместо замены innerHTML
+  // меняем только то, что отличается. Узлы, стили колец/полос (выставлены JS) и поля ввода остаются на месте.
+  function morphNode(a, b) {
+    if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b); return; }
+    if (a.nodeType === 3 || a.nodeType === 8) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+    if (a.nodeType !== 1) return;
+    for (const { name } of [...a.attributes]) {
+      if (b.hasAttribute(name)) continue;
+      if (name === 'style') continue;  // стиль, выставленный JS (кольца, ширина полос) — не сбрасываем
+      a.removeAttribute(name);
+    }
+    for (const { name, value } of [...b.attributes]) {
+      if (a.getAttribute(name) === value) continue;
+      if (name === 'data-off' && a.style.strokeDashoffset === value) continue;  // кольцо уже на месте — не запускать заново
+      if (name === 'data-w' && a.style.width === value) continue;
+      if (name === 'style' && a.style.strokeDashoffset && b.style && !b.style.strokeDashoffset) { a.setAttribute(name, value); a.style.strokeDashoffset = a.style.strokeDashoffset; continue; }
+      a.setAttribute(name, value);
+    }
+    if ((a.nodeName === 'INPUT' || a.nodeName === 'TEXTAREA' || a.nodeName === 'SELECT') && document.activeElement === a) return;  // печатает — не трогаем
+    if (a.nodeName === 'INPUT' && a.type !== 'file' && a.value !== b.value && !a.matches(':focus')) a.value = b.value;
+    morphKids(a, b);
+  }
+  function morphKids(a, b) {
+    const ac = [...a.childNodes].filter(n => !(n.nodeType === 1 && n.classList.contains('sheet-x'))), bc = [...b.childNodes];
+    for (let i = 0; i < bc.length; i++) { if (i < ac.length) morphNode(ac[i], bc[i]); else a.appendChild(bc[i]); }
+    for (let i = bc.length; i < ac.length; i++) ac[i].remove();
+  }
+  // morph(el, html) — поменять содержимое el; morph(el, html, true) — сам el (вместо outerHTML)
+  function morph(el, html, outer = false) {
+    if (!el) return el;
+    const t = document.createElement('template'); t.innerHTML = html;
+    if (outer) { const n = t.content.firstElementChild; if (!n) { el.remove(); return null; } morphNode(el, n); return el.isConnected ? el : n; }
+    const box = el.cloneNode(false); box.append(t.content); morphKids(el, box); return el;
+  }
   function render(anim) {
     if (!S.data) return;
     const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: () => '', coach: coachView }[S.tab])();
@@ -312,7 +346,9 @@
     // «назад» возвращает прежний экран как был — без повторного набегания цифр и колец
     const moving = (anim || S.navKind || S.inVT) && !S.popping;
     const cls = [S.inVT ? 'enter vt' : S.navKind ? `enter nav-${S.navKind}` : anim ? 'enter' : '', moving ? '' : 'calm'].join(' ').trim();
-    view.innerHTML = `<div class="${cls}">${html}</div>`;
+    const cur = view.firstElementChild;
+    if (!moving && cur && cur.parentNode === view && view.childElementCount === 1) { morph(cur, `<div class="${cls}">${html}</div>`, true); }  // тихо: только отличия
+    else view.innerHTML = `<div class="${cls}">${html}</div>`;
     document.body.classList.toggle('tab-coach', S.tab === 'coach' && !S.screen);
     document.body.classList.toggle('tab-food', S.tab === 'food' && !S.screen);  // рамка «Калорий» (kcal.js) видна только на своей вкладке
     if (moving) stagger();
@@ -805,7 +841,7 @@
     return `<h2>Сводка и советы</h2><div class="seg" role="tablist">${PERIODS.map(([k, l]) => `<button class="${sumPer === k ? 'on' : ''}" data-a="sum-per" data-v="${k}" role="tab">${l}</button>`).join('')}</div>
       <div id="sum-body">${sumBody(sumPer)}</div>`;
   }
-  function sumRender() { const b = sumEl && sumEl.querySelector('#sum-body'); if (b) { b.innerHTML = sumBody(sumPer); animate(); } }
+  function sumRender() { const b = sumEl && sumEl.querySelector('#sum-body'); if (b) { morph(b, sumBody(sumPer)); animate(); } }
   async function sumLoad(per, make) {
     const z = S.sum[per] = S.sum[per] || {};
     if (make) { if (z.making) return; z.making = true; } else z.loading = true;
@@ -986,7 +1022,7 @@
       ${gs.length < 10 ? `<div class="ask"><textarea id="goal-new" rows="1" placeholder="Новая цель…"></textarea><button class="send" data-a="goal-add" aria-label="Добавить">＋</button></div>` : ''}`;
   }
   async function goalApi(path, body) {
-    try { S.data.goals = (await api(path, body)).goals; haptic('success'); const el = $('#goals'); if (el) el.innerHTML = goalsBlock(); } catch (e) { fail(e); }
+    try { S.data.goals = (await api(path, body)).goals; haptic('success'); const el = $('#goals'); if (el) morph(el, goalsBlock()); } catch (e) { fail(e); }
   }
   const GOALS = [['form', 'Форма'], ['mass', 'Мышцы'], ['dry', 'Рельеф'], ['weight', 'Вес']];
   function profileSheet() {
@@ -1238,7 +1274,7 @@
     }, 120000);
   }
   // всё, чем пользуются модули
-  Object.assign(F, { S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
+  Object.assign(F, { morph, S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
     isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
     dHead, cap, head, hero, chartCard, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
     summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav, theme, wide });
