@@ -39,13 +39,16 @@
       <span class="rg-tm"><b>${on ? `${INT[tr.intensity] || 'Полная'} тренировка · ${tr.minutes || '—'} мин` : 'Без тренировки'}</b>
         <span class="muted">${tr.why ? esc(tr.why) : on ? `в ${esc(tr.time || '—')}` : 'день отдыха'}</span></span></div>`;
   }
+  // пункты вечера без тех, что уже есть в уходе за кожей (модуль skin: F.rgHide) — не дублируем
+  const visible = d => (d.checklist || []).filter(x => !(F.rgHide && F.rgHide(x.text)));
   function checklist(d) {
-    const list = d.checklist || [];
-    if (!list.length) return '';
+    const list = visible(d);
+    const more = (F.slots.rgEvening || []).map(fn => { try { return fn(d) || ''; } catch (e) { console.error('rgEvening', e); return ''; } }).join('');
+    if (!list.length && !more) return '';
     const done = list.filter(x => x.done).length;
-    return `<div class="rg-ev"><div class="rg-evh"><span>Вечер</span><b class="num" data-rg-cnt>${done}/${list.length}</b></div>
+    return `<div class="rg-ev">${list.length ? `<div class="rg-evh"><span>Вечер</span><b class="num" data-rg-cnt>${done}/${list.length}</b></div>
       ${list.map(x => `<button type="button" class="rg-ck ${x.done ? 'on' : ''}" data-a="rg-check" data-v="${esc(x.id)}" aria-pressed="${!!x.done}">
-        <span class="rg-box" aria-hidden="true">${F.I.check}</span><span class="rg-ct">${esc(x.text)}</span></button>`).join('')}</div>`;
+        <span class="rg-box" aria-hidden="true">${F.I.check}</span><span class="rg-ct">${esc(x.text)}</span></button>`).join('')}` : ''}${more}</div>`;
   }
   function body(d, full) {
     const tips = (d.tips || []).slice(0, full ? 3 : 2);
@@ -122,8 +125,8 @@
     it.done = !it.done;
     F.haptic(it.done ? 'success' : 'select');
     document.querySelectorAll(`[data-a="rg-check"][data-v="${CSS.escape(id)}"]`).forEach(b => { b.classList.toggle('on', it.done); b.setAttribute('aria-pressed', it.done); });
-    const n = d.checklist.filter(x => x.done).length;
-    document.querySelectorAll('[data-rg-cnt]').forEach(b => { b.textContent = `${n}/${d.checklist.length}`; });
+    const vis = visible(d), n = vis.filter(x => x.done).length;
+    document.querySelectorAll('[data-rg-cnt]').forEach(b => { b.textContent = `${n}/${vis.length}`; });
     try { const r = await F.api('/api/regime/check', { id, done: it.done }); if (r && (r.today || r.day)) { put(r); } }
     catch (e) { it.done = !it.done; F.fail(e); F.render(false); }
   };

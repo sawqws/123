@@ -60,8 +60,10 @@ import f_journal  # noqa: E402  дневник: привычки «да/нет»
 import f_plan  # noqa: E402  мой план: цели недели, планер сна
 import f_regime  # noqa: E402  режим дня: отбой/подъём со сдвигом, тренировка и интенсивность, массаж, чек-лист вечера
 import f_habits  # noqa: E402  привычки и цели на день: отметки, серии, неделя, импорт списком
+import f_skin  # noqa: E402  кожа: мой уход утро/вечер, процедуры по расписанию, отметки, серия, дневник кожи 1–5
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
-FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits}
+FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits,
+            "skin": f_skin}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
@@ -402,6 +404,12 @@ def context(uid, day=None):
     day = day or today_of(uid)
     text, t = insights.text_context(db, uid, day, profile(uid), whoop.body(db, uid))
     extra = []
+    try:  # тренер знает, который час: утро, вечер перед сном или ночь — советы разные
+        now = user_now(db.user(uid))
+        if now.date() == day:
+            extra.append(f"СЕЙЧАС: {now.strftime('%H:%M')}, {['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'][now.weekday()]}")
+    except Exception:
+        traceback.print_exc()
     for name, m in FEATURES.items():
         try:
             extra += (m.context_lines(sys.modules[__name__], uid, day) if hasattr(m, "context_lines") else [])
@@ -719,8 +727,15 @@ def regime_remind(uid, day):
         hl = ""
     if hl:
         lines.append("✅ " + esc(hl))
+    try:  # вечерний уход за кожей — из раздела «Кожа», в чек-листе режима его не повторяем
+        sl, pm = f_skin.remind_line(db, uid, day), f_skin.evening_titles(db, uid)
+    except Exception:
+        traceback.print_exc()
+        sl, pm = "", []
+    if sl:
+        lines.append("🧴 " + esc(sl))
     done = f_regime.checks(db, uid, day.isoformat())
-    left = [x for i, x in enumerate(cfg["evening"]) if f"e{i}" not in done]
+    left = [x for i, x in enumerate(cfg["evening"]) if f"e{i}" not in done and not any(f_skin.same(x, t) for t in pm)]
     lines += [f"• {esc(x)}" for x in left[:5 - len(lines)]]
     send(uid, box("🌙", f"Отбой в {bed}", "\n".join(lines)), with_app(uid, [], "📱 Открыть"))
 
@@ -2194,7 +2209,7 @@ def photo_api(uid, b):
     ctx, _ = context(uid)
     u = db.user(uid)
     if b.get("mode") == "ask":
-        out = ai.claude(ai.chat_prompt(ctx, db.history(uid), text or PHOTO_ASK), image=path)
+        out = ai.claude(ai.chat_prompt(ctx, db.history(uid), text or PHOTO_ASK, full=True), image=path)
         db.say(uid, "user", f"📷 {text}" if text else "📷 Фото")
         db.say(uid, "coach", out)
         return {"answer": out, "history": db.history(uid, 40)}
@@ -2561,7 +2576,7 @@ def route(uid, path, b):
         if not q:
             raise ValueError("пустой вопрос")
         ctx, _ = context(uid)
-        out = ai.ask(ctx, db.history(uid), q)
+        out = ai.ask(ctx, db.history(uid), q, full=True)  # в приложении — полный ответ, в чате бота — коротко
         db.say(uid, "user", q)
         db.say(uid, "coach", out)
         return {"answer": out, "history": db.history(uid, 40)}
