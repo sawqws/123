@@ -1,0 +1,80 @@
+name: kit-test
+# Проверка набора «Claude с нуля» (docs/kit/): поиск наработок на подставных данных + настоящая установка.
+on:
+  workflow_dispatch:
+  push:
+    paths: ['docs/kit/**', '.github/workflows/kit-test.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Подставные наработки
+        shell: pwsh
+        run: |
+          $v = "$HOME\Documents\Заметки"; New-Item -ItemType Directory -Force "$v\.obsidian", "$v\Проекты" | Out-Null
+          Set-Content "$v\Проекты\идея.md" '# Идея' -Encoding UTF8
+          '["dataview"]' | Set-Content "$v\.obsidian\community-plugins.json"
+          New-Item -ItemType Directory -Force "$env:APPDATA\obsidian" | Out-Null
+          @{ vaults = @{ a1 = @{ path = $v; ts = 1 } } } | ConvertTo-Json -Depth 4 | Set-Content "$env:APPDATA\obsidian\obsidian.json"
+          $r = "$HOME\code\bot"; New-Item -ItemType Directory -Force $r | Out-Null
+          git -C $r init -q; Set-Content "$r\CLAUDE.md" 'правила'; git -C $r add -A; git -C $r -c user.name=t -c user.email=t@t commit -qm init
+          Set-Content "$r\new.txt" 'x'
+          New-Item -ItemType Directory -Force "$HOME\.claude\skills\my-skill" | Out-Null
+          Set-Content "$HOME\.claude\CLAUDE.md" 'старые правила'
+          '{"mcpServers":{"obsidian":{"command":"x","env":{"KEY":"SECRET123"}}}}' | Set-Content "$HOME\.claude.json"
+      - name: Запуск как у человека (строкой UTF-8 через iex), без установки
+        shell: powershell
+        env: { KIT_SKIP_INSTALL: '1', KIT_NO_LAUNCH: '1' }
+        run: |
+          $env:KIT_BASE = ([Uri]"$env:GITHUB_WORKSPACE\docs\kit").AbsoluteUri
+          iex ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes("$env:GITHUB_WORKSPACE\docs\kit\start.ps1")))
+      - name: Отчёт верный и без секретов
+        shell: pwsh
+        run: |
+          $f = "$HOME\claude-kit\scan.json"; $raw = Get-Content $f -Raw -Encoding UTF8; $s = $raw | ConvertFrom-Json
+          $s.obsidian_vaults | Format-List; $s.git_repos | Format-List; $s.claude_code | Format-List
+          if (@($s.obsidian_vaults | Where-Object { $_.path -like '*Заметки' -and $_.notes -eq 1 }).Count -ne 1) { throw 'хранилище не найдено' }
+          $b = @($s.git_repos | Where-Object { $_.path -like '*code\bot' })
+          if ($b.Count -ne 1 -or $b[0].uncommitted -ne 1 -or -not $b[0].has_claude_md) { throw 'репозиторий не найден' }
+          if ($s.claude_code.skills -notcontains 'my-skill' -or -not $s.claude_code.global_claude_md) { throw 'прошлый Claude не найден' }
+          if ($s.claude_code.mcp_servers -notcontains 'obsidian') { throw 'MCP не найден' }
+          if ($raw -match 'SECRET123') { throw 'секрет попал в отчёт' }
+          if (-not (Select-String "$HOME\claude-kit\prompt.md" -Pattern 'Второй мозг' -Quiet)) { throw 'нет промпта' }
+          if (-not (Test-Path "$HOME\claude-kit\first-message.txt")) { throw 'нет первого сообщения' }
+      - name: Настоящая установка
+        if: matrix.os == 'windows-2025'
+        shell: powershell
+        env: { KIT_NO_LAUNCH: '1' }
+        run: |
+          $env:KIT_BASE = ([Uri]"$env:GITHUB_WORKSPACE\docs\kit").AbsoluteUri
+          iex ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes("$env:GITHUB_WORKSPACE\docs\kit\start.ps1")))
+          $env:Path += ";$HOME\.local\bin"
+          claude --version; if ($LASTEXITCODE) { throw 'claude не работает' }
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Подставные наработки
+        run: |
+          mkdir -p ~/Documents/Notes/.obsidian ~/code/app ~/.claude/skills/s1; echo '# a' > ~/Documents/Notes/a.md
+          git -C ~/code/app init -q; touch ~/code/app/CLAUDE.md
+      - name: Запуск (с установкой Claude Code)
+        env: { KIT_NO_LAUNCH: '1', KIT_BASE: 'file://${{ github.workspace }}/docs/kit' }
+        run: bash docs/kit/start.sh && ~/.local/bin/claude --version
+      - name: Отчёт
+        run: |
+          python3 -c "
+          import json,os; s=json.load(open(os.path.expanduser('~/claude-kit/scan.json')))
+          assert any(v['path'].endswith('Notes') and v['notes']==1 for v in s['obsidian_vaults']), s['obsidian_vaults']
+          assert any(r['path'].endswith('code/app') and r['has_claude_md'] for r in s['git_repos']), s['git_repos']
+          assert 's1' in s['claude_code']['skills']; print('ok')"
+          grep -q 'Второй мозг' ~/claude-kit/prompt.md
