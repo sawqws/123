@@ -27,7 +27,8 @@ import coach  # noqa: E402
 
 # GET-пути разделов, которые приложение спрашивает без параметров — добавляй сюда свои
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
-               "/api/regime", "/api/regime/save", "/api/regime/check"]
+               "/api/regime", "/api/regime/save", "/api/regime/check",
+               "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal"]
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -64,6 +65,38 @@ def regime_sample(today):
     return {"cfg": cfg, "today": week[0], "week": week}
 
 
+# Привычки и цели — нейтральный пример (как у любого пользователя): список строками через /api/habits/import
+HABITS = """Пить 8 стаканов воды
+Зарядка утром
+Медитация 10 минут утром
+Прогулка 8000 шагов
+Читать 20 мин перед сном
+Английский 3 раза в неделю
+Растяжка вечером
+Убраться в комнате по выходным"""
+GOALS = [("Купить продукты на неделю", True), ("Повторить конспект", False), ("Ответить на письма", False)]
+
+
+def seed_habits(today):
+    """История за 3 недели (не всё и не всегда — как в жизни) и сегодня: часть сделана, цели на день."""
+    coach.route(T.U, "/api/habits/import", {"text": HABITS})
+    ids = [h["id"] for h in coach.route(T.U, "/api/habits", {})["habits"]]
+    st = coach.f_habits.load(coach.db, T.U)
+    for h in st["items"]:
+        h["created"] = (today - datetime.timedelta(days=21)).isoformat()
+    coach.f_habits.store(coach.db, T.U, st)
+    for back in range(1, 22):
+        d = (today - datetime.timedelta(days=back)).isoformat()
+        doc = {"v": {}, "s": [], "g": []}
+        for i, hid in enumerate(ids):
+            if (back * 7 + i * 3) % 10 < (8 if i < 2 else 6):  # первые две — почти всегда, остальные — чаще всего
+                doc["v"][hid] = {0: 8, 3: 8000, 2: 10, 4: 20}.get(i, 1)
+        coach.f_habits.put_doc(coach.db, T.U, d, doc)
+    t = {"v": {ids[0]: 5, ids[1]: 1, ids[2]: 10, ids[3]: 4200}, "s": [], "g": []}
+    t["g"] = [{"id": f"g{i}", "text": x, "done": dn} for i, (x, dn) in enumerate(GOALS)]
+    coach.f_habits.put_doc(coach.db, T.U, today.isoformat(), t)
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
     coach.db = db
@@ -72,6 +105,7 @@ def build(shots=None):
     with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: today):
         db.save_profile(T.U, {"age": "15", "sex": "m", "sport": "бокс", "goal": "form"})
         db.add_goal(T.U, "ложиться до 23:00")
+        seed_habits(today)
         allp = coach.route(T.U, "/api/all", {})
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]
@@ -101,6 +135,8 @@ def build(shots=None):
         if not isinstance(api.get("/api/regime"), dict) or "today" not in api["/api/regime"]:
             api["/api/regime"] = api["/api/regime/save"] = reg
             api["/api/regime/check"] = reg
+        api["/api/habits/import"] = coach.f_habits.import_text(  # предпросмотр «Добавить списком»
+            db, T.U, "Пить 8 стаканов воды\nАнглийский 3 раза в неделю\nБег пн ср пт в 07:00", today, preview=True)
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
