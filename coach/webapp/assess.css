@@ -22,65 +22,126 @@
 .as-dots { display: flex; gap: 4px; margin-top: auto; }
 .as-dots i { width: 9px; height: 9px; border-radius: 50%; }
 
-/* экран оценки */
+/* экран оценки. Цвета графиков — свои токены: в ч/б виде (mono.css) только серые; в виде «как WHOOP» — белый по графиту */
+:root { --as-hi: var(--ink); --as-lo: rgba(255, 255, 255, .24); --as-was: rgba(255, 255, 255, .3); --as-on: #000; --as-gap: rgba(255, 255, 255, .4); }
+html.mono { --as-hi: var(--ink); --as-lo: var(--fill-2); --as-was: var(--hint-2); --as-on: var(--on-ink); --as-gap: var(--hint); }
 .as-seg { margin: 6px 0 14px; }
 .as-tips { margin: 6px 0 18px; }
 .as-word { margin: -4px 0 10px; font: 800 24px/1.1 var(--head); text-transform: uppercase; letter-spacing: .06em; }
-.as-gauge { position: relative; display: flex; gap: 3px; height: 10px; margin: 30px 0 8px; }
-.as-gauge > span:not(.as-mark) { display: block; height: 100%; border-radius: 999px; opacity: .85; }
-.as-mark { position: absolute; top: -5px; bottom: -5px; width: 4px; margin-left: -2px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 2px var(--card); }
-.as-mark b { position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); font: 700 13px var(--num); white-space: nowrap; }
-.as-gl { display: flex; justify-content: space-between; font: 800 10px var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--hint); }
-.as-sr { padding: 10px 0; border-top: 1px solid var(--sep); }
+html.mono .as-word { text-transform: none; letter-spacing: 0; font-weight: 700; }
+/* строка вывода под заголовком: главный итог крупно, пояснение — мельче */
+.as-lead { margin: -2px 0 4px; font: 700 19px/1.25 var(--head); color: var(--ink); letter-spacing: 0; text-transform: none; }
+.as-sub, .card .as-sub { margin: 0 0 14px; font-size: 13.5px; line-height: 1.4; color: var(--hint); }
+.as-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.4; color: var(--hint); }
+.as-vs.vs { flex-basis: auto; margin: 0; font: 700 13px var(--num); white-space: nowrap; }
+.big-line .as-vs.vs { align-self: center; margin-left: 4px; }
+
+/* «Нагрузка: мало, норма или много?» — три участка шкалы с подписями под ними и метка «ты здесь» */
+.as-gauge { position: relative; display: flex; gap: 3px; margin: 34px 0 14px; }
+.as-gs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.as-gs i { display: block; height: 10px; border-radius: 999px; background: var(--as-lo); }
+.as-gs.ok i { background: var(--as-hi); opacity: .55; }
+.as-gs em { font: 600 12px var(--head); font-style: normal; color: var(--hint); text-align: center; white-space: nowrap; }
+.as-mark { position: absolute; top: -5px; height: 20px; width: 4px; margin-left: -2px; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 2px var(--card); }
+.as-mark b { position: absolute; bottom: calc(100% + 5px); left: 50%; transform: translateX(-50%); padding: 2px 8px; border-radius: 999px;
+  background: var(--ink); color: var(--as-on); font: 700 12px var(--num); white-space: nowrap; }
+.as-mark.l b { left: -6px; transform: none; }
+.as-mark.r b { left: auto; right: -6px; transform: none; }
+
+/* «Как ты спишь»: строки с полосой 0–100 и подписью справа */
+.as-sr { padding: 12px 0; border-top: 1px solid var(--sep); }
 .as-sr:first-of-type { border-top: 0; padding-top: 2px; }
-.as-srt { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; }
-.as-srt > span:last-child { color: var(--hint); text-align: right; }
-.as-srt b { color: var(--ink); font: 700 16px var(--num); }
-.as-sr .bar { margin-top: 8px; }
+.as-srt { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14px; }
+.as-srt b { color: var(--ink); font: 700 16px var(--num); white-space: nowrap; }
+.as-sr .as-note { margin-top: 6px; }
+
+/* полосы (растут через transform) */
+.as-pt { position: relative; flex: 1; min-width: 0; height: 10px; border-radius: 999px; background: var(--trk); overflow: hidden; }
+.as-pt i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--as-hi); transform-origin: left center; }
+.as-anim .as-pt i, .as-anim .as-f, .as-anim .as-wt i { transform: scaleX(0); }
+.as-anim .as-f, .as-anim .as-wt i { transform: scaleY(0); }
+.as-anim.as-go .as-pt i, .as-anim.as-go .as-f, .as-anim.as-go .as-wt i { transform: none; transition: transform .7s cubic-bezier(.2, .8, .2, 1); }
+.as-anim .as-nt, .as-anim .as-gp, .as-anim .as-nl, .as-anim .as-wv, .as-anim .as-f b { opacity: 0; }
+.as-anim.as-go .as-nt, .as-anim.as-go .as-gp, .as-anim.as-go .as-nl, .as-anim.as-go .as-wv, .as-anim.as-go .as-f b { opacity: 1; transition: opacity .3s .45s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .as-anim.as-go :is(.as-pt i, .as-f, .as-wt i, .as-nt, .as-gp, .as-nl, .as-wv, .as-f b) { transition: none; }
+}
+.as-hb { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.as-hb .as-pv { flex: none; min-width: 74px; text-align: right; font: 600 12.5px var(--num); color: var(--hint); white-space: nowrap; }
+
+/* пары полос «сейчас / раньше» (зоны пульса, дни восстановления) */
+.as-pg { padding: 10px 0; border-top: 1px solid var(--sep); }
+.as-pg:first-child { border-top: 0; padding-top: 2px; }
+.as-ph { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 7px; }
+.as-pn { display: flex; align-items: center; gap: 7px; font: 600 14px var(--head); color: var(--ink); min-width: 0; }
+.as-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; }
+.as-pr { display: grid; grid-template-columns: 54px minmax(0, 1fr) 62px; align-items: center; gap: 8px; }
+.as-pr + .as-pr { margin-top: 5px; }
+.as-pk { font-size: 12px; color: var(--hint); }
+.as-pr .as-pv { text-align: right; font: 700 13px var(--num); color: var(--ink); white-space: nowrap; }
+.as-pr.was .as-pv { font-weight: 600; color: var(--hint); }
+.as-pr.was .as-pt { height: 6px; }
+.as-pr.was .as-pt i { background: var(--as-was); }
 
 /* дни недели кружками */
 .as-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 .as-day { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 2px 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .as-day:active { opacity: .6; }
-.as-dc { display: grid; place-items: center; width: 38px; height: 38px; max-width: 100%; aspect-ratio: 1; border-radius: 50%;
-  border: 3px solid var(--c); font: 700 13px var(--num); }
-.as-dw { font: 800 10px var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--hint); }
+.as-dc { display: grid; place-items: center; width: 40px; height: 40px; max-width: 100%; aspect-ratio: 1; border-radius: 50%;
+  border: 3px solid var(--c); font: 700 12px var(--num); letter-spacing: -.02em; }
+.as-dw { font: 600 12px var(--head); color: var(--hint); }
+.as-day .as-dot { width: 7px; height: 7px; margin: 1px 0 -1px; }
+html.mono .as-dc { border-color: var(--trk); border-width: 2px; }
 .as-dd { font-size: 11px; color: var(--hint); margin-top: -3px; }
+.as-legd { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 12px; font-size: 12.5px; color: var(--hint); }
+.as-legd span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 
-/* столбики с подписями */
-.as-cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; align-items: end; }
-.as-col { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; }
-.as-cv { font-size: 11.5px; color: var(--ink); white-space: nowrap; }
-.as-ct { position: relative; display: flex; align-items: flex-end; width: 100%; max-width: 34px; height: 110px; border-radius: 6px; background: var(--trk); overflow: hidden; }
-.as-ct i { position: relative; display: flex; align-items: flex-end; width: 100%; border-radius: 6px; transition: height .7s cubic-bezier(.2, .8, .2, 1); }
-.as-ct i s { display: block; width: 100%; background: var(--st-deep); border-radius: 0 0 6px 6px; text-decoration: none; }
-.as-need { position: absolute; left: -2px; right: -2px; height: 2px; background: var(--ink); opacity: .7; z-index: 1; }
-.as-cl { font: 800 10px var(--head); text-transform: uppercase; letter-spacing: .06em; color: var(--hint); white-space: nowrap; }
-.as-cs { font-size: 10.5px; color: var(--hint); white-space: nowrap; margin-top: -3px; }
-.as-ws .as-ct { max-width: 52px; }
-.as-ws .as-cl { text-transform: none; letter-spacing: 0; font: 600 10.5px var(--head); }
-@media (prefers-reduced-motion: reduce) { .as-ct i { transition: none; } }
+/* «В какие дни нагрузка больше»: столбики пн…вс, значения над столбиками, самый тяжёлый выделен */
+.as-wk { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; padding-top: 22px; }
+.as-wc { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+.as-wt { position: relative; display: block; width: 100%; max-width: 30px; height: 120px; }
+.as-wt::after { content: ""; position: absolute; left: -4px; right: -4px; bottom: 0; height: 1px; background: var(--sep); }
+.as-wt i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 4px 4px 0 0; background: var(--as-lo); transform-origin: bottom; }
+.as-wc.top .as-wt i { background: var(--as-hi); }
+.as-wv { position: absolute; left: 50%; margin-bottom: 4px; transform: translateX(-50%); font: 600 12px var(--num); color: var(--hint); white-space: nowrap; }
+.as-wc.top .as-wv { color: var(--ink); font-weight: 800; font-size: 13px; }
+.as-wl { font: 600 12.5px var(--head); color: var(--hint); }
+.as-wc.top .as-wl { color: var(--ink); font-weight: 800; }
+.as-wd { font-size: 11px; color: var(--hint); margin-top: -4px; }
 
-/* пульсовые зоны: эта неделя / прошлая */
-.as-z { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
-.as-zk { flex: none; width: 36px; font: 800 12px var(--head); letter-spacing: .06em; }
-.as-zk i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
-.as-zb { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.card .as-zb .bar { margin: 0; height: 7px; }
-.card .as-zb .bar.as-zp { height: 4px; }
-.as-zp > i { background: rgba(255, 255, 255, .3) !important; }
-.as-zv { flex: none; width: 46px; text-align: right; display: flex; flex-direction: column; line-height: 1.1; }
-.as-zv b { font: 700 15px var(--num); }
-.as-zv small { font-size: 11px; color: var(--hint); }
+/* «Сколько спал и сколько нужно» по неделям месяца */
+.as-leg { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 6px; font-size: 12px; color: var(--hint); }
+.as-leg span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.as-sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.as-sw.dp { background: var(--as-hi); }
+.as-sw.lt { background: var(--as-lo); }
+.as-sw.gp { border: 1.5px dashed var(--as-gap); }
+.as-sw.nl { height: 2px; width: 14px; border-radius: 1px; background: var(--ink); }
+.as-ws { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+.as-sc { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.as-sp { position: relative; width: 100%; max-width: 64px; height: 150px; margin-top: 40px; }
+.as-sp::after { content: ""; position: absolute; left: -4px; right: -4px; bottom: 0; height: 1px; background: var(--sep); }
+.as-f { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: flex-start; justify-content: center; transform-origin: bottom; }
+.as-f.lt { background: var(--as-lo); border-radius: 4px 4px 0 0; }
+.as-f.dp { background: var(--as-hi); box-shadow: 0 -2px 0 var(--card); }
+.as-f b { margin-top: 5px; font: 700 11.5px var(--num); color: var(--as-on); white-space: nowrap; }
+.as-gp { position: absolute; left: 0; right: 0; box-sizing: border-box; border: 1.5px dashed var(--as-gap); border-bottom: 0; border-radius: 4px 4px 0 0; }
+.as-nl { position: absolute; left: -5px; right: -5px; height: 2px; margin-bottom: -1px; border-radius: 1px; background: var(--ink); }
+.as-nt { position: absolute; left: 50%; display: flex; flex-direction: column; align-items: center; margin-bottom: 6px; transform: translateX(-50%);
+  font-size: 11px; line-height: 1.15; color: var(--hint); white-space: nowrap; }
+.as-nt b { font: 700 12px var(--num); color: var(--ink); }
+.as-sc .as-cl { margin-top: 5px; font: 600 11.5px var(--head); color: var(--hint); white-space: nowrap; }
+.as-sc .as-cv { font: 700 12px var(--num); color: var(--ink); white-space: nowrap; }
+.as-cs { display: flex; flex-direction: column; align-items: center; font-size: 11px; line-height: 1.2; color: var(--hint); white-space: nowrap; }
+.as-cs b { font: 700 12px var(--num); color: var(--ink); }
+.as-sc.none .as-sp { opacity: 0; }
 
-/* восстановление по зонам: этот / прошлый период */
-.as-rl { display: grid; grid-template-columns: 62px 1fr auto; align-items: center; gap: 10px; margin: 6px 0; }
-.as-zr { display: flex; height: 10px; gap: 2px; border-radius: 999px; overflow: hidden; }
-.as-zr span { display: block; }
-
+/* плитки «было → стало» */
 .as-cmp .as-tile { cursor: default; }
 .as-cmp .as-tile:active { transform: none; }
 .as-cmp .tile-v b { font-size: 26px; }
+.as-td { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.as-was { font: 600 12px var(--num); color: var(--hint); white-space: nowrap; }
 
 /* календарь */
 .as-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0 12px; }
