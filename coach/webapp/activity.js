@@ -28,28 +28,52 @@
     const e = (Number(m[1]) * 60 + Number(m[2]) + min) % 1440;
     return `${String(Math.floor(e / 60)).padStart(2, '0')}:${String(e % 60).padStart(2, '0')}`;
   };
-  const wHead = (title, sub) => `<header class="dhead"><button class="avatar ghost" data-a="actv-back" aria-label="Назад">${back}</button>
+  const wHead = (title, sub) => `<header class="dhead"><button class="avatar ghost bk" data-a="actv-back" aria-label="Назад">${back}<span class="bk-t">Назад</span></button>
     <div class="titles"><h1 style="--c:var(--strain)">${title}</h1><div class="sub">${sub}</div></div></header>`;
   const tile = (k, v, unit, sub) => `<div class="tile actv-tile"><span class="tile-k">${k}</span>
     <span class="tile-v"><b class="num">${v}</b>${unit ? `<small>${unit}</small>` : ''}</span>${sub ? `<span class="actv-sub">${sub}</span>` : ''}</div>`;
 
+  // Пульс: средний крупно, максимальный рядом, шкала от 50% до 100% макс. пульса с метками «средний» и «пик»
+  function hrCard(w, maxHr) {
+    const avg = w.avg_hr, mx = w.max_hr;
+    if (!avg && !mx) return '';
+    let scale = '';
+    if (maxHr) {
+      const lo = Math.round(maxHr * .5), pos = v => Math.max(0, Math.min(100, (v - lo) / (maxHr - lo) * 100)).toFixed(1);
+      const ticks = ZONES.map(([z]) => `<i style="left:${((z - 50) / 50 * 100).toFixed(1)}%"></i>`).join('');
+      scale = `<div class="hr-scale" aria-hidden="true"><div class="hr-track">${ticks}
+          ${avg ? `<span class="hr-fill" style="width:${pos(avg)}%"></span><b class="hr-mk avg" style="left:${pos(avg)}%"></b>` : ''}
+          ${mx ? `<b class="hr-mk max" style="left:${pos(mx)}%"></b>` : ''}</div>
+        <div class="hr-ax num"><span>${lo}</span><span>${maxHr}</span></div></div>
+        <div class="hr-legend"><span><b class="dot avg"></b>средний${avg ? ` · <b class="num">${Math.round(avg / maxHr * 100)}%</b>` : ''}</span>
+          <span><b class="dot max"></b>пик${mx ? ` · <b class="num">${Math.round(mx / maxHr * 100)}%</b>` : ''}</span><span class="muted">от макс. ${maxHr}</span></div>`;
+    }
+    return `<section class="card hr-card rise">${F.cap('Пульс')}
+      <div class="hr-nums"><div class="hr-n"><b class="num">${avg || '—'}</b><span>средний, уд/мин</span></div>
+        <div class="hr-n"><b class="num">${mx || '—'}</b><span>максимальный</span></div></div>${scale}</section>`;
+  }
+
+  const ZNAME = ['лёгкая', 'выносливость', 'темп', 'тяжело', 'максимум'];
   function zonesCard(w, maxHr) {
     const z = w.zones || [];
     const tot = z.reduce((a, x) => a + (x || 0), 0);
     if (!tot) return `<section class="card rise">${F.cap('Пульсовые зоны')}<p class="small muted">WHOOP не прислал зоны пульса для этой тренировки.</p></section>`;
     const pc = m => Math.round(m / tot * 100);
     const top = Math.max(...z.slice(1).map(x => x || 0), 1);
+    // общая полоса: сколько времени в каждой зоне (слева — лёгкие, справа — тяжёлые)
+    const strip = [0, 1, 2, 3, 4].map(i => { const m = z[i + 1] || 0; return m ? `<i style="flex:${m};background:${ZCOL[i]}" title="Зона ${i + 1}: ${m} мин"></i>` : ''; }).join('');
     // сверху — самая тяжёлая зона, как в WHOOP
     const rows = [4, 3, 2, 1, 0].map(i => {
       const m = z[i + 1] || 0, [lo, hi] = ZONES[i];
-      const bpm = maxHr ? ` · ${Math.round(maxHr * lo / 100)}–${Math.round(maxHr * hi / 100)} уд/мин` : '';
-      return `<div class="actv-z"><span class="actv-zk" style="--c:${ZCOL[i]}"><b>Z${i + 1}</b><small class="num">${lo}–${hi}%${bpm}</small></span>
-        <span class="actv-zbar"><i style="width:0;background:${ZCOL[i]}" data-w="${m ? Math.max(2, m / top * 100).toFixed(1) : 0}%"></i></span>
-        <span class="actv-zv num"><span><b>${m}</b> мин</span><small>${pc(m)}%</small></span></div>`;
+      const bpm = maxHr ? `${Math.round(maxHr * lo / 100)}–${Math.round(maxHr * hi / 100)} уд/мин` : `${lo}–${hi}% от макс.`;
+      return `<div class="actv-z${m ? '' : ' none'}"><span class="actv-zk"><b><i class="zsw" style="background:${ZCOL[i]}"></i>Зона ${i + 1} · ${ZNAME[i]}</b><small class="num">${bpm}</small></span>
+        <span class="actv-zbar"><i style="width:0;background:${ZCOL[i]}" data-w="${m ? Math.max(3, m / top * 100).toFixed(1) : 0}%"></i></span>
+        <span class="actv-zv num"><b>${m}</b><small>мин · ${pc(m)}%</small></span></div>`;
     }).join('');
     const z0 = z[0] || 0;
-    return `<section class="card rise">${F.cap('Пульсовые зоны', maxHr ? `<span class="num">от макс. пульса ${maxHr}</span>` : 'от макс. пульса')}
-      ${rows}<p class="small muted">${z0 ? `Ниже 50% (разминка, паузы) — ${z0} мин. ` : ''}Z1–Z2 — лёгкая работа и выносливость, Z3 — темп, Z4–Z5 — тяжело: раунды, спурты.</p></section>`;
+    return `<section class="card rise">${F.cap('Пульсовые зоны', `<span class="num">${tot} мин</span>`)}
+      <div class="z-strip" aria-hidden="true">${strip}</div>
+      ${rows}<p class="small muted">${z0 ? `Ниже зоны 1 (разминка, паузы) — ${z0} мин. ` : ''}Зоны 1–2 — лёгкая работа и выносливость, 3 — темп, 4–5 — тяжело: раунды, спурты.</p></section>`;
   }
 
   function shareCard(w, t, others) {
@@ -77,17 +101,11 @@
     if (!w.scored) h += '<div class="note rise"><span>⏳</span><span>WHOOP ещё считает эту тренировку — цифры появятся чуть позже.</span></div>';
     h += `<section class="hero-ring rise">${F.ring((w.strain || 0) / 21, 'var(--strain)', `<b class="num">${F.cnt(w.strain, 1)}</b><span>нагрузка</span>`, 210)}
       <div class="hr-sub">${w.strain != null ? `${level(w.strain)} · шкала 0–21` : 'Нагрузка ещё не посчитана'}</div></section>`;
+    h += hrCard(w, maxHr);
     const tiles = [tile('Длительность', w.minutes ? hm(w.minutes / 60) : '—', w.minutes ? 'ч:мин' : ''),
-      tile('Калории', w.kcal ? big(w.kcal) : '—', 'ккал'),
-      tile('Пульс средний', w.avg_hr || '—', 'уд/мин'),
-      tile('Пульс макс.', w.max_hr || '—', 'уд/мин')];
-    if (maxHr && (w.avg_hr || w.max_hr)) {
-      tiles.push(tile('От макс. пульса', w.avg_hr ? Math.round(w.avg_hr / maxHr * 100) : '—', '%',
-        `${w.avg_hr ? 'в среднем' : ''}${w.max_hr ? `${w.avg_hr ? ', ' : ''}пик ${Math.round(w.max_hr / maxHr * 100)}%` : ''} · макс. ${maxHr}`));
-    }
+      tile('Калории', w.kcal ? big(w.kcal) : '—', 'ккал')];
     if (w.distance) tiles.push(tile('Дистанция', w.distance >= 1000 ? num(w.distance / 1000, 2) : Math.round(w.distance), w.distance >= 1000 ? 'км' : 'м'));
     h += `<div class="tiles actv-tiles rise">${tiles.join('')}</div>`;
-    if (!maxHr) h += '<p class="small muted actv-foot">Макс. пульс в профиле WHOOP не указан — проценты зон без пульса в ударах.</p>';
     h += zonesCard(w, maxHr);
     h += shareCard(w, t, (t.workouts || []).length);
     const when = t.day === d.today.day ? 'сегодняшней' : `${F.dateLine(t.day)}`;
