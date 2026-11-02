@@ -61,6 +61,7 @@
   const partDone = (t, p) => t[p + '_total'] > 0 && t[p + '_done'] >= t[p + '_total'];
   // заглушка загрузки — другим тегом (article): morph заменит её целиком, и ширины строк-заглушек (style="width:92%")
   // не прилипнут к настоящим блокам (morph не снимает style, которого нет в новой разметке)
+  const days = n => `${n} ${F.plural(n, 'день', 'дня', 'дней')}`;
   const skel = n => `<article class="card">${F.skel(n)}</article>`;
 
   // ---------- строка шага: круглая галочка, отметка одним нажатием ----------
@@ -102,7 +103,7 @@
     const p = t[np + '_total'] && !(partDone(t, np) && t[other + '_total'] && !partDone(t, other) && np === 'am') ? np : other;
     const list = (t[p] || []).slice(0, HOME_MAX), more = (t[p] || []).length - HOME_MAX;
     const due = (t.extra || []).filter(x => !x.done);
-    return `<div class="sec rise">${cap('Кожа', `<button class="link" data-a="sn-open">${d.streak >= 2 ? `<span class="sn-fl num">${F.I.flame}${d.streak}</span>` : 'Все'}</button>`)}
+    return `<div class="sec rise">${cap('Кожа', `<button class="link" data-a="sn-open" aria-label="Кожа: ${d.streak >= 2 ? `серия ${days(d.streak)}` : 'все шаги и дневник'}">${d.streak >= 2 ? `<span class="sn-fl num">${F.I.flame}${d.streak}</span>` : 'Все'}</button>`)}
       <section class="card sn-card"><div class="sn-parts">${partBtn(t, 'am')}${partBtn(t, 'pm')}</div>
         ${list.length ? `<div class="sn-list"><div class="sn-lh">${p === 'am' ? 'Утро' : 'Уход на вечер'}</div>${list.map(x => step(x)).join('')}</div>` : ''}
         ${more > 0 || due.length ? `<button class="sn-more" data-a="sn-open"><span>${due.length ? `Сегодня ещё: ${esc(due.map(x => x.title.toLowerCase()).join(', '))}` : `Ещё ${more}`}</span><span class="chev"></span></button>` : ''}

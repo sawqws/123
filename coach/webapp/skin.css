@@ -12,7 +12,7 @@
 .sn-pi { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--fill); }
 .sn-pi .ico { width: 19px; height: 19px; }
 .sn-pt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.sn-pt b { font: 650 16px/1.15 var(--head); }
+.sn-pt b { font: 650 16px/1.15 var(--head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sn-pt small { font: 500 13px/1.1 var(--num); color: var(--hint); }
 .sn-part.none .sn-pt small { font-family: var(--head); }
 .sn-pm { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px var(--hint-2);
@@ -51,7 +51,7 @@
   color: var(--hint); font: 500 14px/1.25 var(--head); text-align: left; cursor: pointer; }
 .sn-card > .sn-list + .sn-more { margin-top: -10px; }
 .sn-more span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sn-fl { display: inline-flex; align-items: center; gap: 3px; font: 600 14px/1 var(--num); color: var(--ink); }
+.sn-fl { display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; min-width: 44px; min-height: 36px; font: 600 14px/1 var(--num); color: var(--ink); }
 .sn-fl .ico { width: 15px; height: 15px; }
 
 /* ---------- оценка 1–5 ---------- */
@@ -140,8 +140,8 @@
 .sn-ed > .btn { width: 100%; margin-top: 10px; }
 
 @media (max-width: 374px) {
-  .sn-part { gap: 8px; padding: 8px 10px; }
-  .sn-pi { width: 30px; height: 30px; }
+  .sn-part { gap: 8px; padding: 8px 12px; }
+  .sn-pi { display: none; }
   .sn-pt b { font-size: 15px; }
   .sn-bars { gap: 2px; }
 }
