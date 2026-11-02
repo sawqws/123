@@ -201,66 +201,349 @@
   }
 
   // ---------- графики (SVG без библиотек) ----------
+  // Понятность (Глеб 02.11: «графики очень непонятные»): даты под столбиками, значения — у последнего дня, максимума и
+  // минимума, линия «норма …» подписана прямо на графике, уровни (низкое/среднее/высокое) — словами справа, касание или
+  // наведение показывает день и значение. Столбики ≤ 24 px со скруглённым верхом, линии 2 px, сетка — тонкие сплошные.
   const chartW = () => {  // карточка: padding 20 + 20; на широком экране — ширина колонки
     const w = ($('#app') || view).clientWidth || 358, cols = WIDE3.matches ? 3 : WIDE.matches ? 2 : 1;
     return Math.max(200, Math.min((w - (cols - 1) * 24) / cols, 800) - 40);
   };
-  const CH = 112, LAB = 22;
-  function xLabels(days, W, slot) {
-    const n = days.length, fits = Math.max(2, Math.floor(W / (n <= 7 ? 30 : 58)));
-    const k = Math.min(n, fits), idx = new Set();
-    for (let i = 0; i < k; i++) idx.add(Math.round(i * (n - 1) / Math.max(1, k - 1)));
+  const TP = 22, CH = 116, GUT = 64;  // поле над графиком (подписи значений), высота графика, колонка уровней справа
+  const f1 = v => Math.round(v * 10) / 10;
+  const hS = h => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}ч ${m % 60}м`; };  // коротко для подписей: 7ч 12м
+  const dayTip = s => { const d = parseDay(s), t = S.data && S.data.today && S.data.today.day; return `${s === t ? 'Сегодня' : WD[d.getDay()]}, ${d.getDate()} ${MON[d.getMonth()]}`; };
+  // даты под графиком: неделя — день недели и число, месяц — числа (месяц — у первой и при смене), полгода — месяцы
+  function xLabels(days, PW, slot) {
+    const n = days.length, y1 = TP + CH + 16;
     let s = '';
-    idx.forEach(i => {
-      const dt = parseDay(days[i]), x = (i + .5) * slot;
-      const t = n <= 7 ? WD_S[dt.getDay()] : `${dt.getDate()} ${MON_S[dt.getMonth()]}`;
-      const anchor = n > 7 && i === 0 ? 'start' : n > 7 && i === n - 1 ? 'end' : 'middle';
-      s += `<text x="${anchor === 'start' ? 0 : anchor === 'end' ? W : x.toFixed(1)}" y="${CH + 16}" text-anchor="${anchor}">${t}</text>`;
+    const put = (i, a, b, at) => {
+      let x = at != null ? at : (i + .5) * slot, anchor = at != null ? 'start' : 'middle';
+      if (anchor === 'middle' && x < 16) { x = 0; anchor = 'start'; } else if (anchor === 'middle' && x > PW - 16) { x = PW; anchor = 'end'; }
+      s += `<text class="xl" x="${f1(x)}" y="${y1}" text-anchor="${anchor}">${a}</text>`;
+      if (b) s += `<text class="xl2" x="${f1(x)}" y="${y1 + 14}" text-anchor="${anchor}">${b}</text>`;
+    };
+    if (n <= 7) {
+      days.forEach((d, i) => { const dt = parseDay(d); put(i, WD_S[dt.getDay()], `${dt.getDate()}${i === 0 || dt.getDate() === 1 ? ' ' + MON_S[dt.getMonth()] : ''}`); });
+      return s;
+    }
+    if (n <= 45) {
+      const k = Math.max(1, Math.ceil(40 / slot)), idx = [];
+      for (let i = n - 1; i >= 0; i -= k) idx.unshift(i);
+      let lastM = -1;
+      idx.forEach(i => { const dt = parseDay(days[i]), m = dt.getMonth(); put(i, `${dt.getDate()}${m !== lastM ? ' ' + MON_S[m] : ''}`); lastM = m; });
+      return s;
+    }
+    let lastX = -99;
+    days.forEach((d, i) => {
+      const dt = parseDay(d);
+      if (dt.getDate() !== 1 && i !== 0) return;
+      const x = i * slot;
+      if (x - lastX < 34 || x > PW - 24) return;
+      put(i, MON_S[dt.getMonth()], '', x); lastX = x;
     });
     return s;
   }
-  const svg = (W, s, rows) => `<svg class="chart" viewBox="0 0 ${W} ${CH + LAB}" width="${W}" height="${CH + LAB}" role="img">${s}${xLabels(rows.map(r => r.day), W, W / rows.length)}</svg>`;
-  function bars(rows, key, { max, color, ref } = {}) {
-    const W = chartW(), n = rows.length, slot = W / n;
+  // подписи значений по важности; та, что налезает на уже поставленную, не рисуется (значение есть в подсказке)
+  function labels(cands, PW, taken = []) {
+    let s = '';
+    cands.forEach(c => {
+      if (!c) return;
+      const w = c.t.length * 6.3 + 4;
+      let x = c.x, anchor = c.anchor || 'middle';
+      if (anchor === 'middle' && x - w / 2 < 0) { x = 0; anchor = 'start'; }
+      if (anchor === 'middle' && x + w / 2 > PW) { x = PW; anchor = 'end'; }
+      if (anchor === 'end' && x - w < 0) { x = 0; anchor = 'start'; }
+      const x0 = anchor === 'end' ? x - w : anchor === 'middle' ? x - w / 2 : x, b = [x0, c.y - 11, x0 + w, c.y + 3];
+      if (taken.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1])) return;
+      taken.push(b);
+      s += `<text class="${c.cls || 'vl'}" x="${f1(x)}" y="${f1(c.y)}" text-anchor="${anchor}">${esc(c.t)}</text>`;
+    });
+    return s;
+  }
+  // tips[i] = [день, значение, пояснение, y точки, цвет точки] — для плавающей подсказки
+  const svgWrap = (W, H, s, days, PW, slot, tips, kind, label) => `<svg class="chart ${kind}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" tabindex="0"
+    aria-label="${esc(label || 'График')}. Коснись столбика или точки — покажу день и значение" data-tip="${esc(JSON.stringify(tips))}" data-slot="${f1(slot)}" data-pw="${f1(PW)}">${s}${xLabels(days, PW, slot)}</svg>`;
+  const xbOf = n => n <= 7 ? 36 : 22;
+  // столбик: скруглённый верх 4 px, ровное основание
+  function rbar(x, y, w, base) {
+    const h = base - y; if (h <= 0) return '';
+    const r = Math.min(4, w / 2, h);
+    return `M${f1(x)},${base}V${f1(y + r)}Q${f1(x)},${f1(y)} ${f1(x + r)},${f1(y)}H${f1(x + w - r)}Q${f1(x + w)},${f1(y)} ${f1(x + w)},${f1(y + r)}V${base}Z`;
+  }
+  // норма линией с подписью у левого края (над линией, если есть место)
+  function normLine(yn, PW, text, taken) {
+    let s = `<line class="norm" x1="0" x2="${PW}" y1="${f1(yn)}" y2="${f1(yn)}"/>`;
+    // где свободно: над линией слева, под ней слева, над ней справа, под ней справа
+    const spots = [[0, yn - 6, 'start'], [0, yn + 15, 'start'], [PW, yn - 6, 'end'], [PW, yn + 15, 'end']].filter(c => c[1] > 10);
+    for (const [x, y, anchor] of spots) { const t = labels([{ x, y, t: text, anchor, cls: 'norm-t' }], PW, taken); if (t) return s + t; }
+    return s;
+  }
+  // o: max, color (цвет или функция строки), bands [[от, до, слово]], norm {v, t}, fmt (подпись значения с единицей),
+  // tip (строка -> [значение, пояснение, цвет точки]), label (для экранного диктора)
+  function bars(rows, key, o = {}) {
+    const W = chartW(), G = o.bands ? GUT : 0, PW = W - G, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
     const vals = rows.map(r => r[key]).filter(v => v != null);
     if (!vals.length) return '<div class="chart-empty">Нет данных за этот период</div>';
-    const top = max || Math.max(1, ...vals, ...(ref ? rows.map(r => r[ref] || 0) : [])) * 1.08;
-    const gap = n > 60 ? 1 : n > 20 ? 2 : Math.min(10, slot * .35), bw = Math.max(1, slot - gap);
-    let s = `<line class="axis" x1="0" x2="${W}" y1="${CH + .5}" y2="${CH + .5}"/>`;
+    const nv = o.norm && o.norm.v != null ? o.norm.v : null;
+    const top = o.max || Math.max(1, ...vals, nv || 0) * 1.1, base = TP + CH;
+    const y = v => base - Math.max(0, Math.min(v, top)) / top * CH;
+    const bw = n > 60 ? Math.max(1, slot - 1) : n > 20 ? Math.max(2, slot - 2) : Math.min(24, slot * .6);
+    const fmt = o.fmt || (v => num(v)), col = r => typeof o.color === 'function' ? o.color(r) : o.color || 'var(--ink)';
+    let s = '';
+    if (o.bands) o.bands.forEach(([a, b, word]) => {
+      if (a > 0) s += `<line class="grid" x1="0" x2="${PW}" y1="${f1(y(a))}" y2="${f1(y(a))}"/>`;
+      s += `<text class="band-t" x="${PW + 10}" y="${f1((y(a) + y(b)) / 2 + 4)}">${word}</text>`;
+    });
+    s += `<line class="axis" x1="0" x2="${PW}" y1="${base + .5}" y2="${base + .5}"/>`;
+    const hw = Math.min(slot, Math.max(bw + 10, 16));
+    s += `<rect class="ch-hb" x="${f1((slot - hw) / 2)}" y="${TP - 6}" width="${f1(hw)}" height="${CH + 6}" rx="${Math.min(8, hw / 2)}"/>`;
+    const tips = [];
+    let iMax = -1, iMin = -1, iLast = -1;
     rows.forEach((r, i) => {
-      const v = r[key]; if (v == null) return;
-      const h = Math.max(2, v / top * CH), x = i * slot + gap / 2;
-      s += `<rect class="gb" style="--i:${Math.round(i / n * 24)}" x="${x.toFixed(1)}" y="${(CH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(6, bw / 2).toFixed(1)}" fill="${typeof color === 'function' ? color(r) : color}"><title>${r.day}: ${v}</title></rect>`;
+      const v = r[key], x = i * slot + (slot - bw) / 2;
+      if (v == null) { tips.push([dayTip(r.day), 'нет данных', '', base]); return; }
+      if (iMax < 0 || v > rows[iMax][key]) iMax = i;
+      if (iMin < 0 || v < rows[iMin][key]) iMin = i;
+      iLast = i;
+      s += `<path class="gb" style="--i:${Math.round(i / n * 24)}" d="${rbar(x, Math.min(y(v), base - 2), bw, base)}" fill="${col(r)}"/>`;
+      const tp = o.tip ? o.tip(r) : [fmt(v), ''];
+      tips.push([dayTip(r.day), tp[0], tp[1] || '', y(v), tp[2] || '']);
     });
-    if (ref) rows.forEach((r, i) => {
-      const v = r[ref]; if (v == null) return;
-      const y = CH - v / top * CH;
-      s += `<line class="ref" x1="${(i * slot + gap / 2).toFixed(1)}" x2="${((i + 1) * slot - gap / 2).toFixed(1)}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
-    });
-    return svg(W, s, rows);
+    const taken = [];
+    // подписи: последний день (жирно), максимум, минимум
+    const at = (i, cls) => i < 0 ? null : { x: (i + .5) * slot, y: y(rows[i][key]) - 6, t: fmt(rows[i][key]), cls };
+    // порядок важности: последний день, подпись нормы, максимум, минимум
+    let lab = labels([at(iLast, 'vl last')], PW, taken);
+    if (nv != null) s += normLine(y(nv), PW, o.norm.t, taken);
+    lab += labels([iMax !== iLast ? at(iMax, 'vl') : null, iMin !== iLast && iMin !== iMax && n <= 45 ? at(iMin, 'vl') : null], PW, taken);
+    return svgWrap(W, H, s + lab, rows.map(r => r.day), PW, slot, tips, 'bars', o.label);
   }
-  function line(rows, key, color, base) {
-    const W = chartW(), n = rows.length, slot = W / n;
-    const pts = rows.map((r, i) => [(i + .5) * slot, r[key]]).filter(p => p[1] != null);
-    if (pts.length < 2) return '<div class="chart-empty">Мало данных для графика</div>';
-    const vs = pts.map(p => p[1]).concat(base != null ? [base] : []);
-    let lo = Math.min(...vs), hi = Math.max(...vs); const sp = (hi - lo) || 1; lo -= sp * .15; hi += sp * .25;
-    const y = v => CH - 6 - (v - lo) / (hi - lo) * (CH - 12);
-    const P = pts.map(p => [p[0], y(p[1])]);
-    let d = `M${P[0][0].toFixed(1)},${P[0][1].toFixed(1)}`;
-    for (let i = 1; i < P.length; i++) { const [x0, y0] = P[i - 1], [x1, y1] = P[i], cx = (x0 + x1) / 2; d += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`; }
-    const id = 'g' + key + Math.random().toString(36).slice(2, 6);
-    let s = `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".25"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>`;
-    s += `<line class="axis" x1="0" x2="${W}" y1="${CH + .5}" y2="${CH + .5}"/>`;
-    if (base != null) {
-      const yb = y(base);
-      s += `<line class="norm" x1="0" x2="${W}" y1="${yb.toFixed(1)}" y2="${yb.toFixed(1)}"/><text class="norm-t" x="${W}" y="${(yb > 18 ? yb - 6 : yb + 14).toFixed(1)}" text-anchor="end">норма ${num(base)}</text>`;
+  // плавная линия без «выбросов» за точки (монотонная кривая): ни одна дуга не выше максимума и не ниже минимума
+  function smooth(P) {
+    const n = P.length;
+    if (n < 3) return 'M' + P.map(p => `${f1(p[0])},${f1(p[1])}`).join('L');
+    const dx = [], m = [], t = [];
+    for (let i = 0; i < n - 1; i++) { dx[i] = P[i + 1][0] - P[i][0]; m[i] = (P[i + 1][1] - P[i][1]) / dx[i]; }
+    t[0] = m[0]; t[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) t[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+    for (let i = 0; i < n - 1; i++) {
+      if (m[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+      const a = t[i] / m[i], b = t[i + 1] / m[i], h = a * a + b * b;
+      if (h > 9) { const k = 3 / Math.sqrt(h); t[i] = k * a * m[i]; t[i + 1] = k * b * m[i]; }
     }
-    s += `<path class="fillin" d="${d} L${P[P.length - 1][0].toFixed(1)},${CH} L${P[0][0].toFixed(1)},${CH} Z" fill="url(#${id})"/>`;
-    s += `<path class="draw" pathLength="1" d="${d}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>`;
-    const last = P[P.length - 1];
-    s += `<circle class="dotin" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" fill="${color}" stroke="#1a2227" stroke-width="2"/>`;
-    return svg(W, s, rows);
+    let d = `M${f1(P[0][0])},${f1(P[0][1])}`;
+    for (let i = 0; i < n - 1; i++) {
+      const h = dx[i] / 3;
+      d += ` C${f1(P[i][0] + h)},${f1(P[i][1] + t[i] * h)} ${f1(P[i + 1][0] - h)},${f1(P[i + 1][1] - t[i + 1] * h)} ${f1(P[i + 1][0])},${f1(P[i + 1][1])}`;
+    }
+    return d;
+  }
+  // base — твоя норма (линия «норма …»); o.fmt — подпись с единицей («92 мс»), o.label — для диктора
+  function line(rows, key, color, base, o = {}) {
+    const W = chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
+    const pts = rows.map((r, i) => [(i + .5) * slot, r[key], i]).filter(p => p[1] != null);
+    if (pts.length < 2) return '<div class="chart-empty">Мало данных для графика</div>';
+    const fmt = o.fmt || (v => num(v));
+    const vs = pts.map(p => p[1]).concat(base != null ? [base] : []);
+    let lo = Math.min(...vs), hi = Math.max(...vs); const sp = (hi - lo) || 1; lo -= sp * .06; hi += sp * .06;
+    const y = v => TP + 4 + (hi - v) / (hi - lo) * (CH - 24);  // снизу место под подпись минимума
+    const P = pts.map(p => [p[0], y(p[1])]), d = smooth(P), bottom = TP + CH;
+    let s = `<line class="axis" x1="0" x2="${PW}" y1="${bottom + .5}" y2="${bottom + .5}"/>`;
+    s += `<g class="ch-hl"><line class="ch-x" x1="${f1(slot / 2)}" x2="${f1(slot / 2)}" y1="${TP - 6}" y2="${bottom}"/></g>`;
+    s += `<path class="fillin" d="${d} L${f1(P[P.length - 1][0])},${bottom} L${f1(P[0][0])},${bottom} Z" fill="${color}"/>`;
+    s += `<path class="draw" pathLength="1" d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+    let iMax = 0, iMin = 0;
+    pts.forEach((p, k) => { if (p[1] > pts[iMax][1]) iMax = k; if (p[1] < pts[iMin][1]) iMin = k; });
+    const L = pts.length - 1, taken = [];
+    const above = k => ({ x: pts[k][0], y: P[k][1] - 9, t: fmt(pts[k][1]) }), below = k => ({ x: pts[k][0], y: P[k][1] + 17, t: fmt(pts[k][1]) });
+    const lastLab = { ...(L === iMin && L !== iMax ? below(L) : above(L)), anchor: 'end', x: pts[L][0] + 4, cls: 'vl last' };
+    let lab = labels([lastLab], PW, taken);
+    // точки у последнего дня, максимума и минимума — в кольце цвета карточки
+    const dot = (k, r) => `<circle class="${k === L ? 'dotin' : 'mm'}" cx="${f1(P[k][0])}" cy="${f1(P[k][1])}" r="${r}" fill="${color}"/>`;
+    if (base != null) lab += normLine(y(base), PW, `норма ${fmt(base)}`, taken);
+    const mm = labels([iMax !== L ? { ...above(iMax), cls: 'vl' } : null], PW, taken), mn = labels([iMin !== L && iMin !== iMax ? { ...below(iMin), cls: 'vl' } : null], PW, taken);
+    lab += mm + mn;
+    const dots = (mm && iMax !== L ? dot(iMax, 3) : '') + (mn && iMin !== L ? dot(iMin, 3) : '') + dot(L, 4);
+    s += `<circle class="ch-pt" cx="0" cy="0" r="5" fill="${color}"/>`;
+    const tips = rows.map(r => r[key] == null ? [dayTip(r.day), 'нет данных', '', bottom]
+      : [dayTip(r.day), fmt(r[key]), o.tip ? o.tip(r) : base != null ? `норма ${fmt(base)}` : '', y(r[key])]);
+    return svgWrap(W, H, s + dots + lab, rows.map(r => r.day), PW, slot, tips, 'lines', o.label);
+  }
+
+  // плавающая подсказка: наведение мышью, касание пальцем (ведёшь — едет за пальцем), стрелки с клавиатуры;
+  // второе касание того же дня, касание мимо или Esc — скрыть. Одна на всё приложение, текст — через textContent.
+  const tip = document.createElement('div');
+  tip.className = 'ch-tip'; tip.setAttribute('role', 'status'); tip.setAttribute('aria-live', 'polite');
+  tip.innerHTML = '<b></b><span class="ct-d"></span><span class="ct-x"><i></i><em></em></span>';
+  document.body.append(tip);
+  let tipAt = null;  // { svg, i }
+  const tipData = svg => {  // разбор один раз на версию графика (тихое обновление меняет data-tip у того же узла)
+    if (svg._tk !== svg.dataset.tip) { try { svg._tips = JSON.parse(svg.dataset.tip); } catch (e) { svg._tips = []; } svg._tk = svg.dataset.tip; }
+    return svg._tips;
+  };
+  function tipIdx(svg, clientX) {
+    const r = svg.getBoundingClientRect(), k = r.width / Number(svg.viewBox.baseVal.width || r.width);
+    const x = (clientX - r.left) / k, n = tipData(svg).length;
+    return Math.max(0, Math.min(n - 1, Math.floor(x / Number(svg.dataset.slot))));
+  }
+  function tipPlace() {
+    if (!tipAt) return;
+    const { svg, i } = tipAt, d = tipData(svg)[i];
+    if (!d || !svg.isConnected) return tipHide();
+    const r = svg.getBoundingClientRect(), k = r.width / Number(svg.viewBox.baseVal.width || r.width), slot = Number(svg.dataset.slot);
+    const cx = r.left + (i + .5) * slot * k, cy = r.top + Math.max(TP - 6, d[3] - 8) * k;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    const x = Math.max(8, Math.min(innerWidth - w - 8, cx - w / 2)), yy = cy - h - 10 < 8 ? cy + 26 : cy - h - 10;
+    tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(yy)}px)`;
+  }
+  function tipShow(svg, i) {
+    const d = tipData(svg)[i]; if (!d) return;
+    if (tipAt && tipAt.svg !== svg) tipClear();
+    tipAt = { svg, i };
+    tip.querySelector('b').textContent = d[1];
+    tip.querySelector('.ct-d').textContent = d[0];
+    const x = tip.querySelector('.ct-x'); x.hidden = !d[2];
+    x.querySelector('em').textContent = d[2] || '';
+    const dot = x.querySelector('i'); dot.hidden = !d[4]; dot.style.background = d[4] || '';
+    const slot = Number(svg.dataset.slot);
+    const hb = svg.querySelector('.ch-hb, .ch-hl'), pt = svg.querySelector('.ch-pt');
+    if (hb) { hb.style.transform = `translateX(${f1(i * slot)}px)`; hb.classList.add('on'); }
+    if (pt) { pt.style.transform = `translate(${f1((i + .5) * slot)}px, ${f1(d[3])}px)`; pt.classList.toggle('on', d[1] !== 'нет данных'); }
+    svg.classList.add('tipping');
+    const fresh = !tip.classList.contains('on');
+    if (fresh) tip.style.transition = 'opacity .15s';  // первое появление — сразу на месте, дальше едет за пальцем
+    tip.classList.add('on');
+    tipPlace();
+    if (fresh) requestAnimationFrame(() => { tip.style.transition = ''; });
+  }
+  function tipClear() {
+    if (!tipAt) return;
+    const { svg } = tipAt;
+    svg.classList.remove('tipping');
+    svg.querySelectorAll('.ch-hb, .ch-hl, .ch-pt').forEach(e => e.classList.remove('on'));
+  }
+  function tipHide() { tipClear(); tipAt = null; tip.classList.remove('on'); }
+  const chartOf = e => e.target && e.target.closest ? e.target.closest('svg.chart[data-tip]') : null;
+  document.addEventListener('pointermove', e => {
+    const svg = chartOf(e);
+    if (e.pointerType === 'mouse') { if (svg) tipShow(svg, tipIdx(svg, e.clientX)); else if (tipAt && !tipAt.pinned) tipHide(); return; }
+    if (svg && e.buttons && tipAt && tipAt.svg === svg) tipShow(svg, tipIdx(svg, e.clientX));  // палец ведёт по графику
+  }, { passive: true });
+  document.addEventListener('click', e => {
+    const svg = chartOf(e);
+    if (!svg) { if (tipAt && !e.target.closest('.ch-tip')) tipHide(); return; }
+    const i = tipIdx(svg, e.clientX);
+    if (tipAt && tipAt.fresh) { tipAt.fresh = false; tipAt.pinned = true; haptic('select'); return; }  // это касание и открыло подсказку
+    if (tipAt && tipAt.svg === svg && tipAt.i === i && (tipAt.pinned || e.pointerType !== 'mouse')) { tipHide(); return; }
+    tipShow(svg, i); tipAt.pinned = true; haptic('select');
+  });
+  // палец: подсказка — сразу при касании (и едет, если вести); второе касание того же дня её скрывает (в click)
+  document.addEventListener('pointerdown', e => {
+    const svg = chartOf(e); if (!svg || e.pointerType === 'mouse') return;
+    const i = tipIdx(svg, e.clientX);
+    if (tipAt && tipAt.svg === svg && tipAt.i === i) return;
+    tipShow(svg, i); tipAt.fresh = true;
+  }, { passive: true });
+  document.addEventListener('pointercancel', () => { if (tipAt && tipAt.fresh) tipHide(); });  // палец начал прокрутку страницы — подсказка не нужна
+  document.addEventListener('focusin', e => { const svg = chartOf(e); if (svg && svg.matches(':focus-visible')) tipShow(svg, tipData(svg).length - 1); });
+  document.addEventListener('focusout', e => { if (tipAt && e.target === tipAt.svg) tipHide(); });
+  window.addEventListener('keydown', e => {
+    if (!tipAt) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); tipHide(); return; }
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && document.activeElement === tipAt.svg) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      const n = tipData(tipAt.svg).length;
+      tipShow(tipAt.svg, Math.max(0, Math.min(n - 1, tipAt.i + (e.key === 'ArrowLeft' ? -1 : 1)))); tipAt.pinned = true;
+    }
+  }, true);
+  addEventListener('scroll', () => { if (tipAt) requestAnimationFrame(tipPlace); }, { passive: true, capture: true });
+  addEventListener('resize', () => tipHide());
+
+  // ---------- карточки графиков: заголовок простыми словами и одна строка вывода с цифрой ----------
+  const PER = { 7: 'неделю', 14: '2 недели', 30: 'месяц', 180: 'полгода' };
+  const PREV = { 7: 'за прошлую неделю', 14: 'за прошлые 2 недели', 30: 'за прошлый месяц', 180: 'за прошлые полгода' };
+  const filledN = (rows, k) => rows.filter(r => r[k] != null).length;
+  // «В среднем 71% — ▲ на 6% лучше, чем за прошлые 2 недели»; нет прошлого периода — сравнение с твоей нормой за 30 дней
+  function chartLead(rows, prev, key, { fmt, diff, goodUp = null, base, word = 'в среднем', eps = .5 } = {}) {
+    const a = avg(rows, key), n = rows.length;
+    if (a == null) return '<p class="ch-lead"><b>—</b> нет данных за этот период</p>';
+    const half = Math.max(3, Math.round(n / 2));
+    let ref = null, vsWord = '', same = 'как обычно';
+    if (prev && prev.length >= n && filledN(prev, key) >= half && filledN(rows, key) >= half) { ref = avg(prev, key); vsWord = `, чем ${PREV[n] || 'в прошлый раз'}`; same = `так же, как ${PREV[n] || 'в прошлый раз'}`; }
+    else if (base != null) { ref = base; vsWord = ' твоей нормы'; }
+    let cmp = '';
+    if (ref != null) {
+      const x = a - ref, df = diff || fmt;
+      if (Math.abs(x) < eps) cmp = `<span class="ch-cmp flat">${same}</span>`;
+      else {
+        const up = x > 0, good = goodUp == null ? null : goodUp === up;
+        const w = goodUp === true ? (up ? 'лучше' : 'хуже') : goodUp === false ? (up ? 'выше' : 'ниже') : (up ? 'больше' : 'меньше');
+        const tail = goodUp === false ? (good ? ' — хорошо' : ' — хуже') : '';
+        cmp = `<span class="ch-cmp ${good == null ? 'flat' : good ? 'up' : 'down'}"><i>${up ? '▲' : '▼'}</i>на ${df(Math.abs(x))} ${w}${vsWord}${tail}</span>`;
+      }
+    }
+    return `<p class="ch-lead"><span class="ch-v"><b class="num">${fmt(a)}</b> ${word}</span>${cmp}</p>`;
+  }
+  const chBlock = (title, lead, chart, foot = '') => `<div class="ch-block"><h3 class="ch-t">${title}</h3>${lead}<div class="chart-box">${chart}</div>${foot ? `<div class="ch-key">${foot}</div>` : ''}</div>`;
+  const chartCard = (title, lead, chart, foot = '') => `<section class="card chart-card rise">${chBlock(title, lead, chart, foot)}</section>`;
+  const REC_BANDS = [[0, 34, 'низкое'], [34, 67, 'среднее'], [67, 100, 'высокое']];
+  const STRAIN_LV = [[0, 10, 'лёгкая'], [10, 14, 'средняя'], [14, 18, 'высокая'], [18, 21, 'макс.']];
+  const strainWord = v => v < 10 ? 'лёгкая' : v < 14 ? 'средняя' : v < 18 ? 'высокая' : 'максимальная';
+  const recWord = z => ({ green: 'высокое', yellow: 'среднее', red: 'низкое' }[z] || '');
+  const zoneDot = z => z ? `var(--zone-${z}, ${C[z]})` : '';
+  const kdot = z => `<i class="kdot" style="background:${zoneDot(z)}"></i>`;
+  const baseNow = () => (S.data && S.data.today && S.data.today.base) || {};
+  // одни и те же графики — во «Здоровье» и в разборах сна, восстановления и нагрузки
+  const CHARTS = {
+    rec(rows, prev, n) {
+      const g = rows.filter(r => r.zone === 'green').length, y = rows.filter(r => r.zone === 'yellow').length, rd = rows.filter(r => r.zone === 'red').length;
+      const dn = k => `<b class="num">${k}</b> ${plural(k, 'день', 'дня', 'дней')}`;
+      return chBlock(`Восстановление за ${PER[n]}`,
+        chartLead(rows, prev, 'recovery', { fmt: v => `${Math.round(v)}%`, goodUp: true, base: baseNow().recovery }),
+        bars(rows, 'recovery', { max: 100, color: r => C[r.zone] || 'var(--hint)', bands: REC_BANDS, fmt: v => `${Math.round(v)}%`,
+          norm: baseNow().recovery != null ? { v: baseNow().recovery, t: `норма ${Math.round(baseNow().recovery)}%` } : null, label: `Восстановление за ${PER[n]}`,
+          tip: r => [`${r.recovery}%`, `${recWord(r.zone)} восстановление`, zoneDot(r.zone)] }),
+        `<span>${kdot('green')}высокое ${dn(g)}</span><span>${kdot('yellow')}среднее ${dn(y)}</span><span>${kdot('red')}низкое ${dn(rd)}</span>`);
+    },
+    sleep(rows, prev, n) {
+      const nd = avg(rows, 'need'), pf = avg(rows, 'perf');
+      return chBlock(`Сон за ${PER[n]}`,
+        chartLead(rows, prev, 'sleep', { fmt: hHuman, diff: v => `${Math.round(v * 60)} мин`, goodUp: true, base: baseNow().sleep, eps: 5 / 60 }),
+        bars(rows, 'sleep', { color: 'var(--sleep)', fmt: hS, norm: nd != null ? { v: nd, t: `нужно ${hS(nd)}` } : null, label: `Сон за ${PER[n]}`,
+          tip: r => [hHuman(r.sleep), r.need ? `нужно было ${hHuman(r.need)}` : ''] }),
+        `<span><i class="kline"></i>сколько нужно спать — WHOOP считает по нагрузке и недосыпу</span>${pf != null ? `<span>поспал от нужного в среднем <b class="num">${Math.round(pf)}%</b></span>` : ''}`);
+    },
+    strain(rows, prev, n) {
+      const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);
+      return chBlock(`Нагрузка за ${PER[n]}`,
+        chartLead(rows, prev, 'strain', { fmt: v => `${num(v, 1)} из 21`, diff: v => `${num(v, 1)} ${Number.isInteger(Math.round(v * 10) / 10) ? plural(Math.round(v), 'балл', 'балла', 'баллов') : 'балла'}`, base: baseNow().strain, eps: .05 }),
+        bars(rows, 'strain', { max: 21, color: 'var(--strain)', bands: STRAIN_LV, fmt: v => num(v, 1),
+          norm: baseNow().strain != null ? { v: baseNow().strain, t: `норма ${num(baseNow().strain, 1)}` } : null, label: `Нагрузка за ${PER[n]}`,
+          tip: r => [`${num(r.strain, 1)} из 21`, `${strainWord(r.strain)} нагрузка${r.workouts ? ` · ${r.workouts} ${plural(r.workouts, 'тренировка', 'тренировки', 'тренировок')}` : ''}`] }),
+        `<span><b class="num">${wk}</b> ${plural(wk, 'тренировка', 'тренировки', 'тренировок')} за ${PER[n]}</span><span>шкала нагрузки — от 0 до 21</span>`);
+    },
+    hrv(rows, prev, n) {
+      const b = baseNow().hrv, fmt = v => `${Math.round(v)} мс`;
+      return chBlock(`Отдых нервов за ${PER[n]}`, chartLead(rows, prev, 'hrv', { fmt, goodUp: true, base: b }),
+        line(rows, 'hrv', 'var(--rec-blue)', b, { fmt, label: `Отдых нервов за ${PER[n]}` }), '<span>Выше — лучше: нервная система отдохнула</span>');
+    },
+    rhr(rows, prev, n) {
+      const b = baseNow().rhr, fmt = v => `${Math.round(v)} уд/мин`;
+      return chBlock(`Пульс покоя за ${PER[n]}`, chartLead(rows, prev, 'rhr', { fmt, goodUp: false, base: b }),
+        line(rows, 'rhr', 'var(--rec-blue)', b, { fmt, label: `Пульс покоя за ${PER[n]}` }), '<span>Ниже — лучше: сердцу легче, ты отдохнул</span>');
+    },
+  };
+  // самый длинный загруженный ряд (все кончаются сегодняшним днём) и прошлый такой же период для сравнения
+  function longest() {
+    let best = (S.data && S.data.series) || [];
+    Object.values(S.series || {}).forEach(r => { if (r && r.length > best.length) best = r; });
+    return best;
+  }
+  const prevAsked = new Set();
+  function prevOf(n) {
+    const all = longest(), want = Math.min(180, n * 2);
+    if (all.length < want && !prevAsked.has(want)) { prevAsked.add(want); loadSeries(want, true); }
+    return all.length >= 2 * n ? all.slice(-2 * n, -n) : null;
   }
   const avg = (rows, k) => { const v = rows.map(r => r[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const retryCard = (title, act) => `<section class="card"><div class="empty"><span class="e">⚠️</span><b>${title}</b>Проверь интернет и попробуй ещё раз.</div>
@@ -310,7 +593,8 @@
     if (a.nodeType !== 1) return;
     for (const { name } of [...a.attributes]) {
       if (b.hasAttribute(name)) continue;
-      if (name === 'style') continue;  // стиль, выставленный JS (кольца, ширина полос) — не сбрасываем
+      // стиль, выставленный JS для анимации (кольца, ширина и высота полос) — не сбрасываем; остальной (ширины заглушек) — снять
+      if (name === 'style' && (b.hasAttribute('data-off') || b.hasAttribute('data-w') || b.hasAttribute('data-h') || a.classList.contains('arc') || a.classList.contains('w-in'))) continue;
       a.removeAttribute(name);
     }
     for (const { name, value } of [...b.attributes]) {
@@ -340,7 +624,8 @@
     if (!S.data) return;
     const html = S.screen ? screenView(S.screen) : (F.views[S.tab] || { today: todayView, trends: trendsView, food: () => '', coach: coachView }[S.tab])();
     view.removeAttribute('aria-busy');
-    const rz = (S.dayData || S.data.today || {}).recovery;  // цвет восстановления — в живой фон
+    tipHide();  // подсказка графика не висит над новым экраном
+    const rz =(S.dayData || S.data.today || {}).recovery;  // цвет восстановления — в живой фон
     document.documentElement.style.setProperty('--zc', rz ? C[rz.zone] : 'var(--rec-blue)');
     if (revealer) revealer.disconnect();
     // «назад» возвращает прежний экран как был — без повторного набегания цифр и колец
@@ -441,13 +726,34 @@
   }
   const cap = (title, right = '') => `<div class="cap"><h3>${title}</h3>${right ? `<span class="cap-r">${right}</span>` : ''}</div>`;
 
-  // «Strain Target»: шкала 0–21, целевой отрезок по восстановлению и где ты сейчас
-  const STRAIN_BANDS = [[0, 10, 'Лёгкая'], [10, 14, 'Средняя'], [14, 18, 'Высокая'], [18, 21, 'Макс']];
+  // «Strain Target»: шкала 0–21 с подписанными уровнями, цель на сегодня (светлый отрезок) и где ты сейчас (метка с числом)
+  const STRAIN_BANDS = [[0, 10, 'Лёгкая'], [10, 14, 'Средняя'], [14, 18, 'Высокая'], [18, 21, 'Макс.']];
   function strainScale(t, sv) {
-    const band = t.band, p = v => `${pct(v, 21)}%`;
-    return `<div class="scale21"><span class="band21" style="left:${band ? p(band[0]) : 0};width:${band ? `calc(${p(band[1])} - ${p(band[0])})` : 0}"></span>
-        ${sv != null ? `<span class="mark21" style="left:${p(sv)}"><b class="num">${num(sv, 1)}</b></span>` : ''}</div>
-      <div class="ticks num">${STRAIN_BANDS.map(([a, b, k]) => `<span style="flex:${b - a}">${k}</span>`).join('')}</div>`;
+    const band = t.band, p = v => `${pct(v, 21).toFixed(1)}%`;
+    const edge = v => pct(v, 21) < 14 ? ' l' : pct(v, 21) > 86 ? ' r' : '';  // у краёв подпись не вылезает за шкалу
+    const mid = band ? (band[0] + band[1]) / 2 : null, near = band && sv != null && Math.abs(mid - sv) < 5.5;
+    const inBand = band && sv != null && sv >= band[0] && sv <= band[1];
+    const now = sv != null ? `<span class="s21-l now${edge(sv)}" style="left:${p(sv)}">сейчас <b class="num">${num(sv, 1)}</b>${near && inBand ? ' · в цели' : ''}</span>` : '';
+    const goal = band && !(near && sv != null) ? `<span class="s21-l goal${edge(mid)}" style="left:${p(mid)}">цель <b class="num">${band[0]}–${band[1]}</b></span>` : '';
+    return `<div class="s21" role="img" aria-label="Нагрузка ${sv != null ? num(sv, 1) : 'нет'} из 21${band ? `, цель ${band[0]}–${band[1]}` : ''}">
+      <div class="s21-top">${goal}${now}</div>
+      <div class="scale21">${[10, 14, 18].map(v => `<i class="div21" style="left:${p(v)}"></i>`).join('')}
+        ${band ? `<span class="band21" style="left:${p(band[0])};width:calc(${p(band[1])} - ${p(band[0])})"></span>` : ''}
+        ${sv != null ? `<span class="mark21" style="left:${p(sv)}"></span>` : ''}</div>
+      <div class="s21-ax num">${[0, 10, 14, 18, 21].map(v => `<span style="left:${p(v)}">${v}</span>`).join('')}</div>
+      <div class="ticks">${STRAIN_BANDS.map(([a, b, k]) => `<span style="flex:${b - a}">${k}</span>`).join('')}</div></div>`;
+  }
+  // карточка «Цель нагрузки»: одна строка вывода — сколько ещё можно или что уже хватит
+  function strainTarget(t, sv) {
+    const band = t.band;
+    let lead = '';
+    if (sv == null) lead = '<span class="ch-v"><b class="num">—</b> нагрузка ещё не посчитана</span>';
+    else if (!band) lead = `<span class="ch-v"><b class="num">${num(sv, 1)}</b> из 21 сейчас</span>`;
+    else if (sv < band[0]) lead = `<span class="ch-v"><b class="num">${num(sv, 1)}</b> из 21 сейчас</span><span class="ch-cmp flat">до цели ещё ${num(band[0] - sv, 1)} — можно тренироваться</span>`;
+    else if (sv <= band[1]) lead = `<span class="ch-v"><b class="num">${num(sv, 1)}</b> из 21 — ты в цели</span><span class="ch-cmp up"><i>▲</i>хорошая нагрузка на сегодня</span>`;
+    else lead = `<span class="ch-v"><b class="num">${num(sv, 1)}</b> из 21 — выше цели</span><span class="ch-cmp down"><i>▲</i>на ${num(sv - band[1], 1)} больше — на сегодня хватит</span>`;
+    return `<section class="card rise"><h3 class="ch-t">Цель нагрузки на ${t.day === S.data.today.day ? 'сегодня' : 'этот день'}</h3><p class="ch-lead">${lead}</p>${strainScale(t, sv)}
+      ${band ? '<p class="small muted">Цель зависит от восстановления: чем лучше отдохнул, тем больше можно.</p>' : ''}</section>`;
   }
   // «Tonight's Sleep»: сколько нужно и во сколько лечь
   function sleepPlanner(t) {
@@ -478,7 +784,7 @@
   function tile({ k, v, d = 0, unit = '', base, goodUp, ex, sub }) {
     return `<button class="tile" data-a="explain" data-v="${ex}"><span class="tile-k">${k}</span>
       <span class="tile-v"><b class="num">${v == null ? '—' : cnt(v, d)}</b><small>${unit}</small></span>
-      <span class="tile-d">${vs(v, base, goodUp, d) || `<span class="vs flat">${sub || (base != null ? `норма ${num(base, d)}` : 'нет нормы')}</span>`}</span></button>`;
+      <span class="tile-d">${vs(v, base, goodUp, d, unit && unit !== '%' ? ' ' + unit : unit) || `<span class="vs flat">${sub || (base != null ? `норма ${num(base, d)}` : 'нет нормы')}</span>`}</span></button>`;
   }
   function dashboard(t) {
     const r = t.recovery || {}, s = t.sleep || {}, c = t.cycle || {}, b = t.base || {};
@@ -650,7 +956,6 @@
   const lastRows = n => (S.data.series || []).slice(-n);
   const dNoData = (title, text) => `<div class="empty"><span class="e">${I.moon}</span><b>${title}</b>${text}</div>`;
   const metric = (k, v, sub) => `<div class="stat"><div class="k">${k}</div><div class="v num">${v}</div>${sub ? `<div class="d">${sub}</div>` : ''}</div>`;
-  const chartCard = (title, side, chart) => `<section class="card rise">${head(title, side)}<div class="chart-box">${chart}</div></section>`;
   const sub0 = t => `${dateWord(t.day)}, ${dateLine(t.day)}`;
 
   function screenView(kind) {
@@ -690,12 +995,13 @@
   // три деления «плохо / достаточно / оптимально»; границы — наш расчёт (WHOOP свои не публикует)
   const lvl3 = (v, a, b) => v == null ? -1 : v < a ? 0 : v < b ? 1 : 2;
   const seg3 = lvl => `<span class="seg3">${[0, 1, 2].map(i => `<i class="${i === lvl ? ['poor', 'ok', 'best'][i] : ''}"></i>`).join('')}</span>`;
-  const segFoot = '<div class="cfoot"><i class="lg poor"></i>Плохо<i class="lg ok"></i>Достаточно<i class="lg best"></i>Оптимально</div>';
+  // ключ — те же три деления в миниатюре: уровень видно по тому, какое деление горит (в ч/б виде цвет не различим)
+  const segFoot = `<div class="cfoot seg3-key">${['Плохо', 'Достаточно', 'Оптимально'].map((w, l) => `<span>${seg3(l).replace('seg3', 'seg3 mini')}${w}</span>`).join('')}</div>`;
   const insight = (text, link, q) => `<section class="winsight rise"><p>${text}</p><button class="wlink" data-a="ask-go" data-v="${esc(q)}">${link}${I.arrow}</button></section>`;
   const cmpWord = (v, b, tol, up, down, same) => v == null || b == null ? null : v - b > tol ? up : b - v > tol ? down : same;
 
   // фазы сна: какую долю ночи занял каждый этап (подробной по минутам кривой WHOOP API не отдаёт — только итоги по фазам)
-  const STAGES = [['awake', 'Бодрствование', 'var(--st-awake)'], ['rem', 'REM', 'var(--st-rem)'], ['light', 'Лёгкий', 'var(--st-light)'], ['deep', 'Глубокий (SWS)', 'var(--st-deep)']];
+  const STAGES = [['awake', 'Не спал', 'var(--st-awake)'], ['rem', 'Быстрый сон', 'var(--st-rem)'], ['light', 'Лёгкий сон', 'var(--st-light)'], ['deep', 'Глубокий сон', 'var(--st-deep)']];
   function sleepScreen(t) {
     const s = t.sleep, b = t.base || {};
     let h = dTop(t, 'sleep');
@@ -709,27 +1015,30 @@
     h += `<section class="wcon rise">${crow(I.moon, 'Часы и потребность', hvn != null ? hvn + '%' : '—', seg3(L.hvn))}
       ${crow(I.clock, 'Режим сна', s.consistency != null ? s.consistency + '%' : '—', seg3(L.cons))}
       ${crow(I.bed, 'Эффективность', s.efficiency != null ? Math.round(s.efficiency) + '%' : '—', seg3(L.eff))}
-      ${crow(I.sparkle, 'Глубокий + REM', restP != null ? restP + '%' : '—', seg3(L.rest))}${segFoot}</section>`;
+      ${crow(I.sparkle, 'Глубокий + быстрый', restP != null ? restP + '%' : '—', seg3(L.rest))}${segFoot}</section>`;
     const lv = perf == null ? -1 : perf >= 85 ? 2 : perf >= 70 ? 1 : 0;
     const weak = [['режим сна', L.cons], ['часы сна', L.hvn], ['эффективность', L.eff], ['глубокий сон и REM', L.rest]].filter(x => x[1] === 0 || x[1] === 1).sort((a, c) => a[1] - c[1])[0];
     h += insight(`${['Сна не хватило', 'Сон достаточный, но есть куда расти', 'Сон оптимальный — организм хорошо восстановился'][lv] || 'Сон посчитан'}${weak && lv < 2 ? ` — подтянуть стоит ${weak[0]}` : ''}.`,
       'Разобрать мой сон', `Разбери мой сон за ${dateLine(t.day)}: что улучшить?`);
     const mx = Math.max(s.hours, s.need, 1);
-    h += `<section class="card rise">${cap('Часы и потребность', `<span class="num">${s.debt ? 'недосып ' + hm(s.debt) : 'недосыпа нет'}</span>`)}
+    const short = s.need ? s.need - s.hours : null;
+    h += `<section class="card rise"><h3 class="ch-t">Сколько спал и сколько нужно</h3>
+      <p class="ch-lead"><span class="ch-v"><b class="num">${hHuman(s.hours)}</b> сна</span>${short == null ? '' : short > 5 / 60
+        ? `<span class="ch-cmp down"><i>▼</i>на ${Math.round(short * 60)} мин меньше, чем нужно</span>` : '<span class="ch-cmp up"><i>▲</i>выспался — хватило</span>'}</p>
       <div class="hv"><div class="hv-r"><span>Спал · ${esc(s.start)}–${esc(s.end)}</span><b class="num">${hHuman(s.hours)}</b></div>${bar(pct(s.hours, mx), 'var(--sleep)')}
         <div class="hv-r"><span>Нужно</span><b class="num">${hHuman(s.need)}</b></div>${bar(pct(s.need, mx), 'var(--st-awake)')}
         ${b.sleep != null ? `<div class="hv-r"><span>Обычно</span><b class="num">${hHuman(b.sleep)}</b></div>${bar(pct(b.sleep, mx), 'color-mix(in srgb, var(--sleep) 45%, transparent)')}` : ''}</div></section>`;
-    h += `<section class="card rise">${cap('Фазы сна', `<span class="num">в постели ${hm(inBed)}</span>`)}
+    h += `<section class="card rise"><h3 class="ch-t">Из чего состоял сон</h3>
+      <p class="ch-lead"><span class="ch-v"><b class="num">${hHuman(rest)}</b> восстанавливающего сна</span><span class="ch-cmp flat">глубокий + быстрый · ${restP != null ? restP + '% сна' : ''} · в постели ${hHuman(inBed)}</span></p>
       <div class="stagebar">${STAGES.map(([k, , col]) => s[k] ? `<span style="flex:${s[k]};background:${col}"></span>` : '').join('')}</div>
       <div class="steps-chart">${STAGES.map(([k, name, col], i) => {
         const v = s[k] || 0, p = v / inBed * 100;
         return `<div class="stp"><span class="stn"><i style="background:${col}"></i>${name}</span>
-          <span class="stbar"><span style="margin-left:${(i * 3).toFixed(0)}%;width:0;background:${col}" data-w="${Math.max(1.5, p).toFixed(1)}%"></span></span>
-          <span class="stv num"><b>${hm(v)}</b><small>${p.toFixed(0)}%</small></span></div>`;
-      }).join('')}</div><p class="small muted">Восстанавливающий сон — глубокий ${hm(s.deep)} + REM ${hm(s.rem)} = ${hm(rest)}.</p></section>`;
-    h += `<div class="grid2 metrics rise">${metric('Дыхание во сне', s.resp != null ? num(s.resp, 1) : '—', b.resp != null ? `обычно ${num(b.resp, 1)} в мин` : 'в минуту')}
-      ${metric('Пробуждения', s.disturbances != null ? s.disturbances : '—', s.cycles != null ? `${s.cycles} ${plural(s.cycles, 'цикл', 'цикла', 'циклов')} сна` : '')}</div>`;
-    h += chartCard('Сон за 14 дней', `<span class="num"><i class="tick"></i>нужно</span>`, bars(lastRows(14), 'sleep', { color: 'var(--sleep)', ref: 'need' }));
+          <span class="stbar"><span style="width:0;background:${col}" data-w="${Math.max(1.5, p).toFixed(1)}%"></span></span>
+          <span class="stv num"><b>${hS(v)}</b><small>${p.toFixed(0)}%</small></span></div>`;
+      }).join('')}</div><p class="small muted">Глубокий сон чинит мышцы, быстрый — голову и память. Чем их больше, тем лучше восстановление.</p></section>`;
+    h += `<div class="grid2 metrics rise">${metric('Дыхание во сне', s.resp != null ? `${num(s.resp, 1)}<small>вдохов/мин</small>` : '—', b.resp != null ? `обычно ${num(b.resp, 1)} вдохов в минуту` : '')}
+      ${metric('Просыпался', s.disturbances != null ? `${s.disturbances}<small>${plural(s.disturbances, 'раз', 'раза', 'раз')}</small>` : '—', s.cycles != null ? `${s.cycles} ${plural(s.cycles, 'цикл', 'цикла', 'циклов')} сна` : '')}</div>`;
     return h;
   }
 
@@ -740,18 +1049,14 @@
     h += bigRing(r.score / 100, C[r.zone], `${cnt(r.score)}<small>%</small>`, 'Восстановление');
     if (r.calibrating) h += '<div class="note rise"><span>⏳</span><span>WHOOP ещё калибруется — первые недели цифры неточные.</span></div>';
     const perfs = (d.series || []).filter(x => x.day < t.day).map(x => x.perf).filter(x => x != null), pb = perfs.length >= 5 ? perfs.reduce((a, x) => a + x, 0) / perfs.length : null;
-    h += `<section class="wcon rise">${crow(I.hrv, 'Вариабельность пульса', r.hrv != null ? Math.round(r.hrv) : '—', tri(r.hrv, b.hrv, true), 'hrv')}
-      ${crow(I.rhr, 'Пульс покоя', r.rhr != null ? r.rhr : '—', tri(r.rhr, b.rhr, false), 'rhr')}
-      ${crow(I.lungs, 'Частота дыхания', s.resp != null ? num(s.resp, 1) : '—', tri(s.resp, b.resp, null, 1), 'resp')}
-      ${crow(I.moon, 'Выполнение сна', s.performance != null ? s.performance + '%' : '—', tri(s.performance, pb, true))}${vsFoot}</section>`;
+    h += `<section class="wcon rise">${crow(I.hrv, 'Отдых нервов', r.hrv != null ? `${Math.round(r.hrv)}<small>мс</small>` : '—', tri(r.hrv, b.hrv, true), 'hrv')}
+      ${crow(I.rhr, 'Пульс покоя', r.rhr != null ? `${r.rhr}<small>уд/мин</small>` : '—', tri(r.rhr, b.rhr, false), 'rhr')}
+      ${crow(I.lungs, 'Дыхание во сне', s.resp != null ? `${num(s.resp, 1)}<small>в мин</small>` : '—', tri(s.resp, b.resp, null, 1), 'resp')}
+      ${crow(I.moon, 'Сон от нужного', s.performance != null ? s.performance + '%' : '—', tri(s.performance, pb, true))}${vsFoot}</section>`;
     const parts = [cmpWord(r.hrv, b.hrv, (b.hrv || 0) * .07, 'Отдых нервов лучше обычного', 'Отдых нервов хуже обычного', 'Отдых нервов как обычно'),
       cmpWord(r.rhr, b.rhr, 2, 'пульс покоя выше', 'пульс покоя ниже', 'пульс покоя обычный')].filter(Boolean);
     h += insight(`${parts.length ? parts.join(', ') + ' — ' : ''}${{ green: 'организм готов к нагрузке сегодня', yellow: 'сегодня лучше умеренная нагрузка', red: 'сегодня день восстановления' }[r.zone]}.`.replace(/^./, x => x.toUpperCase()),
       'Разобрать восстановление', `Почему у меня восстановление ${r.score}% и что с этим делать сегодня?`);
-    const rows = lastRows(14);
-    h += chartCard('Восстановление, 14 дней', b.recovery != null ? `<span class="num">обычно ${num(b.recovery)}%</span>` : '', bars(rows, 'recovery', { max: 100, color: r2 => C[r2.zone] || 'var(--hint)' }));
-    h += chartCard('Отдых нервов, 14 дней', '<span>выше — лучше</span>', line(rows, 'hrv', 'var(--rec-blue)', b.hrv));
-    h += chartCard('Пульс покоя, 14 дней', '<span>ниже — лучше</span>', line(rows, 'rhr', 'var(--rec-blue)', b.rhr));
     if (t.brief) h += `<div class="label rise">Разбор тренера</div><div class="card prose rise">${tgHtml(t.brief)}</div>`;
     if ((t.tips || []).length) h += `<div class="label rise">Сигналы тела</div><div class="card tips rise">${t.tips.map(x => `<div class="tip ${x.tone}"><i></i><p>${esc(x.text)}</p></div>`).join('')}</div>`;
     if (t.day === d.today.day) h += `<button class="btn tonal rise" data-a="brief">${t.brief ? 'Обновить разбор' : 'Разобрать сейчас'}</button>`;
@@ -769,14 +1074,14 @@
     // зоны — только по тренировкам (поминутного пульса за весь день WHOOP API не отдаёт)
     const zs = [1, 2, 3, 4, 5].map(i => ws.reduce((a, w) => a + ((w.zones || [])[i] || 0), 0));
     const z13 = zs[0] + zs[1] + zs[2], z45 = zs[3] + zs[4], mins = ws.reduce((a, w) => a + (w.minutes || 0), 0);
-    h += `<section class="wcon rise">${crow(I.zones, 'Пульсовые зоны 1–3', ws.length ? hm(z13 / 60) : '—', '<i class="tri dot"></i>')}
-      ${crow(I.zones, 'Пульсовые зоны 4–5', ws.length ? hm(z45 / 60) : '—', '<i class="tri dot"></i>')}
-      ${crow(I.bolt, 'Калории', c && c.kcal != null ? big(c.kcal) : '—', tri(c && c.kcal, b.kcal, null), 'kcal')}
-      ${crow(I.run, 'Тренировки', ws.length ? `${ws.length} · ${hm(mins / 60)}` : '0', '<i class="tri dot"></i>')}${vsFoot}</section>`;
+    h += `<section class="wcon rise">${crow(I.zones, 'Пульс: зоны 1–3 · лёгкие', ws.length ? hS(z13 / 60) : '—', '<i class="tri dot"></i>')}
+      ${crow(I.zones, 'Пульс: зоны 4–5 · тяжёлые', ws.length ? hS(z45 / 60) : '—', '<i class="tri dot"></i>')}
+      ${crow(I.bolt, 'Калории', c && c.kcal != null ? `${big(c.kcal)}<small>ккал</small>` : '—', tri(c && c.kcal, b.kcal, null), 'kcal')}
+      ${crow(I.run, 'Тренировки', ws.length ? `${ws.length} · ${hS(mins / 60)}` : '0', '<i class="tri dot"></i>')}${vsFoot}</section>`;
     const word = sv == null ? '' : sv < 10 ? 'лёгкая: организм почти не напрягался' : sv < 14 ? 'средняя: обычная активная нагрузка' : sv < 18 ? 'высокая: сердце и мышцы хорошо поработали' : 'максимальная: на пределе сил';
     h += insight(sv == null ? 'Нагрузка ещё не посчитана.' : `Нагрузка ${num(sv, 1)} — ${word}.${t.band ? ` Цель на сегодня по восстановлению — ${t.band[0]}–${t.band[1]}.` : ''}`,
       'Разобрать нагрузку', 'Сколько и как мне тренироваться сегодня по нагрузке и восстановлению?');
-    if (t.band || sv != null) h += `<section class="card rise">${cap('Цель нагрузки', t.band ? `<b class="num" style="color:var(--strain)">${t.band[0]}–${t.band[1]}</b>` : '')}${strainScale(t, sv)}</section>`;
+    if (t.band || sv != null) h += strainTarget(t, sv);
     h += `<div class="grid2 metrics rise">${metric('Пульс средний', c && c.avg_hr ? c.avg_hr : '—', 'уд/мин за день')}${metric('Пульс макс.', c && c.max_hr ? c.max_hr : '—', 'уд/мин за день')}</div>`;
     if (ws.length) {
       h += '<div class="label rise">Тренировки</div>';
@@ -785,10 +1090,9 @@
         return `<section class="card wk rise tap" data-a="workout" data-v="${esc(w.id)}" role="button"><div class="wk-h"><div><div class="wk-n">${esc(w.sport)}</div><div class="meta num">${esc(w.start)} · ${w.minutes || '—'} мин · пульс ${w.avg_hr || '—'}/${w.max_hr || '—'}${w.kcal ? ` · ${big(w.kcal)} ккал` : ''}</div></div>
           <div class="wk-s num">${w.strain != null ? num(w.strain, 1) : '—'}</div></div>
           ${tot ? `<div class="zbar">${w.zones.slice(1).map((m, i) => m ? `<span style="flex:${m};background:${ZCOL[i]}"></span>` : '').join('')}</div>
-          <div class="zleg num">${w.zones.slice(1).map((m, i) => `<span><i style="background:${ZCOL[i]}"></i>Z${i + 1}<b>${m}</b></span>`).join('')}</div>` : ''}</section>`;
+          <div class="zleg num">${w.zones.slice(1).map((m, i) => `<span><i style="background:${ZCOL[i]}"></i>Зона ${i + 1}<b>${m}<small> мин</small></b></span>`).join('')}</div>` : ''}</section>`;
       }).join('');
     } else h += '<div class="empty rise"><span class="e">' + I.run + '</span>Тренировок за день нет.</div>';
-    h += chartCard('Нагрузка, 14 дней', b.strain != null ? `<span class="num">обычно ${num(b.strain, 1)}</span>` : '', bars(lastRows(14), 'strain', { max: 21, color: 'var(--strain)' }));
     return h;
   }
 
@@ -818,15 +1122,18 @@
     const stV = per === 'day' ? (dd.cycle ? dd.cycle.strain : null) : x.strain;
     let h = `<p class="small muted">${range} · сравнение: ${esc(s.prev_label)}</p>
       <div class="grid2">${tile('Восстановление', recV != null ? Math.round(recV) + '%' : '—', cmp(recV, p.recovery, true, '%'))}
-      ${tile('Отдых нервов', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true))}
-      ${tile('Пульс покоя', rhrV != null ? Math.round(rhrV) : '—', cmp(rhrV, p.rhr, false))}
-      ${tile('Сон', hm(slV), cmp(slV != null ? slV * 60 : null, p.sleep != null ? p.sleep * 60 : null, true, ' мин'))}
-      ${tile('Нагрузка', stV != null ? num(stV, 1) : '—', cmp(stV, p.strain, null, '', 1))}
-      ${per === 'day' ? tile('Тренировки', (dd.workouts || []).length, '') : tile('Тренировки', x.workouts, `<span class="muted">${x.minutes} мин</span>`)}</div>`;
+      ${tile('Отдых нервов', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true, ' мс'))}
+      ${tile('Пульс покоя', rhrV != null ? Math.round(rhrV) + ' уд/мин' : '—', cmp(rhrV, p.rhr, false, ' уд/мин'))}
+      ${tile('Сон', hHuman(slV), cmp(slV != null ? slV * 60 : null, p.sleep != null ? p.sleep * 60 : null, true, ' мин'))}
+      ${tile('Нагрузка', stV != null ? num(stV, 1) + ' из 21' : '—', cmp(stV, p.strain, null, '', 1))}
+      ${per === 'day' ? tile('Тренировки', (dd.workouts || []).length, '') : tile('Тренировки', x.workouts, `<span class="muted">всего ${x.minutes} мин</span>`)}</div>`;
     if (per !== 'day' && x.days) {
       const zb = (n, c) => n ? `<span style="flex:${n};background:${c}"></span>` : '';
-      h += `<div class="zones">${zb(x.green, C.green)}${zb(x.yellow, C.yellow)}${zb(x.red, C.red)}</div>
-        <p class="small muted num">🟢 ${x.green} · 🟡 ${x.yellow} · 🔴 ${x.red} из ${x.days} дн. · отбой в среднем ${x.bed != null ? esc(clockH(x.bed)) : '—'}${x.bed_spread != null ? ` ±${num(x.bed_spread * 60)} мин` : ''}</p>`;
+      const dn = k => `<b class="num">${k}</b> ${plural(k, 'день', 'дня', 'дней')}`;
+      h += `<div class="label">Восстановление по дням</div><div class="card sum-z"><p class="ch-lead"><span class="ch-v"><b class="num">${x.green}</b> из ${x.days} ${plural(x.days, 'дня', 'дней', 'дней')} — высокое</span></p>
+        <div class="zones" role="img" aria-label="Высокое ${x.green}, среднее ${x.yellow}, низкое ${x.red} из ${x.days}">${zb(x.green, C.green)}${zb(x.yellow, C.yellow)}${zb(x.red, C.red)}</div>
+        <div class="ch-key"><span>${kdot('green')}высокое ${dn(x.green)}</span><span>${kdot('yellow')}среднее ${dn(x.yellow)}</span><span>${kdot('red')}низкое ${dn(x.red)}</span></div>
+        <p class="small muted num">Отбой в среднем ${x.bed != null ? esc(clockH(x.bed)) : '—'}${x.bed_spread != null ? `, разброс ±${num(x.bed_spread * 60)} мин` : ''}</p></div>`;
     }
     h += `<div class="label">Итог и советы</div>`;
     if (z.making && z.live) h += `<div class="card prose sum-live">${md(z.live)}</div>`;
@@ -936,7 +1243,7 @@
     }).join('');
     return `<section class="card monitor rise">${cap('Монитор здоровья', all ? `<b class="num" style="color:${ok === all ? C.green : ok >= all - 1 ? C.yellow : C.red}">${ok}/${all}</b> в норме` : '')}${rows}</section>`;
   }
-  const RANGES = [[7, '1Н'], [30, '1М'], [180, '6М']];
+  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, 'Полгода']];
   function trendsView() {
     const t = S.data.today;
     let h = hero('Здоровье', `${dateWord(t.day)}, ${dateLine(t.day)}`);
@@ -956,22 +1263,15 @@
     if (!rows.some(r => r.recovery != null || r.strain != null || r.sleep != null)) {
       return h + `<div class="empty"><span class="e">${I.trends}</span><b>Данных пока нет</b>Подключи WHOOP — графики появятся после первой ночи с браслетом.</div>`;
     }
-    const zc = r => C[r.zone] || 'var(--hint)';
-    const card = (title, value, unit, side, chart, color) => `<section class="card rise">${cap(title, side)}
-      <div class="big-line"><span class="v num" style="color:${color || 'var(--ink)'}">${value}</span><span class="u">${unit}</span></div>${chart}</section>`;
-    const greens = rows.filter(r => r.zone === 'green').length, yellows = rows.filter(r => r.zone === 'yellow').length, reds = rows.filter(r => r.zone === 'red').length;
-    h += card('Восстановление', num(avg(rows, 'recovery')), '% в среднем', `<span class="num"><i class="dot" style="background:${C.green}"></i>${greens}<i class="dot" style="background:${C.yellow}"></i>${yellows}<i class="dot" style="background:${C.red}"></i>${reds}</span>`, bars(rows, 'recovery', { max: 100, color: zc }));
-    h += card('Сон', hm(avg(rows, 'sleep')), 'в среднем', '<i class="tick"></i>нужно', bars(rows, 'sleep', { color: 'var(--sleep)', ref: 'need' }), 'var(--sleep)');
-    const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);
-    h += card('Нагрузка', num(avg(rows, 'strain'), 1), 'в среднем', `<span class="num">${wk} ${plural(wk, 'тренировка', 'тренировки', 'тренировок')}</span>`, bars(rows, 'strain', { max: 21, color: 'var(--strain)' }), 'var(--strain)');
-    h += card('Отдых нервов', num(avg(rows, 'hrv')), 'мс', 'выше — лучше', line(rows, 'hrv', 'var(--rec-blue)', avg(rows, 'hrv')));
-    h += card('Пульс покоя', num(avg(rows, 'rhr')), 'уд/мин', 'ниже — лучше', line(rows, 'rhr', 'var(--rec-blue)', avg(rows, 'rhr')));
+    // каждый график: заголовок «… за неделю», строка вывода (среднее и сравнение с прошлым таким же периодом), подсказка по касанию
+    const n = S.range, prev = prevOf(n), card = html => `<section class="card chart-card rise">${html}</section>`;
+    ['rec', 'sleep', 'strain', 'hrv', 'rhr'].forEach(k => { h += card(CHARTS[k](rows, prev, n)); });
     h += slot('healthBottom', t, rows);
     return h;
   }
-  async function loadSeries(n) {
-    S.seriesErr = null;
-    try { S.series[n] = (await api('/api/series', { n })).series; } catch (e) { fail(e); S.seriesErr = n; }
+  async function loadSeries(n, quiet) {  // quiet — прошлый период для сравнения: без ошибки на экране
+    if (!quiet) S.seriesErr = null;
+    try { S.series[n] = (await api('/api/series', { n })).series; } catch (e) { if (quiet) return; fail(e); S.seriesErr = n; }
     if (S.tab === 'trends') render(false);
   }
   async function loadProgress(make) {
@@ -1305,7 +1605,7 @@
   // всё, чем пользуются модули
   Object.assign(F, { morph, S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
     isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
-    dHead, cap, head, hero, chartCard, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
+    dHead, cap, head, hero, chartCard, chBlock, chartLead, CHARTS, PER, prevOf, longest, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
     summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav, theme, wide });
   // вид WHOOP: «Прогноз на день» открывает совет дня листом (карточки над «Моим днём» у WHOOP нет)
   if (!F.actions.outlook) F.actions.outlook = () => { if (S.outlookHtml) sheet(`<h2>Прогноз на день</h2>${S.outlookHtml}`); else openScreen('rec'); };

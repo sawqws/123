@@ -85,15 +85,20 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None):
     return res["result"].strip()
 
 
-def chat_prompt(context, history, question):
+def chat_prompt(context, history, question, full=False):
+    """Вопрос тренеру — о чём угодно (спорт, сон, еда, кожа, учёба, настроение, быт). full — ответ для приложения
+    (полный, но по делу); без него — короткий для чата бота (целиком он всё равно остаётся в приложении)."""
     talk = "\n".join(("Я: " if m["role"] == "user" else "Тренер: ") + m["text"][:1200] for m in history)
+    how = ("Ответ для приложения: полный, но по делу — до ~15 строк, пункты «- …», **жирным** главное. "
+           if full else "Ответ для чата: 2–5 коротких строк. ")
     return (f"ДАННЫЕ:\n{context}\n\n" + (f"НЕДАВНИЙ РАЗГОВОР:\n{talk}\n\n" if talk else "")
-            + f"ВОПРОС: {question}\n\nОтветь как тренер по правилам из системного промпта: "
-            "2–5 коротких строк, сначала вывод с цифрами.")
+            + f"ВОПРОС: {question}\n\nОтветь как личный наставник по правилам из системного промпта. {how}"
+            "Сначала главный вывод, потом что сделать; опирайся на ДАННЫЕ (цифры, режим, привычки, еду, уход), "
+            "когда они к месту, и не притягивай их, если вопрос о другом.")
 
 
-def ask(context, history, question):
-    return claude(chat_prompt(context, history, question))
+def ask(context, history, question, full=False):
+    return claude(chat_prompt(context, history, question, full))
 
 
 def morning(context):

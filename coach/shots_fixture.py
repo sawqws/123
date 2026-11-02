@@ -28,7 +28,8 @@ import coach  # noqa: E402
 # GET-пути разделов, которые приложение спрашивает без параметров — добавляй сюда свои
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
-               "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal"]
+               "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/skin/rate"]
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -97,6 +98,34 @@ def seed_habits(today):
     coach.f_habits.put_doc(coach.db, T.U, today.isoformat(), t)
 
 
+# Уход за кожей — нейтральный пример (обычный базовый уход), «Заполнить списком» через /api/skin/import
+SKIN = """Утро: умыться мягким гелем, увлажняющий крем
+Вечер:
+- умыться
+- крем на ночь
+Маска 2 раза в неделю: вт, сб
+Скраб раз в неделю
+Тип кожи: комбинированная
+Не подходит: спиртовые лосьоны"""
+SKIN_RATES = [3, 3, 4, 3, 2, 3, 3, 4, 4, 3, 3, 4, 4, 5, 4, 3, 4, 4, 4, 5, 4, 4, 3, 4, 5, 4, 4, 5, 4]  # 29 дней до сегодня
+
+
+def seed_skin(today):
+    """Уход и дневник кожи за месяц (не каждый день всё по плану — как в жизни); сегодня утро сделано, вечер — нет."""
+    coach.route(T.U, "/api/skin/import", {"text": SKIN})
+    st = coach.f_skin.load(coach.db, T.U)
+    st["created"] = (today - datetime.timedelta(days=29)).isoformat()
+    coach.f_skin.store(coach.db, T.U, st)
+    am, pm = [s["id"] for s in st["am"]], [s["id"] for s in st["pm"]]
+    for back, r in enumerate(reversed(SKIN_RATES), 1):
+        d = today - datetime.timedelta(days=back)
+        full = back < 6 or back % 4 != 0
+        m = am + (pm if full else []) + ([st["extra"][0]["id"]] if d.weekday() in (1, 5) else [])
+        coach.f_skin.put_doc(coach.db, T.U, d.isoformat(), {"m": m, "r": r if back % 7 != 3 else None, "t": "",
+                                                            "a": True, "p": full, "ok": full})
+    coach.f_skin.put_doc(coach.db, T.U, today.isoformat(), {"m": am, "r": 4, "t": "", "a": True, "p": False, "ok": False})
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
     coach.db = db
@@ -106,6 +135,7 @@ def build(shots=None):
         db.save_profile(T.U, {"age": "15", "sex": "m", "sport": "бокс", "goal": "form"})
         db.add_goal(T.U, "ложиться до 23:00")
         seed_habits(today)
+        seed_skin(today)
         allp = coach.route(T.U, "/api/all", {})
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]
@@ -137,6 +167,8 @@ def build(shots=None):
             api["/api/regime/check"] = reg
         api["/api/habits/import"] = coach.f_habits.import_text(  # предпросмотр «Добавить списком»
             db, T.U, "Пить 8 стаканов воды\nАнглийский 3 раза в неделю\nБег пн ср пт в 07:00", today, preview=True)
+        api["/api/skin/import"] = coach.f_skin.import_text(db, T.U, "Утром: тоник\nКрем от солнца утром\nПатчи по субботам",
+                                                           today, preview=True)  # предпросмотр «Заполнить списком»
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 

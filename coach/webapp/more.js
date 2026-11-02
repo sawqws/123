@@ -43,7 +43,7 @@
     ['spo2', 'Кислород в крови', 'сколько кислорода в крови ночью', I.o2, 'var(--rec-blue)'],
     ['temp', 'Температура кожи', 'отклонение от нормы', I.temp, 'var(--rec-blue)'],
     ['kcal', 'Калории', 'траты за день', I.flame, 'var(--food)'],
-    ['zones', 'Пульсовые зоны', 'Z1–Z5 на тренировке', I.zones, 'var(--z4)'],
+    ['zones', 'Пульсовые зоны', 'зоны 1–5 на тренировке', I.zones, 'var(--z4)'],
     ['target', 'Цель нагрузки', 'ориентир на день', I.target, 'var(--strain)'],
   ];
   const OWN_HELP = ['rec', 'strain', 'sleep', 'zones', 'target'];
@@ -138,15 +138,15 @@
     } else if (kind === 'zones') {
       // границы зон — % от максимального пульса, как в WHOOP: Z1 50–60, Z2 60–70, Z3 70–80, Z4 80–90, Z5 90–100
       const mx = (d.body || {}).max_heart_rate;
-      const ZN = [['Z1', 50, 60, 'разминка, заминка'], ['Z2', 60, 70, 'лёгкое кардио, выносливость'], ['Z3', 70, 80, 'темповая работа'], ['Z4', 80, 90, 'тяжело: раунды, интервалы'], ['Z5', 90, 100, 'максимум, рывки']];
+      const ZN = [['Зона 1', 50, 60, 'разминка, заминка'], ['Зона 2', 60, 70, 'лёгкое кардио, выносливость'], ['Зона 3', 70, 80, 'темповая работа'], ['Зона 4', 80, 90, 'тяжело: раунды, интервалы'], ['Зона 5', 90, 100, 'максимум, рывки']];
       const ws = (t.workouts || []).filter(w => (w.zones || []).length);
       const tot = [0, 0, 0, 0, 0];
       ws.forEach(w => w.zones.slice(1).forEach((m, i) => { tot[i] += m || 0; }));
       h = `<h2>Пульсовые зоны</h2><div class="card more-zl">${ZN.map(([z, a, bb, what], i) => `<div class="more-zr"><i style="background:var(--z${i + 1})"></i><b>${z}</b>
           <span>${what}</span><em class="num">${mx ? `${Math.round(mx * a / 100)}–${Math.round(mx * bb / 100)}` : `${a}–${bb}%`}</em></div>`).join('')}</div>
-        <p class="small muted">${mx ? `По твоему макс. пульсу ${mx} уд/мин из WHOOP.` : 'Проценты от максимального пульса — он появится, когда WHOOP его посчитает.'}${ws.length ? ` За день в зонах: ${tot.map((m, i) => `Z${i + 1} ${m}`).join(' · ')} мин.` : ''}</p>
-        ${box('Что это', '<p>Зона — насколько близко пульс к твоему максимуму. Чем выше зона, тем сильнее растёт нагрузка дня.</p><p>Для бокса нужны обе: <b>Z2</b> строит выносливость (дольше держишь темп), <b>Z4–Z5</b> — взрывную работу в раунде.</p>')}
-        ${box('Как использовать', '<ul><li>Лёгкий день — держись в Z1–Z2</li><li>Интервалы: работа в Z4–Z5, отдых до Z2</li><li>Много Z5 подряд несколько дней — восстановление упадёт</li></ul>')}`;
+        <p class="small muted">${mx ? `По твоему макс. пульсу ${mx} уд/мин из WHOOP.` : 'Проценты от максимального пульса — он появится, когда WHOOP его посчитает.'}${ws.length ? ` За день в зонах: ${tot.map((m, i) => `зона ${i + 1} — ${m}`).join(' · ')} мин.` : ''}</p>
+        ${box('Что это', '<p>Зона — насколько близко пульс к твоему максимуму. Чем выше зона, тем сильнее растёт нагрузка дня.</p><p>Для бокса нужны обе: <b>зона 2</b> строит выносливость (дольше держишь темп), <b>зоны 4–5</b> — взрывную работу в раунде.</p>')}
+        ${box('Как использовать', '<ul><li>Лёгкий день — держись в зонах 1–2</li><li>Интервалы: работа в зонах 4–5, отдых до зоны 2</li><li>Много зоны 5 подряд несколько дней — восстановление упадёт</li></ul>')}`;
     } else if (kind === 'target') {
       const band = t.band;
       h = `<h2>Цель нагрузки</h2>${pair('Цель сегодня', band ? `${band[0]}–${band[1]}` : '—', r ? `восстановление ${ZW[r.zone]}` : 'нет восстановления', 'Сейчас', c.strain != null ? num(c.strain, 1) : '—', 'нагрузка за день')}
@@ -159,6 +159,7 @@
 
   // ---------- вкладка «Тренер» (как WHOOP Coach) ----------
   // подсказки по ситуации дня: восстановление, тренировка, сон, еда
+  const S0 = () => F.S.data || {};
   function prompts(t) {
     const r = t.recovery, s = t.sleep, ws = t.workouts || [], e = t.eaten || {}, out = [];
     const add = (text, ic, col, sub) => { if (!out.some(x => x.text === text)) out.push({ text, ic, col, sub }); };
@@ -172,7 +173,10 @@
     if (!r) add('Как понять, готов ли я к тренировке?', I.rec, 'var(--teal)', 'без данных восстановления');
     if (t.bedtime) add('Во сколько лечь сегодня?', I.moon, 'var(--sleep)', `нужно ${hm(t.bedtime.need)} сна`);
     add('План тренировок на неделю', I.stats, 'var(--teal)', 'по нагрузке и восстановлению');
+    const sk = S0().ext && S0().ext.skin;  // тренер — по всему: кожа, учёба, настроение
+    if (sk && sk.has) add('Что улучшить в уходе за кожей?', I.spark, 'var(--ink)', 'по твоему уходу и оценкам');
     add('Как улучшить сон?', I.moon, 'var(--sleep)', 'режим и привычки');
+    add('Как успевать учёбу и бокс?', I.stats, 'var(--ink)', 'режим дня');
     return out.slice(0, 6);
   }
   function context(t) {
@@ -183,7 +187,7 @@
   function coachView() {
     const S = F.S, t = S.data.today, hist = S.history;
     const name = ((S.data.user && S.data.user.name) || '').trim().split(/\s+/)[0];
-    let h = F.hero('Тренер', 'на данных твоего WHOOP', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
+    let h = F.hero('Тренер', 'знает твой день — спроси о чём угодно', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
     // вид WHOOP: вместо большого заголовка — строка «Ф Тренер · бета» и «новый разговор» справа (как WHOOP Coach)
     h += `<div class="co-top"><span class="co-beta"><i>Ф</i>Тренер · бета</span>${hist && hist.length ? `<button class="co-new" data-a="clear" aria-label="Новый разговор">${I.edit}</button>` : ''}</div>`;
     h += F.slots.coachTop.map(fn => { try { return fn(t) || ''; } catch (e) { console.error('coachTop', e); return ''; } }).join('');
@@ -193,7 +197,7 @@
     if (empty) {
       // как WHOOP Coach: значок «бета», первое сообщение тренера текстом; готовые вопросы — капсулами над полем
       h += `<div class="chat co-chat rise"><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>
-        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Чем помочь? Я вижу твой сон, восстановление, нагрузку и еду.${context(t)}</div>
+        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Спрашивай о чём угодно: спорт, сон, еда, кожа, учёба, настроение. Я вижу твой сон, восстановление, нагрузку, еду, режим, привычки и уход.${context(t)}</div>
         <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
@@ -209,7 +213,7 @@
       <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${F.I.cam}</button>
       <textarea id="q" rows="1" placeholder="Спроси о чём угодно">${esc(S.qDraft || '')}</textarea>
       <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div>
-      <p class="co-note">Тренер не врач: при боли, травме или плохом самочувствии — к врачу.</p></div>`;
+      <p class="co-note">Тренер не врач: при боли, травме, сыпи или плохом самочувствии — к врачу и скажи родителям.</p></div>`;
     return h;
   }
   F.views.coach = coachView;
