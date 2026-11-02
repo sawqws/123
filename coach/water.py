@@ -74,7 +74,8 @@ def parse(text):
 def norm(nutrition, train_minutes=0):
     """(мл на день, пояснение)."""
     if nutrition and nutrition.get("water"):
-        return int(nutrition["water"]), "35 мл на кг веса" + (" + тренировка" if train_minutes else "")
+        base = "норма по возрасту" if nutrition.get("teen") else "35 мл на кг веса"
+        return int(nutrition["water"]), base + (" + тренировка" if train_minutes else "")
     return int(round((DEFAULT_NORM + train_minutes * 10) / 50) * 50), "ориентир без веса — добавь вес в профиле"
 
 

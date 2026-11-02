@@ -228,7 +228,10 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
     protein = round(w * {"form": 1.6, "weight": 1.7, "mass": 1.8, "dry": 1.8 if teen else 2.0}[goal])
     fat = round(max(w * 0.9, kcal * 0.27 / 9))
     carbs = max(0, round((kcal - protein * 4 - fat * 9) / 4))
-    water = round((w * 35 + train_minutes * 10) / 50) * 50
+    # вода (Глеб 02.11: «точно ли мне 3 л?»): подростку не меньше нормы напитков по возрасту (IOM: юноши 14–18 — 2,6 л,
+    # девушки — 2,1 л), взрослому — 35 мл на кг; тренировка — +10 мл в минуту (~0,6 л пота в час)
+    floor = (2100 if profile.get("sex") == "f" else 2600) if teen else 0
+    water = round((max(w * 35, floor) + train_minutes * 10) / 50) * 50
     return {"kcal": kcal, "protein": protein, "fat": fat, "carbs": carbs, "water": water, "spend": round(spend),
             "how": how, "goal": goal, "teen": teen}
 

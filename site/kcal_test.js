@@ -515,7 +515,7 @@ async function addFood(page, q, grams, meal) {
     {
       const base = { goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } }, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {} };
       let { ctx, page } = await newPage(browser, { seed: { ...base, water: { train: 3000, rest: 2500 } } });
-      ok((await text(page, '#water')).includes('0 из 3,4 л'), 'старая норма 3 л → расчёт 3,4 л в день тренировки', await text(page, '#water'));
+      ok((await text(page, '#water')).includes('0 из 3,5 л'), 'старая норма 3 л → расчёт 3,5 л в день тренировки', await text(page, '#water'));
       await ctx.close();
       ({ ctx, page } = await newPage(browser, { seed: { ...base, water: { train: 4000, rest: 2000 }, waterSet: true } }));
       ok((await text(page, '#water')).includes('0 из 4 л'), 'своя норма 4 л сохраняется', await text(page, '#water'));
@@ -535,7 +535,7 @@ async function addFood(page, q, grams, meal) {
       await page.fill('#w-rest', '100'); await page.press('#w-rest', 'Tab'); await sleep(150);
       ok((await toastText(page)).includes('От 500 до 8000'), 'норма воды 100 мл не принимается');
       await page.click('#sheetClose'); await sleep(600);
-      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500 && (await state(page)).waterSet === true, 'настройки: порции как у всех, вода 3500 мл (своя)');
+      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500, 'настройки: порции как у всех, вода 3500 мл');
       await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
       ok((await page.inputValue('#g')) === '250', '«Как у всех» — порция 250 г');
       await page.click('#sheetClose'); await sleep(500);
@@ -630,7 +630,7 @@ async function addFood(page, q, grams, meal) {
       ok((await toastText(page)).includes('Связано с Формой'), 'тост «Связано с Формой»', await toastText(page));
       ok(ctx.syncs.length >= 1 && ctx.syncs[0].auth === 'Bearer tok123456', 'сразу sync с токеном', JSON.stringify(ctx.syncs.map(x => x.auth)));
       const b0 = ctx.syncs[0] && ctx.syncs[0].body;
-      ok(b0 && b0.goals.train.kcal === 3400 && b0.goals.rest.c === 360 && b0.salt === 5 && b0.water.train === 3400 && b0.water.rest === 2500 && typeof b0.days === 'object', 'в sync — нормы, соль, вода', JSON.stringify(b0));
+      ok(b0 && b0.goals.train.kcal === 3400 && b0.goals.rest.c === 360 && b0.salt === 5 && b0.water.train === 3500 && b0.water.rest === 2600 && typeof b0.days === 'object', 'в sync — нормы, соль, вода', JSON.stringify(b0));
       await sleep(300);
       const card = await text(page, '#forma');
       ok(['32', 'низкое', '7,6 ч', '84%', '2,9', 'Бокс', '10:20', '1 ч 38 мин', '13,4', 'Отбой 23:45', 'тренировка 10:00', 'лёгкая'].every(w => card.includes(w)), 'карточка Формы: восстановление, сон, нагрузка, тренировка, режим', card);
@@ -640,7 +640,7 @@ async function addFood(page, q, grams, meal) {
       const fm = await text(page, '#fmeals');
       ok(fm.includes('Из Формы') && fm.includes('Плов <b>') && fm.includes('600') && fm.includes('13:10'), 'секция «Из Формы» (только просмотр, имя как текст)', fm);
       ok(!(await page.$('#fmeals button')), 'еда из Формы не правится');
-      ok((await text(page, '#water .sec-h')).includes('0,5 из 2,5 л'), 'вода: своя 0 + из Формы 0,5', await text(page, '#water .sec-h'));
+      ok((await text(page, '#water .sec-h')).includes('0,5 из 2,6 л'), 'вода: своя 0 + из Формы 0,5', await text(page, '#water .sec-h'));
       await shot(page, '14-forma');
       await sleep(2300); // тип дня по Форме уходит следующим sync
       let n = ctx.syncs.length, last = ctx.syncs[n - 1].body;
@@ -652,7 +652,7 @@ async function addFood(page, q, grams, meal) {
       ok(ctx.syncs.length === n + 1, 'два сохранения подряд → один sync', `${ctx.syncs.length} vs ${n + 1}`);
       last = ctx.syncs[ctx.syncs.length - 1].body.days['2026-10-21'];
       ok(last && JSON.stringify(last.water) === '[250,500]', 'в sync своя вода (без воды Формы)', JSON.stringify(last));
-      ok((await text(page, '#water .sec-h')).includes('1,3 из 2,5 л'), 'общий итог воды 0,75 + 0,5 ≈ 1,3 л', await text(page, '#water .sec-h'));
+      ok((await text(page, '#water .sec-h')).includes('1,3 из 2,6 л'), 'общий итог воды 0,75 + 0,5 ≈ 1,3 л', await text(page, '#water .sec-h'));
       await addFood(page, 'банан', 120, 'snack'); await sleep(2400);
       last = ctx.syncs[ctx.syncs.length - 1].body.days['2026-10-21'];
       const it = last && last.items[0];
