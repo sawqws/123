@@ -129,8 +129,16 @@ $scan.claude_desktop = [ordered]@{ installed = (Test-Path "$env:LOCALAPPDATA\Ant
 if (Test-Path $dc) { try { $scan.claude_desktop.mcp_servers = @((Get-Content $dc -Raw -Encoding UTF8 | ConvertFrom-Json).mcpServers.PSObject.Properties.Name) } catch {} }
 $scan.claude_md_files = @(Find-Items 'CLAUDE.md' 5 -File | ForEach-Object { $_.FullName })
 
+# Прочее: проекты без git, правила других ИИ (Cursor, Codex, Gemini), редакторы
+$scan.code_projects = @(foreach ($m in 'package.json', 'requirements.txt', 'pyproject.toml', 'main.py', 'bot.py', 'index.html') {
+  Find-Items $m 4 -File | ForEach-Object { $_.DirectoryName } }) | Sort-Object -Unique | Where-Object {
+  $d = $_; -not ($scan.git_repos | Where-Object { $d -like "$($_.path)*" }) } | Select-Object -First 200
+$scan.ai_rules = @(foreach ($m in 'AGENTS.md', 'GEMINI.md', '.cursorrules', '.windsurfrules') { Find-Items $m 5 -File | ForEach-Object { $_.FullName } })
+$scan.ai_dirs = @(foreach ($m in '.cursor', '.codex', '.gemini', '.continue', '.aider') { $d = Join-Path $HOME $m; if (Test-Path $d) { $d } })
+$scan.editors = @(foreach ($e in 'Code', 'Cursor', 'Windsurf') { if (Test-Path (Join-Path $env:APPDATA "$e\User")) { $e } })
+
 $scan | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $Kit 'scan.json') -Encoding UTF8
-Ok "Хранилищ Obsidian: $($scan.obsidian_vaults.Count) · git-репозиториев: $($scan.git_repos.Count) · CLAUDE.md: $($scan.claude_md_files.Count) · прошлый Claude Code: $($scan.claude_code.exists)"
+Ok "Хранилищ Obsidian: $($scan.obsidian_vaults.Count) · git-репозиториев: $($scan.git_repos.Count) · проектов без git: $(@($scan.code_projects).Count) · CLAUDE.md: $($scan.claude_md_files.Count) · прошлый Claude Code: $($scan.claude_code.exists)"
 foreach ($v in $scan.obsidian_vaults) { Write-Host "    📓 $($v.path) — заметок $($v.notes)" }
 foreach ($r in $scan.git_repos) { Write-Host "    📦 $($r.path) $(if ($r.remote) { '→ ' + $r.remote } else { '(без GitHub)' })" }
 
@@ -150,3 +158,4 @@ Write-Host 'Дальше: в открывшемся окне Claude войди �
 if ($env:KIT_NO_LAUNCH -ne '1' -and (Has 'claude')) {
   Start-Process powershell -WorkingDirectory $HOME -ArgumentList '-NoExit', '-Command', 'claude'
 }
+$global:LASTEXITCODE = 0

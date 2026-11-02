@@ -72,6 +72,11 @@ s['claude_desktop'] = {'config': os.path.exists(dc)}
 try: s['claude_desktop']['mcp_servers'] = sorted(json.load(open(dc)).get('mcpServers', {}))
 except Exception: pass
 s['claude_md_files'] = walk('CLAUDE.md', 6, file=True)
+repos = [r['path'] for r in s['git_repos']]
+s['code_projects'] = sorted({os.path.dirname(f) for m in ('package.json', 'requirements.txt', 'pyproject.toml', 'main.py', 'bot.py', 'index.html')
+    for f in walk(m, 4, file=True) if not any(f.startswith(r + os.sep) for r in repos)})[:200]
+s['ai_rules'] = [f for m in ('AGENTS.md', 'GEMINI.md', '.cursorrules', '.windsurfrules') for f in walk(m, 5, file=True)]
+s['ai_dirs'] = [H + '/' + m for m in ('.cursor', '.codex', '.gemini', '.continue', '.aider') if os.path.isdir(H + '/' + m)]
 json.dump(s, open(sys.argv[1], 'w'), ensure_ascii=False, indent=2)
 print(f"  ✅ Хранилищ Obsidian: {len(s['obsidian_vaults'])} · git-репозиториев: {len(s['git_repos'])} · CLAUDE.md: {len(s['claude_md_files'])} · прошлый Claude Code: {cc['exists']}")
 for v in s['obsidian_vaults']: print(f"    📓 {v['path']} — заметок {v['notes']}")
