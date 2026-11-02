@@ -139,6 +139,89 @@
 .sn-ed > .label { margin-top: 12px; }
 .sn-ed > .btn { width: 100%; margin-top: 10px; }
 
+/* ---------- фото лба: строка, значок с числом, полёт миниатюры, лист со снимками ---------- */
+.cap-r:has(.sn-ph) { overflow: visible; }
+.sn-ph { position: relative; flex: none; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; margin-right: 4px; border: 0; border-radius: 50%;
+  background: var(--fill); color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  transition: transform .4s var(--spring-bounce, ease), opacity .25s ease; }
+.sn-ph .ico { width: 18px; height: 18px; }
+.sn-ph b { position: absolute; top: -4px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--ink);
+  color: var(--on-ink, var(--bg)); font: 700 11px/18px var(--num); text-align: center; box-shadow: 0 0 0 2px var(--bg); }
+.sn-ph:active { transform: scale(.88); transition-duration: .1s; }
+.sn-ph.zero { opacity: 0; transform: scale(.5); pointer-events: none; }
+.sn-ph.bump { animation: sn-bump .55s var(--spring-bounce, ease); }
+@keyframes sn-bump { 0% { transform: scale(1); } 35% { transform: scale(1.24); } 100% { transform: scale(1); } }
+@media (hover: hover) { .sn-ph:hover { background: var(--card-2); } }
+/* значок в уголке экрана — когда значка карточки не видно (прокрутил) */
+.sn-corner { position: fixed; z-index: 70; top: calc(env(safe-area-inset-top, 0px) + 14px); right: max(16px, env(safe-area-inset-right, 0px));
+  width: 40px; height: 40px; background: var(--card-2); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .28); opacity: 0; transform: scale(.6); pointer-events: none; }
+.sn-corner.show { opacity: 1; transform: none; }
+.sn-corner b { box-shadow: none; }
+.sn-fly { position: fixed; z-index: 71; width: 64px; height: 64px; border-radius: 50%; background: var(--card-2) center / cover no-repeat;
+  box-shadow: 0 0 0 2px var(--ink), 0 10px 26px rgba(0, 0, 0, .35); pointer-events: none; will-change: transform, opacity; }
+
+/* строка «Фото лба»: в свой день — с кнопкой «Снять» (вечером — яркой), в другие дни — тише */
+.sn-shot { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 6px 0; border: 0; background: none;
+  color: var(--ink); text-align: left; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  transition: opacity .25s ease; }
+.sn-sb { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; box-shadow: inset 0 0 0 1.8px var(--hint-2);
+  transition: background-color .25s ease, box-shadow .25s ease, transform .4s var(--spring-bounce, ease); }
+.sn-sb .ico { width: 16px; height: 16px; }
+.sn-shot.due .sn-sb { background: var(--fill); box-shadow: none; }
+.sn-shot.on .sn-sb { background: var(--ink); color: var(--on-ink, var(--bg)); box-shadow: inset 0 0 0 1.8px var(--ink); }
+.sn-shot.on .sn-sb .ico { width: 17px; height: 17px; stroke-width: 2.6; }
+.sn-shot.on .sn-ct b { color: var(--hint); }
+.sn-shot.quiet { opacity: .62; }
+.sn-shot:active .sn-sb { transform: scale(.86); transition-duration: .1s; }
+.sn-go { flex: none; display: inline-grid; place-items: center; min-width: 76px; min-height: 36px; margin-left: auto; padding: 0 16px; border-radius: 999px;
+  background: var(--fill); color: var(--ink); font: 600 14px/1 var(--head); transition: background-color .25s ease, color .25s ease, transform .35s var(--spring-bounce, ease); }
+.sn-shot.hot .sn-go { background: var(--ink); color: var(--on-ink, var(--bg)); }
+.sn-shot:active .sn-go { transform: scale(.92); transition-duration: .1s; }
+@media (hover: hover) { .sn-shot:hover .sn-go { opacity: .88; } .sn-shot.quiet:hover { opacity: .85; } }
+.sn-card > .sn-shotbox { margin: -6px 0 -8px; }
+.sn-list > .sn-shotbox + :is(.sn-ck, .sn-later)::before { content: ""; position: absolute; top: 0; left: 40px; right: 0; height: .5px; background: var(--sep); }
+
+/* лист «Фото лба»: размытые миниатюры, одно фото, удалить */
+.sn-phs h2 { margin-bottom: 4px; }
+.sn-phh { margin: 0; }
+.sn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 8px; margin-top: 14px; }
+.sn-tile { display: grid; gap: 6px; min-width: 0; padding: 0; border: 0; background: none; color: var(--hint); font: 500 12px/1.2 var(--head);
+  text-align: center; cursor: pointer; -webkit-tap-highlight-color: transparent; animation: sn-in .32s var(--spring-soft, ease) both;
+  transition: transform .3s var(--spring-bounce, ease); }
+.sn-tile:active { transform: scale(.95); transition-duration: .1s; }
+.sn-tile small { font-size: 12px; }
+.sn-tw { position: relative; display: block; aspect-ratio: 3 / 4; overflow: hidden; border-radius: 14px; background: var(--in-sheet, var(--card-2)); }
+.sn-tw img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(14px); transform: scale(1.25); opacity: 0; transition: opacity .35s ease; }
+.sn-tw img.in { opacity: .9; }
+.sn-eye { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+  background: rgba(0, 0, 0, .32); color: #fff; }
+.sn-eye .ico { width: 16px; height: 16px; }
+.sn-tile.sk .sn-tw { animation: sn-sk 1.2s ease-in-out infinite alternate; }
+@keyframes sn-sk { from { opacity: .55; } to { opacity: 1; } }
+@media (hover: hover) { .sn-tile:hover .sn-tw img.in { opacity: 1; } .sn-tile:hover small { color: var(--ink); } }
+.sn-first { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin-top: 16px; }
+.sn-first .ico { width: 19px; height: 19px; }
+.sn-view { display: grid; gap: 12px; animation: sn-in .3s var(--spring-soft, ease) both; }
+.sn-vbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; min-height: 40px; padding-right: 58px; }
+.sn-vbar b { font: 650 16px/1.2 var(--head); text-align: center; white-space: nowrap; }
+.sn-vb { justify-self: start; display: inline-flex; align-items: center; gap: 2px; min-height: 36px; padding: 0 12px 0 6px; border: 0; border-radius: 999px;
+  background: var(--fill); color: var(--ink); font: 600 14px/1 var(--head); cursor: pointer; }
+.sn-vb .ico { width: 18px; height: 18px; }
+.sn-vn { justify-self: end; font: 500 13px/1 var(--num); color: var(--hint); white-space: nowrap; }
+.sn-vimg { position: relative; width: min(100%, 420px, calc((100dvh - 260px) * .75)); aspect-ratio: 3 / 4; margin: 0 auto; overflow: hidden; border-radius: 24px;
+  background: var(--in-sheet, var(--card-2)); }
+.sn-vimg img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .3s ease, filter .3s ease; }
+.sn-vimg img.in { opacity: 1; }
+.sn-vimg img.lo { filter: blur(8px); }
+.sn-vnav { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
+.sn-vnav .btn { margin: 0; }
+.sn-vnav .btn.icon { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; border-radius: 50%; }
+.sn-vnav .btn.icon .ico { width: 20px; height: 20px; }
+.sn-vnav .btn.icon:disabled { opacity: .35; }
+.sn-del { min-height: 44px; transition: background-color .2s ease, color .2s ease; }
+.sn-del.sure { background: var(--ink) !important; color: var(--on-ink, var(--bg)) !important; }
+
 @media (max-width: 374px) {
   .sn-part { gap: 8px; padding: 8px 12px; }
   .sn-pi { display: none; }
@@ -146,5 +229,6 @@
   .sn-bars { gap: 2px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sn-part, .sn-box, .sn-box .ico, .sn-rb button, .sn-bar i, .sn-er { transition: none !important; animation: none !important; }
+  .sn-part, .sn-box, .sn-box .ico, .sn-rb button, .sn-bar i, .sn-er, .sn-ph, .sn-sb, .sn-go, .sn-tile, .sn-tw img, .sn-view, .sn-vimg img,
+  .sn-tile.sk .sn-tw { transition: none !important; animation: none !important; }
 }

@@ -1,7 +1,8 @@
 """Кожа: модель ухода, расписание процедур, отметки, серия, дневник кожи, «Заполнить списком», лимиты, контекст тренера,
-связь с режимом (напоминание об отбое) и персона тренера «по всему».
+связь с режимом (напоминание об отбое), фото лба (раз в 3 дня, только владельцу) и персона тренера «по всему».
 usage: python3 coach/test_skin.py
 """
+import base64
 import datetime
 import os
 import sys
@@ -18,6 +19,17 @@ import coach  # noqa: E402
 import f_skin as K  # noqa: E402
 
 D = datetime.date
+# серая картинка-заглушка 48×64 (JPEG) — вместо настоящих фото в тестах и фикстуре
+GRAY_JPEG = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//"
+    "2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCABAADADASIAAhEBAxEB/8QA"
+    "HwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkK"
+    "FhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG"
+    "x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAEC"
+    "AxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE"
+    "hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCfFGKdijFA"
+    "DcUYp2KMUANxRinYoxQAuKMU7FGKAG4oxTsUYoAbijFOxRigB2KMU7FGKAG4oxTsUYoAbijFOxRigB2KMU7FGKAG4oxTsUYoAbijFOxRigD/2Q==")
+GRAY_URL = "data:image/jpeg;base64," + base64.b64encode(GRAY_JPEG).decode()
 TODAY = D(2026, 11, 4)  # среда
 ROUTINE = {"am": [{"title": "Умыться", "product": "мягкий гель"}, {"title": "Крем"}],
            "pm": [{"title": "Умыться"}, {"title": "Крем на ночь"}],
@@ -252,13 +264,14 @@ class ApiTest(unittest.TestCase):
         self.assertIn("к дерматологу и сказать родителям", ctx)
         ext = self.call("/api/all")["ext"]["skin"]
         self.assertEqual((ext["has"], ext["today"]["am_done"], ext["today"]["rating"], ext["notes"]), (True, 1, 3, True))
-        self.assertEqual(K.remind_line(self.db, T.U, TODAY), "Уход на ночь: Крем на ночь, Скраб")
+        # фото лба ещё ни разу не делал — сегодня день фото: второй строкой
+        self.assertEqual(K.remind_line(self.db, T.U, TODAY), "Уход на ночь: Крем на ночь, Скраб\n" + K.PHOTO_LINE)
         # напоминание об отбое: уход — из «Кожи», одинаковые пункты режима («Крем на лицо») не повторяются
         self.call("/api/regime/save", {"cfg": {"evening": ["Душ", "Крем на лицо", "Телефон в сторону"]}})
         sent = []
         with mock.patch.object(coach, "send", lambda chat, text, buttons=None, **kw: sent.append(text)):
             coach.regime_remind(T.U, TODAY)
-        self.assertIn("🧴 Уход на ночь: Крем на ночь, Скраб", sent[0])
+        self.assertIn("🧴 Уход на ночь: Крем на ночь, Скраб\n📸 Сегодня фото лба после умывания", sent[0])
         self.assertNotIn("Крем на лицо", sent[0])
         self.assertIn("Душ", sent[0])
         self.assertLessEqual(sent[0].split("<blockquote>")[1].count("\n") + 1, 5)
@@ -294,6 +307,154 @@ class ApiTest(unittest.TestCase):
         for want in ("о чём угодно", "кож", "учёб", "настроени", "рецептурных", "дерматолог", "родителям",
                      "8-800-2000-122", "без терминов" if "без терминов" in p else "простыми словами"):
             self.assertIn(want, p)
+
+
+class PhotoTest(unittest.TestCase):
+    """Фото лба: сохранение (одно на день, повтор заменяет), список, отдача только владельцу, плохие даты, удаление,
+    расписание раз в 3 дня, строка напоминания, контекст тренера (без самих фото)."""
+    OTHER = T.U + 1
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db, _ = T.seeded(os.path.join(tempfile.mkdtemp(), "skinph.db"))
+
+    def setUp(self):
+        coach.db = self.db
+        self.db.x("DELETE FROM meta WHERE key LIKE 'skin:%'")
+        self.root = tempfile.mkdtemp()
+        p = mock.patch.object(coach, "DATA", self.root)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def call(self, path, body=None, day=TODAY, uid=T.U):
+        now = datetime.datetime.combine(day, datetime.time(21, 10), tzinfo=ZoneInfo("Europe/Moscow"))
+        with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda u: day):
+            return coach.route(uid, path, body or {})
+
+    def file(self, day, uid=T.U, thumb=False):
+        return os.path.join(self.root, "photos", "skin", str(uid), f"{day}{'.t' if thumb else ''}.jpg")
+
+    def test_save_replace_list_get(self):
+        r = self.call("/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
+        ph = r["today"]["photo"]
+        self.assertEqual((ph["done"], ph["count"], ph["last"], r["count"], r["photos"]),
+                         (True, 1, "2026-11-04", 1, [{"day": "2026-11-04"}]))
+        self.assertTrue(os.path.isfile(self.file("2026-11-04")) and os.path.isfile(self.file("2026-11-04", thumb=True)))
+        self.assertEqual(os.stat(self.file("2026-11-04")).st_mode & 0o777, 0o600)
+        self.assertTrue(K.day_doc(self.db, T.U, "2026-11-04")["f"])  # отметка в дне кожи
+        # повтор за день — заменяет (без миниатюры — старая убирается), второго файла нет
+        other = GRAY_JPEG[:-2] + b"\x00" * 8 + GRAY_JPEG[-2:]
+        r = self.call("/api/skin/photo", {"image": base64.b64encode(other).decode()})
+        self.assertEqual((r["count"], r["today"]["photo"]["count"]), (1, 1))
+        self.assertFalse(os.path.exists(self.file("2026-11-04", thumb=True)))
+        with open(self.file("2026-11-04"), "rb") as f:
+            self.assertEqual(f.read(), other)
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.file("2026-11-04")))), ["2026-11-04.jpg"])
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 7))
+        r = self.call("/api/skin/photos", {}, day=D(2026, 11, 7))
+        self.assertEqual(r, {"photos": [{"day": "2026-11-07"}, {"day": "2026-11-04"}], "count": 2})
+        g = self.call("/api/skin/photo", {"day": "2026-11-07"}, day=D(2026, 11, 7))
+        self.assertEqual(g, {"day": "2026-11-07", "image": GRAY_URL})
+        self.assertEqual(self.call("/api/skin/photo/get", {"day": "2026-11-07", "thumb": True})["image"], GRAY_URL)
+        # GET /api/skin/photo?day=… — тот же путь без image (параметры строки — строки)
+        self.assertEqual(self.call("/api/skin/photo", {"day": "2026-11-04", "thumb": "1"})["day"], "2026-11-04")
+
+    def test_only_owner(self):
+        self.call("/api/skin/photo", {"image": GRAY_URL})
+        with self.assertRaises(ValueError):
+            self.call("/api/skin/photo", {"day": "2026-11-04"}, uid=self.OTHER)
+        self.assertEqual(self.call("/api/skin/photos", {}, uid=self.OTHER), {"photos": [], "count": 0})
+        with self.assertRaises(ValueError):
+            self.call("/api/skin/photo/delete", {"day": "2026-11-04"}, uid=self.OTHER)
+        self.assertTrue(os.path.isfile(self.file("2026-11-04")))
+        # и через HTTP: без входа (нет initData и cookie) — 401, файл не отдаётся
+        h = coach.Web.__new__(coach.Web)
+        h.headers, out = {}, []
+        h.reply = lambda code, body, *a, **k: out.append((code, body))
+        h.api("/api/skin/photo", {"day": "2026-11-04"})
+        self.assertEqual(out[0][0], 401)
+        self.assertNotIn("image", out[0][1])
+
+    def test_bad_input(self):
+        for bad in ("../2026-11-04", "2026-11-04/../../x", "2026-13-40", "20261104", "2026-11-04.jpg", "", None, "..", 5,
+                    "2026-11-04\n"):
+            for path in ("/api/skin/photo", "/api/skin/photo/delete"):
+                with self.assertRaises(ValueError, msg=(path, bad)):
+                    self.call(path, {"day": bad})
+        png = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 200).decode()
+        big = base64.b64encode(GRAY_JPEG[:-2] + b"\x00" * (K.MAX_PHOTO + 1) + GRAY_JPEG[-2:]).decode()
+        for bad in ("", "не base64!", base64.b64encode(b"GIF89a" + b"0" * 200).decode(), png, big,
+                    base64.b64encode(b"\xff\xd8\xff" + b"\x00" * 300).decode()):  # заголовок JPEG без размеров
+            with self.assertRaises(ValueError, msg=bad[:30]):
+                self.call("/api/skin/photo", {"image": bad})
+        with self.assertRaises(ValueError):  # миниатюра больше лимита
+            self.call("/api/skin/photo", {"image": GRAY_URL,
+                                          "thumb": base64.b64encode(GRAY_JPEG + b"\x00" * K.MAX_THUMB).decode()})
+        with self.assertRaises(ValueError):  # нет фото за день
+            self.call("/api/skin/photo", {"day": "2026-11-01"})
+        self.assertEqual(K.photo_days(self.root, T.U), [])  # ничего плохого не записалось
+        self.assertEqual(K.jpeg_size(GRAY_JPEG), (48, 64))
+
+    def test_delete(self):
+        self.call("/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
+        r = self.call("/api/skin/photo/delete", {"day": "2026-11-04"})
+        self.assertEqual((r["count"], r["photos"], r["today"]["photo"]["done"], r["today"]["photo"]["count"]), (0, [], False, 0))
+        self.assertFalse(os.path.exists(self.file("2026-11-04")) or os.path.exists(self.file("2026-11-04", thumb=True)))
+        self.assertFalse(K.day_doc(self.db, T.U, "2026-11-04")["f"])
+        with self.assertRaises(ValueError):
+            self.call("/api/skin/photo/delete", {"day": "2026-11-04"})
+        # файл пропал не через приложение — список убирает и отметку
+        self.call("/api/skin/photo", {"image": GRAY_URL})
+        os.remove(self.file("2026-11-04"))
+        self.assertEqual(self.call("/api/skin/photos")["count"], 0)
+        self.assertEqual(self.call("/api/skin")["today"]["photo"]["count"], 0)
+
+    def test_schedule_every_3_days(self):
+        self.call("/api/skin/save", {"routine": ROUTINE}, day=D(2026, 11, 1))
+        self.assertTrue(self.call("/api/skin", day=D(2026, 11, 1))["today"]["photo"]["due"])  # ещё ни одного — сегодня
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 1))
+        want = {D(2026, 11, 1): (True, True), D(2026, 11, 2): (False, False), D(2026, 11, 3): (False, False),
+                D(2026, 11, 4): (True, False), D(2026, 11, 5): (True, False)}  # пропустил — просим и завтра
+        for d, (due, done) in want.items():
+            ph = self.call("/api/skin", day=d)["today"]["photo"]
+            self.assertEqual((ph["due"], ph["done"]), (due, done), d)
+        ph = self.call("/api/skin", day=D(2026, 11, 2))["today"]["photo"]
+        self.assertEqual((ph["next"], ph["days"], ph["last"], ph["every"]), ("2026-11-04", 1, "2026-11-01", 3))
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 5))  # снял на день позже — отсчёт от него
+        self.assertEqual(self.call("/api/skin", day=D(2026, 11, 7))["today"]["photo"]["due"], False)
+        self.assertEqual(self.call("/api/skin", day=D(2026, 11, 8))["today"]["photo"]["due"], True)
+        self.assertEqual(self.call("/api/skin", day=D(2026, 11, 5))["today"]["photo"]["next"], "2026-11-08")
+        # без ухода и без фото раздел не ведётся — фото не просим
+        self.db.x("DELETE FROM meta WHERE key LIKE 'skin:%'")
+        self.assertFalse(self.call("/api/skin")["today"]["photo"]["due"])
+
+    def test_remind_and_coach(self):
+        self.call("/api/skin/save", {"routine": ROUTINE}, day=D(2026, 11, 1))
+        r = self.call("/api/skin", day=D(2026, 11, 1))
+        for p in ("pm", "extra"):
+            for x in r["today"][p]:
+                self.call("/api/skin/mark", {"id": x["id"], "done": True}, day=D(2026, 11, 1))
+        # уход сделан, но день фото — строка только про фото
+        self.assertEqual(K.remind_line(self.db, T.U, D(2026, 11, 1)), "Уход на ночь: 📸 фото лба после умывания")
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 1))
+        self.assertEqual(K.remind_line(self.db, T.U, D(2026, 11, 1)), "")
+        self.assertNotIn(K.PHOTO_LINE, K.remind_line(self.db, T.U, D(2026, 11, 2)))  # не день фото
+        self.assertIn(K.PHOTO_LINE, K.remind_line(self.db, T.U, D(2026, 11, 4)))
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 4))
+        lines = "\n".join(K.context_lines(coach, T.U, D(2026, 11, 6)))
+        self.assertIn("Фото лба (делает сам раз в 3 дня", lines)
+        self.assertIn("всего 2, последнее 04.11 (2 дн. назад); следующее 07.11", lines)
+        self.assertNotIn("base64", lines)
+        lines = "\n".join(K.context_lines(coach, T.U, D(2026, 11, 7)))
+        self.assertIn("фото лба по плану сегодня — не сделано", lines)
+        self.assertIn("сегодня по плану — ещё не сделано", lines)
+        with mock.patch.object(ai, "claude", return_value="Ок") as c:
+            self.call("/api/ask", {"text": "Как кожа?"}, day=D(2026, 11, 7))
+        self.assertIn("Фото лба", c.call_args[0][0])
+        self.assertNotIn("data:image", c.call_args[0][0])
+        self.assertIsNone(c.call_args[1].get("image"))  # картинки тренеру не уходят
+        ext = self.call("/api/all", day=D(2026, 11, 7))["ext"]["skin"]["today"]["photo"]
+        self.assertEqual((ext["due"], ext["count"]), (True, 2))
 
 
 if __name__ == "__main__":

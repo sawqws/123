@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import sys
+import tempfile
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -124,6 +125,11 @@ def seed_skin(today):
         coach.f_skin.put_doc(coach.db, T.U, d.isoformat(), {"m": m, "r": r if back % 7 != 3 else None, "t": "",
                                                             "a": True, "p": full, "ok": full})
     coach.f_skin.put_doc(coach.db, T.U, today.isoformat(), {"m": am, "r": 4, "t": "", "a": True, "p": False, "ok": False})
+    # фото лба раз в 3 дня — серые заглушки (никаких настоящих лиц); последнее 3 дня назад — сегодня день фото
+    from test_skin import GRAY_URL
+    for back in (15, 12, 9, 6, 3):
+        coach.f_skin.save_photo(coach.db, coach.DATA, T.U, {"image": GRAY_URL, "thumb": GRAY_URL},
+                                today - datetime.timedelta(days=back))
 
 
 # Разборы за сегодня — нейтральный пример: утро (уже открыт) и после тренировки (новый); вечер ещё впереди
@@ -155,7 +161,8 @@ def build(shots=None):
     coach.db = db
     today = T.TODAY
     now = datetime.datetime.combine(today, datetime.time(13, 40))
-    with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: today):
+    with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: today), \
+            mock.patch.object(coach, "DATA", tempfile.mkdtemp()):  # фото лба — во временную папку, не в coach/data
         db.save_profile(T.U, {"age": "15", "sex": "m", "sport": "бокс", "goal": "form"})
         db.add_goal(T.U, "ложиться до 23:00")
         seed_habits(today)
@@ -194,6 +201,12 @@ def build(shots=None):
             db, T.U, "Пить 8 стаканов воды\nАнглийский 3 раза в неделю\nБег пн ср пт в 07:00", today, preview=True)
         api["/api/skin/import"] = coach.f_skin.import_text(db, T.U, "Утром: тоник\nКрем от солнца утром\nПатчи по субботам",
                                                            today, preview=True)  # предпросмотр «Заполнить списком»
+        # фото лба: список, снимок (серый), сохранение сегодня и удаление — последними (меняют данные)
+        api["/api/skin/photos"] = coach.route(T.U, "/api/skin/photos", {})
+        api["/api/skin/photo/get"] = coach.route(T.U, "/api/skin/photo/get", {"day": api["/api/skin/photos"]["photos"][0]["day"]})
+        from test_skin import GRAY_URL
+        api["/api/skin/photo"] = coach.route(T.U, "/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
+        api["/api/skin/photo/delete"] = coach.route(T.U, "/api/skin/photo/delete", {"day": today.isoformat()})
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
