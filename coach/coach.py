@@ -59,8 +59,9 @@ import f_assess  # noqa: E402  оценки недели и месяца, кал
 import f_journal  # noqa: E402  дневник: привычки «да/нет» и их влияние на восстановление
 import f_plan  # noqa: E402  мой план: цели недели, планер сна
 import f_regime  # noqa: E402  режим дня: отбой/подъём со сдвигом, тренировка и интенсивность, массаж, чек-лист вечера
+import f_habits  # noqa: E402  привычки и цели на день: отметки, серии, неделя, импорт списком
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
-FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime}
+FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
@@ -668,7 +669,7 @@ def morning_brief(uid, chat=None, force=False):
             full = body = rule_brief(t)
             note = f"Claude недоступен: {esc(e)}"
         db.brief(uid, t["day"], "morning", full)
-        send(chat, box("☀️", "Доброе утро", [headline(t), body, regime_brief(uid, t)], note=note, expand=False),
+        send(chat, box("☀️", "Доброе утро", [headline(t), body, "\n".join(x for x in (regime_brief(uid, t), habits_brief(uid, t)) if x)], note=note, expand=False),
              kb([app_button(uid, "📱 Открыть", style="primary"), btn("💬 Спросить", "q|")]))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
@@ -693,6 +694,16 @@ def regime_brief(uid, t):
         return ""
 
 
+def habits_brief(uid, t):
+    """Строка «✅ Привычки сегодня: N» в утренний разбор (к строкам режима) — если привычки или цели есть."""
+    try:
+        line = f_habits.brief_line(db, uid, datetime.date.fromisoformat(t["day"]))
+    except Exception:  # привычки сломались — разбор всё равно уходит
+        traceback.print_exc()
+        return ""
+    return esc(line)
+
+
 def regime_remind(uid, day):
     """За remind минут до отбоя по режиму: во сколько встать, тренировка завтра, что осталось сделать вечером."""
     cfg = f_regime.load(db, uid, profile(uid))
@@ -701,6 +712,13 @@ def regime_remind(uid, day):
     lines = [f"Подъём завтра в <b>{f_regime.bed_wake(cfg, nxt)[1]}</b>"]
     if f_regime.train_on(cfg, nxt):
         lines.append(f"🏋️ Завтра тренировка в {esc(f_regime.train_time(cfg, nxt))}")
+    try:  # невыполненные привычки и цели — одной строкой в этом же напоминании
+        hl = f_habits.remind_line(db, uid, day)
+    except Exception:
+        traceback.print_exc()
+        hl = ""
+    if hl:
+        lines.append("✅ " + esc(hl))
     done = f_regime.checks(db, uid, day.isoformat())
     left = [x for i, x in enumerate(cfg["evening"]) if f"e{i}" not in done]
     lines += [f"• {esc(x)}" for x in left[:5 - len(lines)]]
