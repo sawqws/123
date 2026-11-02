@@ -46,3 +46,9 @@
 .jr-box .ico { width: 16px; height: 16px; stroke-width: 2.6; }
 .jr-pick.on .jr-box { background: var(--teal); border-color: var(--teal); color: #06140f; }
 .sheet .jr-sg + .btn { margin-top: 14px; }
+/* плавное переключение «Нет/Да» без перерисовки (Глеб 02.11: «дёргается и моргает») */
+.jr-yn button { transition: background-color .22s cubic-bezier(.32, .72, 0, 1), color .22s, transform .18s cubic-bezier(.32, .72, 0, 1); }
+@media (prefers-reduced-motion: reduce) { .jr-yn button { transition: none; } }
+/* под палец на сенсорных: стрелки дней и «Нет/Да» не меньше 40×40 */
+.jr-pager .pg { min-width: 40px; min-height: 40px; }
+html.mono .jr-yn button { min-height: 40px; }

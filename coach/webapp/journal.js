@@ -77,7 +77,7 @@
     const done = sel.filter(k => k in ans).length;
     let h = head;
     h += `<div class="jr-pager rise"><button class="pg" data-a="jr-day" data-v="-1" aria-label="День назад" ${day <= d.first ? 'disabled' : ''}>${F.I.back}</button>
-      <div class="pg-t"><b>${F.esc(F.dateWord(day))}</b><span>${F.dateLine(day)} · <span class="num">${done}/${sel.length}</span></span></div>
+      <div class="pg-t"><b>${F.esc(F.dateWord(day))}</b><span>${F.dateLine(day)} · <span class="num jr-count">${done}/${sel.length}</span></span></div>
       <button class="pg" data-a="jr-day" data-v="1" aria-label="День вперёд" ${day >= d.yesterday ? 'disabled' : ''}>${F.I.next}</button></div>`;
     h += `<p class="small muted jr-lead">Отмечай про день целиком: вечер, еду, сон. Ответ сравнивается с восстановлением на следующее утро.</p>`;
     for (const g of d.groups) {
@@ -150,16 +150,27 @@
       const [k, b] = v.split(':'), want = b === '1';
       const prev = J.data.answers[k];
       const value = prev === want ? null : want;  // повторное нажатие снимает ответ
-      if (value == null) delete J.data.answers[k]; else J.data.answers[k] = value;
-      F.haptic('select'); F.render(false);
+      // меняем только эту строку и счётчик — без перерисовки экрана (иначе всё мигало и дёргалось, Глеб 02.11)
+      const set = val => {
+        if (val == null) delete J.data.answers[k]; else J.data.answers[k] = val;
+        const g = el.closest('.jr-yn');
+        if (g) g.querySelectorAll('button').forEach(x => {
+          const yes = x.dataset.v.endsWith(':1'), on = val != null && val === yes;
+          x.classList.toggle('on', on); x.classList.toggle('yes', on && yes); x.classList.toggle('no', on && !yes);
+          x.setAttribute('aria-pressed', on);
+        });
+        const c = document.querySelector('.jr-count'), sel = J.data.selected || [];
+        if (c) c.textContent = `${sel.filter(x => x in J.data.answers).length}/${sel.length}`;
+      };
+      set(value); F.haptic('select');
       const my = ++J.seq, day = J.data.day;
       try {
         const r = await F.api('/api/journal/answer', { day, key: k, value });
         syncExt(r.ext);
-        if (my === J.seq && J.data && J.data.day === day) { J.data = r; if (F.S.screen === 'journal') F.render(false); }
+        if (my === J.seq && J.data && J.data.day === day && r && r.answers) J.data = r;  // данные — молча, экран уже верный
       } catch (e) {
         F.fail(e);
-        if (J.data && J.data.day === day) { if (prev == null) delete J.data.answers[k]; else J.data.answers[k] = prev; F.render(false); }
+        if (J.data && J.data.day === day) set(prev);
       }
     },
     'jr-setup': () => { F.haptic('tap'); setupSheet(); },
