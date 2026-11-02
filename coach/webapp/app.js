@@ -1145,6 +1145,7 @@
     const dials = !S.screen && S.tab === 'today' && view.querySelector('.dials');
     navbar.classList.toggle('rings', !!dials);
     if (dials) {
+      navbar.querySelector('button').hidden = true;  // на главной «Назад» не нужен
       const mini = navbar.querySelector('.mini');
       if (!mini.dataset.k || mini.dataset.k !== dials.dataset.k) {
         mini.dataset.k = dials.dataset.k || '';
