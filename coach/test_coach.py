@@ -486,6 +486,16 @@ class BotTest(unittest.TestCase):
         empty = store.Store(os.path.join(tempfile.mkdtemp(), "e.db"))
         self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None})
 
+    def test_clean_photos_keeps_skin(self):
+        tmp = tempfile.mkdtemp()
+        old_skin = os.path.join(tmp, "photos", "skin", "1", "2026-01-01.jpg"); old_food = os.path.join(tmp, "photos", "a.jpg")
+        for fp in (old_skin, old_food):
+            os.makedirs(os.path.dirname(fp), exist_ok=True); open(fp, "wb").write(b"x"); os.utime(fp, (0, 0))
+        with mock.patch.object(coach, "DATA", tmp):
+            coach.clean_photos()
+        self.assertTrue(os.path.exists(old_skin))
+        self.assertFalse(os.path.exists(old_food))
+
     def test_summary_api(self):
         asked = []
         with mock.patch.object(ai, "summary", lambda ctx, per: asked.append(per) or "**Итог** — неделя лучше прошлой.\n- Спи 9 ч"):

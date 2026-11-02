@@ -1893,7 +1893,9 @@ def clean_photos(days=3):
     """Присланные фото нужны Claude только на время ответа — старше days дней удаляем (иначе диск растёт без конца)."""
     root = os.path.join(DATA, "photos")
     cut = time.time() - days * 86400
-    for dirpath, _, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        if dirpath == root:
+            dirs[:] = [d for d in dirs if d != "skin"]  # фото лба хранит сам владелец (f_skin) — не чистить
         for f in files:
             fp = os.path.join(dirpath, f)
             try:
