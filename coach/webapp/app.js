@@ -593,7 +593,8 @@
     if (a.nodeType !== 1) return;
     for (const { name } of [...a.attributes]) {
       if (b.hasAttribute(name)) continue;
-      if (name === 'style') continue;  // стиль, выставленный JS (кольца, ширина полос) — не сбрасываем
+      // стиль, выставленный JS для анимации (кольца, ширина и высота полос) — не сбрасываем; остальной (ширины заглушек) — снять
+      if (name === 'style' && (b.hasAttribute('data-off') || b.hasAttribute('data-w') || b.hasAttribute('data-h') || a.classList.contains('arc') || a.classList.contains('w-in'))) continue;
       a.removeAttribute(name);
     }
     for (const { name, value } of [...b.attributes]) {
