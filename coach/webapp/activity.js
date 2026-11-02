@@ -159,7 +159,7 @@
     const r = t.recovery, b = t.base || {}, qs = [];
     if (r) qs.push(`Почему восстановление ${r.score}%?`);
     qs.push(isToday(t) ? 'Сколько тренироваться сегодня?' : 'Как восстановление влияет на тренировки?');
-    if (r && b.hrv != null && r.hrv != null && r.hrv < b.hrv * .9) qs.push('Почему ВСР ниже нормы?');
+    if (r && b.hrv != null && r.hrv != null && r.hrv < b.hrv * .9) qs.push('Почему отдых нервов хуже нормы?');
     qs.push(r && r.zone === 'green' ? 'Готов ли я к спаррингу?' : 'Как быстрее восстановиться?');
     return qs;
   }
@@ -240,7 +240,7 @@
       body += big1(mean(rows, 'recovery') != null ? Math.round(mean(rows, 'recovery')) + '%' : '—', 'в среднем', 'var(--ink)', cmp(rows, prev, 'recovery', true, FMT.pct, n, label))
         + `<div class="chart-box">${F.bars(rows, 'recovery', { max: 100, color: zc })}</div>
         <div class="actv-mini num"><span><i class="dot" style="background:${F.C.green}"></i><b>${cnt('green')}</b> зелёных</span><span><i class="dot" style="background:${F.C.yellow}"></i><b>${cnt('yellow')}</b> жёлтых</span><span><i class="dot" style="background:${F.C.red}"></i><b>${cnt('red')}</b> красных</span></div>
-        <div class="actv-sub2">${F.cap('ВСР', `<b class="num">${hv != null ? Math.round(hv) : '—'}</b> мс в среднем`)}${cmp(rows, prev, 'hrv', true, FMT.ms, n, label)}
+        <div class="actv-sub2">${F.cap('Отдых нервов', `<b class="num">${hv != null ? Math.round(hv) : '—'}</b> мс в среднем`)}${cmp(rows, prev, 'hrv', true, FMT.ms, n, label)}
         <div class="chart-box">${F.line(rows, 'hrv', 'var(--rec-blue)', hv)}</div></div>`;
     } else {
       const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);

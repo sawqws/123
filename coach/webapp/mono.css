@@ -231,3 +231,6 @@ html.mono .bk[hidden] { visibility: hidden !important; pointer-events: none !imp
 .sheet.sum-sheet { height: min(88vh, 860px); max-height: 88vh; overflow-y: auto; overscroll-behavior: contain; }
 .sum-sheet #sum-body { min-height: 60vh; }
 .sum-sheet .sum-live { min-height: 132px; }
+/* крестик не уезжает с прокруткой длинного листа (Глеб 02.11: «крестики опять улетели»): лист сам прокручивается,
+   поэтому кнопка прилипает к верху листа (sticky) и стоит справа, не занимая место в потоке */
+html.mono .sheet-x { position: sticky !important; top: 12px !important; right: auto !important; float: right; margin: 4px -2px -44px 0; }
