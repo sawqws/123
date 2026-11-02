@@ -35,9 +35,10 @@ _ready = set()
 
 def _db(app):
     db = app.db
-    if id(db) not in _ready:
+    # метка на самой базе, а не id(db): id освободившейся базы мог достаться новой — и таблицу не создавали
+    if not getattr(db, "_plan_table", False):
         db.x("CREATE TABLE IF NOT EXISTS plan (user INTEGER PRIMARY KEY, data TEXT, updated TEXT)")
-        _ready.add(id(db))
+        db._plan_table = True
     return db
 
 
