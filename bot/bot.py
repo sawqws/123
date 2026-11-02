@@ -1871,6 +1871,12 @@ def send_delay(rng=None):
         return 0
 
 
+def day_word(when, now=None):
+    """День отправки для подписи: сегодня — пусто, «завтра», «послезавтра» или дата (через 2+ дня)."""
+    days = (when.date() - datetime.datetime.fromtimestamp(now or time.time(), MSK).date()).days
+    return "" if days <= 0 else "завтра" if days == 1 else "послезавтра" if days == 2 else f"{when:%d.%m}"
+
+
 def schedule_send(chat, task=None, secs=None, at=None):
     """Назначить отправку: через secs секунд, к моменту at (epoch) или по настройке «⏳ Отправка» (0 — сразу)."""
     d = draft(task)
@@ -1886,8 +1892,8 @@ def schedule_send(chat, task=None, secs=None, at=None):
     d["send_at"] = at
     set_draft(d)
     when = datetime.datetime.fromtimestamp(at, MSK)
-    day = "" if when.date() == datetime.datetime.now(MSK).date() else " завтра"
-    send(chat, card(f"Отправлю{day} в {when.strftime('%H:%M')}", note=f"{esc(d['title'])} · как будто ты сам отправил",
+    day = day_word(when)
+    send(chat, card(f"Отправлю{' ' + day if day else ''} в {when.strftime('%H:%M')}", note=f"{esc(d['title'])} · как будто ты сам отправил",
                     icon="⏳"),
          markup=kb([("⚡ Сейчас", f"now:{d['task']}"), ("✖ Отменить", f"hold:{d['task']}")]), raw_html=True)
 
@@ -1973,7 +1979,6 @@ def waiting_card(now=None):
     """HTML и кнопки «⏳ Ожидание»."""
     now = now or time.time()
     timed, held, sending, work = waiting(now)
-    today = datetime.datetime.fromtimestamp(now, MSK).date()
     parts, rows = ["⏳ <b>Ожидание</b>"], []
     tests = sorted(pending_tests().values(), key=lambda t: t.get("at") or 0)
     if tests:
@@ -1996,8 +2001,8 @@ def waiting_card(now=None):
             when = datetime.datetime.fromtimestamp(d["send_at"], MSK)
             left = max(0, int(d["send_at"] - now))
             soon = f"через {left // 60} мин" if left < 3600 else f"через {left // 3600} ч {left % 3600 // 60} мин"
-            day = "" if when.date() == today else " завтра"
-            lines.append(f"📬 {esc(d['title'])} — <b>{day.strip() + ' ' if day else ''}в {when:%H:%M}</b> <i>({soon})</i>")
+            day = day_word(when, now)
+            lines.append(f"📬 {esc(d['title'])} — <b>{day + ' ' if day else ''}в {when:%H:%M}</b> <i>({soon})</i>")
             rows.append([(f"⚡ {short(d['title'])}", f"now:{d['task']}"), ("✖ Отменить", f"hold:{d['task']}")])
         parts.append("<b>Отправлю учителю</b>\n<blockquote>" + "\n".join(lines) + "</blockquote>")
     if sending:
@@ -4187,7 +4192,8 @@ def site_when(at, now):
     when = datetime.datetime.fromtimestamp(at, MSK)
     left = max(0, int(at - now))
     soon = f"через {left // 60} мин" if left < 3600 else f"через {left // 3600} ч {left % 3600 // 60} мин"
-    day = "" if when.date() == datetime.datetime.fromtimestamp(now, MSK).date() else "завтра "
+    day = day_word(when, now)
+    day = day + " " if day else ""
     return {"at": int(at), "left": left, "hhmm": f"{when:%H:%M}", "when": f"{day}в {when:%H:%M}", "soon": soon}
 
 
