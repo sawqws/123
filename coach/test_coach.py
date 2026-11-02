@@ -479,6 +479,13 @@ class BotTest(unittest.TestCase):
         self.assertEqual(len(r.json["series"]), 30)
         self.assertEqual(r.json["redirect"], "https://coach.example/whoop/callback")
 
+    def test_wear_streak(self):
+        st = insights.wear_streak(self.db, U, TODAY)
+        self.assertGreater(st["n"], 30 - 1)  # по всей истории, а не по 30 дням
+        self.assertEqual(call("/api/all").json["streak"], st)
+        empty = store.Store(os.path.join(tempfile.mkdtemp(), "e.db"))
+        self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None})
+
     def test_summary_api(self):
         asked = []
         with mock.patch.object(ai, "summary", lambda ctx, per: asked.append(per) or "**Итог** — неделя лучше прошлой.\n- Спи 9 ч"):
