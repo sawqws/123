@@ -1059,6 +1059,30 @@ function weekDays() {
   const start = addDays(cur, -wdi(cur));
   return Array.from({ length: 7 }, (_, i) => addDays(start, i));
 }
+/* Тихое обновление экрана дня без мигания и прыжка прокрутки (Глеб 02.11: «проверь все панели на дёргания»):
+   при пересчёте меняются только отличия, узлы и прокрутка остаются на месте; переход между днями — как раньше. */
+function kMorphNode(a, b) {
+  if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b); return; }
+  if (a.nodeType === 3 || a.nodeType === 8) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  if (a.nodeType !== 1) return;
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
+  for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
+  if ((a.nodeName === 'INPUT' || a.nodeName === 'TEXTAREA') && document.activeElement === a) return;
+  kMorphKids(a, b);
+}
+function kMorphKids(a, b) {
+  const ac = [...a.childNodes], bc = [...b.childNodes];
+  for (let i = 0; i < bc.length; i++) { if (i < ac.length) kMorphNode(ac[i], bc[i]); else a.appendChild(bc[i]); }
+  for (let i = bc.length; i < ac.length; i++) ac[i].remove();
+}
+function setApp(calm, html) {
+  const app = $('#app');
+  if (calm && app.firstElementChild) {
+    const y = window.scrollY, t = document.createElement('template'); t.innerHTML = html;
+    const box = app.cloneNode(false); box.append(t.content); kMorphKids(app, box);
+    if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
+  } else app.innerHTML = html;
+}
 function renderToday(animate) {
   const t = totals(cur), type = dayType(cur), g = S.goals[type], d = day(cur);
   const left = g.kcal - t.kcal, over = left < 0, pct = t.kcal / g.kcal;
@@ -1072,7 +1096,7 @@ function renderToday(animate) {
   const metric = (k, n, val, goal, unit, color) => { const w = Math.min(100, (num(val) / goal) * 100 || 0); now[k] = w;
     return `<div class="metric" style="--dot:${color}"><div class="n">${n}</div>
     <div class="v num">${val}<small> / ${k === 's' ? dec(goal) : goal} ${unit}</small></div><div class="b"><i data-w="${w / 100}" style="transform:scaleX(${(was[k] ?? (animate ? 0 : w)) / 100})"></i></div></div>`; };
-  $('#app').innerHTML = `<div class="view${animate ? ' enter' : ''}"><div class="tgrid"><div class="ta">
+  setApp(!animate, `<div class="view${animate ? ' enter' : ''}"><div class="tgrid"><div class="ta">
     <h1 class="large">${dateTitle(cur)}</h1>
     <div class="subtitle">${WEEK_FULL[wdi(cur)]}, ${x.getDate()} ${MONTHS[x.getMonth()]}${st > 1 ? `<span class="streak">${I.flame}${st} ${plural(st, 'день', 'дня', 'дней')} подряд</span>` : ''}</div>
     <div class="wkrow"><button class="wk-nav press" id="wkPrev" aria-label="Прошлая неделя">${I.back}</button>
@@ -1114,7 +1138,7 @@ function renderToday(animate) {
       <div class="list">${fm.meals.map(m => `<div class="cell ro"><span class="t"><div class="n">${esc(m.title)}</div>
         <div class="m num">${m.time ? m.time + ' · ' : ''}Б ${Math.round(m.p)} · Ж ${Math.round(m.f)} · У ${Math.round(m.c)}</div></span><span class="k num">${fmt(m.kcal)}</span></div>`).join('')}</div>
       <div class="foot">Записано в Форме — там и правится.</div></section>` : ''}
-  </div></div></div>`;
+  </div></div></div>`);
   formaShown = !!fm;
   lastAdded = null;
   placeThumb();
@@ -1228,6 +1252,7 @@ function openWater() {
   }, { short: true });
 }
 function swipeWeek(el) {
+  if (el._sw) return; el._sw = true;  // элемент переживает тихое обновление — не вешать свайп второй раз
   let x0 = null, y0 = 0;
   el.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
   el.addEventListener('touchcancel', () => { x0 = null; });

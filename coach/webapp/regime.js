@@ -158,7 +158,7 @@
       <div class="rg-g"><div class="label">Напоминание</div><div class="rg-fr"><span>До отбоя</span>${step('remind', c.remind, c.remind ? 'мин' : 'выкл')}</div></div>
       <button class="btn primary" type="button" data-save>Сохранить</button>`;
     const el = F.sheet(html());
-    const redraw = () => { const x = el.querySelector('.sheet-x'), y = el.scrollTop; el.innerHTML = html(); if (x) el.prepend(x); el.scrollTop = y; };
+    const redraw = () => { F.morph(el, html()); };
     const get = k => k.split('.').reduce((o, p) => o && o[p], c);
     const setv = (k, v) => { const p = k.split('.'), last = p.pop(), o = p.reduce((a, b) => a[b], c); o[last] = v; };
     const LIM = { train_minutes: [30, 240, 15], 'shift.step': [10, 60, 5], 'shift.every': [1, 7, 1], remind: [0, 120, 15] };

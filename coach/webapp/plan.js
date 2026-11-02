@@ -161,7 +161,7 @@
       ${block('protein', 'Белок', 'дней, когда белка по норме (по записанной еде)', stepper('protein', cfg.protein.n, days(cfg.protein.n)))}
       <button class="btn primary" type="button" data-save>Сохранить</button>`;
     const el = F.sheet(html());
-    const redraw = () => { const x = el.querySelector('.sheet-x'), y = el.scrollTop; el.innerHTML = html(); if (x) el.prepend(x); el.scrollTop = y; };
+    const redraw = () => { F.morph(el, html()); };
     el.addEventListener('click', async ev => {
       const sw = ev.target.closest('[data-sw]'), st = ev.target.closest('.pl-step button'), kd = ev.target.closest('[data-kind] button');
       if (sw) { const k = sw.dataset.sw; cfg[k].on = !cfg[k].on; F.haptic('select'); redraw(); }

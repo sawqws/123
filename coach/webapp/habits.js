@@ -133,7 +133,7 @@
       m.textContent = t; m.hidden = !t;
       const st = el.querySelector('.hb-st'), html = streak(it.streak, it.streak_unit);
       if (st && !html) st.remove();
-      else if (html) { if (st) st.outerHTML = html; else el.querySelector('.hb-main').insertAdjacentHTML('afterend', html); }
+      else if (html) { if (st) F.morph(st, html, true); else el.querySelector('.hb-main').insertAdjacentHTML('afterend', html); }
       if (pop) { b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
     });
   }
@@ -196,7 +196,7 @@
       <input class="hb-gin" type="text" maxlength="80" enterkeyhint="done" placeholder="${ph}" aria-label="Новая цель на сегодня"></div>`;
   function redrawGoals() {
     const t = today(); if (!t) return;
-    document.querySelectorAll('[data-hb-goals]').forEach(el => { el.innerHTML = goalsList(t.goals || [], Number(el.dataset.hbGoals) || 0); });
+    document.querySelectorAll('[data-hb-goals]').forEach(el => { F.morph(el, goalsList(t.goals || [], Number(el.dataset.hbGoals) || 0)); });
     patchSum(true);
   }
 
@@ -292,7 +292,7 @@
     const d = F.S.hb;
     if (d && d.habits) {
       const days = (d.week || []).map(w => w.day);
-      d.habits.forEach(x => document.querySelectorAll(`[data-hb-grid="${CSS.escape(x.id)}"]`).forEach(el => { el.innerHTML = gridRow(x, days); }));
+      d.habits.forEach(x => document.querySelectorAll(`[data-hb-grid="${CSS.escape(x.id)}"]`).forEach(el => { F.morph(el, gridRow(x, days)); }));
     }
   }
   F.actions['hb-tap'] = (el, id) => {
@@ -418,7 +418,7 @@
       if (q('#hb-unit')) h.unit = q('#hb-unit').value;
       if (q('#hb-time')) h.time = q('#hb-time').value || null;
     };
-    const redraw = () => { read(); const x = el.querySelector('.sheet-x'), y = el.scrollTop; el.innerHTML = html(); if (x) el.prepend(x); el.scrollTop = y; };
+    const redraw = () => { read(); F.morph(el, html()); };
     const body = () => {
       read();
       const out = { title: h.title.trim(), icon: h.icon, kind: h.kind, time: tmode === 'at' ? h.time || '07:00' : tmode || null };
