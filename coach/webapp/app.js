@@ -1306,11 +1306,42 @@
     try { S.history = (await api('/api/history', {})).history; } catch (e) { fail(e); S.historyErr = true; }
     if (S.tab === 'coach') render();
   }
+  // поле ввода очищаем сами: тихое обновление (morph) не трогает поле, в котором стоит курсор
+  const clearQ = v => { const el = $('#q'); if (el) { el.value = v || ''; el.style.height = ''; } };
+  // ответ тренера приходит по кусочкам: дописываем только последний пузырь раз в кадр, экран не перерисовывается
+  async function askStream(q) {
+    const headers = { 'X-Init-Data': (tg && tg.initData) || '', 'Content-Type': 'application/json' };
+    if (!headers['X-Init-Data']) headers['X-Site'] = '1';
+    const r = await fetch('/api/ask/stream', { method: 'POST', headers, body: JSON.stringify({ text: q }) });
+    if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Тренер не ответил — попробуй ещё раз'); }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '', live = '', queued = false, done = null;
+    const paint = () => { queued = false; const b = [...document.querySelectorAll('.msg.them')].pop(); if (!b || S.tab !== 'coach') return;
+      const stick = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
+      b.classList.add('prose'); b.innerHTML = md(live); if (stick) window.scrollTo(0, document.documentElement.scrollHeight); };
+    for (;;) {
+      const { value, done: end } = await rd.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i).replace(/^data: ?/, ''); buf = buf.slice(i + 2);
+        let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.error) throw new Error(ev.error);
+        if (ev.t) { live += ev.t; S.askLive = live; if (!queued) { queued = true; requestAnimationFrame(paint); } }
+        if (ev.done) done = ev;
+      }
+    }
+    if (!done) throw new Error('Ответ оборвался — попробуй ещё раз');
+    return done.history;
+  }
   async function ask(q) {
     q = (q || '').trim(); if (!q || S.asking) return;
-    S.asking = q; S.qDraft = ''; haptic('tap'); render();
-    try { const r = await api('/api/ask', { text: q }); S.history = r.history; haptic('success'); } catch (e) { fail(e); S.qDraft = q; }
-    S.asking = false; if (S.tab === 'coach') render();
+    S.asking = q; S.askLive = ''; S.qDraft = ''; clearQ(); haptic('tap'); render();
+    try { S.history = await askStream(q); haptic('success'); }
+    catch (e) { fail(e); S.qDraft = q; }
+    S.asking = false; S.askLive = '';
+    if (S.tab === 'coach') { render(); if (S.qDraft) clearQ(S.qDraft); }
   }
 
   // ---------- фото ----------
@@ -1335,7 +1366,7 @@
       if (!f) return;
       haptic('tap');
       const text = ($('#q') || {}).value || '';
-      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; render();
+      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; clearQ(); render();
       try { const r = await api('/api/photo', { image: await shrink(f), mode: 'ask', text: text.trim() }); S.history = r.history; haptic('success'); }
       catch (e) { fail(e); }
       S.asking = false; if (S.tab === 'coach') render();
