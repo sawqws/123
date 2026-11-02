@@ -57,7 +57,7 @@ jobs:
           $env:KIT_BASE = ([Uri]"$env:GITHUB_WORKSPACE\docs\kit").AbsoluteUri
           iex ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes("$env:GITHUB_WORKSPACE\docs\kit\start.ps1")))
           $env:Path += ";$HOME\.local\bin"
-          claude --version; if ($LASTEXITCODE) { throw 'claude не работает' }
+          claude --version; if ($LASTEXITCODE) { throw 'claude does not run' }
   mac:
     runs-on: macos-latest
     timeout-minutes: 15
