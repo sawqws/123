@@ -245,7 +245,8 @@ class ApiTest(unittest.TestCase):
             with mock.patch.object(coach, "bg", lambda f, *a, **kw: f(*a)), \
                     mock.patch.object(coach, "allowed", lambda uid: True), \
                     mock.patch.object(coach, "maybe_morning", lambda *a: None), \
-                    mock.patch.object(coach, "sync_user", lambda *a, **kw: None):
+                    mock.patch.object(coach, "sync_user", lambda *a, **kw: None), \
+                    mock.patch.object(coach.ai, "claude", side_effect=coach.ai.AIError("тест")):  # вечерний итог — без Claude
                 for hh, mm in ((22, 20), (22, 31), (22, 50), (23, 10)):
                     now = datetime.datetime(2026, 11, 3, hh, mm, tzinfo=tz)
                     with mock.patch.object(coach, "user_now", lambda u_, now=now: now):

@@ -40,7 +40,7 @@
   // каждую с объектом F перед стартом. Что модуль может: F.screens[вид] — экран «подробностей» (открыть: F.openScreen(вид, арг)),
   // F.actions[data-a] — обработчик кнопки, F.views[вкладка] — заменить вкладку, F.slots.<место> — куски HTML, F.onData — после загрузки.
   const F = window.F = { screens: {}, actions: {}, views: {}, onData: [],
-    slots: { homeTop: [], homeAfterOutlook: [], homeAfterMyDay: [], homeJournal: [], homeAfterDashboard: [],
+    slots: { homeTop: [], homeAfterDials: [], homeAfterOutlook: [], homeAfterMyDay: [], homeJournal: [], homeAfterDashboard: [],
       healthTop: [], healthAfterMonitor: [], healthBottom: [], sleep: [], rec: [], strain: [], coachTop: [], plus: [] } };
   const slot = (name, ...args) => F.slots[name].map(fn => { try { return fn(...args) || ''; } catch (e) { console.error(name, e); return ''; } }).join('');
   const S = { data: null, tab: 'today', dayData: null, range: 30, series: {}, history: null, progress: undefined,
@@ -824,6 +824,7 @@
         ${dial(r ? r.score / 100 : 0, recC, r ? `<b class="num">${cnt(r.score)}<small>%</small></b>` : '<b>—</b>', 'Восстановление', '', 'rec')}
         ${dial(c && c.strain != null ? c.strain / 21 : 0, 'var(--strain)', c && c.strain != null ? `<b class="num">${cnt(c.strain, 1)}</b>` : '<b>—</b>', 'Нагрузка', '', 'strain')}
       </section>`;
+    h += slot('homeAfterDials', t, isToday);
 
     // «Daily Outlook»: совет на день + «Узнать у тренера»
     const adv = advice(t);

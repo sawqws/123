@@ -61,9 +61,10 @@ import f_plan  # noqa: E402  мой план: цели недели, плане�
 import f_regime  # noqa: E402  режим дня: отбой/подъём со сдвигом, тренировка и интенсивность, массаж, чек-лист вечера
 import f_habits  # noqa: E402  привычки и цели на день: отметки, серии, неделя, импорт списком
 import f_skin  # noqa: E402  кожа: мой уход утро/вечер, процедуры по расписанию, отметки, серия, дневник кожи 1–5
+import f_reviews  # noqa: E402  разборы за день: утро (как WHOOP посчитал сон), после тренировки, вечерний итог
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
 FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits,
-            "skin": f_skin}
+            "skin": f_skin, "reviews": f_reviews}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
@@ -533,15 +534,18 @@ def sync_user(uid, days=3, quiet=False, notify=True):
 
 
 def react(uid, fresh):
-    """Новые оценённые записи: тренировка -> разбор тренировки. Утренний разбор шлёт расписание (maybe_morning)."""
+    """Новые оценённые записи после синхронизации: тренировка (от 15 мин и нагрузки 5, до 2 за день) -> разбор
+    тренировки; сон или восстановление за сегодня -> утренний разбор сразу (maybe_morning решает, утро ли это)."""
     u = db.user(uid)
     now = user_now(u)
     day = now.date().isoformat()
     for kind, r in fresh:
         if kind == "workout" and r.get("_day") == day and 6 <= now.hour < 23:
             w = insights.workout_of(r)
-            if (w["minutes"] or 0) >= 15 and db.once(f"workout:{r.get('id')}"):
+            if f_reviews.workout_ok(w) and f_reviews.take_workout(db, uid, day, r.get("id")):
                 threading.Thread(target=workout_note, args=(uid, w), daemon=True).start()
+    if any(kind in ("sleep", "recovery") and r.get("_day") == day for kind, r in fresh):
+        maybe_morning(u, now)
 
 
 # ---------- разборы ----------
@@ -672,13 +676,18 @@ def morning_brief(uid, chat=None, force=False):
         try:
             md = ai.morning(text)
             full = ai.to_html(md)
-            body, _ = short(md, 4, 420)
+            body, _ = short(md, 2, 260)
         except ai.AIError as e:
             full = body = rule_brief(t)
+            md = f_reviews.html_md(full)
             note = f"Claude недоступен: {esc(e)}"
         db.brief(uid, t["day"], "morning", full)
-        send(chat, box("☀️", "Доброе утро", [headline(t), body, "\n".join(x for x in (regime_brief(uid, t), habits_brief(uid, t)) if x)], note=note, expand=False),
-             kb([app_button(uid, "📱 Открыть", style="primary"), btn("💬 Спросить", "q|")]))
+        # целиком — в ленте «Разборы за сегодня» (цифры, разбор, режим и привычки); в чат — цифры и 2 строки
+        tail = [f_reviews.html_md(x) for x in (regime_brief(uid, t), habits_brief(uid, t)) if x]
+        rid_ = f_reviews.add(db, uid, t["day"], "morning", morning_title(t), "\n\n".join(
+            x for x in (facts_md(t), md, "\n".join("- " + re.sub(r"^[^\w«(]+", "", ln) for x in tail for ln in x.splitlines())) if x), now_hm(uid))
+        send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note, expand=False),
+             kb([app_button(uid, "📱 Открыть", f"review-{rid_}", style="primary"), btn("💬 Спросить", "q|")]))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
         return True
@@ -688,6 +697,30 @@ def morning_brief(uid, chat=None, force=False):
 
 def app_mod():
     return sys.modules[__name__]
+
+
+def now_hm(uid):
+    return user_now(db.user(uid)).strftime("%H:%M")
+
+
+def morning_title(t):
+    r = t.get("recovery")
+    return f"Восстановление {r['score']}%" if r and r.get("score") is not None else "План на день"
+
+
+def facts_md(t):
+    """Цифры утра одной строкой для приложения (Markdown): восстановление, сон, запас сил против нормы."""
+    r, s, b = t.get("recovery"), t.get("sleep"), t.get("base") or {}
+    out = []
+    if r and r.get("score") is not None:
+        out.append(f"Восстановление **{r['score']}%**")
+    if s:
+        out.append(f"сон **{hm(s['hours'])}**" + (f" из {hm(s['need'])}" if s.get("need") else ""))
+    if r and r.get("hrv"):
+        out.append(f"запас сил {round(r['hrv'])}" + (f" (обычно {round(b['hrv'])})" if b.get("hrv") else ""))
+    if r and r.get("rhr"):
+        out.append(f"пульс в покое {r['rhr']}")
+    return " · ".join(out)
 
 
 def regime_brief(uid, t):
@@ -714,6 +747,12 @@ def habits_brief(uid, t):
 
 def regime_remind(uid, day):
     """За remind минут до отбоя по режиму: во сколько встать, тренировка завтра, что осталось сделать вечером."""
+    bed, lines = remind_lines(uid, day)
+    send(uid, box("🌙", f"Отбой в {bed}", "\n".join(lines)), with_app(uid, [], "📱 Открыть"))
+
+
+def remind_lines(uid, day):
+    """(отбой, строки напоминания об отбое) — их же берёт вечерний итог, когда приходится на то же время."""
     cfg = f_regime.load(db, uid, profile(uid))
     bed, _ = f_regime.bed_wake(cfg, day)
     nxt = day + datetime.timedelta(days=1)
@@ -737,7 +776,7 @@ def regime_remind(uid, day):
     done = f_regime.checks(db, uid, day.isoformat())
     left = [x for i, x in enumerate(cfg["evening"]) if f"e{i}" not in done and not any(f_skin.same(x, t) for t in pm)]
     lines += [f"• {esc(x)}" for x in left[:5 - len(lines)]]
-    send(uid, box("🌙", f"Отбой в {bed}", "\n".join(lines)), with_app(uid, [], "📱 Открыть"))
+    return bed, lines
 
 
 def morning_early(uid):
@@ -752,20 +791,25 @@ def morning_early(uid):
             body, _ = short(md, 3, 320)
         except ai.AIError:
             full = body = rule_early(t)
+            md = f_reviews.html_md(full)
         db.brief(uid, t["day"], "morning", full)
+        rid_ = f_reviews.add(db, uid, t["day"], "morning", "План на день",
+                             md + "\n\nWHOOP ещё не посчитал сон — полный разбор придёт сюда же.", now_hm(uid))
         y = headline({"yesterday": t.get("yesterday")})
         send(uid, box("☀️", "Доброе утро", [y, body], note="WHOOP ещё не посчитал сон — разбор пришлю позже.",
                       expand=False),
-             kb([btn("🔄 Обновить", "s|"), app_button(uid, "📱 Открыть")]))
+             kb([btn("🔄 Обновить", "s|"), app_button(uid, "📱 Открыть", f"review-{rid_}")]))
         return True
     finally:
         busy.discard(uid)
 
 
-# ---------- утренний разбор по расписанию ----------
-# Каждый день не раньше времени из /morning (по умолчанию 07:00, часовой пояс пользователя): как только WHOOP
-# посчитал восстановление — полный разбор. Не посчитал за MORNING_WAIT часов — короткий план без сна, а полный
-# разбор — когда данные появятся (до MORNING_LATE часов после времени). Каждое — не больше раза в день.
+# ---------- утренний разбор ----------
+# Сразу, как WHOOP посчитал сон и восстановление за сегодня (react после синхронизации, и расписание раз в минуту):
+# если основной сон (не дневной) закончился с 05:00 — это утро, разбор уходит, даже если до /morning ещё далеко.
+# Ночное пробуждение (сон кончился раньше 05:00) — защита: не раньше времени из /morning (по умолчанию 07:00).
+# Не посчитал за MORNING_WAIT часов после /morning — короткий план без сна, а полный разбор — когда данные появятся
+# (до MORNING_LATE часов после времени). Каждое — не больше раза в день; /morning off — выключено.
 MORNING_WAIT = datetime.timedelta(hours=3)
 MORNING_LATE = datetime.timedelta(hours=8)
 
@@ -789,8 +833,8 @@ def morning_text(u):
                    note="Или командой: /morning 07:00")
     late = (datetime.datetime.combine(datetime.date.today(), at) + MORNING_WAIT).strftime("%H:%M")
     return box("☀️", "Утренний разбор",
-               f"Каждый день с <b>{at.strftime('%H:%M')}</b> — как только WHOOP посчитает сон.\n"
-               f"Не посчитал к {late} — пришлю короткий план без сна.",
+               "Сразу, как WHOOP посчитает сон — ты проснулся, разбор уже в приложении.\n"
+               f"Проснулся ночью — подожду до <b>{at.strftime('%H:%M')}</b>. Не посчитал к {late} — короткий план без сна.",
                note="Своё время: /morning 08:30 · выключить: /morning off")
 
 
@@ -807,12 +851,23 @@ def night_ready(uid, day):
     return "full" if d.get("recovery") else "part" if d.get("sleep") else None
 
 
-def morning_due(at, now, ready, sent_brief, sent_early):
-    """Что прислать сейчас: 'brief' (полный разбор), 'early' (план без сна) или None."""
+def woke_up(uid, day):
+    """Основной сон за сегодня — утренний (не дневной, закончился с 05:00): человек уже встал."""
+    d = insights.by_day(db, uid, day, day).get(day) or {}
+    return f_reviews.morning_sleep(d.get("sleep"))
+
+
+def morning_due(at, now, ready, sent_brief, sent_early, woke=False):
+    """Что прислать сейчас: 'brief' (полный разбор), 'early' (план без сна) или None.
+    woke — сон закончился утром (с 05:00, не дневной): тогда разбор сразу, не дожидаясь времени /morning."""
     if at is None or sent_brief:
         return None
     start = datetime.datetime.combine(now.date(), at, now.tzinfo)
-    if not start <= now < start + MORNING_LATE:
+    if now >= start + MORNING_LATE:
+        return None
+    if ready == "full" and woke:
+        return "brief"
+    if now < start:  # ночное пробуждение или сон ещё не посчитан — до времени /morning не шлём
         return None
     if ready == "full":
         return "brief"
@@ -825,12 +880,13 @@ def morning_due(at, now, ready, sent_brief, sent_early):
 
 
 def morning_waiting(u, now):
-    """Ждём сон к утреннему разбору — синхронизировать WHOOP чаще (с 10 минут до времени разбора)."""
+    """Ждём сон к утреннему разбору — синхронизировать WHOOP чаще (с 05:00, разбор — сразу, как встал)."""
     at = morning_at(u)
     if not at or db.was_sent(f"morning:{u['id']}:{now.date()}"):
         return False
     start = datetime.datetime.combine(now.date(), at, now.tzinfo)
-    return start - datetime.timedelta(minutes=10) <= now < start + MORNING_LATE
+    wake = datetime.datetime.combine(now.date(), datetime.time(5, 0), now.tzinfo)
+    return min(wake, start - datetime.timedelta(minutes=10)) <= now < start + MORNING_LATE
 
 
 def maybe_morning(u, now):
@@ -839,7 +895,9 @@ def maybe_morning(u, now):
         return None
     day = now.date().isoformat()
     keys = {"brief": f"morning:{uid}:{day}", "early": f"morning-early:{uid}:{day}"}
-    kind = morning_due(morning_at(u), now, night_ready(uid, day), db.was_sent(keys["brief"]), db.was_sent(keys["early"]))
+    ready = night_ready(uid, day)
+    kind = morning_due(morning_at(u), now, ready, db.was_sent(keys["brief"]), db.was_sent(keys["early"]),
+                       ready == "full" and woke_up(uid, day))
     if kind and db.once(keys[kind]):
         threading.Thread(target=morning_job, args=(uid, kind, keys[kind]), daemon=True).start()
     return kind
@@ -868,38 +926,99 @@ def sport_icon(sport):
 
 
 def workout_note(uid, w):
+    """Разбор тренировки — как только WHOOP её посчитал: в чат цифры и 2 строки, целиком — в ленту приложения."""
     typing(uid)
     text, t = context(uid)
     try:
         md = ai.after_workout(text, w)
-        full = ai.to_html(md)
-        body, _ = short(md, 3, 330)
+        body, _ = short(md, 2, 260)
     except ai.AIError:
-        full = body = ("• Вода 500–700 мл за час\n• Белок 25–35 г и углеводы в ближайшие 1–2 часа\n"
-                       "• Вечером без экранов за 30 мин до сна")
-    db.brief(uid, t["day"], f"workout:{w['id']}", full)
+        md = ("**Хорошая работа — теперь восстановление.**\n- Вода 500–700 мл за час\n"
+              "- Белок 25–35 г и углеводы в ближайшие 1–2 часа\n- Вечером без экранов за 30 мин до сна")
+        body = ai.to_html("\n".join(md.splitlines()[1:3]))
+    db.brief(uid, t["day"], f"workout:{w['id']}", ai.to_html(md))
+    zones = w.get("zones") or []
+    hard = sum(zones[4:]) if len(zones) >= 6 else 0
+    facts = " · ".join(x for x in (
+        f"Нагрузка **{fmt(w['strain'])}**", f"{w['minutes']} мин" if w.get("minutes") else "",
+        f"пульс {w['avg_hr']}/{w['max_hr']}" if w.get("avg_hr") else "", f"{w['kcal']} ккал" if w.get("kcal") else "",
+        f"тяжёлых минут (зоны 4–5) {hard}" if hard else "") if x)
+    title = w["sport"] + (f" · {w['minutes']} мин" if w.get("minutes") else "")
+    rid_ = f_reviews.add(db, uid, t["day"], "workout", title, facts + "\n\n" + md, now_hm(uid), ref=w.get("id") or "")
     stats = f"Нагрузка <b>{fmt(w['strain'])}</b> · пульс {w['avg_hr'] or '—'}/{w['max_hr'] or '—'}" \
         + (f" · {w['kcal']} ккал" if w.get("kcal") else "")
-    title = esc(w["sport"]) + (f" · {w['minutes']} мин" if w.get("minutes") else "")
-    send(uid, box(sport_icon(w["sport"]), title, [stats, body], expand=False), with_app(uid, [], "📱 Открыть"))
+    send(uid, box(sport_icon(w["sport"]), esc(title), [stats, body], expand=False),
+         with_app(uid, [], "📱 Открыть", f"review-{rid_}"))
 
 
-def evening(uid, now):
-    """Вечером — если записывал еду, а до цели далеко: сколько добрать и чем."""
-    day = now.date()
-    _, t = context(uid, day)
-    n, e = t["nutrition"], t["eaten"]
-    if not n or not e["count"]:
-        return
-    lack_p, lack_k = n["protein"] - e["protein"], n["kcal"] - e["kcal"]
-    if lack_p < 20 and lack_k < 300:
-        return
-    lines = [f"Съедено <b>{e['kcal']}</b> из {n['kcal']} ккал · белок {e['protein']}/{n['protein']} г"]
-    if lack_p >= 20:
-        lines.append(f"• +{lack_p} г белка: творог, яйца, курица или кефир")
-    elif lack_k >= 300:
-        lines.append(f"• +{lack_k} ккал — нормальный ужин, не пропускай")
-    send(uid, box("🍽", "Итог питания", "\n".join(lines)), with_app(uid, [], "📱 Питание", "/food"))
+def day_facts(uid, t, day):
+    """Цифры дня для вечернего итога: [(Markdown, HTML)] — нагрузка, еда, вода, привычки."""
+    out = []
+    c, band = t.get("cycle") or {}, t.get("band")
+    if c.get("strain") is not None:
+        ws = [w for w in (t.get("workouts") or []) if w.get("minutes")]
+        tail = (f" · цель {band[0]}–{band[1]}" if band else "") + (f" · тренировок {len(ws)}" if ws else "")
+        out.append((f"Нагрузка за день **{num(c['strain'])}**{tail}", f"⚡ Нагрузка <b>{num(c['strain'])}</b>{esc(tail)}"))
+    n, e = t.get("nutrition") or {}, t.get("eaten") or {}
+    if e.get("count") or e.get("kcal"):
+        m = f"{e.get('kcal', 0)}" + (f" из {n['kcal']}" if n.get("kcal") else "") + " ккал · белок " \
+            + f"{e.get('protein', 0)}" + (f"/{n['protein']}" if n.get("protein") else "") + " г"
+        out.append((f"Еда: {m}", f"🍽 {esc(m)}"))
+    wt = t.get("water") or {}
+    if wt.get("drank") or (wt.get("target") and t.get("has_data")):
+        m = water.liters(wt.get("drank") or 0) + (f" из {water.liters(wt['target'])}" if wt.get("target") else "")
+        out.append((f"Вода: {m}", f"💧 Вода {esc(m)}"))
+    try:
+        h = f_habits.payload(db, uid, day)["today"]
+        if h.get("total"):
+            out.append((f"Привычки и цели: {h['done']} из {h['total']}", f"✅ Привычки {h['done']} из {h['total']}"))
+    except Exception:  # привычки сломались — итог всё равно уходит
+        traceback.print_exc()
+    return out
+
+
+def rule_evening(t, facts):
+    """Вечерний итог без Claude: что добрать и во сколько лечь."""
+    lines = ["**День позади — теперь сон.**"]
+    n, e = t.get("nutrition") or {}, t.get("eaten") or {}
+    if n and e.get("count"):
+        lack_p, lack_k = n["protein"] - e["protein"], n["kcal"] - e["kcal"]
+        if lack_p >= 20:
+            lines.append(f"- +{lack_p} г белка до сна: творог, кефир или яйца")
+        elif lack_k >= 300:
+            lines.append(f"- +{lack_k} ккал — нормальный ужин, не пропускай")
+    lines.append("- Телефон в сторону за 30 мин до сна, комната прохладная и тёмная")
+    bt = t.get("bedtime")
+    if bt:
+        lines.append(f"- Лечь до {bt['bed']}, подъём в {bt['wake']}")
+    return "\n".join(lines)
+
+
+def evening(uid, now=None, day=None, combine=False):
+    """Вечерний итог дня — раз в день, за ~1 ч до отбоя по режиму (без режима — в 21:00): нагрузка, еда и вода,
+    привычки и что сделать до сна. combine — напоминание об отбое приходится на это же время: одним сообщением."""
+    now = now or user_now(db.user(uid))
+    day = day or now.date()
+    text, t = context(uid, day)
+    facts = day_facts(uid, t, day)
+    if not facts and not t.get("has_data"):
+        return  # за день ничего не записано — итожить нечего
+    try:
+        md = ai.evening(text, "\n".join(m for m, _ in facts) or "нет записей")
+        body, _ = short(md, 1, 200)
+    except ai.AIError:
+        md = rule_evening(t, facts)
+        body = ai.to_html(md.splitlines()[0])
+    full = "\n".join("- " + m for m, _ in facts) + ("\n\n" if facts else "") + md
+    rid_ = f_reviews.add(db, uid, day.isoformat(), "evening", "Итог дня", full, now.strftime("%H:%M"))
+    lines = [h for _, h in facts[:3]]
+    title = "Итог дня"
+    if combine:  # напоминание об отбое — в этом же сообщении, отдельным не придёт
+        bed, rl = remind_lines(uid, day)
+        title += f" · отбой в {bed}"
+        lines = lines[:2] + rl[:2]
+    send(uid, box("🌆", title, [x for x in ("\n".join(lines), body) if x], expand=False),
+         with_app(uid, [], "📱 Открыть", f"review-{rid_}"))
 
 
 # ---------- чат ----------
@@ -1749,6 +1868,15 @@ def tick():
                 maybe_morning(db.user(uid), now)
             except Exception as e:
                 print("morning:", uid, e)
+        try:  # вечерний итог — раз в день за ~1 ч до отбоя по режиму (без режима — в 21:00)
+            cfg = f_regime.load(db, uid, u["profile"]) if f_regime.configured(db, uid) else None
+            ed = f_reviews.evening_due(cfg, now)
+            if ed and db.once(f"review-evening:{uid}:{ed}"):
+                # напоминание об отбое в это же время — одним сообщением (его ключ занимаем, отдельным не придёт)
+                both = bool(cfg) and f_regime.due(cfg, now) == ed and db.once(f"regime:{uid}:{ed}")
+                bg(evening, uid, now, ed, both)
+        except Exception as e:
+            print("evening:", uid, e)
         try:  # режим: напоминание за remind минут до отбоя — раз в день, только если режим настроен
             if f_regime.configured(db, uid):
                 rd = f_regime.due(f_regime.load(db, uid, u["profile"]), now)
@@ -1756,11 +1884,6 @@ def tick():
                     bg(regime_remind, uid, rd)
         except Exception as e:
             print("regime:", uid, e)
-        if now.hour == 20 and now.minute >= 30 and db.once(f"evening:{uid}:{now.date()}"):
-            try:
-                evening(uid, now)
-            except Exception as e:
-                print("evening:", e)
         # итог недели — воскресенье, 19:00
         if tok and now.weekday() == 6 and now.hour == 19 and db.once(f"week:{uid}:{now.date()}"):
             bg(progress_report, uid, uid, True, chat=uid)
@@ -1770,7 +1893,9 @@ def clean_photos(days=3):
     """Присланные фото нужны Claude только на время ответа — старше days дней удаляем (иначе диск растёт без конца)."""
     root = os.path.join(DATA, "photos")
     cut = time.time() - days * 86400
-    for dirpath, _, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        if dirpath == root:
+            dirs[:] = [d for d in dirs if d != "skin"]  # фото лба хранит сам владелец (f_skin) — не чистить
         for f in files:
             fp = os.path.join(dirpath, f)
             try:

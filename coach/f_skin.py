@@ -8,17 +8,28 @@
   POST /api/skin/rate {rating: 1–5 | null, note?, day?}   → оценка кожи за день и короткая заметка
   POST /api/skin/import {text, preview?, drop?: [ключ…]}  → «Заполнить списком»: preview — только разобрать
                                                              (ключи частей «am:0», «pm:1», «extra:0» — для drop)
-Ответ всех, кроме preview, — payload: {has, routine, notes, today, streak, best, diary (30 дней), stats, limits}.
+  POST /api/skin/photo {image, thumb?}                    → фото лба за сегодня (JPEG base64 / data:URL; одно на день,
+                                                             повтор заменяет) → payload + photos
+  POST /api/skin/photo {day, thumb?} (или /photo/get, GET ?day=) → {day, image: data:URL} — только своё (по сессии)
+  POST /api/skin/photos {}                                → {photos: [{day}] (новые сверху), count}
+  POST /api/skin/photo/delete {day}                       → payload + photos
+Ответ всех, кроме preview и фото, — payload: {has, routine, notes, today, streak, best, diary (30 дней), stats, limits};
+today.photo — {due, done, count, last, next, days, every}: «Фото лба» раз в 3 дня (через 2 дня после последнего).
 
 Хранение (meta): skin:<uid> — {"am": [шаг], "pm": [шаг], "extra": [процедура], "notes": {type, react, avoid}, "n", "created"};
-skin:d:<uid>:<ГГГГ-ММ-ДД> — {"m": [id отмеченных], "r": 1–5 | null, "t": заметка, "a": утро сделано, "p": вечер сделан}.
+skin:d:<uid>:<ГГГГ-ММ-ДД> — {"m": [id отмеченных], "r": 1–5 | null, "t": заметка, "a": утро сделано, "p": вечер сделан,
+"f": фото лба сделано}. Фото — файлы <DATA>/photos/skin/<uid>/<день>.jpg (+ <день>.t.jpg — миниатюра), только владельцу;
+в репозиторий и тренеру (Claude) не попадают — тренер видит лишь даты и число.
 Флаги «a»/«p» считаются в момент отметки по тогдашнему уходу — правка ухода не переписывает прошлые дни.
 Шаг: {id, title, product}; процедура: + days [0..6] (пн = 0) или weekly N (N раз в неделю, в любой день).
 Серия — дни подряд, когда сделан весь утренний и вечерний уход (сегодня ещё идёт — не обрывает).
 """
+import base64
 import datetime
 import json
+import os
 import re
+import tempfile
 
 import f_habits as H  # общий разбор строк списка (дни недели, «N раз в неделю», время) и проверки
 
@@ -36,6 +47,13 @@ NOTE_KEYS = ("type", "react", "avoid")
 NOTE_WORD = {"type": "тип и особенности", "react": "на что реагирует", "avoid": "что не подходит"}
 RATE_WORD = {1: "плохо", 2: "так себе", 3: "нормально", 4: "хорошо", 5: "отлично"}
 WD = H.WD_SHORT
+PHOTO_EVERY = 3  # «Фото лба» — раз в 3 дня: через 2 дня после последнего фото (пропустил — напоминаем каждый день)
+MAX_PHOTO = 640 * 1024  # JPEG из приложения ≤ 1280 px, обычно 150–400 КБ; тело POST в coach.py — до 1 МБ (base64 ×4/3)
+MAX_THUMB = 48 * 1024  # миниатюра для сетки «Фото лба»
+MAX_SIDE = 2048
+PHOTO_LINE = "📸 Сегодня фото лба после умывания"
+DAY_RX = re.compile(r"\d{4}-\d{2}-\d{2}")
+FILE_RX = re.compile(r"(\d{4}-\d{2}-\d{2})\.jpg")
 
 
 # ---------- проверка ----------
@@ -125,7 +143,8 @@ def _clean_doc(v):
     r = v.get("r")
     return {"m": [str(x) for x in (v.get("m") or []) if isinstance(x, str)],
             "r": r if isinstance(r, int) and not isinstance(r, bool) and 1 <= r <= 5 else None,
-            "t": str(v.get("t") or "")[:MAX_DAY_NOTE], "a": bool(v.get("a")), "p": bool(v.get("p")), "ok": bool(v.get("ok"))}
+            "t": str(v.get("t") or "")[:MAX_DAY_NOTE], "a": bool(v.get("a")), "p": bool(v.get("p")), "ok": bool(v.get("ok")),
+            "f": bool(v.get("f"))}
 
 
 def day_doc(db, uid, day):
@@ -161,7 +180,7 @@ class Calc:
         self.st, self.hist, self.today = st, hist, today
 
     def doc(self, d):
-        return self.hist.get(d.isoformat()) or {"m": [], "r": None, "t": "", "a": False, "p": False, "ok": False}
+        return self.hist.get(d.isoformat()) or {"m": [], "r": None, "t": "", "a": False, "p": False, "ok": False, "f": False}
 
     def ok(self, d):
         doc = self.doc(d)
@@ -289,7 +308,8 @@ def payload(db, uid, today):
                   "extra": [x for x in extras if x["due"]], "later": [x for x in extras if not x["due"]],
                   "am_done": sum(x["done"] for x in steps["am"]), "am_total": len(steps["am"]),
                   "pm_done": sum(x["done"] for x in steps["pm"]), "pm_total": len(steps["pm"]),
-                  "ok": day_ok(st, doc), "rating": doc["r"], "word": RATE_WORD.get(doc["r"]), "note": doc["t"]},
+                  "ok": day_ok(st, doc), "rating": doc["r"], "word": RATE_WORD.get(doc["r"]), "note": doc["t"],
+                  "photo": photo_info(hist, today, has_routine(st))},
         "streak": c.streak(), "best": c.best(), "diary": diary, "stats": stats(c),
         "limits": {"steps": MAX_STEPS, "extra": MAX_EXTRA, "text": MAX_TEXT, "notes": MAX_NOTES, "note": MAX_DAY_NOTE},
     }
@@ -580,6 +600,180 @@ def import_text(db, uid, text, today, preview=False, drop=None):
     return {"added": {p: len(res[p]) for p in PARTS}, "dup": res["dup"], "over": res["over"], "skipped": res["skipped"]}
 
 
+# ---------- фото лба ----------
+
+def photo_info(hist, today, active=True):
+    """«Фото лба» по дням с отметкой «f»: раз в PHOTO_EVERY дней от последнего фото. active — раздел ведётся (уход есть
+    или фото уже были): без этого фото не просим. due — по плану сегодня (сделано сегодня — тоже due, как процедуры)."""
+    days = sorted(d for d, doc in hist.items() if doc.get("f") and d <= today.isoformat())
+    t = today.isoformat()
+    done = bool(days) and days[-1] == t
+    before = [d for d in days if d < t]
+    last = days[-1] if days else None
+    prev = datetime.date.fromisoformat(before[-1]) if before else None
+    nxt = (prev + datetime.timedelta(days=PHOTO_EVERY)) if prev else today
+    if done:
+        nxt = today + datetime.timedelta(days=PHOTO_EVERY)
+    active = bool(active or days)
+    return {"due": active and (done or nxt <= today), "done": done, "count": len(days), "last": last,
+            "next": nxt.isoformat(), "days": (today - datetime.date.fromisoformat(last)).days if last else None,
+            "every": PHOTO_EVERY}
+
+
+def photo_dir(root, uid):
+    return os.path.join(root, "photos", "skin", str(int(uid)))
+
+
+def _pday(v):
+    """Дата фото «ГГГГ-ММ-ДД» строго (никаких «..», слэшей и чужих путей)."""
+    s = str(v if v is not None else "")
+    try:
+        if not DAY_RX.fullmatch(s):
+            raise ValueError
+        datetime.date.fromisoformat(s)
+    except ValueError:
+        raise ValueError("Фото: неверная дата") from None
+    return s
+
+
+def jpeg_size(raw):
+    """(ширина, высота) из заголовка JPEG; не JPEG или битый — ValueError."""
+    if len(raw) < 100 or raw[:3] != b"\xff\xd8\xff":
+        raise ValueError("Это не фото — нужен снимок JPEG")
+    i, n = 2, len(raw)
+    while i + 9 < n:
+        if raw[i] != 0xFF:
+            break
+        m = raw[i + 1]
+        if m == 0xFF:
+            i += 1
+            continue
+        if 0xD0 <= m <= 0xD8 or m == 0x01:
+            i += 2
+            continue
+        size = int.from_bytes(raw[i + 2:i + 4], "big")
+        if size < 2 or m in (0xDA, 0xD9):  # данные кадра или конец раньше размеров
+            break
+        if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+            h, w = int.from_bytes(raw[i + 5:i + 7], "big"), int.from_bytes(raw[i + 7:i + 9], "big")
+            if w and h:
+                return w, h
+            break
+        i += 2 + size
+    raise ValueError("Фото не читается — сделай снимок ещё раз")
+
+
+def decode_jpeg(v, limit=MAX_PHOTO):
+    """base64 или data:image/jpeg;base64,… → байты JPEG с проверкой размера и заголовка."""
+    s = str(v or "")
+    m = re.match(r"data:image/(?:jpeg|jpg);base64,", s)
+    if not m and s.startswith("data:"):
+        raise ValueError("Фото: нужен JPEG")
+    body = s[m.end():] if m else s
+    if not body:
+        raise ValueError("Нет фото")
+    if len(body) > limit * 4 // 3 + 8:
+        raise ValueError(f"Фото больше {limit // 1024} КБ — сделай снимок ещё раз")
+    try:
+        raw = base64.b64decode(body, validate=True)
+    except ValueError:  # binascii.Error — тоже ValueError
+        raise ValueError("Не получилось прочитать фото") from None
+    if len(raw) > limit:
+        raise ValueError(f"Фото больше {limit // 1024} КБ — сделай снимок ещё раз")
+    w, h = jpeg_size(raw)
+    if max(w, h) > MAX_SIDE:
+        raise ValueError("Фото слишком большое — до 2048 точек по стороне")
+    return raw
+
+
+def _write(path, raw):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")  # 0600, своё имя у каждого запроса
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        os.replace(tmp, path)  # повтор за день — заменяет целиком, без полузаписанного файла
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def photo_days(root, uid):
+    """Дни, за которые есть фото (по файлам), по возрастанию."""
+    try:
+        names = os.listdir(photo_dir(root, uid))
+    except OSError:
+        return []
+    return sorted(m.group(1) for m in map(FILE_RX.fullmatch, names) if m)
+
+
+def _set_flag(db, uid, day, on):
+    doc = day_doc(db, uid, day)
+    if doc["f"] != on:
+        doc["f"] = on
+        put_doc(db, uid, day, doc)
+
+
+def save_photo(db, root, uid, b, today):
+    raw = decode_jpeg(b.get("image"))
+    thumb = decode_jpeg(b["thumb"], MAX_THUMB) if b.get("thumb") else None
+    day = today.isoformat()
+    folder = photo_dir(root, uid)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    _write(os.path.join(folder, f"{day}.jpg"), raw)
+    tp = os.path.join(folder, f"{day}.t.jpg")
+    if thumb:
+        _write(tp, thumb)
+    elif os.path.exists(tp):  # старая миниатюра от прошлого снимка за этот день — не к этому фото
+        os.remove(tp)
+    _set_flag(db, uid, day, True)
+    return day
+
+
+def get_photo(root, uid, b):
+    day = _pday(b.get("day"))
+    folder = photo_dir(root, uid)
+    path = os.path.join(folder, f"{day}.jpg")
+    if b.get("thumb") and os.path.isfile(os.path.join(folder, f"{day}.t.jpg")):
+        path = os.path.join(folder, f"{day}.t.jpg")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        raise ValueError("Фото за этот день нет") from None
+    return {"day": day, "image": "data:image/jpeg;base64," + base64.b64encode(raw).decode()}
+
+
+def list_photos(db, root, uid, today):
+    """Список по файлам; отметки «f» в днях кожи подтягиваются к файлам (удалили руками — отметка уходит)."""
+    days = photo_days(root, uid)
+    have = set(days)
+    start = today - datetime.timedelta(days=HISTORY)
+    for d, doc in history(db, uid, start, today).items():
+        if doc["f"] and d not in have:
+            _set_flag(db, uid, d, False)
+    for d in days:
+        if start.isoformat() <= d <= today.isoformat() and not day_doc(db, uid, d)["f"]:
+            _set_flag(db, uid, d, True)
+    return {"photos": [{"day": d} for d in reversed(days)], "count": len(days)}
+
+
+def delete_photo(db, root, uid, b):
+    day = _pday(b.get("day"))
+    folder, gone = photo_dir(root, uid), False
+    for name in (f"{day}.jpg", f"{day}.t.jpg"):
+        try:
+            os.remove(os.path.join(folder, name))
+            gone = True
+        except FileNotFoundError:
+            pass
+    if not gone:
+        raise ValueError("Фото за этот день нет")
+    _set_flag(db, uid, day, False)
+
+
 # ---------- подключение ----------
 
 def route(app, uid, path, b, today):
@@ -602,6 +796,17 @@ def route(app, uid, path, b, today):
         drop = b.get("drop") if isinstance(b.get("drop"), list) else None
         r = import_text(db, uid, b.get("text"), today, bool(b.get("preview")), drop)
         return r if b.get("preview") else {**payload(db, uid, today), **r}
+    root = app.DATA
+    if path in ("/api/skin/photo", "/api/skin/photo/get"):
+        if path == "/api/skin/photo" and "image" in b:
+            save_photo(db, root, uid, b, today)
+            return {**payload(db, uid, today), **list_photos(db, root, uid, today)}
+        return get_photo(root, uid, b)
+    if path == "/api/skin/photos":
+        return list_photos(db, root, uid, today)
+    if path == "/api/skin/photo/delete":
+        delete_photo(db, root, uid, b)
+        return {**payload(db, uid, today), **list_photos(db, root, uid, today)}
     return None
 
 
@@ -620,7 +825,8 @@ def context_lines(app, uid, today):
     p = payload(app.db, uid, today)
     notes = {k: v for k, v in p["notes"].items() if v}
     s, t = p["stats"], p["today"]
-    if not p["has"] and not notes and not s["rated"]:
+    ph = t["photo"]
+    if not p["has"] and not notes and not s["rated"] and not ph["count"]:
         return []
     out = []
     r = p["routine"]
@@ -644,6 +850,8 @@ def context_lines(app, uid, today):
                                                                       if t["pm_done"] < t["pm_total"] else ""))
         for x in t["extra"]:
             bits.append(f"{x['title'].lower()} по плану сегодня — {'сделано' if x['done'] else 'не сделано'}")
+        if ph["due"]:
+            bits.append(f"фото лба по плану сегодня — {'сделано' if ph['done'] else 'не сделано'}")
         bits.append(f"серия ухода {p['streak']} дн. (лучшая {p['best']})")
         out.append("Кожа сегодня (отмечает сам): " + "; ".join(bits))
     rated = [(x["day"], x["r"]) for x in p["diary"] if x["r"]]
@@ -660,17 +868,28 @@ def context_lines(app, uid, today):
         if s["link"]:
             line += (f". С вечерним уходом кожа в среднем {fnum(s['link']['with'])}, без него — {fnum(s['link']['without'])}")
         out.append(line)
+    if ph["count"]:
+        d = ph["last"]
+        ago = {0: "сегодня", 1: "вчера"}.get(ph["days"], f"{ph['days']} дн. назад")
+        out.append(f"Фото лба (делает сам раз в {PHOTO_EVERY} дня вечером после умывания, чтобы видеть, как меняются прыщи; "
+                   f"сами фото тебе не показываются): всего {ph['count']}, последнее {d[8:10]}.{d[5:7]} ({ago}); "
+                   + ("сегодня по плану — " + ("сделано" if ph["done"] else "ещё не сделано") if ph["due"]
+                      else f"следующее {ph['next'][8:10]}.{ph['next'][5:7]}"))
     out.append("Советуй по коже бережно: простой уход по его списку, без рецептурных средств и диагнозов; "
                "сыпь, сильные, болезненные или гнойные прыщи, зуд, отёк, пятна — к дерматологу и сказать родителям.")
     return out
 
 
 def remind_line(db, uid, day):
-    """Строка в вечернее напоминание об отбое: невыполненный вечерний уход и процедуры на сегодня — или ""."""
+    """Строка в вечернее напоминание об отбое (coach.regime_remind ставит перед ней «🧴 »): невыполненный вечерний уход
+    и процедуры на сегодня, в день фото — второй строкой PHOTO_LINE; нечего — ""."""
     p = payload(db, uid, day)
     t = p["today"]
     left = [x["title"] for x in t["pm"] if not x["done"]] + [x["title"] for x in t["extra"] if not x["done"]]
-    return ("Уход на ночь: " + ", ".join(left[:4]) + (f" и ещё {len(left) - 4}" if len(left) > 4 else "")) if left else ""
+    line = ("Уход на ночь: " + ", ".join(left[:4]) + (f" и ещё {len(left) - 4}" if len(left) > 4 else "")) if left else ""
+    if t["photo"]["due"] and not t["photo"]["done"]:
+        line = f"{line}\n{PHOTO_LINE}" if line else "Уход на ночь: 📸 фото лба после умывания"
+    return line
 
 
 def evening_titles(db, uid):

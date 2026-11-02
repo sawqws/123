@@ -1,0 +1,32 @@
+/* reviews — «Разборы за сегодня»: строки iOS-списка (значок · что за разбор и первая строка · время, точка «новый»),
+   ожидаемые разборы — приглушёнными строками; лист с полным текстом. Только токены темы (ч/б), движение — opacity/transform. */
+.rv-list { overflow: hidden; }
+.rv-row .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv-row .title { font-weight: 600; }
+.rv-end { gap: 8px !important; }
+.rv-t { font-size: 14px; color: var(--hint); font-variant-numeric: tabular-nums; }
+/* «новый» — точка цвета текста; открыл — тихо гаснет (без перерисовки строки) */
+.rv-dot { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--ink); flex: none;
+  opacity: 0; transform: scale(.4); transition: opacity .3s ease, transform .4s var(--spring-soft, cubic-bezier(.16, 1, .3, 1)); }
+.rv-row.new .rv-dot { opacity: 1; transform: none; }
+.rv-row.new .title { font-weight: 700; }
+.rv-wait { cursor: default; }
+.rv-wait .ic, .rv-wait .main { opacity: .45; }
+.rv-wait .ic { background: transparent !important; box-shadow: inset 0 0 0 1px var(--sep) !important; }
+.rv-new { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--hint); }
+.rv-new::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink); }
+
+/* лист разбора */
+.rv-sheet { display: flex; flex-direction: column; gap: 6px; }
+.rv-k { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--hint); padding-right: 56px; }
+.rv-ic { display: inline-flex; width: 18px; height: 18px; }
+.rv-ic .ico, .rv-ic svg { width: 18px; height: 18px; }
+.rv-sheet h2 { margin: 2px 0 6px; }
+.rv-prose { font-size: 16.5px; line-height: 1.45; }
+.rv-prose p { margin: 0 0 10px; }
+.rv-prose ul { margin: 2px 0 10px; padding-left: 20px; }
+.rv-prose li { margin: 7px 0; }
+.rv-prose li::marker { color: var(--hint); }
+.rv-ask { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; min-height: 48px; }
+.rv-ask .ico, .rv-ask svg { width: 18px; height: 18px; }
+@media (prefers-reduced-motion: reduce) { .rv-dot { transition: none; } }

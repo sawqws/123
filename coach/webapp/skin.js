@@ -2,7 +2,10 @@
    дневник кожи 1–5 и график за 30 дней. Карточка на главной, экран ?p=skin, пункт в «＋», вечерний уход — в чек-листе
    «Режима» (F.slots.rgEvening; одинаковые пункты режима прячет F.rgHide).
    Данные — F.S.sn (полный ответ /api/skin) или F.S.data.ext.skin (кратко из /api/all). Сервер — coach/f_skin.py.
-   Отметка и оценка меняют только свою строку (без перерисовки экрана); запросы — по очереди. */
+   Отметка и оценка меняют только свою строку (без перерисовки экрана); запросы — по очереди.
+   Фото лба (раз в 3 дня вечером после умывания): строка «Фото лба» (карточка и «Процедуры»), фронтальная камера,
+   сжатие ≤ 1280 px; снимок крупно не показывается — миниатюра улетает в значок с числом снимков (угол карточки
+   или экрана); лист «Фото лба» — сетка размытых миниатюр, нажатие — открыть одно, удалить. */
 (window.FormaModules = window.FormaModules || []).push(F => {
   const { esc, svgi, cap } = F;
   const I = {
@@ -13,6 +16,10 @@
     edit: svgi('<path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 3L8 18.5z"/><path d="M13.5 7l3 3"/>'),
     note: svgi('<path d="M6 3.5h9l3.5 3.5v13.5H6z"/><path d="M14.5 3.5V7.5h4M9 12h6M9 15.5h4"/>'),
     x: svgi('<path d="M7 7l10 10M17 7L7 17"/>'),
+    cam: svgi('<path d="M3.8 8.6A1.6 1.6 0 0 1 5.4 7h2.3l1.6-2.2h5.4L16.3 7h2.3a1.6 1.6 0 0 1 1.6 1.6v9a1.6 1.6 0 0 1-1.6 1.6H5.4a1.6 1.6 0 0 1-1.6-1.6z"/><circle cx="12" cy="12.8" r="3.5"/>'),
+    left: svgi('<path d="M14.5 5.5L8 12l6.5 6.5"/>'),
+    right: svgi('<path d="M9.5 5.5L16 12l-6.5 6.5"/>'),
+    hide: svgi('<path d="M3.5 12s3-6 8.5-6c1.6 0 3 .5 4.2 1.2M20.5 12s-3 6-8.5 6c-1.6 0-3-.5-4.2-1.2"/><path d="M4.5 19.5l15-15"/>'),
   };
   const WD = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
   const WORD = { 1: 'плохо', 2: 'так себе', 3: 'нормально', 4: 'хорошо', 5: 'отлично' };
@@ -103,10 +110,11 @@
     const p = t[np + '_total'] && !(partDone(t, np) && t[other + '_total'] && !partDone(t, other) && np === 'am') ? np : other;
     const list = (t[p] || []).slice(0, HOME_MAX), more = (t[p] || []).length - HOME_MAX;
     const due = (t.extra || []).filter(x => !x.done);
-    return `<div class="sec rise">${cap('Кожа', `<button class="link" data-a="sn-open" aria-label="Кожа: ${d.streak >= 2 ? `серия ${days(d.streak)}` : 'все шаги и дневник'}">${d.streak >= 2 ? `<span class="sn-fl num">${F.I.flame}${d.streak}</span>` : 'Все'}</button>`)}
+    return `<div class="sec rise">${cap('Кожа', `${badge(t)}<button class="link" data-a="sn-open" aria-label="Кожа: ${d.streak >= 2 ? `серия ${days(d.streak)}` : 'все шаги и дневник'}">${d.streak >= 2 ? `<span class="sn-fl num">${F.I.flame}${d.streak}</span>` : 'Все'}</button>`)}
       <section class="card sn-card"><div class="sn-parts">${partBtn(t, 'am')}${partBtn(t, 'pm')}</div>
         ${list.length ? `<div class="sn-list"><div class="sn-lh">${p === 'am' ? 'Утро' : 'Уход на вечер'}</div>${list.map(x => step(x)).join('')}</div>` : ''}
         ${more > 0 || due.length ? `<button class="sn-more" data-a="sn-open"><span>${due.length ? `Сегодня ещё: ${esc(due.map(x => x.title.toLowerCase()).join(', '))}` : `Ещё ${more}`}</span><span class="chev"></span></button>` : ''}
+        <div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div>
         ${rateRow(t)}</section></div>`;
   });
   F.slots.plus.push(row => row('sn-open', '', I.face, 'var(--ink)', 'Кожа', 'уход утром и вечером, оценка'));
@@ -144,16 +152,16 @@
         if (!(t[p] || []).length) return;
         h += `<div class="sec rise">${cap(PART[p], `<span class="num" data-sn-cnt="${p}">${cnt(t, p)}</span>`)}<section class="card sn-card"><div class="sn-list">${t[p].map(x => step(x)).join('')}</div></section></div>`;
       });
-      const ex = (t.extra || []).concat(t.later || []);
-      if (ex.length) {
-        h += `<div class="sec rise">${cap('Процедуры', '<span>по расписанию</span>')}<section class="card sn-card"><div class="sn-list">
+      // процедуры по расписанию; «Фото лба» (раз в 3 дня) — первой строкой: в свой день — как отметка дня, в другие — тише
+      h += `<div class="sec rise">${cap('Процедуры', badge(t))}<section class="card sn-card"><div class="sn-list">
+          <div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div>
           ${(t.extra || []).map(x => step(x, `сегодня · ${extraMeta(x)}`)).join('')}
           ${(t.later || []).map(x => `<div class="sn-later">${step(x, extraMeta(x))}</div>`).join('')}</div></section></div>`;
-      }
     } else {
       h += `<section class="card sn-card sn-empty sn-hero rise"><span class="sn-ei">${I.face}</span>
         <p><b>Расскажи, какой у тебя уход</b>Напиши списком, что делаешь утром и вечером и какие маски бывают, — я разложу по шагам. Каждый день отмечай одним нажатием, а тренер будет видеть уход и советовать.</p>
         <div class="sn-btns"><button class="btn primary" data-a="sn-import">Заполнить списком</button><button class="btn" data-a="sn-edit">По шагам</button></div></section>`;
+      h += `<div class="sec rise">${cap('Фото лба', badge(t))}<section class="card sn-card"><div class="sn-list"><div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div></div></section></div>`;
     }
     h += `<div class="sec rise">${cap('Как кожа сегодня')}<section class="card sn-card">${rateRow(t, true)}
       <input class="sn-note" type="text" maxlength="200" enterkeyhint="done" value="${esc(t.note || '')}" placeholder="Заметка: что заметил (по желанию)" aria-label="Заметка о коже за сегодня"></section></div>`;
@@ -315,6 +323,219 @@
       const notes = {}; el.querySelectorAll('[data-k]').forEach(t => { notes[t.dataset.k] = t.value.trim(); });
       await F.busy(b, async () => {
         try { await send('/api/skin/save', { notes }); vib('success'); F.toast('Сохранено', 'ok'); el.close(); F.render(false); } catch (e) { F.fail(e); }
+      });
+    });
+  }
+
+  // ---------- фото лба: раз в 3 дня вечером после умывания ----------
+  // Снимок не показываем крупно: миниатюра улетает в значок с числом снимков. Открыть — только по нажатию на значок.
+  const photo = t => (t && t.photo) || { due: false, done: false, count: 0, next: null, every: 3 };
+  const evening = () => new Date().getHours() >= 17;
+  const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const dayShort = s => { const d = F.parseDay(s); return `${d.getDate()} ${F.MON_S[d.getMonth()]}`; };
+  function nextWord(t, ph) {
+    if (!ph.next || !t || !t.day) return `раз в ${ph.every || 3} дня`;
+    const n = Math.round((F.parseDay(ph.next) - F.parseDay(t.day)) / 864e5);
+    const wd = WD[(F.parseDay(ph.next).getDay() + 6) % 7].toLowerCase();
+    return `следующее ${n === 1 ? 'завтра' : n === 2 ? 'послезавтра' : `в ${wd}`} · раз в ${ph.every || 3} дня`;
+  }
+  function shotRow(t) {
+    const ph = photo(t), ev = evening(), todo = ph.due && !ph.done;
+    const sub = ph.done ? 'сегодня готово · можно переснять' : todo ? (ev ? 'сейчас, после умывания' : 'вечером, после умывания') : nextWord(t, ph);
+    return `<button type="button" class="sn-shot${todo ? ' due' : ''}${todo && ev ? ' hot' : ''}${ph.done ? ' on' : ''}${!ph.due ? ' quiet' : ''}" data-a="sn-photo" data-sn-shot
+      aria-label="Фото лба: ${esc(sub)}"><span class="sn-sb" aria-hidden="true">${ph.done ? F.I.check : I.cam}</span>
+      <span class="sn-ct"><b>Фото лба</b><small>${esc(sub)}</small></span>${todo ? '<span class="sn-go" aria-hidden="true">Снять</span>' : ''}</button>`;
+  }
+  const badge = t => { const n = photo(t).count || 0; return `<button type="button" class="sn-ph${n ? '' : ' zero'}" data-a="sn-photos" data-sn-ph
+      aria-label="Фото лба: ${n} ${F.plural(n, 'снимок', 'снимка', 'снимков')}"${n ? '' : ' tabindex="-1"'}>${I.cam}<b class="num" data-sn-phn>${n}</b></button>`; };
+  const inView = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; };
+  // только счётчики и строки «Фото лба» — без перерисовки экрана
+  function patchPhoto() {
+    const t = today(); if (!t) return;
+    const n = photo(t).count || 0;
+    document.querySelectorAll('[data-sn-ph]').forEach(b => {
+      b.classList.toggle('zero', !n); b.querySelector('[data-sn-phn]').textContent = n;
+      b.setAttribute('aria-label', `Фото лба: ${n} ${F.plural(n, 'снимок', 'снимка', 'снимков')}`);
+      if (n) b.removeAttribute('tabindex'); else b.setAttribute('tabindex', '-1');
+    });
+    document.querySelectorAll('[data-sn-shotbox]').forEach(el => F.morph(el, shotRow(t)));
+  }
+
+  F.actions['sn-photo'] = () => {
+    vib('tap');
+    let inp = document.getElementById('sn-cam');
+    if (!inp) {
+      inp = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*', id: 'sn-cam', hidden: true });
+      inp.setAttribute('capture', 'user');  // фронтальная камера — лоб снимаешь сам
+      inp.setAttribute('aria-hidden', 'true');
+      document.body.append(inp);
+    }
+    inp.value = '';
+    inp.onchange = () => { const f = inp.files && inp.files[0]; inp.value = ''; if (f) gotPhoto(f); };
+    inp.click();
+  };
+  F.actions['sn-photos'] = () => photosSheet();
+
+  // сжатие, как shrink в app.js: ≤ side px, JPEG; не влезло в лимит — тише качество, потом меньше сторона
+  async function jpeg(file, side, max) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
+      let k = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight)), q = .82, out = '';
+      const cv = document.createElement('canvas');
+      for (let i = 0; i < 6; i++) {
+        cv.width = Math.max(1, Math.round(img.naturalWidth * k)); cv.height = Math.max(1, Math.round(img.naturalHeight * k));
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        out = cv.toDataURL('image/jpeg', q);
+        if (out.length <= max) return out;
+        if (q > .62) q -= .1; else k *= .8;
+      }
+      if (out.length <= max) return out;
+      throw new Error('big');
+    } finally { URL.revokeObjectURL(url); }
+  }
+  let saving = false;
+  async function gotPhoto(file) {
+    if (saving) return;
+    const t = today(); if (!t) return;
+    saving = true;
+    let full, thumb;
+    try { [full, thumb] = await Promise.all([jpeg(file, 1280, 840000), jpeg(file, 240, 60000)]); }
+    catch (e) { saving = false; vib('error'); F.toast('Не получилось прочитать фото — попробуй ещё раз', 'err'); return; }
+    const ph = photo(t), was = { ...ph };
+    t.photo = { ...ph, count: (ph.count || 0) + (ph.done ? 0 : 1), done: true, due: true, last: t.day };
+    const req = send('/api/skin/photo', { image: full, thumb });
+    const landed = fly(thumb, t.photo.count);
+    try {
+      const r = await req;
+      thumbs.delete(t.day);
+      if (r && r.photos) F.S.snPhotos = r.photos;
+      await landed;
+      vib('success'); F.toast('Фото сохранено', 'ok');
+    } catch (e) {
+      await landed;
+      const tt = today(); if (tt) tt.photo = was;
+      vib('error'); F.fail(e);
+    }
+    saving = false;
+    patchPhoto();
+  }
+  // миниатюра улетает в значок (в углу карточки) или в уголок экрана; крупно снимок не показываем
+  function fly(src, n) {
+    const done = () => { patchPhoto(); document.querySelectorAll('[data-sn-ph]').forEach(b => { if (inView(b)) { b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); } }); };
+    if (reduced()) { done(); return Promise.resolve(); }
+    const from = [...document.querySelectorAll('[data-sn-shot] .sn-sb')].find(inView);
+    let to = [...document.querySelectorAll('[data-sn-ph]')].find(b => inView(b) && b.getBoundingClientRect().top > 0), corner = null;
+    if (!to) {  // значка не видно (прокрутил) — временный значок в правом верхнем углу экрана
+      corner = document.createElement('div');
+      corner.className = 'sn-ph sn-corner'; corner.setAttribute('aria-hidden', 'true');
+      corner.innerHTML = `${I.cam}<b class="num">${n - 1}</b>`;
+      document.body.append(corner);
+      requestAnimationFrame(() => corner.classList.add('show'));
+      to = corner;
+    }
+    const a = from ? from.getBoundingClientRect() : { left: innerWidth / 2 - 14, top: innerHeight * .62, width: 28, height: 28 };
+    const b = to.getBoundingClientRect(), bw = to.offsetWidth || b.width;  // скрытый (0 снимков) значок сжат transform — берём настоящий размер
+    const S = 64, x0 = a.left + a.width / 2 - S / 2, y0 = a.top + a.height / 2 - S / 2;
+    const dx = b.left + b.width / 2 - S / 2 - x0, dy = b.top + b.height / 2 - S / 2 - y0, k = bw / S;
+    const el = document.createElement('div');
+    el.className = 'sn-fly'; el.setAttribute('aria-hidden', 'true');
+    el.style.cssText = `left:${x0}px;top:${y0}px;background-image:url("${src}")`;
+    document.body.append(el);
+    const anim = el.animate([
+      { transform: 'translate(0,0) scale(.3)', opacity: 0 },
+      { transform: 'translate(0,-28px) scale(1)', opacity: 1, offset: .26 },
+      { transform: `translate(${dx * .55}px,${Math.min(dy * .55, -28 + dy * .3)}px) scale(${(1 + k) / 2})`, opacity: 1, offset: .62 },
+      { transform: `translate(${dx}px,${dy}px) scale(${k})`, opacity: .9, offset: .94 },
+      { transform: `translate(${dx}px,${dy}px) scale(${k * .6})`, opacity: 0 }],
+    { duration: 780, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'forwards' });
+    return anim.finished.catch(() => {}).then(() => {
+      el.remove(); done();
+      if (corner) {
+        corner.querySelector('b').textContent = n;
+        corner.classList.remove('bump'); void corner.offsetWidth; corner.classList.add('bump');
+        setTimeout(() => { corner.classList.remove('show'); setTimeout(() => corner.remove(), 400); }, 1300);
+      }
+    });
+  }
+
+  // ---------- лист «Фото лба»: сетка размытых миниатюр по датам, нажатие — одно фото, удалить ----------
+  const thumbs = new Map();  // день → data:URL миниатюры (только в памяти, пока открыто приложение)
+  async function getImg(day, thumb) {
+    if (thumb && thumbs.has(day)) return thumbs.get(day);
+    const r = await F.api('/api/skin/photo/get', thumb ? { day, thumb: true } : { day });
+    if (thumb && r && r.image) thumbs.set(day, r.image);
+    return r && r.image;
+  }
+  function photosSheet() {
+    vib('tap');
+    let list = F.S.snPhotos || null, cur = -1, sure = 0;
+    const keys = ev => {  // ПК: ← → — соседние снимки, Backspace — к сетке (Esc закрывает лист сам)
+      if (cur < 0 || ev.target.closest && ev.target.closest('input, textarea')) return;
+      if (ev.key === 'ArrowLeft') { ev.preventDefault(); go(-1); } else if (ev.key === 'ArrowRight') { ev.preventDefault(); go(1); }
+      else if (ev.key === 'Backspace') { ev.preventDefault(); cur = -1; sure = 0; show(); }
+    };
+    document.addEventListener('keydown', keys);
+    const el = F.sheet('<div class="sn-phs" data-sn-phs></div>', () => { document.removeEventListener('keydown', keys); token++; });
+    const box = el.querySelector('[data-sn-phs]');
+    const grid = () => !list ? `<h2>Фото лба</h2><div class="sn-grid">${'<span class="sn-tile sk"><span class="sn-tw"></span></span>'.repeat(6)}</div>`
+      : `<h2>Фото лба</h2><p class="small muted sn-phh">${list.length ? `${list.length} ${F.plural(list.length, 'снимок', 'снимка', 'снимков')} · видишь только ты. Нажми, чтобы открыть.` : 'Пока нет снимков. Раз в 3 дня вечером после умывания — так видно, как меняется кожа.'}</p>
+        ${list.length ? `<div class="sn-grid">${list.map((p, i) => `<button type="button" class="sn-tile" data-i="${i}" aria-label="Фото ${esc(dayShort(p.day))}">
+          <span class="sn-tw"><img alt="" data-day="${esc(p.day)}"><span class="sn-eye" aria-hidden="true">${I.hide}</span></span><small>${esc(dayShort(p.day))}</small></button>`).join('')}</div>`
+        : `<button class="btn primary sn-first" type="button" data-shoot>${I.cam}<span>Сделать фото</span></button>`}`;
+    const view = () => { const p = list[cur]; return `<div class="sn-view">
+        <div class="sn-vbar"><button type="button" class="sn-vb" data-back aria-label="Все фото">${I.left}<span>Все</span></button>
+          <b>${esc(F.dateLine(p.day))}</b><span class="sn-vn num">${cur + 1} из ${list.length}</span></div>
+        <div class="sn-vimg"><img alt="Фото лба ${esc(dayShort(p.day))}"></div>
+        <div class="sn-vnav"><button type="button" class="btn icon" data-step="-1" aria-label="Новее"${cur > 0 ? '' : ' disabled'}>${I.left}</button>
+          <button type="button" class="btn sn-del${sure ? ' sure' : ''}" data-del>${sure ? 'Точно удалить?' : 'Удалить'}</button>
+          <button type="button" class="btn icon" data-step="1" aria-label="Старее"${cur < list.length - 1 ? '' : ' disabled'}>${I.right}</button></div></div>`; };
+    let token = 0;
+    async function fill() {  // миниатюры по 3 за раз, новые сверху
+      const my = ++token;
+      const imgs = [...box.querySelectorAll('img[data-day]')];
+      let i = 0;
+      const one = async () => {
+        while (i < imgs.length && my === token) {
+          const img = imgs[i++];
+          try { const src = await getImg(img.dataset.day, true); if (my !== token || !src) continue; img.onload = () => img.classList.add('in'); img.src = src; } catch (e) { /* пропустим */ }
+        }
+      };
+      await Promise.all([one(), one(), one()]);
+    }
+    async function show() {
+      if (cur < 0) { box.innerHTML = grid(); fill(); return; }
+      token++;
+      box.innerHTML = view();
+      const img = box.querySelector('.sn-vimg img'), day = list[cur].day;
+      const th = thumbs.get(day);
+      if (th) { img.src = th; img.classList.add('in', 'lo'); }
+      try { const src = await getImg(day, false); if (list[cur] && list[cur].day === day && src) { img.onload = () => img.classList.remove('lo'); img.src = src; img.classList.add('in'); } }
+      catch (e) { F.fail(e); }
+    }
+    show();
+    (async () => {
+      try { const r = await F.api('/api/skin/photos', {}); list = (r && r.photos) || []; F.S.snPhotos = list; }
+      catch (e) { if (!list) { F.fail(e); el.close(); return; } }
+      if (cur < 0) show();
+    })();
+    const go = d => { const n = cur + d; if (n < 0 || n >= list.length) return; cur = n; sure = 0; vib('select'); show(); };
+    el.addEventListener('click', async ev => {
+      const tile = ev.target.closest('.sn-tile[data-i]');
+      if (tile) { cur = Number(tile.dataset.i); sure = 0; vib('tap'); show(); return; }
+      if (ev.target.closest('[data-back]')) { cur = -1; sure = 0; vib('select'); show(); return; }
+      if (ev.target.closest('[data-shoot]')) { el.close(); F.actions['sn-photo'](); return; }
+      const st = ev.target.closest('[data-step]'); if (st) { go(Number(st.dataset.step)); return; }
+      const del = ev.target.closest('[data-del]');
+      if (!del) return;
+      if (!sure) { sure = 1; vib('select'); del.classList.add('sure'); del.textContent = 'Точно удалить?'; setTimeout(() => { if (sure && del.isConnected) { sure = 0; del.classList.remove('sure'); del.textContent = 'Удалить'; } }, 3500); return; }
+      const day = list[cur].day;
+      await F.busy(del, async () => {
+        try {
+          const r = await send('/api/skin/photo/delete', { day });
+          thumbs.delete(day); list = r.photos || list.filter(p => p.day !== day); F.S.snPhotos = list;
+          cur = -1; sure = 0; vib('success'); F.toast('Фото удалено', 'ok'); show(); patchPhoto();
+        } catch (e) { F.fail(e); }
       });
     });
   }
