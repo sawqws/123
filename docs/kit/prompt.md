@@ -69,7 +69,7 @@
 Скачай набор: `git clone --depth 1 --filter=blob:none --sparse https://github.com/sawqws/123 ~/claude-kit/gleb-skills` → `git -C ~/claude-kit/gleb-skills sparse-checkout set .claude/skills` → скопируй папки из `.claude/skills/` в `~/.claude/skills/`, **не перезаписывая** уже существующие с тем же именем. Проверь: в новом чате `/` показывает скиллы.
 
 ## 8. MCP-серверы и подключения прошлого Claude
-Из `scan.json` (`claude_code.mcp_servers`, `claude_desktop.mcp_servers`): серверы Claude Desktop перенеси в Claude Code (`claude mcp add-from-claude-desktop -s user`), остальные — `claude mcp add -s user` (ключи внутри — не показывать; если ключа нет — скажи, где его взять). Подключения claude.ai (Notion, Google и т. п.) — я включаю сам в настройках, скажи какие.
+Из `scan.json` (`claude_code.mcp_servers`, `claude_desktop.mcp_servers`): серверы Claude Desktop перенеси в Claude Code (`claude mcp add-from-claude-desktop -s user`; не работает на Windows — перенеси из `claude_desktop_config.json` через `claude mcp add-json -s user`), остальные — `claude mcp add -s user` (ключи внутри — не показывать; если ключа нет — скажи, где его взять). Подключения claude.ai (Notion, Google и т. п.) — я включаю сам в настройках, скажи какие.
 Если старые чаты/проекты были в ДРУГОМ аккаунте claude.ai: там Settings → Privacy → Export data (это делаю я); архив положу в `~/claude-kit/export/` — ты разберёшь его: инструкции и знания проектов → заметки в `raw/`, важные выводы из чатов → `raw/notes/`.
 
 ## 9. Obsidian Git — автосинхронизация
