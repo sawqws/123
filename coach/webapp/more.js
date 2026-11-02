@@ -159,6 +159,7 @@
 
   // ---------- вкладка «Тренер» (как WHOOP Coach) ----------
   // подсказки по ситуации дня: восстановление, тренировка, сон, еда
+  const S0 = () => F.S.data || {};
   function prompts(t) {
     const r = t.recovery, s = t.sleep, ws = t.workouts || [], e = t.eaten || {}, out = [];
     const add = (text, ic, col, sub) => { if (!out.some(x => x.text === text)) out.push({ text, ic, col, sub }); };
@@ -172,7 +173,10 @@
     if (!r) add('Как понять, готов ли я к тренировке?', I.rec, 'var(--teal)', 'без данных восстановления');
     if (t.bedtime) add('Во сколько лечь сегодня?', I.moon, 'var(--sleep)', `нужно ${hm(t.bedtime.need)} сна`);
     add('План тренировок на неделю', I.stats, 'var(--teal)', 'по нагрузке и восстановлению');
+    const sk = S0().ext && S0().ext.skin;  // тренер — по всему: кожа, учёба, настроение
+    if (sk && sk.has) add('Что улучшить в уходе за кожей?', I.spark, 'var(--ink)', 'по твоему уходу и оценкам');
     add('Как улучшить сон?', I.moon, 'var(--sleep)', 'режим и привычки');
+    add('Как успевать учёбу и бокс?', I.stats, 'var(--ink)', 'режим дня');
     return out.slice(0, 6);
   }
   function context(t) {
@@ -183,7 +187,7 @@
   function coachView() {
     const S = F.S, t = S.data.today, hist = S.history;
     const name = ((S.data.user && S.data.user.name) || '').trim().split(/\s+/)[0];
-    let h = F.hero('Тренер', 'на данных твоего WHOOP', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
+    let h = F.hero('Тренер', 'знает твой день — спроси о чём угодно', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
     // вид WHOOP: вместо большого заголовка — строка «Ф Тренер · бета» и «новый разговор» справа (как WHOOP Coach)
     h += `<div class="co-top"><span class="co-beta"><i>Ф</i>Тренер · бета</span>${hist && hist.length ? `<button class="co-new" data-a="clear" aria-label="Новый разговор">${I.edit}</button>` : ''}</div>`;
     h += F.slots.coachTop.map(fn => { try { return fn(t) || ''; } catch (e) { console.error('coachTop', e); return ''; } }).join('');
@@ -193,7 +197,7 @@
     if (empty) {
       // как WHOOP Coach: значок «бета», первое сообщение тренера текстом; готовые вопросы — капсулами над полем
       h += `<div class="chat co-chat rise"><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>
-        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Чем помочь? Я вижу твой сон, восстановление, нагрузку и еду.${context(t)}</div>
+        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Спрашивай о чём угодно: спорт, сон, еда, кожа, учёба, настроение. Я вижу твой сон, восстановление, нагрузку, еду, режим, привычки и уход.${context(t)}</div>
         <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
@@ -209,7 +213,7 @@
       <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${F.I.cam}</button>
       <textarea id="q" rows="1" placeholder="Спроси о чём угодно">${esc(S.qDraft || '')}</textarea>
       <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div>
-      <p class="co-note">Тренер не врач: при боли, травме или плохом самочувствии — к врачу.</p></div>`;
+      <p class="co-note">Тренер не врач: при боли, травме, сыпи или плохом самочувствии — к врачу и скажи родителям.</p></div>`;
     return h;
   }
   F.views.coach = coachView;

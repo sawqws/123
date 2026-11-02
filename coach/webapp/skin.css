@@ -1,0 +1,150 @@
+/* skin — «Кожа»: части дня, строки шагов с круглой галочкой, оценка 1–5, график 30 дней, листы ухода.
+   Только токены темы (ч/б: --ink, --hint, --trk, --card-2, --fill…), движение — transform/opacity, шрифт ≥ 11 px. */
+.sn-card { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
+.sn-card > .sn-list:empty { display: none; }
+
+/* ---------- утро / вечер ---------- */
+.sn-parts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sn-part { position: relative; display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 60px; padding: 10px 12px; border: 0;
+  border-radius: 20px; background: var(--card-2); color: var(--ink); text-align: left; font: inherit; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; transition: transform .35s var(--spring-bounce, ease), background-color .25s ease; }
+.sn-part:active { transform: scale(.97); transition-duration: .1s; }
+.sn-pi { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--fill); }
+.sn-pi .ico { width: 19px; height: 19px; }
+.sn-pt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sn-pt b { font: 650 16px/1.15 var(--head); }
+.sn-pt small { font: 500 13px/1.1 var(--num); color: var(--hint); }
+.sn-part.none .sn-pt small { font-family: var(--head); }
+.sn-pm { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px var(--hint-2);
+  transition: background-color .25s ease, box-shadow .25s ease; }
+.sn-pm .ico { width: 15px; height: 15px; stroke-width: 2.6; color: var(--on-ink, var(--bg)); opacity: 0; transform: scale(.4);
+  transition: opacity .2s ease, transform .4s var(--spring-bounce, ease); }
+.sn-part.ok .sn-pm { background: var(--ink); box-shadow: inset 0 0 0 1.6px var(--ink); }
+.sn-part.ok .sn-pm .ico { opacity: 1; transform: none; }
+.sn-part.none { opacity: .6; }
+.sn-part.none .sn-pm { visibility: hidden; }
+
+/* ---------- строка шага ---------- */
+.sn-list { display: grid; }
+.sn-lh { margin-bottom: 2px; font: 600 13px/1.2 var(--head); color: var(--hint); }
+.sn-ck { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; padding: 6px 0; border: 0; background: none;
+  color: var(--ink); text-align: left; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.sn-list > :is(.sn-ck, .sn-later) + :is(.sn-ck, .sn-later)::before { content: ""; position: absolute; top: 0; left: 40px; right: 0; height: .5px; background: var(--sep); }
+.sn-later { position: relative; }
+.sn-later .sn-ck { opacity: .62; }
+.sn-later .sn-ck.on { opacity: 1; }
+.sn-box { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; box-shadow: inset 0 0 0 1.8px var(--hint-2);
+  transition: background-color .25s ease, box-shadow .25s ease, transform .4s var(--spring-bounce, ease); }
+.sn-box .ico { width: 17px; height: 17px; stroke-width: 2.6; color: var(--on-ink, var(--bg)); opacity: 0; transform: scale(.4);
+  transition: opacity .2s ease, transform .42s var(--spring-bounce, cubic-bezier(.34, 1.56, .64, 1)); }
+.sn-ck:active .sn-box { transform: scale(.86); transition-duration: .1s; }
+.sn-ck.on .sn-box { background: var(--ink); box-shadow: inset 0 0 0 1.8px var(--ink); }
+.sn-ck.on .sn-box .ico { opacity: 1; transform: none; }
+.sn-ck.pop .sn-box { animation: sn-pop .5s var(--spring-bounce, ease); }
+@keyframes sn-pop { 0% { transform: scale(.84); } 55% { transform: scale(1.1); } 100% { transform: scale(1); } }
+.sn-ct { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sn-ct b { font: 500 16px/1.25 var(--head); overflow-wrap: anywhere; transition: color .25s ease; }
+.sn-ct small { font-size: 13px; line-height: 1.25; color: var(--hint); overflow-wrap: anywhere; }
+.sn-ck.on .sn-ct b { color: var(--hint); }
+
+.sn-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 40px; padding: 0; border: 0; background: none;
+  color: var(--hint); font: 500 14px/1.25 var(--head); text-align: left; cursor: pointer; }
+.sn-card > .sn-list + .sn-more { margin-top: -10px; }
+.sn-more span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sn-fl { display: inline-flex; align-items: center; gap: 3px; font: 600 14px/1 var(--num); color: var(--ink); }
+.sn-fl .ico { width: 15px; height: 15px; }
+
+/* ---------- оценка 1–5 ---------- */
+.sn-rate { display: grid; gap: 10px; }
+.sn-card .sn-rate:not(:first-child) { padding-top: 14px; border-top: .5px solid var(--sep); }
+.sn-rh { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font: 600 14px/1.2 var(--head); color: var(--hint); }
+.sn-rh b { font: 650 15px/1.2 var(--head); color: var(--ink); }
+.sn-rb { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.sn-rb button { min-height: 40px; border: 0; border-radius: 999px; background: var(--fill); color: var(--ink); font: 600 16px/1 var(--num); cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: background-color .22s ease, color .22s ease, transform .35s var(--spring-bounce, ease); }
+.sn-rb button:active { transform: scale(.9); transition-duration: .1s; }
+.sn-rb button.on { background: var(--ink); color: var(--on-ink, var(--bg)); }
+.sn-rate.big .sn-rb button { min-height: 46px; font-size: 18px; }
+.sn-rl { display: flex; justify-content: space-between; font-size: 12px; color: var(--hint); }
+.sn-note { width: 100%; min-height: 44px; padding: 0 14px; border-radius: 14px; font: 15px/1.3 var(--head); }
+
+/* ---------- серия и цифры ---------- */
+.sn-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.sn-stats > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 12px; border-radius: 18px; background: var(--card-2); }
+.sn-stats b { font: 700 21px/1.1 var(--num); letter-spacing: -.02em; }
+.sn-stats span { font-size: 12.5px; line-height: 1.25; color: var(--hint); }
+
+/* ---------- график 30 дней ---------- */
+.sn-chart { display: grid; grid-template-columns: auto 1fr; gap: 8px; height: 120px; }
+.sn-ax { display: flex; flex-direction: column; justify-content: space-between; font: 500 11px/1 var(--num); color: var(--hint); }
+.sn-bars { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); align-items: end; gap: 3px; height: 100%;
+  background: linear-gradient(var(--sep) 0 0) 0 0 / 100% .5px no-repeat, linear-gradient(var(--sep) 0 0) 0 50% / 100% .5px no-repeat,
+    linear-gradient(var(--sep) 0 0) 0 100% / 100% .5px no-repeat; }
+.sn-bar { position: relative; display: flex; align-items: flex-end; justify-content: center; height: 100%; }
+.sn-bar i { display: block; width: 100%; max-width: 12px; height: 100%; border-radius: 999px; background: var(--ink); transform-origin: bottom;
+  transform: scaleY(var(--h, 0)); transition: transform .6s var(--spring-soft, cubic-bezier(.16, 1, .3, 1)); }
+.sn-bar i.none { height: 4px; transform: none; background: var(--trk); }
+.sn-bar.ok::after { content: ""; position: absolute; bottom: -9px; width: 4px; height: 4px; border-radius: 50%; background: var(--hint); }
+.sn-bar.now i:not(.none) { box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--ink); }
+.sn-xl { display: flex; justify-content: space-between; margin: 14px 0 0 18px; font: 500 11.5px/1 var(--head); color: var(--hint); }
+.sn-leg { display: flex; gap: 14px; margin: 0; font-size: 12px; color: var(--hint); }
+.sn-leg span { display: inline-flex; align-items: center; gap: 6px; }
+.sn-lb { display: inline-block; width: 6px; height: 12px; border-radius: 3px; background: var(--ink); }
+.sn-lo { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--hint); }
+.sn-sum { margin: 0; font-size: 15px; line-height: 1.4; }
+
+/* ---------- пустое состояние ---------- */
+.sn-empty { justify-items: start; }
+.sn-ei { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--fill); }
+.sn-ei .ico { width: 26px; height: 26px; }
+.sn-empty p { margin: 0; font-size: 15px; line-height: 1.4; color: var(--hint); }
+.sn-empty p b { display: block; margin-bottom: 4px; font: 650 18px/1.25 var(--head); color: var(--ink); }
+.sn-btns { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.sn-btns .btn { flex: 1 1 140px; margin: 0; }
+
+/* ---------- в чек-листе «Режима» ---------- */
+.sn-rg { display: grid; gap: 2px; }
+.rg-ev > .rg-ck + .sn-rg, .rg-ev > .sn-rg:not(:first-child) { margin-top: 10px; }
+
+/* ---------- листы: мой уход, заметки, список ---------- */
+.sn-ed { display: grid; gap: 4px; }
+.sn-eg { display: grid; gap: 8px; margin: 10px 0 8px; }
+.sn-er { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: start; padding: 10px; border-radius: 18px; background: var(--in-sheet, var(--card-2));
+  animation: sn-in .32s var(--spring-soft, ease) both; }
+@keyframes sn-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.sn-ef { display: grid; gap: 6px; min-width: 0; }
+.sn-ef input { width: 100%; min-height: 42px; padding: 0 12px; border-radius: 12px; font: 15px/1.3 var(--head); }
+.sn-ef input[data-f="product"] { min-height: 38px; font-size: 14px; }
+.sn-rm { width: 40px; min-width: 40px; height: 40px; min-height: 40px; padding: 0; margin: 0; border-radius: 50%; }
+.sn-rm .ico { width: 18px; height: 18px; }
+.sn-eday { grid-column: 1 / -1; display: grid; gap: 8px; }
+.sn-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.sn-days button { min-height: 36px; padding: 0; border: 0; border-radius: 999px; background: var(--fill); color: var(--ink); font: 600 13px/1 var(--head); cursor: pointer;
+  transition: background-color .2s ease, color .2s ease; }
+.sn-days button.on { background: var(--ink); color: var(--on-ink, var(--bg)); }
+.sn-ewk { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--hint); }
+.sn-ewk .pl-step { display: flex; align-items: center; gap: 10px; }
+.sn-ewk .pl-step button { width: 36px; height: 36px; border: 0; border-radius: 50%; font: 600 18px/1 var(--head); color: var(--ink); cursor: pointer; }
+.sn-ewk .pl-step b { min-width: 16px; text-align: center; font: 600 16px/1 var(--num); color: var(--ink); }
+.sn-add { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; margin: 0; }
+.sn-add .ico { width: 17px; height: 17px; }
+.sn-f { display: grid; gap: 6px; margin: 12px 0; }
+.sn-f span { font: 600 13px/1.2 var(--head); color: var(--hint); }
+.sn-f textarea, .sheet #sn-text { width: 100%; padding: 12px 14px; border-radius: 14px; font: 15px/1.4 var(--head); resize: vertical; }
+.sheet #sn-text { margin: 10px 0; min-height: 170px; }
+.sn-help { margin: 4px 0 0; }
+.sn-prev .row { transition: opacity .2s ease, transform .2s ease; }
+.sn-prev .row.out { opacity: 0; transform: translateX(16px); }
+.sn-prev .ic .ico { width: 18px; height: 18px; }
+.sn-ed > .label { margin-top: 12px; }
+.sn-ed > .btn { width: 100%; margin-top: 10px; }
+
+@media (max-width: 374px) {
+  .sn-part { gap: 8px; padding: 8px 10px; }
+  .sn-pi { width: 30px; height: 30px; }
+  .sn-pt b { font-size: 15px; }
+  .sn-bars { gap: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sn-part, .sn-box, .sn-box .ico, .sn-rb button, .sn-bar i, .sn-er { transition: none !important; animation: none !important; }
+}
