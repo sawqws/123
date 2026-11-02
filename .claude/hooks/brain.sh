@@ -14,6 +14,16 @@ if [ -f "$B/NOW.md" ]; then
 else
   echo "Brain не подключён: вызови add_repo sawqws/Brain (клон в $B), прочитай NOW.md и wiki/INDEX.md."
 fi
+# Хранилище паролей Глеба (Brain/secrets/vault.enc, шифр) → переменные во все команды этого чата.
+# Ключ — BRAIN_KEY или выводится из HUB_KEY. Уже заданные переменные не трогает. Значения нигде не печатаются.
+if [ -n "$CLAUDE_ENV_FILE" ]; then
+  for d in "$B" /home/user/Brain; do
+    if [ -f "$d/tools/vault.py" ] && [ -f "$d/secrets/vault.enc" ]; then
+      python3 "$d/tools/vault.py" env >> "$CLAUDE_ENV_FILE" 2>/dev/null && echo "Хранилище паролей Brain загружено ($(python3 "$d/tools/vault.py" list 2>/dev/null | wc -l) шт.)"
+      break
+    fi
+  done
+fi
 # «Пульс»: сводка этого чата (контекст, задачи, статус) → бот «Пульс» через Главного
 python3 "$(dirname "$0")/../../pulse/reporter.py" start >/dev/null 2>&1 || true
 # Библиотеки для почерка и браузера — в фоне, чтобы первая задача не ждала установки (старт сессии не тормозит)
