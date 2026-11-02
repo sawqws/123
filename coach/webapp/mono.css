@@ -234,3 +234,12 @@ html.mono .bk[hidden] { visibility: hidden !important; pointer-events: none !imp
 /* крестик не уезжает с прокруткой длинного листа (Глеб 02.11: «крестики опять улетели»): лист сам прокручивается,
    поэтому кнопка прилипает к верху листа (sticky) и стоит справа, не занимая место в потоке */
 html.mono .sheet-x { position: sticky !important; top: 12px !important; right: auto !important; float: right; margin: 4px -2px -44px 0; }
+/* три деления «плохо / достаточно / оптимально»: горит одно — уровень виден по месту, а не по цвету */
+html.mono .seg3 i { background: var(--trk) !important; }
+html.mono .seg3 i:is(.poor, .ok, .best) { background: var(--ink) !important; }
+/* под палец ≥ 36 px: «i» в шапке разбора и ссылка «Разобрать …» под выводом (common/devcheck.js) */
+html.mono .wbtn.info { width: 36px; height: 36px; }
+html.mono .wlink { min-height: 36px; }
+/* символ «✕» от kit.js — прозрачный, но обычного размера (проверка «текст ≥ 11 px» не спотыкается о 0 px); крест — маской */
+html.mono .sheet-x { font-size: 11px !important; color: transparent !important; }
+html.mono .sheet-x::before { background: var(--ink); }

@@ -1026,3 +1026,92 @@ body, button, input, textarea, select, .tabbar button, .sheet, .toast { font-fam
 .co-chat .msg.them { background: none !important; box-shadow: none !important; padding: 2px 0 2px 30px; }
 .co-chat .msg.them::after { content: none; }
 .co-s { font-size: 14px; padding: 8px 13px; }
+
+/* ===== Понятные графики (Глеб 02.11: «графики очень непонятные») =====
+   Заголовок простыми словами → одна строка вывода крупно → график с датами, подписанной нормой и уровнями →
+   ключ под графиком. Касание/наведение — плавающая подсказка .ch-tip. Движение — только transform/opacity. */
+.ch-block + .ch-block { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--sep); }
+.ch-t { margin: 0; font: 600 15px/1.3 var(--head); color: var(--hint); letter-spacing: 0; text-transform: none; }
+.ch-lead { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font: 500 15px/1.35 var(--head); color: var(--hint); }
+.ch-lead .ch-v { color: var(--ink); font-weight: 600; }
+.ch-lead .ch-v b { font: 700 28px/1.1 var(--num); letter-spacing: -.02em; color: var(--ink); margin-right: 3px; }
+.ch-cmp { font: 600 14px/1.35 var(--head); color: var(--ink); }
+.ch-cmp i { font-style: normal; display: inline-block; font-size: 11px; transform: scale(.8); margin-right: 3px; }
+.ch-cmp.up i { color: var(--zone-green, var(--teal)); }
+.ch-cmp.down i { color: var(--zone-red, #ff4d5e); }
+.ch-cmp.flat { color: var(--hint); font-weight: 500; }
+.ch-key { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font: 500 13px/1.35 var(--head); color: var(--hint); }
+.ch-key b { color: var(--ink); font-weight: 700; }
+.kdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.kline { display: inline-block; width: 14px; height: 0; border-top: 1.5px solid var(--hint); margin-right: 6px; vertical-align: 3px; }
+.chart-card .chart-box, .ch-block .chart-box { margin-top: 10px; }
+.chart { display: block; max-width: 100%; height: auto; overflow: visible; touch-action: pan-y; cursor: crosshair; -webkit-tap-highlight-color: transparent; outline: none; -webkit-user-select: none; user-select: none; }
+.chart:focus-visible { outline: 2px solid var(--hint); outline-offset: 4px; border-radius: 8px; }
+.chart text { fill: var(--hint); font: 500 11px var(--num); font-variant-numeric: tabular-nums; }
+.chart .xl2 { opacity: .75; }
+.chart :is(.vl, .norm-t) { paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.chart .vl { font-weight: 600; }
+.chart .vl.last { fill: var(--ink); font-weight: 700; font-size: 12px; }
+.chart .band-t { font: 500 11px var(--head); }
+.chart :is(.axis, .grid) { stroke: var(--sep); stroke-width: 1; }
+.chart .norm { stroke: var(--hint); stroke-width: 1; stroke-dasharray: none; stroke-opacity: .9; }
+.chart .norm-t { font: 600 11px var(--head); fill: var(--ink); }
+.chart .fillin { fill-opacity: .1; }
+.chart :is(.mm, .dotin) { stroke: var(--card); stroke-width: 2; }
+.chart .ch-hb { fill: var(--ink); opacity: 0; transition: opacity .15s, transform .2s cubic-bezier(.32, .72, 0, 1); }
+.chart .ch-hb.on { opacity: .1; }
+.chart .ch-hl { opacity: 0; transition: opacity .15s, transform .2s cubic-bezier(.32, .72, 0, 1); }
+.chart .ch-hl.on { opacity: 1; }
+.chart .ch-x { stroke: var(--hint); stroke-width: 1; }
+.chart .ch-pt { opacity: 0; stroke: var(--card); stroke-width: 2.5; transition: opacity .15s, transform .2s cubic-bezier(.32, .72, 0, 1); }
+.chart .ch-pt.on { opacity: 1; }
+.card .chart text, .sheet .chart text { font-size: 11px; }
+.ch-tip { position: fixed; left: 0; top: 0; z-index: 70; pointer-events: none; min-width: 92px; max-width: 230px; padding: 8px 12px 9px; border-radius: 14px;
+  display: flex; flex-direction: column; gap: 2px; background: var(--sheet-bg, #1c1c1e); color: var(--ink);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .3), inset 0 0 0 .5px var(--bar-line, rgba(255, 255, 255, .12));
+  opacity: 0; transition: opacity .15s, transform .14s cubic-bezier(.32, .72, 0, 1); will-change: transform, opacity; }
+.ch-tip.on { opacity: 1; }
+.ch-tip b { font: 700 17px/1.2 var(--num); font-variant-numeric: tabular-nums; }
+.ch-tip .ct-d { font: 500 12px/1.3 var(--head); color: var(--hint); }
+.ch-tip .ct-x { display: flex; align-items: center; gap: 6px; font: 500 12.5px/1.3 var(--head); color: var(--ink); }
+.ch-tip .ct-x[hidden], .ch-tip .ct-x i[hidden] { display: none; }
+.ch-tip .ct-x i { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.ch-tip em { font-style: normal; }
+/* «Цель нагрузки»: уровни подписаны словами и числами, цель и «сейчас» — над шкалой */
+.s21 { margin-top: 12px; }
+.s21-top { position: relative; height: 24px; }
+.s21-l { position: absolute; bottom: 6px; transform: translateX(-50%); white-space: nowrap; font: 500 12.5px/1 var(--head); color: var(--hint); }
+.s21-l b { font: 700 14px/1 var(--num); color: var(--ink); }
+.s21-l.l { transform: none; }
+.s21-l.r { transform: translateX(-100%); }
+.s21-l.now { color: var(--ink); }
+.s21 .scale21 { height: 12px; margin: 0; overflow: visible; }
+.div21 { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--card); z-index: 1; }
+.s21 .band21 { z-index: 0; }
+.s21 .mark21 { z-index: 2; top: -5px; height: 22px; }
+.s21-ax { position: relative; height: 14px; margin-top: 7px; font: 500 11px/1 var(--num); color: var(--hint); }
+.s21-ax span { position: absolute; top: 0; transform: translateX(-50%); }
+.s21-ax span:first-child { transform: none; }
+.s21-ax span:last-child { transform: translateX(-100%); }
+.s21 .ticks { display: flex; gap: 0; margin-top: 4px; font: 500 11px/1.2 var(--head); text-transform: none; letter-spacing: 0; color: var(--hint); }
+.s21 .ticks span { text-align: center; border-left: 0; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv small { font: 500 12px var(--head); color: var(--hint); margin-left: 3px; letter-spacing: 0; }
+.zleg span { font-size: 11px; }
+.zleg b small { font: 500 11px var(--head); color: var(--hint); }
+.sum-z .zones { margin: 12px 0 0; height: 12px; }
+.sum-z .small { margin: 10px 0 0; }
+/* тихое обновление и «меньше движения»: линия видна сразу (раньше пропадала — dasharray оставался, а анимация снималась) */
+.calm .draw { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
+@media (prefers-reduced-motion: reduce) {
+  .draw { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
+  .ch-tip, .chart :is(.ch-hb, .ch-hl, .ch-pt) { transition: none !important; }
+}
+.seg3-key { flex-wrap: wrap; gap: 6px 14px; }
+.seg3-key span { display: inline-flex; align-items: center; gap: 6px; }
+.seg3.mini { margin: 0; gap: 2px; }
+.seg3.mini i { width: 8px; height: 3px; }
+.stp { grid-template-columns: minmax(104px, 128px) 1fr 96px; }
+.stv b { white-space: nowrap; }
+@media (max-width: 420px) { .stp { grid-template-columns: minmax(96px, 112px) 1fr 92px; } }
+/* лист сводки на широком экране: плитки — на всю ширину окна (раньше сжимались по содержимому) */
+.sum-sheet #sum-body > :is(.grid2, .card, .zones) { width: 100%; box-sizing: border-box; }

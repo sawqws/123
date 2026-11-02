@@ -172,16 +172,10 @@
   }
 
   // ---------- тренды 1Н / 1М / 6М в разборах ----------
-  const RANGES = [[7, '1Н', 'к прошлой неделе', 'как на прошлой неделе'], [30, '1М', 'к прошлому месяцу', 'как в прошлом месяце'],
-    [180, '6М', 'к прошлым 6 мес.', 'как в прошлые 6 мес.']];
+  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, 'Полгода']];
   F.S.actvRange = F.S.actvRange || { sleep: 7, rec: 7, strain: 7 };
   const pending = new Set(), asked = new Set(), failed = new Set();
-  // самый длинный загруженный ряд: все ряды кончаются сегодняшним днём
-  function longest() {
-    let best = F.S.data.series || [];
-    Object.values(F.S.series || {}).forEach(r => { if (r && r.length > best.length) best = r; });
-    return best;
-  }
+  const longest = F.longest;
   const wantOf = n => Math.min(180, n * 2);  // для сравнения нужен и прошлый такой же период (сервер отдаёт до 180 дней)
   function need(n) {
     const want = wantOf(n);
@@ -193,62 +187,24 @@
       ['sleep', 'rec', 'strain'].forEach(k => { if (F.S.screen === k) redraw(k); });
     });
   }
-  const mean = (rows, k) => { const v = rows.map(r => r[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
-  const filled = (rows, k) => rows.filter(r => r[k] != null).length;
-  // сравнение с прошлым таким же периодом — только если в обоих хотя бы половина дней с данными (наш порог)
-  function cmp(rows, prev, k, goodUp, fmt, n, [label, same]) {
-    const minDays = Math.max(3, Math.round(n / 2));
-    if (!prev || prev.length < n || filled(prev, k) < minDays || filled(rows, k) < minDays) return '<span class="actv-cmp flat">нет прошлого периода для сравнения</span>';
-    const a = mean(rows, k), b = mean(prev, k), x = a - b;
-    if (Math.abs(x) < fmt.eps) return `<span class="actv-cmp flat">= ${same}</span>`;
-    const cls = goodUp == null ? 'flat' : (goodUp ? x > 0 : x < 0) ? 'up' : 'down';
-    return `<span class="actv-cmp ${cls}"><i>${x > 0 ? '▲' : '▼'}</i>${fmt.f(Math.abs(x))} ${label}</span>`;
-  }
-  const FMT = {
-    h: { f: v => `${Math.round(v * 60)} мин`, eps: 5 / 60 },
-    pct: { f: v => `${Math.round(v)}%`, eps: .5 },
-    ms: { f: v => `${Math.round(v)} мс`, eps: .5 },
-    st: { f: v => num(v, 1), eps: .05 },
-  };
+  // какие графики показывать в разборе: те же, что во «Здоровье» (F.CHARTS), с понятными заголовками и выводом
+  const KINDS = { sleep: ['sleep'], rec: ['rec', 'hrv', 'rhr'], strain: ['strain'] };
 
   function trendCard(kind, anim = true) {
-    const n = F.S.actvRange[kind] || 7, label = RANGES.find(r => r[0] === n).slice(2);
+    const n = F.S.actvRange[kind] || 7;
     const all = longest();
-    const seg = `<div class="seg actv-seg" role="tablist">${RANGES.map(([k, l]) => `<button class="${k === n ? 'on' : ''}" data-a="actv-range" data-v="${kind}:${k}" role="tab">${l}</button>`).join('')}</div>`;
-    const span = len => len < n ? `${len} ${plural(len, 'день', 'дня', 'дней')} — больше данных нет` : n === 180 ? '6 месяцев' : n === 30 ? '30 дней' : '7 дней';
-    const head = len => `<section class="card actv-trend${anim ? ' rise' : ''}" id="actv-trend-${kind}">${F.cap('Тренд', span(len))}${seg}`;
-    const open = head(n);
+    const seg = `<div class="seg actv-seg" role="tablist" aria-label="Период">${RANGES.map(([k, l]) => `<button class="${k === n ? 'on' : ''}" data-a="actv-range" data-v="${kind}:${k}" role="tab">${l}</button>`).join('')}</div>`;
+    const span = len => len < n ? `есть только ${len} ${plural(len, 'день', 'дня', 'дней')}` : '';
+    const head = len => `<section class="card actv-trend${anim ? ' rise' : ''}" id="actv-trend-${kind}">${F.cap('Как менялось', span(len))}${seg}`;
     need(n);  // прошлый период для сравнения подтянется в фоне
     const want = wantOf(n);
     // данных меньше периода, а больше сервер не дал (WHOOP носят недавно) — рисуем, что есть
     if (all.length < n && !(asked.has(want) && !pending.has(want) && !failed.has(want))) {
-      if (failed.has(want)) return `${open}<div class="chart-empty">График не загрузился. <button class="link" data-a="actv-retry" data-v="${kind}">Повторить</button></div></section>`;
-      return `${open}<div class="sk" style="height:34px;width:46%"></div><div class="sk" style="height:${112 + 22}px;margin-top:14px"></div></section>`;
+      if (failed.has(want)) return `${head(n)}<div class="chart-empty">График не загрузился. <button class="link" data-a="actv-retry" data-v="${kind}">Повторить</button></div></section>`;
+      return `${head(n)}<div class="sk" style="height:22px;width:60%"></div><div class="sk" style="height:34px;width:46%;margin-top:10px"></div><div class="sk" style="height:${116 + 58}px;margin-top:14px"></div></section>`;
     }
     const rows = all.slice(-n), prev = all.length >= 2 * n ? all.slice(-2 * n, -n) : null;
-    const big1 = (v, u, col, c) => `<div class="actv-big"><span class="v num" style="color:${col}">${v}</span><span class="u">${u}</span></div>${c}`;
-    let body = head(rows.length);
-    if (kind === 'sleep') {
-      const s = mean(rows, 'sleep'), nd = mean(rows, 'need'), pf = mean(rows, 'perf');
-      body += big1(hm(s), 'сна в среднем', 'var(--sleep)', cmp(rows, prev, 'sleep', true, FMT.h, n, label))
-        + `<div class="chart-box">${F.bars(rows, 'sleep', { color: 'var(--sleep)', ref: 'need' })}</div>
-        <div class="actv-mini num"><span><i class="tick"></i>нужно в среднем <b>${hm(nd)}</b></span><span>выполнение <b>${pf != null ? Math.round(pf) + '%' : '—'}</b></span></div>`;
-    } else if (kind === 'rec') {
-      const zc = r => F.C[r.zone] || 'var(--hint)';
-      const cnt = z => rows.filter(r => r.zone === z).length;
-      const hv = mean(rows, 'hrv');
-      body += big1(mean(rows, 'recovery') != null ? Math.round(mean(rows, 'recovery')) + '%' : '—', 'в среднем', 'var(--ink)', cmp(rows, prev, 'recovery', true, FMT.pct, n, label))
-        + `<div class="chart-box">${F.bars(rows, 'recovery', { max: 100, color: zc })}</div>
-        <div class="actv-mini num"><span><i class="dot" style="background:${F.C.green}"></i><b>${cnt('green')}</b> зелёных</span><span><i class="dot" style="background:${F.C.yellow}"></i><b>${cnt('yellow')}</b> жёлтых</span><span><i class="dot" style="background:${F.C.red}"></i><b>${cnt('red')}</b> красных</span></div>
-        <div class="actv-sub2">${F.cap('Отдых нервов', `<b class="num">${hv != null ? Math.round(hv) : '—'}</b> мс в среднем`)}${cmp(rows, prev, 'hrv', true, FMT.ms, n, label)}
-        <div class="chart-box">${F.line(rows, 'hrv', 'var(--rec-blue)', hv)}</div></div>`;
-    } else {
-      const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);
-      body += big1(num(mean(rows, 'strain'), 1), 'в среднем за день', 'var(--strain)', cmp(rows, prev, 'strain', null, FMT.st, n, label))
-        + `<div class="chart-box">${F.bars(rows, 'strain', { max: 21, color: 'var(--strain)' })}</div>
-        <div class="actv-mini num"><span><b>${wk}</b> ${plural(wk, 'тренировка', 'тренировки', 'тренировок')}</span><span>макс. за день <b>${rows.some(r => r.strain != null) ? num(Math.max(...rows.map(r => r.strain || 0)), 1) : '—'}</b></span></div>`;
-    }
-    return `${body}</section>`;
+    return `${head(rows.length)}${KINDS[kind].map(k => F.CHARTS[k](rows, prev, n)).join('')}</section>`;
   }
   // перерисовать только карточку тренда, без всего экрана
   function redraw(kind) {
