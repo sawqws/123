@@ -271,6 +271,23 @@ async def history(ctx, a):
     return head + "\n" + "\n".join(line(m) for m in msgs)
 
 
+@command("download")
+async def download(ctx, a):
+    """Скачать вложения сообщений (голосовые, файлы, фото, видео) в tgbot/tmp/dl/<чат>/ — только чтение."""
+    c = await chat(ctx, a["chat"])
+    ids = [int(x) for x in a["ids"]]
+    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp", "dl", str(utils.get_peer_id(c)))
+    os.makedirs(folder, exist_ok=True)
+    out = []
+    for m in await ctx.client.get_messages(c, ids=ids):
+        if m is None or m.media is None:
+            continue
+        p = await m.download_media(file=os.path.join(folder, f"{m.id}_"))
+        if p:
+            out.append(f"{m.id} {media(m).strip()} {p}")
+    return "\n".join(out) or "Вложений не найдено"
+
+
 @command("period")
 async def period(ctx, a):
     """Все чаты с сообщениями за период (для разбора «всех чатов» как психолог): по каждому чату — кто это,
