@@ -30,7 +30,7 @@ import coach  # noqa: E402
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
-               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/skin/rate", "/api/reviews"]
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/skin/rate", "/api/reviews", "/api/weight"]
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -156,6 +156,22 @@ def seed_reviews(today):
             coach.f_reviews.seen(coach.db, T.U, rid)
 
 
+# Вес — нейтральный пример (обычный подросток, вес медленно растёт с ростом): утренние замеры раз в 3–5 дней за 2 месяца
+WEIGHT = [(58, 61.6, 15.4, 47.9), (52, 61.9, None, None), (47, 61.8, 15.2, 48.2), (41, 62.2, 15.1, 48.5), (36, 62.1, None, None),
+          (30, 62.4, 14.9, 48.9), (25, 62.6, 14.8, 49.1), (20, 62.5, 14.8, 49.2), (15, 62.9, 14.6, 49.5), (11, 63.0, 14.5, 49.7),
+          (6, 63.1, 14.4, 49.8), (3, 63.0, None, None)]
+
+
+def seed_weight(today):
+    for back, kg, fat, muscle in WEIGHT:
+        d = today - datetime.timedelta(days=back)
+        coach.f_weight.save(coach.db, T.U, {"day": d.isoformat(), "time": "07:%02d" % (10 + back % 20), "kg": kg, "fat_pct": fat,
+                                            "muscle_kg": muscle, "src": "manual" if fat is None else "photo"}, today)
+    coach.f_weight.save(coach.db, T.U, {"day": today.isoformat(), "time": "07:32", "kg": 63.2, "fat_pct": 14.3, "muscle_kg": 50.0,
+                                        "lean_kg": 54.2, "water_pct": 58.6, "bone_kg": 2.7, "visceral": 3, "bmr": 1640, "bmi": 20.2,
+                                        "protein_pct": 18.4, "src": "photo"}, today)
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
     coach.db = db
@@ -168,6 +184,7 @@ def build(shots=None):
         seed_habits(today)
         seed_skin(today)
         seed_reviews(today)
+        seed_weight(today)
         allp = coach.route(T.U, "/api/all", {})
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]
@@ -207,6 +224,14 @@ def build(shots=None):
         from test_skin import GRAY_URL
         api["/api/skin/photo"] = coach.route(T.U, "/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
         api["/api/skin/photo/delete"] = coach.route(T.U, "/api/skin/photo/delete", {"day": today.isoformat()})
+        # вес: предпросмотр скрина и текста (без Claude — как вернул бы разбор), сохранение и удаление — тот же список
+        prev = {"kg": 63.2, "fat_pct": 14.3, "muscle_kg": 50.0, "water_pct": 58.6, "bmr": 1640, "day": today.isoformat(), "time": "07:32"}
+        api["/api/weight/photo"] = {"item": {**prev, "src": "photo"}, "found": [k for k in prev if k not in ("day", "time")],
+                                    "skipped": [], "how": "claude"}
+        item, _ = coach.f_weight.parse_text("вес 63,2 жир 14,3% мышцы 50 вода 58,6%")
+        api["/api/weight/text"] = {"item": {**item, "day": today.isoformat(), "src": "text"}, "found": list(item), "skipped": [], "how": "parser"}
+        api["/api/weight/save"] = {**api["/api/weight"], "saved": api["/api/weight"]["last"]}
+        api["/api/weight/delete"] = api["/api/weight"]
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 

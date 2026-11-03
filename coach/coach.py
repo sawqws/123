@@ -62,9 +62,10 @@ import f_regime  # noqa: E402  режим дня: отбой/подъём со �
 import f_habits  # noqa: E402  привычки и цели на день: отметки, серии, неделя, импорт списком
 import f_skin  # noqa: E402  кожа: мой уход утро/вечер, процедуры по расписанию, отметки, серия, дневник кожи 1–5
 import f_reviews  # noqa: E402  разборы за день: утро (как WHOOP посчитал сон), после тренировки, вечерний итог
+import f_weight  # noqa: E402  вес и состав тела: замеры с умных весов (вручную, скрином, текстом), тренд
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
 FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits,
-            "skin": f_skin, "reviews": f_reviews}
+            "skin": f_skin, "reviews": f_reviews, "weight": f_weight}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)

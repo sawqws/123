@@ -292,7 +292,15 @@ def sync(db, uid, client_id, secret, days=3):
 
 
 def body(db, uid):
+    """Тело из WHOOP (рост, вес, макс. пульс) + свежий замер умных весов в body["scale"] (f_weight.with_scale):
+    по нему нормы еды, воды и белка (insights.weight_of)."""
     try:
-        return json.loads(db.meta(f"body:{uid}") or "{}")
+        b = json.loads(db.meta(f"body:{uid}") or "{}")
     except ValueError:
-        return {}
+        b = {}
+    try:
+        import f_weight  # весы — отдельный раздел; сломались — тело WHOOP как было
+        return f_weight.with_scale(db, uid, b)
+    except Exception as e:
+        print("weight scale:", e)
+        return b if isinstance(b, dict) else {}
