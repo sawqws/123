@@ -288,5 +288,22 @@ class CoachTest(Base):
         self.assertEqual((ext["count"], ext["last"]["kg"], ext["prev"]["kg"], len(ext["spark"])), (3, 63.4, 63.1, 2))
 
 
+
+class AssistTest(unittest.TestCase):
+    def test_coach_chat_weight_goes_to_scale_log(self):
+        import types
+        import store as ST
+        db = ST.Store(os.path.join(tempfile.mkdtemp(), "w.db"))
+        app = types.SimpleNamespace(db=db)
+        today = datetime.date(2026, 11, 4)
+        self.assertIsNone(W.assist(app, 1, {"type": "water", "ml": 300}, today))
+        r = W.assist(app, 1, {"type": "weight", "kg": 63.4}, today)
+        self.assertEqual(r["label"], "вес 63,4 кг")
+        self.assertEqual(W.load(db, 1)[-1]["kg"], 63.4)
+        r["undo"]()
+        self.assertEqual(W.load(db, 1), [])
+        with self.assertRaises(ValueError):
+            W.assist(app, 1, {"type": "weight", "kg": 400}, today)
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

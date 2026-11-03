@@ -682,13 +682,13 @@ class BotTest(unittest.TestCase):
         self.assertIn("«Читать 20 минут» ✓", done["text"])
         self.assertIn("«Вода»: 5 из 8", done["text"])
         self.assertIn("цель на завтра: «Сделать алгебру»", done["text"])
-        self.assertEqual(self.db.user(U)["profile"]["weight"], 63.4)
+        self.assertEqual(coach.f_weight.load(self.db, U)[-1]["kg"], 63.4)  # вес — в раздел «Вес» (замер), не в профиль
         self.assertEqual(f_habits.day_doc(self.db, U, TODAY.isoformat())["v"][hid], 1)
         tomorrow = (TODAY + datetime.timedelta(days=1)).isoformat()
         self.assertEqual([g["text"] for g in f_habits.day_doc(self.db, U, tomorrow)["g"]], ["Сделать алгебру"])
         for a in done["actions"]:
             self.assertEqual(call("/api/ask/undo", {"id": a["undo"]}).code, 200)
-        self.assertEqual(self.db.user(U)["profile"]["weight"], 62)
+        self.assertEqual(coach.f_weight.load(self.db, U), [])
         self.assertEqual(f_habits.day_doc(self.db, U, TODAY.isoformat())["v"], {})
         self.assertEqual(f_habits.day_doc(self.db, U, tomorrow)["g"], [])
         evs, _ = self.stream(['Ок.\nACTIONS: [{"type": "habit_mark", "name": "бегать"}]'], "отметь бег")
