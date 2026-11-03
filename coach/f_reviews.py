@@ -39,7 +39,7 @@ def morning_sleep(s):
 
 def workout_ok(w):
     """Тренировка (insights.workout_of) достойна разбора: от 15 мин и нагрузка от 5."""
-    return (w.get("minutes") or 0) >= WORKOUT_MINUTES and (w.get("strain") or 0) >= WORKOUT_STRAIN
+    return not w.get("rest") and (w.get("minutes") or 0) >= WORKOUT_MINUTES and (w.get("strain") or 0) >= WORKOUT_STRAIN
 
 
 def take_workout(db, uid, day, wid):

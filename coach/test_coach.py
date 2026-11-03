@@ -269,6 +269,19 @@ class InsightsTest(unittest.TestCase):
         self.assertEqual(insights.sport_name("box-jumps"), "Box jumps")
 
 
+class RestSportTest(unittest.TestCase):
+    """Глеб 03.11: массаж 89 мин засчитывался как тренировка — норма воды выросла почти на литр."""
+    def test_massage_not_training(self):
+        box = insights.workout_of({"sport_name": "box-fitness", "start": "2026-11-03T07:20:00Z", "end": "2026-11-03T08:46:00Z"})
+        mas = insights.workout_of({"sport_name": "massage-therapy", "start": "2026-11-03T09:35:00Z", "end": "2026-11-03T11:04:00Z"})
+        self.assertFalse(box["rest"])
+        self.assertTrue(mas["rest"])
+        self.assertEqual(insights.train_minutes([box, mas]), 86)
+        self.assertEqual(insights.train_minutes([mas]), 0)
+        import f_reviews
+        self.assertFalse(f_reviews.workout_ok({**mas, "strain": 6.0}))
+
+
 class SummaryTest(unittest.TestCase):
     """Сводка за день / неделю / месяц / всё время: цифры, с чем сравниваем, советы Claude (подменён) с кэшем."""
 

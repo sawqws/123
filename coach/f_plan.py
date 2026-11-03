@@ -224,7 +224,7 @@ def week(app, uid, today, cfg=None, t=None):
     def norms(d):
         """Нормы воды и белка на день — тем же расчётом, что «Питание» (insights.nutrition)."""
         v = day_of(d)
-        mins = sum(w["minutes"] or 0 for w in v["workouts"])
+        mins = ins.train_minutes(v["workouts"])
         nut = ins.nutrition(profile, body, ins.baseline(days, d), None, mins)
         return nut, app.water.norm(nut, mins)[0]
 
