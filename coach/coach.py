@@ -65,6 +65,7 @@ import f_reviews  # noqa: E402  разборы за день: утро (как W
 import f_trends  # noqa: E402  тренды: любой показатель WHOOP за неделю / месяц / полгода (как Trend View)
 import f_weight  # noqa: E402  вес и состав тела: замеры с умных весов (вручную, скрином, текстом), тренд
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
+import selfcheck  # noqa: E402  самопроверка приложения: ночью, /selfcheck, «Проверить приложение» → ремонт поддержкой
 FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits,
             "skin": f_skin, "reviews": f_reviews, "weight": f_weight, "trends": f_trends}
 
@@ -1746,6 +1747,11 @@ def on_message(msg):
         bg(status, chat, uid, chat=chat)
     elif cmd == "/update" and is_admin(uid):
         update(chat)
+    elif cmd == "/selfcheck" and is_admin(uid):  # самопроверка приложения (только владелец, не чаще раза в 30 мин)
+        try:
+            send(chat, box("🔎", "Проверяю приложение", selfcheck.manual(sys.modules[__name__], uid, chat)["text"]))
+        except ValueError as e:
+            send(chat, err(str(e)))
     elif cmd:
         send(chat, err("Такой команды нет — что я умею: /help"))
     elif kind == "photo":  # скачивание и Claude — не в главном цикле
@@ -2069,6 +2075,10 @@ def tick():
         # итог недели — воскресенье, 19:00
         if tok and now.weekday() == 6 and now.hour == 19 and db.once(f"week:{uid}:{now.date()}"):
             bg(progress_report, uid, uid, True, chat=uid)
+    try:  # самопроверка: 03:30 по времени владельца — в фоне; отложенный ремонт (поддержка была занята / ночь)
+        selfcheck.tick(sys.modules[__name__])
+    except Exception as e:
+        print("selfcheck:", e)
 
 
 def clean_photos(days=3):
@@ -3130,6 +3140,8 @@ def route(uid, path, b):
         if not SUP:
             raise ValueError("Поддержка ещё запускается — попробуй через минуту")
         return SUP.web(uid, b)
+    if path == "/api/selfcheck":  # «Ещё» → «Проверить приложение»: только владелец, не чаще раза в 30 мин
+        return selfcheck.manual(sys.modules[__name__], uid)
     u = db.user(uid)
     today = user_now(u).date()
     if path == "/api/all":
@@ -3141,7 +3153,7 @@ def route(uid, path, b):
             "today": day_payload(uid, today), "series": insights.series(db, uid, today, 30), "streak": insights.wear_streak(db, uid, today),
             "redirect": redirect_url(), "thinking": uid in busy,
             "goals": db.goals(uid), "morning": u["profile"].get("morning") or store.MORNING_DEFAULT,
-            "mode": ui_mode(uid), "ext": features_extra(uid, today),
+            "mode": ui_mode(uid), "ext": features_extra(uid, today), "admin": is_admin(uid),
         }
     if path == "/api/streak":  # число «стрик» из приложения WHOOP (в API его нет) — якорь серии на сегодня
         return {"streak": insights.set_streak_anchor(db, uid, today, b.get("n"))}

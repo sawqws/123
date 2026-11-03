@@ -424,6 +424,7 @@ class ButtonsTest(unittest.TestCase):
             mock.patch.object(coach.media, "video", side_effect=lambda tok, m, d: {
                 "frames": [photo(tok, m, d)], "text": "смотри мой джеб", "seconds": 5}),
             mock.patch.object(coach.subprocess, "run", return_value=git),
+            mock.patch.object(coach.selfcheck, "start", lambda *a, **k: True),  # /selfcheck — без настоящего прогона
             mock.patch.object(coach.os, "_exit", side_effect=AssertionError("os._exit")),
             mock.patch.object(urllib.request, "urlopen", no_network),
             mock.patch.object(socket, "create_connection", no_network),
@@ -578,6 +579,7 @@ class ApiTest(unittest.TestCase):
                     mock.patch.object(coach, "ALLOWED", set()), mock.patch.object(coach, "SUP", sup), \
                     mock.patch.object(coach, "DATA", tmp), mock.patch.object(coach, "busy", set()), \
                     mock.patch.object(coach.threading, "Thread", tc.SyncThread), \
+                    mock.patch.object(coach.selfcheck, "start", lambda *a, **k: True), \
                     mock.patch.object(coach, "user_now", lambda u: NOW), mock.patch.object(ai, "claude", fake_claude), mock.patch.object(ai, "claude_stream", lambda *a, **k: iter(["**Итог** — проверка"])), \
                     mock.patch.object(whoop.Client, "get", tc.FakeWhoop(tc.fake_whoop(40)).get), \
                     mock.patch.object(whoop, "_post_form", no_network), \
