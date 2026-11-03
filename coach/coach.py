@@ -2679,7 +2679,7 @@ def kcal_forma(uid):
         "recovery": {"score": r.get("score"), "hrv": r.get("hrv"), "rhr": r.get("rhr")} if r else None,
         "sleep": {"hours": s.get("hours"), "performance": s.get("performance")} if s else None,
         "strain": (c or {}).get("strain"),
-        "train_today": bool((reg or {}).get("train", {}).get("on")) or bool(t["workouts"]),
+        "train_today": bool((reg or {}).get("train", {}).get("on")) or any(not w.get("rest") for w in t["workouts"]),
         "workouts": [{"sport": w.get("sport"), "start": w.get("start"), "minutes": w.get("minutes"),
                       "strain": w.get("strain")} for w in t["workouts"]],
         "water_forma": sum(w["ml"] for w in db.water(uid, day.isoformat())),

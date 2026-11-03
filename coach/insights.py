@@ -114,6 +114,15 @@ def cycle_of(r):
             "done": bool(r.get("end")), "scored": r.get("score_state") == "SCORED"}
 
 
+# Не тренировка (Глеб 03.11: массаж 89 мин добавил к норме воды почти литр): в норму воды и еды не идут
+REST_SPORTS = {"massage-therapy", "meditation", "sauna", "ice-bath", "breathwork", "cleaning"}
+
+
+def train_minutes(workouts):
+    """Минуты настоящих тренировок за день — без массажа, сауны и т. п. (REST_SPORTS)."""
+    return sum(w.get("minutes") or 0 for w in workouts or [] if not w.get("rest"))
+
+
 def workout_of(r):
     s = _score(r)
     t0, t1 = whoop._parse(r.get("start")), whoop._parse(r.get("end"))
@@ -127,6 +136,7 @@ def workout_of(r):
         "avg_hr": s.get("average_heart_rate"), "max_hr": s.get("max_heart_rate"),
         "zones": [round((z.get(f"zone_{n}_milli") or 0) / 60000) for n in names] if z else [],
         "distance": s.get("distance_meter"), "scored": bool(s),
+        "rest": (r.get("sport_name") or "") in REST_SPORTS,
     }
 
 
@@ -384,13 +394,13 @@ def today(db, uid, day, profile, body):
     base = baseline(days, day)
     ratio = load_ratio(days, day)
     recent = [days[x] for x in sorted(days) if x > (day - datetime.timedelta(days=7)).isoformat()]
-    train_min = sum(w["minutes"] or 0 for w in d["workouts"])
+    train_min = train_minutes(d["workouts"])
     food = db.meals(uid, day.isoformat())
     nut = nutrition(profile, body, base, (d["cycle"] or {}).get("kcal"), train_min)
     y = days.get((day - datetime.timedelta(days=1)).isoformat()) or {}
     target, why = water.norm(nut, train_min)
     yday = (day - datetime.timedelta(days=1)).isoformat()
-    y_train = sum(w["minutes"] or 0 for w in y.get("workouts") or [])
+    y_train = train_minutes(y.get("workouts"))
     y_target, _ = water.norm(nutrition(profile, body, base, None, y_train), y_train)
     drinks = db.water(uid, day.isoformat())
     kd = db.kcal_day(uid, day.isoformat())
