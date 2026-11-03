@@ -674,11 +674,13 @@
 
   function waterCard(w, full) {
     if (!w) return '';
-    const q = full ? [[250, 'стакан'], [500, 'бутылка'], [1000, 'литр']] : [[250, 'стакан'], [500, 'бутылка']];
+    // Глеб 03.11: «больше градаций — кружки у меня больше 250» — ряд листается вбок, на широком экране — в 2 строки
+    const q = [[150, 'глоток'], [200, 'стакан'], [250, 'стакан'], [300, 'кружка'], [350, 'кружка'], [400, 'кружка'],
+      [500, 'бутылка'], [750, 'бутылка'], ...(full ? [[1000, 'литр']] : [])];
     return `<section class="card rise">${head(`<span class="hico" style="--hc:var(--water)">${I.drop}</span>Вода`, `<span class="num"><b>${liters(w.drank)}</b> / ${liters(w.target)}</span>`)}
       ${bar(pct(w.drank, w.target), 'var(--water)')}
       ${w.note ? `<p class="small muted">${esc(w.note)}</p>` : ''}
-      <div class="btns">${q.map(([ml, k]) => `<button class="btn tonal water-b" data-a="water" data-v="${ml}"><b class="num">+${ml}</b><span>${k}</span></button>`).join('')}</div>
+      <div class="btns wq">${q.map(([ml, k]) => `<button class="btn tonal water-b" data-a="water" data-v="${ml}" aria-label="Вода +${ml} мл"><b class="num">+${ml}</b><span>${k}</span></button>`).join('')}</div>
       ${full && w.log.length ? `<div class="logs">${w.log.map(x => x.src === 'kcal'
         ? `<span class="pill num kc" title="Записано в «Калориях»">${esc(x.time)} · ${x.ml} мл<i>Калории</i></span>`
         : `<span class="pill num">${esc(x.time)} · ${x.ml} мл<button data-a="water-del" data-v="${x.id}" aria-label="Удалить">✕</button></span>`).join('')}</div>` : ''}
