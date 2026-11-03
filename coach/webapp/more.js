@@ -86,11 +86,19 @@
       + (d.keys ? row({ a: 'connect', ic: I.plug, title: d.connected ? 'Подключить заново' : 'Подключить WHOOP', meta: d.connected ? 'если данные перестали приходить' : 'вход через аккаунт WHOOP' })
         : d.connected ? '' : row({ a: 'tab', v: 'today', ic: I.plug, title: 'Как подключить', meta: '3 минуты, один раз' })));
     h += group('Как это работает', HELP.map(([k, title, meta, ic, col]) => row({ a: 'more-help', v: k, ic, col, title, meta })).join(''));
+    // самопроверка (Глеб 03.11): обойти все экраны и кнопки на примере данных, найденное — в ремонт; только владельцу
+    if (d.admin) h += group('Проверка', row({ a: 'selfcheck', ic: F.I.check, title: 'Проверить приложение', meta: 'все экраны и кнопки — найду и починю' }));
     h += `<div class="more-g rise"><div class="label">Поддержка</div>${Kit.supportRow('/api/support')}</div>`;
     h += `<p class="more-ver">Форма · тренер по данным WHOOP${VER ? ` · версия <span class="num">${esc(VER)}</span>` : ''}</p>`;
     return h;
   }
   F.screens.more = moreScreen;
+  F.actions.selfcheck = async el => {  // итог — сообщением в чат (минут 10); чаще раза в 30 мин сервер не даст
+    if (el.classList.contains('busy')) return;
+    F.haptic('tap'); el.classList.add('busy');
+    try { const r = await F.api('/api/selfcheck', {}); F.toast(r.text || 'Проверяю — итог пришлю в чат', 'ok'); } catch (e) { F.fail(e); }
+    el.classList.remove('busy');
+  };
   F.actions['home-hint'] = () => {
     const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     F.haptic('tap');

@@ -296,6 +296,8 @@ def build(shots=None):
         api["/api/weight/delete"] = api["/api/weight"]
         api["/api/assess?period=month"] = coach.route(T.U, "/api/assess", {"period": "month"})  # --serve: оценка месяца
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
+        allp["admin"] = True  # «Ещё» → «Проверить приложение» видна (как у владельца); здесь ничего не запускает
+        api["/api/selfcheck"] = {"ok": True, "running": True, "text": "Проверяю приложение — минут 10, итог пришлю в чат"}
         if not isinstance(api.get("/api/streak"), dict) or "streak" not in api["/api/streak"]:  # сверка серии с WHOOP — пример
             api["/api/streak"] = {"streak": {**(allp.get("streak") or {"n": 0, "since": None}), "anchored": True}}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
@@ -467,8 +469,9 @@ def serve(port, stub=False):
             if path == "/api/ask/undo":
                 return self.send(200, {"ok": True, "label": "вода 400 мл", "history": ASK_DEMO[-1]["history"][:-1] + [
                     {**ASK_DEMO[-1]["history"][-1], "text": ASK_DEMO[-1]["text"] + "\n↩️ Отменил: вода 400 мл"}]})
-            if path.startswith("/api/"):
-                return self.send(200, api.get(f"{path}?{u.query}", api.get(path, {})))
+            if path.startswith("/api/"):  # нет примера — {} и X-Fixture: none (самопроверка не считает это ошибкой приложения)
+                hit = api.get(f"{path}?{u.query}", api.get(path))
+                return self.send(200, {} if hit is None else hit, headers=None if hit is not None else {"X-Fixture": "none"})
             if path in ("/kcal/", "/kcal/index.html") and stub:
                 return self.send(200, KCAL_STUB, "text/html; charset=utf-8")
             if path == "/kcal" or path.startswith("/kcal/"):
