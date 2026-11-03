@@ -983,7 +983,7 @@
   }
 
   // ---------- разборы как в WHOOP: дата по центру и «i», большое кольцо, «что влияет» с уголком к кольцу, вывод в рамке ----------
-  const dTop = (t, kind) => `<header class="wtop"><button class="wbtn bk" data-a="back" aria-label="Назад">${I.back}<span class="bk-t">Назад</span></button>
+  const dTop = (t, kind) => `<header class="wtop" data-t="${{ sleep: 'Сон', rec: 'Восстановление', strain: 'Нагрузка' }[kind] || ''}"><button class="wbtn bk" data-a="back" aria-label="Назад">${I.back}<span class="bk-t">Назад</span></button>
     <b class="wtop-t">${esc(dateWord(t.day))}</b><button class="wbtn info" data-a="about" data-v="${kind}" aria-label="Что это">i</button></header>`;
   function bigRing(p, color, value, label, band) {
     const w = 7, r = 50 - w / 2, c = 2 * Math.PI * r, off = c * (1 - Math.max(0, Math.min(1, p || 0)));
@@ -1603,9 +1603,10 @@
       navbar.classList.toggle('show', dials.getBoundingClientRect().bottom < 60);
       return;
     }
-    const h1 = view.querySelector('.hero h1, .dhead h1');
+    // экраны «Сон / Восстановление / Нагрузка» (шапка .wtop): в ч/б виде шапка не липнет — «Назад» после прокрутки даёт полоса
+    const h1 = view.querySelector('.hero h1, .dhead h1') || (document.documentElement.classList.contains('mono') && view.querySelector('.wtop[data-t]'));
     if (!h1) { navbar.classList.remove('show'); return; }
-    navbar.querySelector('b').textContent = h1.textContent.trim();
+    navbar.querySelector('b').textContent = (h1.dataset.t || h1.textContent).trim();
     navbar.querySelector('button').hidden = !S.screen;
     navbar.classList.toggle('show', h1.getBoundingClientRect().bottom < 52);
   }
