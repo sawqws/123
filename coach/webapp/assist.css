@@ -1,0 +1,20 @@
+/* assist — чипы под ответом тренера: «что записал · Отменить» на 10 с, полоска тает за это время.
+   Только токены темы (ч/б и WHOOP), движение — opacity/transform. Ссылки «Источники:» и строка «Ищу в интернете…». */
+.act-chips { align-self: flex-start; display: flex; flex-wrap: wrap; gap: 6px; max-width: 92%; margin: -2px 0 4px;
+  animation: act-in .32s var(--ios, cubic-bezier(.32, .72, 0, 1)) both; transition: opacity .25s ease, transform .25s ease; }
+.act-chips.out { opacity: 0; transform: translateY(-4px); }
+.act-chip { position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 4px; min-height: 36px;
+  max-width: 100%; padding: 0 4px 0 12px; border-radius: 999px; background: var(--fill); font-size: 13.5px; color: var(--ink); }
+.act-chip::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--hint-2, var(--hint));
+  transform-origin: left; animation: act-left var(--left, 10000ms) linear both; }
+.act-l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.act-undo { flex: none; min-height: 36px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.act-undo:active { opacity: .55; }
+.act-undo:disabled { opacity: .4; }
+@media (hover: hover) { .act-undo:hover { background: var(--fill); } }
+@keyframes act-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes act-left { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.msg .src { color: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--hint); cursor: pointer; }
+.ask-note { font-size: 13.5px; color: var(--hint); vertical-align: middle; }
+@media (prefers-reduced-motion: reduce) { .act-chips { animation: none; } }

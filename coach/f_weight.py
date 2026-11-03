@@ -587,3 +587,14 @@ def context_lines(app, uid, today):
 def trend_points(app, uid, since, until):
     """Для экрана «Тренды» (f_trends.weight_points): вес по дням [{day, kg}]."""
     return [{"day": r["day"], "kg": r["kg"]} for r in series(app.db, uid, since, until)]
+
+
+def assist(app, uid, a, today):
+    """Тренер в приложении: «взвесился 63,4» → замер в разделе «Вес» (а не только в профиле). → {label, undo} или None."""
+    if a.get("type") != "weight":
+        return None
+    item = {k: a[k] for k in ("kg", "fat_pct", "muscle_kg", "water_pct") if a.get(k) is not None}
+    item.update(day=today.isoformat(), src="text", note="записал тренер")
+    m = save(app.db, uid, item, today)  # ValueError (вне диапазона) — тренер покажет «Не записал»
+    kg = str(m["kg"]).replace(".", ",")
+    return {"label": f"вес {kg} кг", "undo": lambda: delete(app.db, uid, m["id"])}

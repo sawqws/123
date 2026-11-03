@@ -357,6 +357,15 @@ button, .cell { -webkit-touch-callout: none; }
 .sheet .body.slide { animation: slideIn .45s var(--ios); }
 @keyframes slideIn { from { opacity: 0; transform: translateX(28px); } }
 .group-t { margin: 22px 18px 7px; font-size: 13px; color: var(--text-2); }
+.big-t { margin: 30px 6px -6px; font-size: 22px; font-weight: 700; letter-spacing: -.5px; }
+/* быстрый завтрак: капсулы над списком «Завтрака» и в листе «Добавить» */
+.qb { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.qb-t { width: 100%; margin: 0 6px 2px; font-size: 13px; color: var(--text-2); }
+.qchip { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 16px; border-radius: 999px; background: var(--fill); font-size: 15px; font-weight: 500; white-space: nowrap;
+  transition: transform .35s var(--spring), background .2s, color .2s; }
+.qchip svg { width: 13px; height: 13px; margin-left: -3px; }
+.qchip:active { transform: scale(.93); transition-duration: .12s; }
+.qchip.on { background: var(--ink); color: var(--on-ink); }
 .foot { margin: 7px 18px 0; font-size: 13px; color: var(--text-2); }
 
 .search { position: relative; margin: 4px 0 0; }
@@ -400,6 +409,8 @@ button, .cell { -webkit-touch-callout: none; }
 .days button { height: 40px; border-radius: 999px; background: var(--fill); color: var(--text-2); font-size: 14px; font-weight: 600; transition: background .2s, color .2s, transform .35s var(--spring); }
 .days button[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); }
 .days button:active { transform: scale(.94); }
+#por button { height: 58px; border-radius: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0 6px; line-height: 1.15; }
+#por small { font-size: 12px; font-weight: 500; opacity: .75; }
 
 /* фото */
 .shot { position: relative; height: 210px; border-radius: 28px; overflow: hidden; margin-top: 4px; background: var(--fill); }
@@ -462,7 +473,8 @@ button, .cell { -webkit-touch-callout: none; }
 .wk-nav[disabled] { opacity: .25; pointer-events: none; }
 @media (hover: hover) and (pointer: fine) { /* мышь: стрелки недели, подсветка под курсором */
   .wk-nav { display: grid; margin-top: 18px; }
-  .wk-nav:hover, .ibtn:hover, .hbtn:hover, .tab:hover, .chip:hover, .wb:hover, .starter:hover { background: var(--lens); }
+  .wk-nav:hover, .ibtn:hover, .hbtn:hover, .tab:hover, .chip:hover, .wb:hover, .starter:hover, .qchip:not(.on):hover { background: var(--lens); }
+  .qchip.on:hover { opacity: .9; }
   button.cell:hover, .wd:hover { background: var(--fill); }
   .btn:hover { opacity: .9; }
   button, [role=button] { cursor: pointer; }
@@ -576,6 +588,7 @@ button, .cell { -webkit-touch-callout: none; }
 /* База на 100 г: [название, ккал, белки, жиры, углеводы, соль г, порция «название=граммы»].
    Средние значения из таблиц состава. ≈ — готовое блюдо: состав и соль сильно зависят от рецепта. */
 const BASE = [
+  'Крупы и хлеб',
   ['Овсяные хлопья (сухие)', 352, 12, 6, 60, 0, 'порция=60'],
   ['Гречка (сухая)', 313, 12.6, 3.3, 57, 0],
   ['Гречка варёная', 110, 4.2, 1.1, 21, 0.4, 'порция=200'],
@@ -588,6 +601,17 @@ const BASE = [
   ['Хлеб белый, батон', 262, 7.5, 2.9, 51, 1.1, 'кусок=30'],
   ['Хлеб ржаной', 210, 6.6, 1.2, 40, 1.2, 'кусок=30'],
   ['Лаваш тонкий', 277, 9.1, 1.1, 56, 1, 'лист=80'],
+  ['Хлопья гречневые (сухие)', 345, 12, 3, 68, 0, 'порция=60'],
+  ['Булгур варёный', 83, 3.1, 0.2, 18.6, 0.3, 'порция=200'],
+  ['Киноа варёная', 120, 4.4, 1.9, 21.3, 0.3, 'порция=200'],
+  ['Чечевица варёная', 116, 9, 0.4, 20, 0.3, 'порция=200'],
+  ['Перловка варёная', 123, 2.3, 0.4, 28.2, 0.3, 'порция=200'],
+  ['Пшено варёное', 119, 3.5, 1, 23.7, 0.3, 'порция=200'],
+  ['Рис бурый варёный', 112, 2.3, 0.8, 23.5, 0.3, 'порция=200'],
+  ['Хлебцы цельнозерновые', 300, 11, 3, 57, 0.8, '1 шт=10'],
+  ['Красная фасоль консервированная без масла', 99, 6.7, 0.3, 17.4, 0.8, 'банка=240'],
+  ['Кукуруза консервированная без жира', 85, 2.6, 1, 16, 0.6, 'банка=200'],
+  'Мясо, рыба, яйца',
   ['Яйцо куриное', 157, 12.7, 10.9, 0.7, 0.35, '1 шт=55'],
   ['Куриная грудка (сырая)', 113, 23.6, 1.9, 0.4, 0.17],
   ['Куриная грудка готовая', 165, 31, 3.6, 0, 0.7, 'порция=150'],
@@ -604,6 +628,15 @@ const BASE = [
   ['Горбуша (сырая)', 140, 20.5, 6.5, 0, 0.2],
   ['Лосось (сырой)', 208, 20, 13, 0, 0.15],
   ['Тунец в собственном соку', 100, 22, 1, 0, 0.8, 'банка=150'],
+  ['Фарш куриный (сырой)', 143, 17.4, 8.1, 0, 0.2],
+  ['Говядина тушёная', 232, 16.8, 18.3, 0, 0.8, 'порция=200'],
+  ['Тушёнка говяжья', 220, 15, 17.5, 0, 1.5, 'банка=338'],
+  ['Ветчина варёная', 160, 17, 9, 2.5, 2.3, 'ломтик=20'],
+  ['Минтай (сырой)', 72, 15.9, 0.9, 0, 0.25],
+  ['Сельдь слабосолёная', 217, 19.8, 15.4, 0, 4, 'кусок=50'],
+  ['Крабовые палочки (имитация краба)', 73, 6, 1, 10, 1.5, '1 шт=17'],
+  ['Креветки варёные', 95, 19, 2.2, 0, 0.8, 'порция=150'],
+  'Молочное',
   ['Молоко 2,5%', 52, 2.8, 2.5, 4.7, 0.12, 'стакан=250'],
   ['Молоко 3,2%', 59, 2.9, 3.2, 4.7, 0.12, 'стакан=250'],
   ['Кефир 2,5%', 53, 2.9, 2.5, 4, 0.12, 'стакан=250'],
@@ -613,6 +646,16 @@ const BASE = [
   ['Сыр твёрдый', 360, 24, 29, 0, 1.6, 'ломтик=20'],
   ['Сметана 15%', 160, 2.6, 15, 3, 0.1, '1 ст. л.=20'],
   ['Масло сливочное', 748, 0.5, 82.5, 0.8, 0.03, 'на бутерброд=10'],
+  ['Молоко 1,5%', 44, 2.8, 1.5, 4.7, 0.12, 'стакан=250'],
+  ['Кефир 1%', 40, 3, 1, 4, 0.12, 'стакан=250'],
+  ['Ряженка 4%', 67, 2.9, 4, 4.2, 0.12, 'стакан=250'],
+  ['Йогурт греческий', 70, 9, 2, 4, 0.1, 'баночка=140'],
+  ['Йогурт фруктовый 2,5%', 95, 3, 2.5, 15, 0.1, 'баночка=125'],
+  ['Творог 0%', 71, 16.5, 0, 1.3, 0.1, 'пачка=200'],
+  ['Сыр моцарелла', 280, 22, 21, 1.5, 0.9, 'ломтик=20'],
+  ['Брынза из коровьего молока', 260, 18, 20.5, 0, 2.5, 'ломтик=30'],
+  ['Сыр творожный (крем-чиз)', 255, 6, 24, 3.5, 0.9, '1 ст. л.=25'],
+  'Овощи',
   ['Картофель варёный', 82, 2, 0.4, 16.7, 0.4, 'порция=200'],
   ['Огурец', 15, 0.8, 0.1, 2.5, 0.02, '1 шт=120'],
   ['Огурцы солёные', 13, 0.8, 0.1, 1.7, 3, '1 шт=60'],
@@ -623,6 +666,7 @@ const BASE = [
   ['Перец болгарский', 27, 1.3, 0.1, 5.3, 0.01, '1 шт=150'],
   ['Свёкла варёная', 49, 1.8, 0, 10.8, 0.2],
   ['Горошек консервированный', 40, 3.1, 0.2, 6.5, 0.6],
+  'Фрукты, ягоды, орехи',
   ['Банан', 95, 1.5, 0.5, 21, 0, '1 шт=120'],
   ['Яблоко', 47, 0.4, 0.4, 9.8, 0, '1 шт=170'],
   ['Груша', 47, 0.4, 0.3, 10.3, 0, '1 шт=170'],
@@ -638,11 +682,28 @@ const BASE = [
   ['Арахис', 552, 26.3, 45.2, 9.9, 0, 'горсть=20'],
   ['Арахисовая паста', 590, 25, 50, 16, 1, '1 ст. л.=20'],
   ['Семечки подсолнечника', 578, 20.7, 52.9, 10.5, 0, 'горсть=20'],
+  ['Авокадо', 159, 2.1, 14.5, 2.1, 0, '1 шт=145'],
+  ['Клубника свежая', 33, 0.7, 0.3, 6.5, 0, 'стакан=150'],
+  ['Ягоды замороженные (микс)', 40, 0.8, 0.4, 8, 0, 'стакан=150'],
+  ['Арбуз', 27, 0.6, 0.1, 5.8, 0, 'кусок=300'],
+  ['Дыня', 35, 0.6, 0.3, 7.4, 0.08, 'кусок=200'],
+  ['Персик', 45, 0.9, 0.1, 9.5, 0, '1 шт=150'],
+  ['Ананас', 52, 0.4, 0.2, 11.5, 0, 'кусок=100'],
+  ['Манго свежее', 60, 0.8, 0.4, 13.4, 0, '1 шт=200'],
+  ['Гранат', 72, 0.7, 0.6, 14.5, 0, '1 шт=200'],
+  ['Грейпфрут', 35, 0.7, 0.2, 7.2, 0, '½ шт=150'],
+  ['Финики', 282, 2.5, 0.4, 69, 0, '1 шт=8'],
+  ['Чернослив', 240, 2.3, 0.7, 57.5, 0, 'горсть=30'],
+  ['Кешью', 600, 18, 48.5, 22.5, 0, 'горсть=20'],
+  ['Фундук', 653, 15, 61, 9.4, 0, 'горсть=20'],
+  'Масло и соусы',
   ['Масло растительное', 899, 0, 99.9, 0, 0, '1 ст. л.=14'],
   ['Майонез 67%', 627, 0.4, 67, 2.6, 1.5, '1 ст. л.=15'],
   ['Кетчуп', 93, 1.8, 1, 22, 2.4, '1 ст. л.=15'],
   ['Соевый соус', 53, 8, 0, 5, 14, '1 ст. л.=16'],
   ['Соль', 0, 0, 0, 0, 100, 'щепотка=0.5'],
+  ['Хумус', 243, 7.3, 17.1, 14.9, 1.1, '1 ст. л.=25'],
+  'Сладкое',
   ['Сахар', 399, 0, 0, 99.8, 0, '1 ч. л.=5'],
   ['Мёд', 329, 0.8, 0, 81, 0, '1 ч. л.=8'],
   ['Варенье', 265, 0.3, 0.2, 70, 0, '1 ст. л.=20'],
@@ -653,12 +714,31 @@ const BASE = [
   ['Сырок глазированный', 400, 8.5, 25, 35, 0.2, '1 шт=45'],
   ['Мороженое пломбир', 227, 3.2, 15, 20.8, 0.15, 'стаканчик=80'],
   ['Чипсы', 530, 6.5, 33, 52, 1.3, 'пачка=70'],
+  ['Сгущёнка', 320, 7.2, 8.5, 56, 0.2, '1 ст. л.=30'],
+  ['Шоколадная паста с фундуком (типа Нутелла)', 540, 6, 31, 57, 0.1, '1 ст. л.=20'],
+  ['Печенье овсяное', 437, 6.5, 14.4, 71.8, 0.6, '1 шт=15'],
+  ['Вафли с начинкой', 530, 3.4, 30, 62.5, 0.2, '1 шт=20'],
+  ['Зефир', 320, 0.8, 0.1, 79.8, 0.1, '1 шт=35'],
+  ['Пряник', 350, 5, 6, 70, 0.4, '1 шт=40'],
+  ['Злаковый батончик (мюсли-бар)', 400, 5, 12, 67, 0.2, '1 шт=25'],
+  'Напитки',
   ['Сок апельсиновый', 45, 0.7, 0.2, 10, 0, 'стакан=250'],
   ['Кола', 42, 0, 0, 10.6, 0, 'банка=330'],
   ['Квас', 27, 0.2, 0, 5.2, 0, 'стакан=250'],
+  ['Яблочный сок 100%', 46, 0.4, 0.1, 10.7, 0.01, 'стакан=250'],
+  ['Сок мультифрукт', 48, 0.4, 0.1, 11, 0, 'стакан=250'],
+  ['Морс клюквенный', 41, 0.1, 0, 10.1, 0, 'стакан=250'],
+  ['Компот из сухофруктов', 60, 0.3, 0, 14.5, 0, 'стакан=250'],
+  ['Чай с сахаром (2 ч. л.)', 16, 0, 0, 4, 0, 'кружка=250'],
+  'Спортпит',
+  ['Батончик протеиновый', 350, 30, 10, 35, 0.5, '1 шт=60'],
+  ['Протеин сывороточный (порошок)', 380, 75, 5, 8, 0.5, 'мерная ложка=30'],
+  ['Гейнер (порошок)', 380, 20, 3, 68, 0.3, 'мерная порция=100'],
+  ['Изотоник (спортивный напиток)', 25, 0, 0, 6, 0.3, 'бутылка=500'],
 ];
 /* популярные блюда (≈) — отдельный раздел */
 const DISHES = [
+  'Завтраки',
   ['Каша овсяная на молоке', 102, 3.2, 4.1, 14.2, 0.3, 'тарелка=250'],
   ['Каша манная на молоке', 98, 3, 3.2, 15.3, 0.3, 'тарелка=250'],
   ['Омлет', 184, 9.6, 15.4, 1.9, 0.6, 'порция=150'],
@@ -666,12 +746,43 @@ const DISHES = [
   ['Блины', 230, 6, 9, 31, 0.4, '1 шт=50'],
   ['Бутерброд с колбасой', 304, 8.7, 17, 28, 1.4, '1 шт=55'],
   ['Бутерброд с сыром', 302, 14.1, 13.3, 30.6, 1.4, '1 шт=50'],
+  ['Хлопья гречневые Nordic на молоке', 140, 4.9, 2.6, 24.6, 0.09, 'глубокая тарелка=350'],
+  ['Каша рисовая на молоке', 99, 3, 2.4, 16.3, 0.25, 'глубокая тарелка=400'],
+  ['Каша пшённая на молоке', 115, 3.7, 3.1, 18.1, 0.25, 'глубокая тарелка=400'],
+  ['Каша гречневая на молоке', 120, 4.4, 3.5, 17.5, 0.3, 'тарелка=300'],
+  ['Каша кукурузная на молоке', 105, 3, 2.8, 17, 0.25, 'тарелка=300'],
+  ['Овсяная каша на воде, без масла', 88, 3, 1.7, 15, 0.3, 'тарелка=250'],
+  ['Овсянка с бананом на молоке', 110, 3.2, 3.3, 17.2, 0.25, 'тарелка=300'],
+  ['Гранола-боул с йогуртом', 190, 5.5, 7, 26, 0.15, 'порция=200'],
+  ['Омлет с сыром', 215, 13, 17.5, 2, 0.8, 'порция=180'],
+  ['Омлет с ветчиной', 200, 13.5, 15.5, 2, 1, 'порция=180'],
+  ['Яичница-глазунья', 196, 13, 15.5, 1, 0.6, '2 яйца=110'],
+  ['Блины с творогом', 200, 10, 8, 22, 0.3, '1 шт=90'],
+  ['Блины с мясом', 220, 11, 11, 19, 0.6, '1 шт=100'],
+  ['Оладьи', 260, 6.3, 11, 34, 0.5, '1 шт=40'],
+  ['Запеканка творожная', 168, 12.5, 6, 16, 0.2, 'порция=200'],
+  ['Вареники ленивые', 190, 11, 5, 25, 0.3, 'порция=250'],
+  ['Вареники с творогом', 200, 10, 4, 31, 0.3, 'порция=250'],
+  ['Тост с авокадо и яйцом', 210, 8, 12, 17, 0.7, '1 шт=150'],
+  ['Бутерброд с ветчиной и сыром', 270, 13, 12, 27, 1.5, '1 шт=90'],
+  ['Сэндвич с курицей', 220, 13, 8, 24, 1.2, '1 шт=200'],
+  'Супы',
   ['Борщ', 50, 1.1, 2.2, 6.7, 0.6, 'тарелка=300'],
   ['Щи', 35, 1.2, 2, 3.2, 0.6, 'тарелка=300'],
   ['Суп куриный с лапшой', 45, 2.5, 1.5, 5.5, 0.7, 'тарелка=300'],
   ['Солянка', 70, 4, 4.5, 3, 1.5, 'тарелка=300'],
   ['Гороховый суп', 65, 4, 2, 8, 0.7, 'тарелка=300'],
   ['Окрошка на квасе', 52, 2.5, 2.5, 5, 0.8, 'тарелка=300'],
+  ['Рассольник', 45, 1.6, 2.3, 4.6, 0.8, 'тарелка=350'],
+  ['Уха', 46, 5.5, 1.5, 3, 0.7, 'тарелка=350'],
+  ['Суп с фрикадельками', 52, 3.3, 2.5, 4.2, 0.7, 'тарелка=350'],
+  ['Суп грибной с картофелем', 35, 1.3, 1.6, 3.9, 0.6, 'тарелка=350'],
+  ['Харчо с говядиной', 75, 4.5, 3.8, 6, 0.8, 'тарелка=350'],
+  ['Суп сырный с плавленым сыром', 60, 2.6, 3.5, 4.5, 0.8, 'тарелка=350'],
+  ['Суп-пюре тыквенный', 50, 1.2, 2.6, 5.6, 0.5, 'тарелка=300'],
+  ['Рамен', 85, 5, 3.5, 8.5, 1.2, 'миска=500'],
+  ['Том ям с курицей', 50, 4, 2.5, 3, 1, 'миска=400'],
+  'Вторые блюда',
   ['Плов', 180, 7, 7, 22, 0.8, 'порция=300'],
   ['Пельмени', 250, 12, 13, 22, 1.2, 'порция=250'],
   ['Вареники с картошкой', 150, 4, 3, 26, 0.6, 'порция=250'],
@@ -685,11 +796,53 @@ const DISHES = [
   ['Курица гриль', 239, 27, 14, 0, 1, 'порция=200'],
   ['Шашлык куриный', 165, 22, 8, 1.5, 1, 'шампур=150'],
   ['Шашлык свиной', 270, 18, 22, 0, 1, 'шампур=150'],
+  ['Гречка с курицей', 140, 11, 4, 15, 0.6, 'порция=350'],
+  ['Рис с курицей', 150, 10, 4, 18.5, 0.6, 'порция=350'],
+  ['Макароны с курицей', 165, 10.5, 4.5, 20.5, 0.6, 'порция=350'],
+  ['Макароны с курицей в сливочном соусе', 175, 9, 7.5, 18, 0.7, 'порция=350'],
+  ['Паста с лососем в сливочном соусе', 180, 8.5, 8.5, 17.5, 0.7, 'порция=350'],
+  ['Макароны с сыром', 200, 8, 7.5, 25, 0.8, 'порция=300'],
+  ['Гречка по-купечески', 150, 8, 7, 14, 0.7, 'порция=300'],
+  ['Плов с курицей', 165, 8, 6, 20, 0.8, 'порция=350'],
+  ['Рис с овощами', 110, 2.3, 3, 18.5, 0.5, 'порция=250'],
+  ['Жареный рис с яйцом по-китайски', 165, 4.5, 6, 23.5, 1, 'порция=300'],
+  ['Вок с курицей и лапшой', 140, 8, 4.5, 17, 1.2, 'порция=350'],
+  ['Котлета куриная жареная', 190, 16, 10.5, 8, 0.9, '1 шт=90'],
+  ['Тефтели в томатном соусе', 150, 9, 9.5, 7, 0.9, 'порция=250'],
+  ['Голубцы с мясом и рисом', 110, 5.5, 6, 8, 0.6, '1 шт=150'],
+  ['Перец фаршированный рисом и мясом', 105, 5, 5.5, 8.5, 0.6, '1 шт=200'],
+  ['Курица запечённая с кожей', 210, 22, 13.5, 0, 0.8, 'порция=250'],
+  ['Куриные крылышки запечённые', 240, 20, 17.5, 0.5, 1, 'порция=250'],
+  ['Куриная голень запечённая', 190, 22, 11, 0, 0.8, '1 шт=110'],
+  ['Индейка тушёная', 140, 20, 6.5, 1, 0.7, 'порция=200'],
+  ['Бефстроганов', 165, 14, 11, 3, 0.8, 'порция=250'],
+  ['Гуляш из говядины', 145, 14, 8.5, 3.5, 0.8, 'порция=250'],
+  ['Говяжий стейк', 215, 26, 12, 0, 0.6, 'порция=250'],
+  ['Отбивная свиная жареная', 260, 20, 19, 3, 0.8, '1 шт=150'],
+  ['Котлета по-киевски', 300, 16, 22, 10, 0.9, '1 шт=180'],
+  ['Пюре с котлетой', 150, 7, 8.5, 12, 0.8, 'порция=350'],
+  ['Лосось запечённый или на гриле', 200, 22, 12, 0, 0.5, 'порция=200'],
+  ['Рыба жареная в панировке', 160, 15, 7.5, 8, 0.7, 'порция=150'],
+  ['Рыбная котлета', 165, 13, 8.5, 9.5, 0.8, '1 шт=80'],
+  ['Капуста тушёная', 75, 2, 3.5, 8.5, 0.6, 'порция=200'],
+  ['Овощи гриль', 60, 1.5, 3.5, 5.5, 0.5, 'порция=200'],
+  ['Картофель запечённый дольками', 140, 2.5, 5, 21, 0.6, 'порция=250'],
+  ['Картошка тушёная с мясом', 130, 6.5, 6, 12.5, 0.7, 'порция=350'],
+  ['Драники (картофельные оладьи)', 210, 4, 12, 21.5, 0.6, '1 шт=70'],
+  'Салаты',
   ['Оливье', 190, 5, 16, 7, 1, 'порция=150'],
   ['Цезарь с курицей', 180, 11, 12, 8, 1, 'порция=200'],
   ['Винегрет', 130, 1.6, 10, 9, 1, 'порция=150'],
   ['Греческий салат', 100, 3, 8, 4, 0.8, 'порция=200'],
   ['Салат из овощей с маслом', 70, 1, 5.5, 4, 0.4, 'порция=150'],
+  ['Салат Цезарь с креветками', 160, 9, 11, 6.5, 1, 'порция=250'],
+  ['Салат с тунцом', 110, 9, 6.5, 4, 0.7, 'порция=200'],
+  ['Салат с крабовыми палочками', 175, 4.5, 12, 12, 0.9, 'порция=200'],
+  ['Салат Мимоза с рыбными консервами', 210, 7, 18, 4.5, 0.8, 'порция=150'],
+  ['Сельдь под шубой', 190, 5, 16, 7, 1.3, 'порция=150'],
+  ['Салат из свежей капусты', 50, 1.5, 2.7, 5, 0.5, 'порция=150'],
+  ['Салат из огурцов и помидоров со сметаной', 45, 1.1, 3, 3.3, 0.4, 'порция=200'],
+  'Фастфуд, пицца, роллы',
   ['Пицца', 266, 11.4, 10, 33, 1.5, 'кусок=110'],
   ['Чизбургер', 265, 13, 11, 29, 1.5, '1 шт=115'],
   ['Биг Мак', 245, 12, 13.5, 21, 1, '1 шт=215'],
@@ -701,10 +854,39 @@ const DISHES = [
   ['Пирожок с капустой', 230, 6, 5, 39, 0.8, '1 шт=80'],
   ['Пирожок с мясом, жареный', 290, 10, 15, 29, 0.9, '1 шт=90'],
   ['Круассан', 406, 8.2, 21, 45.8, 1.1, '1 шт=60'],
+  ['Пицца пепперони', 270, 11.5, 12.5, 28, 1.6, 'кусок=120'],
+  ['Пицца Маргарита', 240, 10.5, 9, 29.5, 1.2, 'кусок=120'],
+  ['Бургер с говядиной, как в фастфуде', 250, 13, 12.5, 22, 1.3, '1 шт=250'],
+  ['Бургер с курицей в панировке, как в фастфуде', 230, 12, 10, 23, 1.3, '1 шт=230'],
+  ['Ролл с курицей (твистер)', 230, 10, 11, 23, 1.4, '1 шт=200'],
+  ['Буррито с курицей, рисом и сыром', 190, 10, 7, 22, 1.1, '1 шт=300'],
+  ['Острые крылья в панировке', 290, 18, 20, 9, 1.3, '6 шт=150'],
+  ['Куриные стрипсы (полоски)', 250, 17, 13, 16, 1.2, '4 шт=120'],
+  ['Поке с лососем', 150, 8, 5.5, 17.5, 1, 'миска=400'],
+  ['Поке с курицей', 140, 9, 4, 17, 1, 'миска=400'],
+  ['Боул с курицей и рисом', 135, 10, 4, 15, 0.7, 'миска=400'],
+  ['Ролл Филадельфия', 175, 7.5, 7, 20.5, 1, '8 шт=240'],
+  ['Ролл Калифорния', 150, 5.5, 5, 20.5, 1.1, '8 шт=240'],
+  ['Роллы запечённые', 200, 7, 9.5, 21.5, 1.1, '8 шт=250'],
+  ['Суши с лососем', 165, 7, 3.5, 26, 1, '1 шт=35'],
+  ['Хачапури по-аджарски', 260, 11, 12, 27, 1, '1 шт=350'],
+  ['Чебурек с мясом', 280, 9, 16, 25, 0.9, '1 шт=150'],
+  ['Беляш с мясом', 290, 10, 17, 24, 0.9, '1 шт=120'],
+  ['Пирожок печёный с картошкой', 220, 5, 6, 36, 0.6, '1 шт=80'],
+  'Десерты',
+  ['Чизкейк классический', 320, 6, 22, 25, 0.5, 'кусок=120'],
+  ['Торт', 370, 5, 20, 43, 0.4, 'кусок=120'],
+  ['Пончик', 400, 6, 22, 45, 0.6, '1 шт=70'],
+  'Напитки и коктейли',
   ['Йогурт питьевой сладкий', 80, 2.8, 2.5, 11.5, 0.1, 'бутылка=270'],
   ['Какао на молоке', 85, 3.5, 3, 11, 0.15, 'кружка=250'],
+  ['Протеиновый коктейль на молоке', 84, 9.8, 2.7, 5, 0.16, 'шейкер=330'],
+  ['Протеиновый коктейль на воде', 36, 7.3, 0.45, 0.75, 0.05, 'шейкер=330'],
+  ['Латте', 54, 2.9, 2.8, 4.3, 0.1, 'стакан=300'],
+  ['Капучино', 43, 2.3, 2.2, 3.6, 0.1, 'стакан=250'],
 ];
 const SCALED = /^(порция|тарелка|миска|горсть|шампур)/i; // эти порции у меня больше; штуки, ломтики, банки — как есть
+const PORTIONS = [[1, 'Обычные', '×1'], [1.5, 'Большие', '×1,5'], [2, 'Очень большие', '×2']]; // «Размер порций» в настройках
 const MEALS = [['breakfast', 'Завтрак'], ['lunch', 'Обед'], ['snack', 'Перекус'], ['dinner', 'Ужин']];
 const WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const WEEK_FULL = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
@@ -716,7 +898,8 @@ const KEY = 'kcal.v1', TOKEN = 'kcal.token', FORMA = 'kcal.forma';
 const DEFAULT = {
   goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } },
   salt: 5, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {},
-  portion: 1.2, // мои порции больше обычных (Глеб 25.10) — «порция», «тарелка» в базе умножаются
+  portion: 1.5, // размер порций: 1 — обычные, 1,5 — большие (по умолчанию, Глеб 03.11: «порции сильно больше обычного»), 2 — очень большие;
+  // умножаются «порция», «тарелка», «миска»… из базы и подсказка фото на сервере
   water: { train: 3500, rest: 2600 }, waterSet: false, // мл в день (02.11, как в Форме): напитки по возрасту 2,6 л (IOM, юноши 14–18) + бокс ~1,5 ч × ~0,6 л/ч пота → +0,9 л
   // waterSet — норму поменял сам в настройках; иначе берём этот расчёт
   chat: [], // переписка с нутрициологом (последние 60)
@@ -754,7 +937,8 @@ function clean(x) {
   const out = structuredClone(DEFAULT);
   out.goals = { train: goals('train'), rest: goals('rest') };
   out.salt = num(x.salt) > 0 ? r1(num(x.salt)) : DEFAULT.salt;
-  if (num(x.portion) >= 1 && num(x.portion) <= 2) out.portion = r1(num(x.portion));
+  const por = num(x.portion); // прежние «+10…+50 %» — это «больше обычного» → 1,5; «как у всех» (1) — обычные
+  if (por >= 1 && por <= 2.5) out.portion = por < 1.05 ? 1 : por < 1.75 ? 1.5 : 2;
   out.waterSet = !!x.waterSet;
   if (out.waterSet && x.water && typeof x.water === 'object') for (const k of ['train', 'rest']) if (num(x.water[k]) >= 500 && num(x.water[k]) <= 8000) out.water[k] = Math.round(num(x.water[k])); // своя норма; иначе — расчёт по умолчанию
   if (Array.isArray(x.trainDays)) out.trainDays = [...new Set(x.trainDays.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6))].sort();
@@ -871,7 +1055,7 @@ function dayOut(k) {
   return { items: d.items.map(it => ({ name: it.name, meal: it.meal, g: r(it.g), kcal: r(it.kcal), p: r(it.p), f: r(it.f), c: r(it.c), salt: r(it.salt) })),
     water: d.water || [], type: dayType(k), u: d.u || 0 };
 }
-function bodyFor(keys) { const days = {}; for (const k of keys) days[k] = dayOut(k); return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water }); }
+function bodyFor(keys) { const days = {}; for (const k of keys) days[k] = dayOut(k); return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water, portion: S.portion }); }
 function syncKeys() { // обычная отправка; null — правок больше, чем влезает в запрос: нужна полная
   const t = today(), from = addDays(t, -(SYNC_DAYS - 1)), min = addDays(t, -KEEP_DAYS), keys = [];
   for (let i = SYNC_DAYS - 1; i >= 0; i--) { const k = addDays(t, -i); if (S.days[k]) keys.push(k); }
@@ -930,7 +1114,7 @@ async function pullState() { // всё, что сохранено на серв�
 }
 function mergeState(x) { // у кого u больше — тот прав; дня нет — добавить; нормы, соль, вода — с сервера, если свои по умолчанию
   if (!x || typeof x !== 'object') return 0;
-  const c = clean({ goals: x.goals && typeof x.goals === 'object' ? x.goals : {}, days: x.days && typeof x.days === 'object' ? x.days : {}, salt: x.salt, water: x.water, waterSet: true });
+  const c = clean({ goals: x.goals && typeof x.goals === 'object' ? x.goals : {}, days: x.days && typeof x.days === 'object' ? x.days : {}, salt: x.salt, water: x.water, waterSet: true, portion: x.portion });
   if (!c) return 0;
   const min = addDays(today(), -KEEP_DAYS), same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   let n = 0;
@@ -947,6 +1131,7 @@ function mergeState(x) { // у кого u больше — тот прав; дн
   if (x.goals && same(S.goals, DEFAULT.goals) && !same(c.goals, S.goals)) { S.goals = c.goals; n++; }
   if (num(x.salt) > 0 && S.salt === DEFAULT.salt && c.salt !== S.salt) { S.salt = c.salt; n++; }
   if (!S.waterSet && x.water && !same(c.water, DEFAULT.water)) { S.water = c.water; S.waterSet = true; n++; }
+  if (num(x.portion) >= 1 && S.portion === DEFAULT.portion && c.portion !== S.portion) { S.portion = c.portion; n++; } // размер порций с другого устройства
   if (n) { persist(); refreshView(); }
   return n;
 }
@@ -1128,8 +1313,8 @@ function renderToday(animate) {
       const its = d.items.filter(i => i.meal === m);
       const sum = its.reduce((a, i) => a + i.kcal, 0);
       return `<section class="sec"><div class="sec-h"><h2>${n}</h2><span class="num">${sum ? fmt(sum) + ' ккал' : ''}</span></div>
-        <div class="list">${its.map(i => `<div class="swipe" data-sw="${esc(i.id)}"><button class="del" data-del="${esc(i.id)}">Удалить</button>
-          <button class="cell${i.id === lastAdded ? ' item-in' : ''}" data-item="${esc(i.id)}"><span class="t"><div class="n">${esc(i.name)}</div>
+        ${m === 'breakfast' ? quickRow() : ''}<div class="list">${its.map(i => `<div class="swipe" data-sw="${esc(i.id)}"><button class="del" data-del="${esc(i.id)}">Удалить</button>
+          <button class="cell${[].concat(lastAdded).includes(i.id) ? ' item-in' : ''}" data-item="${esc(i.id)}"><span class="t"><div class="n">${esc(i.name)}</div>
           <div class="m num">${i.g ? (i.g < 10 ? dec(i.g) : fmt(i.g)) + ' г · ' : ''}Б ${Math.round(i.p)} · Ж ${Math.round(i.f)} · У ${Math.round(i.c)}${i.salt >= 0.05 ? ' · соль ' + dec(i.salt) : ''}</div></span>
           <span class="k num">${fmt(i.kcal)}</span></button></div>`).join('')}
           <button class="cell add" data-add="${m}">${I.plus}Добавить<span class="ph" data-photo="${m}" role="button" aria-label="По фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</span></button></div></section>`;
@@ -1169,6 +1354,7 @@ function renderToday(animate) {
   app.querySelectorAll('[data-add]').forEach(b => b.onclick = e => {
     if (e.target.closest('[data-photo]')) photoFlow(b.dataset.add); else openAdd(b.dataset.add);
   });
+  app.querySelectorAll('[data-qb]').forEach(b => b.onclick = () => quickBreakfast(b.dataset.qb));
   app.querySelectorAll('[data-item]').forEach(b => b.onclick = () => { if (!b.dataset.moved) openItem(b.dataset.item); });
   app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => deleteItem(day(cur).items.find(i => i.id === b.dataset.del)));
   app.querySelectorAll('.swipe').forEach(swipeRow);
@@ -1547,7 +1733,17 @@ $('#sheetClose').onclick = closeSheet;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 
 const toFood = ([name, kcal, p, f, c, salt, u]) => ({ name, kcal, p, f, c, salt, unit: u ? { name: u.split('=')[0], g: +u.split('=')[1], scale: SCALED.test(u) } : null });
-const FOODS = BASE.map(toFood), DISH = DISHES.map(f => ({ ...toFood(f), dish: true }));
+const rows = a => a.filter(Array.isArray); // строки-названия в BASE и DISHES — разделы списка
+const FOODS = rows(BASE).map(toFood), DISH = rows(DISHES).map(f => ({ ...toFood(f), dish: true }));
+const OWN = new Set(DISH.concat(FOODS).map(f => norm(f.name))); // такие же названия в мировой базе — не дублировать в поиске
+function grouped(src, list, key, pool, row) { // список по разделам; ключи — по порядку в общем списке (d0, d1… / b0, b1…)
+  let i = 0, html = '', open = false;
+  for (const r of src) {
+    if (!Array.isArray(r)) { html += `${open ? '</div>' : ''}<div class="group-t">${esc(r)}</div><div class="list">`; open = true; continue; }
+    const f = list[i]; pool[key + i] = f; html += row(f, key + i); i++;
+  }
+  return html + (open ? '</div>' : '');
+}
 const macroLine = f => `${fmt(f.kcal)} ккал · Б ${dec(f.p)} · Ж ${dec(f.f)} · У ${dec(f.c)}`;
 const mealName = m => MEALS.find(x => x[0] === m)[1];
 
@@ -1556,7 +1752,7 @@ let WORLD = null, worldLoading = null;
 function loadWorld() {
   if (WORLD || worldLoading) return worldLoading || Promise.resolve(WORLD);
   worldLoading = fetch('foods.json').then(r => r.ok ? r.json() : []).catch(() => []).then(rows => {
-    WORLD = rows.filter(r => Array.isArray(r) && r[0]).map(([name, kcal, p, f, c, salt, g, est]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g, scale: true } : null, world: true, dish: !!est, n: norm(name) }));
+    WORLD = rows.filter(r => Array.isArray(r) && r[0] && !OWN.has(norm(r[0]))).map(([name, kcal, p, f, c, salt, g, est]) => ({ name, kcal, p, f, c, salt, unit: g > 0 ? { name: 'порция', g, scale: true } : null, world: true, dish: !!est, n: norm(name) }));
     worldLoading = null; return WORLD;
   });
   return worldLoading;
@@ -1601,8 +1797,8 @@ function openAdd(meal, query) {
       const rec = S.recent.slice(0, 6);
       if (rec.length) { html += `<div class="group-t">Недавние</div><div class="list">${rec.map((f, i) => { pool['r' + i] = f; return row(f, 'r' + i, f.g ? `${fmt(f.g)} г · ${fmt(f.kcal * f.g / 100)} ккал` : `${fmt(f.kcal)} ккал`); }).join('')}</div>`; }
       if (S.custom.length) html += `<div class="group-t">Мои продукты</div><div class="list">${S.custom.map((f, i) => { pool['m' + i] = f; return row(f, 'm' + i); }).join('')}</div>`;
-      html += `<div class="group-t">Популярные блюда</div><div class="list">${DISH.map((f, i) => { pool['d' + i] = f; return row(f, 'd' + i); }).join('')}</div>`;
-      html += `<div class="group-t">Продукты</div><div class="list">${FOODS.map((f, i) => { pool['b' + i] = f; return row(f, 'b' + i); }).join('')}</div>`;
+      html += `<div class="big-t">Популярные блюда</div>${grouped(DISHES, DISH, 'd', pool, row)}`;
+      html += `<div class="big-t">Продукты</div>${grouped(BASE, FOODS, 'b', pool, row)}`;
       html += `<div class="foot">В поиске — больше 5 000 блюд со всего мира и продукты из магазинов. ≈ — готовое блюдо, калорийность зависит от рецепта.</div>`;
     } else {
       const hit = findFoods(s), shown = hit.slice(0, LIMIT);
@@ -1635,15 +1831,18 @@ function openAdd(meal, query) {
   const html = `<div class="search">${I.search}<input id="q" type="search" placeholder="Любое блюдо или продукт" autocomplete="off" enterkeyhint="search" aria-label="Найти продукт"></div>
     <button class="photo-cta" id="photoCta">${I.cam}<span><b>Сфотографировать еду</b><span>Узнаю блюда и граммы по фото</span></span></button>
     <div class="seg meal" id="mseg"><span class="thumb"></span>${MEALS.map(([k, n]) => `<button data-m="${k}" aria-pressed="${k === m}">${n}</button>`).join('')}</div>
+    <div id="qbAdd" style="margin-top:14px">${quickRow(true)}</div>
     <div id="results"></div>`;
   openSheet('Добавить', html, body => {
     const seg = $('#mseg', body);
     requestAnimationFrame(() => placeSeg(seg));
-    seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); buzz(); };
+    const qb = $('#qbAdd', body), qbShow = () => { qb.hidden = m !== 'breakfast' || !!q.trim(); }; // быстрый завтрак — когда выбран «Завтрак»
+    qb.onclick = e => { const b = e.target.closest('[data-qb]'); if (b) quickBreakfast(b.dataset.qb); };
+    seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); qbShow(); buzz(); };
     const inp = $('#q', body);
-    inp.value = q; $('#photoCta', body).hidden = !!q.trim();
+    inp.value = q; $('#photoCta', body).hidden = !!q.trim(); qbShow();
     let typing = 0;
-    inp.oninput = () => { q = inp.value; $('#photoCta', body).hidden = !!q.trim(); clearTimeout(typing); typing = setTimeout(search, 90); }; // пока печатает — не перерисовываем на каждую букву
+    inp.oninput = () => { q = inp.value; $('#photoCta', body).hidden = !!q.trim(); qbShow(); clearTimeout(typing); typing = setTimeout(search, 90); }; // пока печатает — не перерисовываем на каждую букву
     $('#photoCta', body).onclick = () => photoFlow(m);
     if (!WORLD) loadWorld().then(() => { if ($('#q') === inp) draw(); });
     q.trim() ? search() : requestAnimationFrame(() => requestAnimationFrame(draw)); // лист уже поехал — длинный список следом
@@ -1657,7 +1856,7 @@ function openPortion(food, meal, item, grams, back) {
   const per = food.per100 || food;
   const units = [];
   if (food.unit) units.push([`${food.unit.name} · ${fmt(ug)} г`, ug]);
-  for (const x of [50, 100, 150, 200, 300]) if (!food.unit || x !== ug) units.push([`${x} г`, x]);
+  for (const x of [50, 100, 200, 300, 400, 500]) if (!food.unit || x !== ug) units.push([`${x} г`, x]);
   const html = `<div class="portion">
     <div class="title">${esc(food.name)}</div><div class="per num">${macroLine(per)}${per.salt ? ' · соль ' + dec(per.salt) : ''} на 100 г</div>
     <div class="grams"><button class="st" id="minus" aria-label="Меньше">${I.minus}</button>
@@ -1721,6 +1920,41 @@ function deleteItem(item) {
   toast('Удалено', 'Вернуть', () => { // в тот день, откуда удалили, даже если уже открыт другой
     if (d.items.includes(item)) return;
     d.items.splice(Math.min(i, d.items.length), 0, item); S.days[dk] = d; save();
+    if (view === 'today' && cur === dk) renderToday(false);
+  });
+}
+/* Быстрый завтрак (Глеб 03.11): каша на молоке большой порцией (глубокая тарелка до краёв) + авокадо — одним нажатием.
+   Цифры — оценка по таблицам состава, на всю порцию:
+   · хлопья гречневые Nordic: ~100 г сухих (≈ 340–350 ккал) + 250 мл молока 2,5 % (≈ 130 ккал) ≈ 490 ккал, Б 17, Ж 9, У 86;
+   · рисовая каша на молоке ≈ 99 ккал / 100 г (Б 3, Ж 2,4, У 16,3), пшённая ≈ 115 ккал / 100 г (Б 3,7, Ж 3,1, У 18,1) —
+     середина табличных 97–100 и 110–120; порция 400 г готовой; соль — молоко и щепотка в каше;
+   · авокадо целиком — ~145 г мякоти: 230 ккал, Б 3, Ж 21, У 3 (без клетчатки), соли нет.
+   Авокадо — отдельной строкой (можно убрать свайпом) и только если его ещё нет в завтраке. Порции не умножаются на «Размер порций» — они уже большие. */
+const AVO = { name: 'Авокадо', g: 145, kcal: 230, p: 3, f: 21, c: 3, salt: 0 };
+const QUICK = [
+  ['nordic', 'Хлопья Nordic', { name: 'Хлопья гречневые Nordic на молоке', g: 350, kcal: 490, p: 17, f: 9, c: 86, salt: 0.3 }],
+  ['rice', 'Рисовая каша', { name: 'Каша рисовая на молоке', g: 400, kcal: 396, p: 12, f: 9.6, c: 65.2, salt: 1 }],
+  ['millet', 'Пшённая каша', { name: 'Каша пшённая на молоке', g: 400, kcal: 460, p: 14.8, f: 12.4, c: 72.4, salt: 1 }],
+  ['avo', 'Авокадо', AVO],
+];
+const quickItem = x => ({ ...x, per100: { kcal: x.kcal * 100 / x.g, p: x.p * 100 / x.g, f: x.f * 100 / x.g, c: x.c * 100 / x.g, salt: x.salt * 100 / x.g }, unit: { name: 'порция', g: x.g } });
+const quickHas = name => day(cur).items.some(i => i.meal === 'breakfast' && i.name === name);
+const quickRow = (title) => `<div class="qb" role="group" aria-label="Быстрый завтрак">${title ? '<div class="qb-t">Быстрый завтрак · каша на молоке + авокадо</div>' : ''}${QUICK.map(([k, l, x]) => {
+  const on = quickHas(x.name);
+  return `<button class="qchip${on ? ' on' : ''}" data-qb="${k}" aria-pressed="${on}">${on ? I.check : ''}${l}</button>`; }).join('')}</div>`;
+function quickBreakfast(key, force) {
+  const q = QUICK.find(x => x[0] === key); if (!q) return;
+  const main = q[2];
+  if (!force && quickHas(main.name)) { // повтор — не дублируем молча
+    buzz(); toast(`${q[1]} — уже в завтраке`, 'Ещё раз', () => quickBreakfast(key, true)); return;
+  }
+  const list = [main].concat(main !== AVO && !quickHas(AVO.name) ? [AVO] : []);
+  const dk = cur, ids = [];
+  for (const x of list) { addItem('breakfast', quickItem(x), true); ids.push(lastAdded); }
+  lastAdded = ids;
+  buzz(); closeSheet(); renderToday(false);
+  toast(list.length > 1 ? `${q[1]} + авокадо` : `${q[1]} · ${fmt(main.kcal)} ккал`, 'Отменить', () => { // коротко — рядом кнопка
+    const d = day(dk); d.items = d.items.filter(i => !ids.includes(i.id)); S.days[dk] = d; save();
     if (view === 'today' && cur === dk) renderToday(false);
   });
 }
@@ -1840,7 +2074,7 @@ async function recognize(shots, meal, hint = '') {
   try {
     const r = await fetch(API + '/api/kcal/photo', { method: 'POST', signal: ctl.signal,
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
-      body: JSON.stringify({ image: url, images: shots.slice(1), text: hint }) });
+      body: JSON.stringify({ image: url, images: shots.slice(1), text: hint, portion: S.portion || 1 }) }); // portion — размер моих порций: подсказка модели
     const j = await r.json().catch(() => ({}));
     if (photoReq !== ctl) return;
     if (r.status === 401) { setToken(''); if (EMBED) { closeSheet(); return authLost(); } return openPair(() => recognize(shots, meal, hint)); }
@@ -1971,9 +2205,9 @@ function openSettings() {
       `<div class="cell field"><label for="g-${t}-${k}">${l}</label><input id="g-${t}-${k}" data-t="${t}" data-k="${k}" inputmode="numeric" value="${S.goals[t][k]}"></div>`).join('')}</div>`;
   const paired = !!getToken();
   const html = `${goal('train', 'Норма в день тренировки')}${goal('rest', 'Норма в день отдыха')}
-    <div class="group-t">Мои порции</div><div class="list"><div class="days" id="por" style="grid-template-columns:repeat(5,1fr)">${[[1, 'Как у всех'], [1.1, '+10%'], [1.2, '+20%'], [1.3, '+30%'], [1.5, '+50%']].map(([v, l]) =>
-      `<button data-p="${v}" aria-pressed="${Math.abs((S.portion || 1) - v) < 0.01}" style="font-size:${v === 1 ? 11 : 14}px">${l}</button>`).join('')}</div></div>
-    <div class="foot">«Порция» и «тарелка» в базе станут больше на столько. Штуки, ломтики и упаковки — как есть.</div>
+    <div class="group-t">Размер порций</div><div class="list"><div class="days" id="por" style="grid-template-columns:repeat(3,1fr)">${PORTIONS.map(([v, l, x]) =>
+      `<button data-p="${v}" aria-pressed="${Math.abs((S.portion || 1) - v) < 0.01}"><span>${l}</span><small>${x}</small></button>`).join('')}</div></div>
+    <div class="foot">«Порция», «тарелка» и «миска» из базы станут больше во столько раз, и фото будет считать с учётом этого. Штуки, ломтики и упаковки — как есть.</div>
     <div class="group-t">Вода, мл в день</div><div class="list">
       <div class="cell field"><label for="w-train">В день тренировки</label><input id="w-train" data-wg="train" inputmode="numeric" value="${S.water.train}"></div>
       <div class="cell field"><label for="w-rest">В день отдыха</label><input id="w-rest" data-wg="rest" inputmode="numeric" value="${S.water.rest}"></div></div>

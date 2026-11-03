@@ -226,6 +226,16 @@ html.mono .sheet-x::before { content: ''; display: block; width: 15px; height: 1
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 3.5l9 9M12.5 3.5l-9 9' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
           mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 3.5l9 9M12.5 3.5l-9 9' stroke='%23000' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat; }
 html.mono .bk[hidden] { visibility: hidden !important; pointer-events: none !important; }
+/* «Запас сил» (Глеб 03.11: «что такое запас сил какой-то»): под названием — простая подпись, что это */
+.what { display: block; margin-top: 3px; grid-column: 1 / -1; font: 400 12px/1.3 var(--head) !important; color: var(--hint) !important; text-transform: none !important;
+  letter-spacing: normal !important; white-space: normal; }
+.sheet .what-lead { margin: -6px 44px 14px 2px; font-size: 15px; line-height: 1.35; color: var(--hint); }
+/* лист «Серия»: сверка числа с WHOOP — поле и кнопка в одну строку */
+.sk-form p { margin: 0 0 10px; }
+.sk-row { display: flex; gap: 8px; align-items: stretch; }
+.sk-row input { flex: 1; min-width: 0; min-height: 44px; font-size: 17px; }
+.sk-row .btn { flex: none; width: auto; min-height: 44px; padding: 0 18px; margin: 0; }
+.mepill .fl { cursor: pointer; }
 /* «Сводка и советы» (Глеб 02.11: «дёрганая панелька»): лист постоянной высоты, содержимое прокручивается внутри,
    период переключается без скачков высоты */
 .sheet.sum-sheet { height: min(88vh, 860px); max-height: 88vh; overflow-y: auto; overscroll-behavior: contain; }
@@ -233,7 +243,7 @@ html.mono .bk[hidden] { visibility: hidden !important; pointer-events: none !imp
 .sum-sheet .sum-live { min-height: 132px; }
 /* крестик не уезжает с прокруткой длинного листа (Глеб 02.11: «крестики опять улетели»): лист сам прокручивается,
    поэтому кнопка прилипает к верху листа (sticky) и стоит справа, не занимая место в потоке */
-html.mono .sheet-x { position: sticky !important; top: 12px !important; right: auto !important; float: right; margin: 4px -2px -44px 0; }
+/* (03.11) само прилипание — в layout.css для всех видов, без float: sticky у обычного блока надёжнее в Safari */
 /* три деления «плохо / достаточно / оптимально»: горит одно — уровень виден по месту, а не по цвету */
 html.mono .seg3 i { background: var(--trk) !important; }
 html.mono .seg3 i:is(.poor, .ok, .best) { background: var(--ink) !important; }

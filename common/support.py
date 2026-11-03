@@ -274,7 +274,21 @@ class Support:
     # ---------- работа ----------
 
     def start(self, chat, text, shots=None):
+        self.active = getattr(self, "active", 0) + 1  # своя просьба принята и ещё не закончена (busy)
         threading.Thread(target=self.run, args=(chat, text, shots or []), daemon=True).start()
+
+    def busy(self):
+        """"self" — эта поддержка ещё чинит прошлую просьбу, "other" — Claude на сервере занят другим ботом
+        (новая просьба встанет в очередь), None — свободно."""
+        if getattr(self, "active", 0) > 0:
+            return "self"
+        try:
+            with open(LOCK, "a") as f:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+        except OSError:
+            return "other"
+        return None
 
     def git(self, *a, timeout=120):
         return self.sh("git", "-C", self.cwd, *a, timeout=timeout)
@@ -312,6 +326,7 @@ class Support:
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
+            self.active = max(0, getattr(self, "active", 1) - 1)
 
     def _run(self, st, text, shots):
         st.step("читаю код и логи", force=True)
