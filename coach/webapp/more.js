@@ -51,7 +51,7 @@
   function bodyStats(d) {
     const w = d.body || {}, p = d.profile || {};
     const h = w.height_meter ? Math.round(w.height_meter * 100) : p.height ? Math.round(Number(p.height)) : null;
-    const kg = w.weight_kilogram || (p.weight ? Number(String(p.weight).replace(',', '.')) : null);
+    const kg = (w.scale && w.scale.kg) || w.weight_kilogram || (p.weight ? Number(String(p.weight).replace(',', '.')) : null);  // свежий замер весов — первым
     const st = (k, v, u) => `<div class="more-st"><b class="num">${v == null || Number.isNaN(v) ? '—' : `${v}<small>${u}</small>`}</b><span>${k}</span></div>`;
     return `<div class="more-sts">${st('Рост', h, 'см')}${st('Вес', kg ? num(kg, 1).replace(/,0$/, '') : null, 'кг')}${st('Макс. пульс', w.max_heart_rate || null, 'уд/мин')}</div>`;
   }
@@ -66,7 +66,8 @@
     h += group('Профиль',
       row({ a: 'more-edit', ic: I.edit, title: 'Изменить профиль', meta: 'возраст, рост, вес, спорт, еда' })
       + row({ a: 'more-edit', ic: I.goal, col: 'var(--teal)', title: 'Мои цели', meta: gs.length ? esc(gs[0].text) + (gs.length > 1 ? ` и ещё ${gs.length - 1}` : '') : 'тренер привязывает к ним советы',
-        end: `<b class="num">${gs.length}</b>` }));
+        end: `<b class="num">${gs.length}</b>` })
+      + (F.slots.moreProfile || []).map(fn => { try { return fn(row) || ''; } catch (e) { console.error('moreProfile', e); return ''; } }).join(''));
     const morning = d.morning === 'off' ? 'выкл' : esc(d.morning || '07:00');
     h += group('Тренер',
       row({ a: 'more-edit', ic: I.sun, col: 'var(--rec-yellow)', title: 'Утренний разбор', meta: d.morning === 'off' ? 'выключен — включи в профиле' : 'план на день после сна', end: `<b class="num">${morning}</b>` })

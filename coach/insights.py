@@ -208,7 +208,9 @@ def load_ratio(days, day):
 # ---------- питание ----------
 
 def weight_of(profile, body):
-    return profile.get("weight") or body.get("weight_kilogram")
+    """Свежий замер умных весов (body["scale"], f_weight) — раньше веса из профиля и WHOOP: те введены руками без даты."""
+    scale = body.get("scale") or {}
+    return scale.get("kg") or profile.get("weight") or body.get("weight_kilogram")
 
 
 def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
@@ -249,7 +251,8 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
     floor = (2100 if profile.get("sex") == "f" else 2600) if teen else 0
     water = round((max(w * 35, floor) + train_minutes * 10) / 50) * 50
     return {"kcal": kcal, "protein": protein, "fat": fat, "carbs": carbs, "water": water, "spend": round(spend),
-            "how": how, "goal": goal, "teen": teen}
+            "how": how, "goal": goal, "teen": teen,
+            "weight": round(float(w), 1), "weight_day": (body.get("scale") or {}).get("day") if (body.get("scale") or {}).get("kg") else None}
 
 
 def eaten(meals, kcal=None):
@@ -728,7 +731,8 @@ def profile_line(p, body):
     w = weight_of(p, body)
     h = p.get("height") or ((body.get("height_meter") or 0) * 100) or None
     if w:
-        parts.append(f"вес {w} кг")
+        sc = body.get("scale") or {}
+        parts.append(f"вес {w} кг" + (f" (умные весы, {sc['day'][8:10]}.{sc['day'][5:7]})" if sc.get("kg") and sc.get("day") else ""))
     if h:
         parts.append(f"рост {round(h)} см")
     if body.get("max_heart_rate"):
