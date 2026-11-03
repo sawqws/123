@@ -128,7 +128,7 @@ html.wh .seg { background: #23292d !important; border-radius: 8px !important; }
 html.wh .seg button { font: 700 10.5px var(--head) !important; border-radius: 6px !important; }
 html.wh .seg button.on { background: #3e464c !important; color: #fff !important; }
 
-/* меню снизу: плашка «Главная · Здоровье · Добавить · Питание» и отдельный круг тренера со знаком «Ф» */
+/* меню снизу: плашка «Главная · Здоровье · Питание · Добавить» и отдельный круг чата со знаком «Ф» */
 html.wh .tabbar { background: rgba(38, 44, 48, .86) !important; border-radius: 22px !important; box-shadow: 0 10px 30px rgba(0, 0, 0, .55) !important;
   -webkit-backdrop-filter: blur(20px) saturate(140%) !important; backdrop-filter: blur(20px) saturate(140%) !important; }
 html.wh .tabbar button { font: 500 10px/1.1 var(--head) !important; text-transform: none !important; letter-spacing: 0 !important; color: rgba(255, 255, 255, .55) !important; background: none !important; }

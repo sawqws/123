@@ -377,6 +377,15 @@ ASK_DEMO = [{"t": "**Записал.** Вода за день — 1,15 л из 2
              "actions": [{"kind": "water", "label": "вода 400 мл", "ok": True, "undo": "demo1"},
                          {"kind": "meal", "label": "Макароны с курицей — 680 ккал", "ok": True, "undo": "demo2"}]}]
 
+# «Кожа» → «Спросить» (topic: skin): своя нить истории, правка ухода действием skin_routine с «Отменить»
+_SKIN_TEXT = ("**Убрал скраб из вечера** — через день он сушит кожу.\n- Вечером: умывание и крем\n- Скраб — раз в неделю, в субботу\n\n"
+              "✅ Записал: уход (вечер): убрал «Скраб»")
+SKIN_DEMO = [{"t": "**Убрал скраб из вечера** — через день он сушит кожу.\n"}, {"t": "- Вечером: умывание и крем\n- Скраб — раз в неделю, в субботу"},
+             {"done": True, "thread": "skin", "text": _SKIN_TEXT, "history": [
+                 {"role": "user", "text": "Убери скраб из вечернего ухода", "created": "2026-10-11T13:41:00"},
+                 {"role": "coach", "text": _SKIN_TEXT, "created": "2026-10-11T13:41:05"}],
+              "actions": [{"kind": "skin_routine", "label": "уход (вечер): убрал «Скраб»", "ok": True, "undo": "demo3"}]}]
+
 
 def serve(port, stub=False):
     """Локальный сервер для проверки вида: приложение как сайт, /api/… — примеры, /kcal/ — «Калории» (или заглушка)."""
@@ -403,6 +412,15 @@ def serve(port, stub=False):
         def do_POST(self):
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
             path = urllib.parse.urlparse(self.path).path
+            try:
+                topic = (json.loads(raw or b"{}") or {}).get("topic")
+            except (ValueError, AttributeError):
+                topic = None
+            if topic == "skin" and path == "/api/history":
+                return self.send(200, {"history": []})
+            if topic == "skin" and path == "/api/ask/stream":
+                ev = "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in SKIN_DEMO)
+                return self.send(200, ev, "text/event-stream; charset=utf-8")
             if path in LIVE_PATHS:
                 try:
                     body = json.loads(raw or b"{}")

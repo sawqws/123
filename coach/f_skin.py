@@ -1082,3 +1082,115 @@ def same(a, b):
     if not na or not nb:
         return False
     return na == nb or (na[0] == nb[0] and len(na[0]) >= 4)  # «Крем на лицо» и «Крем на ночь» — один крем
+
+
+# ---------- раздел «Кожа» → «Спросить»: чат по коже (нить «skin» в coach.chat_history) ----------
+# Вопрос идёт тем же чатом (/api/ask/stream {topic: "skin"}), к ДАННЫМ добавляется ask_context — уход целиком, заметки
+# и последние разборы фото; «поменяй вечерний уход…» — действие skin_routine (ai.ASSIST), выполняет assist ниже.
+
+ASK_AI = 3  # сколько последних разборов фото — полным текстом
+
+
+def ask_context(app, uid, today):
+    """Подробно о коже для чата раздела «Кожа»: уход по частям (как в приложении), заметки, последние разборы фото."""
+    p = payload(app.db, uid, today)
+    r, out = p["routine"], []
+    for part in ("am", "pm"):
+        xs = r[part]
+        out.append(f"{PART_WORD[part].capitalize()}: " + ("; ".join(f"{i + 1}) {x['title']}" + (f" — {x['product']}" if x["product"] else "")
+                                                             for i, x in enumerate(xs)) if xs else "шагов нет"))
+    out.append("Процедуры: " + ("; ".join(x["title"] + (f" — {x['product']}" if x["product"] else "") + f" ({x['sched']})"
+                                          for x in r["extra"]) if r["extra"] else "нет"))
+    notes = {k: v for k, v in p["notes"].items() if v}
+    out.append("Заметки о коже: " + ("; ".join(f"{NOTE_WORD[k]} — {v}" for k, v in notes.items()) if notes else "нет"))
+    items = [x for x in p["ai"]["days"] if x["status"] in ("ok", "attention")][:ASK_AI]
+    for x in items:
+        out.append(f"Разбор фото лба {x['day'][8:10]}.{x['day'][5:7]} — {AI_WORD[x['status']]}"
+                   + (f" (по сравнению с прошлым — {x['compare']})" if x.get("compare") else "") + ": "
+                   + " ".join(str(x.get("text") or "").split())[:600])
+    if not items:
+        out.append("Разборов фото лба пока нет.")
+    s = p["stats"] or {}
+    if s.get("summary"):
+        out.append("Итог за 30 дней: " + s["summary"])
+    return out
+
+
+def _find_step(steps, name):
+    """Шаг по названию из слов пользователя: точное совпадение, иначе одно похожее; несколько/ни одного — ValueError."""
+    key = " ".join(str(name or "").lower().replace("ё", "е").split())
+    if not key:
+        raise ValueError("уход: какой шаг — напиши название")
+
+    def low(x):
+        return x["title"].lower().replace("ё", "е")
+    hit = [s for s in steps if low(s) == key]
+    if not hit:
+        hit = [s for s in steps if key in low(s) or low(s) in key
+               or key in (s["title"] + " " + s["product"]).lower().replace("ё", "е") or same(s["title"], key)]
+    if len(hit) == 1:
+        return hit[0]
+    raise ValueError(f"уход: шагов «{name}» несколько — уточни какой" if hit else f"уход: нет шага «{name}»")
+
+
+def _parse_steps(text, part):
+    """Текст шага(ов) → чистые шаги части: «Пенка — CeraVe», «Маска — глина, 2 раза в неделю» (процедура — одна)."""
+    text = str(text or "")
+    pieces = [text] if part == "extra" else [x for x in re.split(r"\s*(?:\n|;|,(?![^()]*\)))\s*", text) if x.strip()]
+    out = []
+    for piece in pieces:
+        got = parse_item(piece, part)
+        if not got:
+            continue
+        item = got[1]
+        if part == "extra":
+            if not item.get("days") and not item.get("weekly"):
+                item.update(days=[], weekly=1)
+        else:
+            item = {"title": item["title"], "product": item["product"]}
+        out.append(clean_step(item, part))
+    if not out:
+        raise ValueError("уход: не понял, какой шаг")
+    return out
+
+
+def assist(app, uid, a, today):
+    """Чат: {"type": "skin_routine", "part": am|pm|extra, "op": add|remove|replace, "text", "old"?} → правка ухода
+    теми же проверками, что «Мой уход» (save). → {label, undo} или None (не наше действие). Ошибка — ValueError."""
+    if a.get("type") != "skin_routine":
+        return None
+    part, op = str(a.get("part") or "").strip().lower(), str(a.get("op") or "").strip().lower()
+    part = {"утро": "am", "вечер": "pm", "morning": "am", "evening": "pm", "процедуры": "extra"}.get(part, part)
+    if part not in PARTS:
+        raise ValueError("уход: часть — утро, вечер или процедуры")
+    if op not in ("add", "remove", "replace"):
+        raise ValueError("уход: можно добавить, убрать или заменить шаг")
+    st = load(app.db, uid)
+    before = [dict(x) for x in st[part]]
+    cur = [dict(x) for x in st[part]]
+    word = PART_WORD[part]
+    if op == "add":
+        names = {x["title"].lower() for x in cur}
+        new = [x for x in _parse_steps(a.get("text"), part) if x["title"].lower() not in names]
+        if not new:
+            raise ValueError(f"уход: такой шаг уже есть ({word})")
+        cur += new
+        label = f"уход ({word}): + " + ", ".join(x["title"] for x in new)
+    elif op == "remove":
+        s = _find_step(cur, a.get("text") or a.get("old"))
+        cur = [x for x in cur if x["id"] != s["id"]]
+        label = f"уход ({word}): убрал «{s['title']}»"
+    elif a.get("old"):
+        s = _find_step(cur, a.get("old"))
+        new = _parse_steps(a.get("text"), part)
+        i = next(i for i, x in enumerate(cur) if x["id"] == s["id"])
+        cur[i:i + 1] = [{**new[0], "id": s["id"]}] + new[1:]  # первый новый — на место старого (отметка дня остаётся)
+        label = f"уход ({word}): «{s['title']}» → " + ", ".join(f"«{x['title']}»" for x in new)
+    else:
+        cur = _parse_steps(a.get("text"), part)
+        label = f"уход ({word}) заново: " + ", ".join(x["title"] for x in cur)
+    save(app.db, uid, {"routine": {part: cur}}, today)  # лимиты и проверки — как в «Мой уход»; ValueError — «Не записал»
+
+    def undo():
+        save(app.db, uid, {"routine": {part: before}}, today)
+    return {"label": label[:160], "undo": undo}

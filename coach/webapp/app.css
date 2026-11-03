@@ -646,7 +646,7 @@ body.has-tabbar .sup-fab { bottom: calc(78px + var(--bottom)); }
 .wlink .ico { width: 18px; height: 18px; }
 
 /* нижнее меню: плавающая капсула + круглая кнопка тренера справа (как кнопка Coach у WHOOP) */
-.tabbar { left: 10px; right: 82px; bottom: calc(10px + var(--bottom)); padding: 6px; border-radius: 999px; border: 0;
+.tabbar { left: 10px; right: 82px; bottom: calc(8px + var(--bottom)); padding: 6px; border-radius: 999px; border: 0;
   background: rgba(30, 37, 41, .96); box-shadow: 0 10px 30px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .06); }
 .tabbar button { font: 600 10.5px/1.1 var(--head); letter-spacing: 0; text-transform: none; color: rgba(255, 255, 255, .5); border-radius: 999px; }
 .tabbar button.on { color: #fff; background: rgba(255, 255, 255, .08) !important; }

@@ -99,11 +99,14 @@ class Store:
         self.db.commit()
 
     def _migrate(self):
-        """Новые столбцы в старой базе: reviews.msg (id сообщения в Telegram), reviews.src (по каким данным разбор)."""
+        """Новые столбцы в старой базе: reviews.msg (id сообщения в Telegram), reviews.src (по каким данным разбор),
+        messages.thread (нить разговора: '' — общий чат, 'skin' — «Спросить» в разделе «Кожа»)."""
         have = {r[1] for r in self.db.execute("PRAGMA table_info(reviews)")}
         for col, typ in (("msg", "INTEGER"), ("src", "TEXT")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE reviews ADD COLUMN {col} {typ}")
+        if "thread" not in {r[1] for r in self.db.execute("PRAGMA table_info(messages)")}:
+            self.db.execute("ALTER TABLE messages ADD COLUMN thread TEXT NOT NULL DEFAULT ''")
 
     def q(self, sql, args=()):
         with self.lock:
@@ -373,18 +376,25 @@ class Store:
 
     # ---------- тренер ----------
 
-    def say(self, uid, role, text):
-        self.x("INSERT INTO messages (user, role, text, created) VALUES (?,?,?,?)", (uid, role, text[:8000], now_iso()))
-        # храним последние 200 сообщений
-        self.x("DELETE FROM messages WHERE user=? AND id NOT IN "
-               "(SELECT id FROM messages WHERE user=? ORDER BY id DESC LIMIT 200)", (uid, uid))
+    def say(self, uid, role, text, thread=""):
+        """thread — нить разговора: '' — общий чат (бот и вкладка «Чат»), 'skin' — «Спросить» в разделе «Кожа»."""
+        self.x("INSERT INTO messages (user, role, text, created, thread) VALUES (?,?,?,?,?)",
+               (uid, role, text[:8000], now_iso(), thread or ""))
+        # храним последние 200 сообщений каждой нити
+        self.x("DELETE FROM messages WHERE user=? AND thread=? AND id NOT IN "
+               "(SELECT id FROM messages WHERE user=? AND thread=? ORDER BY id DESC LIMIT 200)",
+               (uid, thread or "", uid, thread or ""))
 
-    def history(self, uid, n=12):
-        return list(reversed(self.q("SELECT role, text, created FROM messages WHERE user=? ORDER BY id DESC LIMIT ?",
-                                    (uid, n))))
+    def history(self, uid, n=12, thread=""):
+        return list(reversed(self.q("SELECT role, text, created FROM messages WHERE user=? AND thread=? ORDER BY id DESC LIMIT ?",
+                                    (uid, thread or "", n))))
 
-    def clear_history(self, uid):
-        self.x("DELETE FROM messages WHERE user=?", (uid,))
+    def clear_history(self, uid, thread=None):
+        """thread=None — все нити (/clear в боте), иначе — только эту."""
+        if thread is None:
+            self.x("DELETE FROM messages WHERE user=?", (uid,))
+        else:
+            self.x("DELETE FROM messages WHERE user=? AND thread=?", (uid, thread))
 
     def brief(self, uid, day, kind="morning", text=None):
         if text is None:

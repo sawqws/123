@@ -134,7 +134,7 @@
   function hints(qs) {
     qs = qs.filter(Boolean).slice(0, 3);
     if (!qs.length) return '';
-    return `<section class="card actv-coach rise">${F.cap(`<span class="actv-spark">${spark}</span>Спросить тренера`, 'по твоим данным')}
+    return `<section class="card actv-coach rise">${F.cap(`<span class="actv-spark">${spark}</span>Спросить в чате`, 'по твоим данным')}
       ${qs.map(q => `<button class="actv-q" data-a="actv-ask" data-v="${esc(q)}"><span>${esc(q)}</span>${chev}</button>`).join('')}</section>`;
   }
   F.actions['actv-ask'] = async (el, q) => {
