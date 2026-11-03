@@ -595,6 +595,36 @@ class BotTest(unittest.TestCase):
         self.assertEqual(r.json["day"]["eaten"]["kcal"], 450)
         self.assertEqual(call("/api/meal/delete", {"id": mid}).json["day"]["eaten"]["kcal"], 100)
 
+    def test_chat_idle(self):
+        """Пауза ≥ 30 мин — новый разговор: приложение получает пустую историю, Claude — без старых сообщений."""
+        self.assertEqual(coach.CHAT_IDLE, 30 * 60)
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def put(role, text, ago_min):
+            self.db.x("INSERT INTO messages (user, role, text, created) VALUES (?,?,?,?)",
+                      (U, role, text, (now - datetime.timedelta(minutes=ago_min)).isoformat(timespec="seconds")))
+        put("user", "старый вопрос", 120)
+        put("coach", "старый ответ", 119)
+        put("user", "вопрос", 50)  # пауза 69 мин — разговор начался заново
+        put("coach", "ответ", 29)  # 21 мин между ними — тот же разговор
+        hist = coach.chat_history(U, 40, now)
+        self.assertEqual([m["text"] for m in hist], ["вопрос", "ответ"])
+        self.assertEqual([m["text"] for m in call("/api/history").json["history"]], ["вопрос", "ответ"])
+        self.assertEqual(coach.chat_history(U, 40, now + datetime.timedelta(minutes=1)), [])  # 30 мин после последнего — пусто
+        with mock.patch.object(ai, "claude", return_value="Да.") as c:  # пишет через 29 мин — история сохраняется
+            r = call("/api/ask", {"text": "а завтра?"})
+        self.assertIn("Тренер: ответ", c.call_args[0][0])
+        self.assertNotIn("старый", c.call_args[0][0])
+        self.assertEqual([m["text"] for m in r.json["history"]], ["вопрос", "ответ", "а завтра?", "Да."])
+        self.db.x("UPDATE messages SET created=? WHERE user=?", ((now - datetime.timedelta(minutes=31)).isoformat(), U))
+        self.assertEqual(call("/api/history").json["history"], [])  # через 30 мин тишины — начальный экран
+        with mock.patch.object(ai, "claude", return_value="Привет.") as c:
+            r = call("/api/ask", {"text": "новый вопрос"})
+        self.assertNotIn("НЕДАВНИЙ РАЗГОВОР", c.call_args[0][0])  # старое в контекст не идёт
+        self.assertIn("восстановление: 82%", c.call_args[0][0])  # данные и память — остаются
+        self.assertEqual([m["text"] for m in r.json["history"]], ["новый вопрос", "Привет."])
+        self.assertEqual(len(self.db.history(U, 200)), 8)  # в базе ничего не стёрто
+
     def test_ask_keeps_history(self):
         with mock.patch.object(ai, "claude", return_value="**Да**, но без спарринга.") as c:
             r = call("/api/ask", {"text": "Можно спарринг?"})

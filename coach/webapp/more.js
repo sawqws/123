@@ -71,7 +71,10 @@
     h += group('Тренер',
       row({ a: 'more-edit', ic: I.sun, col: 'var(--rec-yellow)', title: 'Утренний разбор', meta: d.morning === 'off' ? 'выключен — включи в профиле' : 'план на день после сна', end: `<b class="num">${morning}</b>` })
       + row({ a: 'skin', ic: I.spark, title: 'Вид', meta: 'чёрно-белый iOS или прежний «как WHOOP»', end: `<span>${document.documentElement.classList.contains('wh') ? 'WHOOP' : 'Ч/Б'}</span>` })
-      + row({ a: 'tochat', ic: I.chat, title: 'Режим', meta: d.mode === 'chat' ? 'режим чата уже включён' : 'всё кнопками в чате', end: `<span>${d.mode === 'chat' ? 'чат' : 'приложение'}</span>` }));
+      + row({ a: 'tochat', ic: I.chat, title: 'Режим', meta: d.mode === 'chat' ? 'режим чата уже включён' : 'всё кнопками в чате', end: `<span>${d.mode === 'chat' ? 'чат' : 'приложение'}</span>` })
+      // сайт в браузере: «На экран „Домой“» — строкой здесь, а не всплывающей плашкой (Глеб 03.11: ничего не всплывает само)
+      + (document.body.classList.contains('site') && !document.body.classList.contains('standalone')
+        ? row({ a: 'home-hint', ic: F.I.plus, title: 'На экран «Домой»', meta: 'Форма как приложение, без Telegram' }) : ''));
     const synced = d.synced ? new Date(d.synced).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     h += group('WHOOP',
       row({ tag: 'div', ic: I.band, col: d.connected ? 'var(--teal)' : 'var(--hint)', title: d.connected ? 'Подключён' : 'Не подключён',
@@ -86,6 +89,12 @@
     return h;
   }
   F.screens.more = moreScreen;
+  F.actions['home-hint'] = () => {
+    const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    F.haptic('tap');
+    F.sheet(`<h2>На экран «Домой»</h2><div class="card prose"><p>${ios ? 'Нажми «Поделиться» внизу Safari → «На экран „Домой“».'
+      : 'Меню браузера (⋮) → «Установить приложение» или «Добавить на главный экран».'}</p><p>Форма откроется значком, как приложение, без Telegram.</p></div>`);
+  };
   // аватар в шапке — экран «Ещё»; «Заполнить профиль» в Питании и др. — сразу лист профиля
   F.actions.profile = el => el.classList.contains('avatar') || el.classList.contains('mepill') ? F.openScreen('more') : F.profileSheet();
   F.actions.skin = () => {  // вид: ч/б iOS 26 (по умолчанию, mono.css) ⇄ прежний «как WHOOP» (whoop.css)
@@ -184,6 +193,12 @@
     const it = (k, v, col) => `<span class="co-ctx-i"><i style="background:${col}"></i>${k}<b class="num">${v}</b></span>`;
     return `<div class="co-ctx">${it('Восст.', r ? r.score + '%' : '—', r ? F.C[r.zone] : 'var(--hint)')}${it('Сон', s ? hm(s.hours) : '—', 'var(--sleep)')}${it('Нагрузка', c.strain != null ? num(c.strain, 1) : '—', 'var(--strain)')}</div>`;
   }
+  // Чат тренера (Глеб 03.11): шапка и поле стоят, прокручиваются только сообщения (.co-scroll); подсказки — по кнопке 💡,
+  // сами не всплывают; после 30 мин тишины — новый разговор (сервер: coach.CHAT_IDLE, chat_history).
+  const IDLE = 30 * 60 * 1000;
+  const who = `<div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>`;
+  const note = '<p class="co-note">Тренер не врач: при боли, травме, сыпи или плохом самочувствии — к врачу и скажи родителям.</p>';
+  I.bulb = sv('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2v.5h5v-.5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>');
   function coachView() {
     const S = F.S, t = S.data.today, hist = S.history;
     const name = ((S.data.user && S.data.user.name) || '').trim().split(/\s+/)[0];
@@ -191,30 +206,86 @@
     // вид WHOOP: вместо большого заголовка — строка «Ф Тренер · бета» и «новый разговор» справа (как WHOOP Coach)
     h += `<div class="co-top"><span class="co-beta"><i>Ф</i>Тренер · бета</span>${hist && hist.length ? `<button class="co-new" data-a="clear" aria-label="Новый разговор">${I.edit}</button>` : ''}</div>`;
     h += F.slots.coachTop.map(fn => { try { return fn(t) || ''; } catch (e) { console.error('coachTop', e); return ''; } }).join('');
-    if (!hist && S.historyErr) return h + F.retryCard('Разговор не загрузился', 'history-retry');
-    if (!hist) return h + '<div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div>';
+    if (!hist && S.historyErr) return h + `<div class="co-scroll">${F.retryCard('Разговор не загрузился', 'history-retry')}</div>`;
+    if (!hist) return h + '<div class="co-scroll"><div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div></div>';
     const ps = prompts(t), empty = !hist.length && !S.asking;
+    h += '<div class="co-scroll" role="log">';
     if (empty) {
-      // как WHOOP Coach: значок «бета», первое сообщение тренера текстом; готовые вопросы — капсулами над полем
-      h += `<div class="chat co-chat rise"><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>
+      // начальный экран как у WHOOP Coach: первое сообщение тренера и готовые вопросы пузырями
+      h += `<div class="chat co-chat rise">${who}
         <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Спрашивай о чём угодно: спорт, сон, еда, кожа, учёба, настроение. Я вижу твой сон, восстановление, нагрузку, еду, режим, привычки и уход.${context(t)}</div>
         <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
-      hist.forEach(m => {
-        h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
-          : `<div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them prose">${F.md(m.text)}</div>`;
-      });
-      if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them${S.askLive ? ' prose' : ''}">${S.askLive ? F.md(S.askLive) : '<span class="dots"><i></i><i></i><i></i></span>'}</div>`;
+      hist.forEach(m => { h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `${who}<div class="msg them prose">${F.md(m.text)}</div>`; });
+      if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div>${who}<div class="msg them${S.askLive ? ' prose' : ''}">${S.askLive ? F.md(S.askLive) : '<span class="dots"><i></i><i></i><i></i></span>'}</div>`;
       h += '</div>';
     }
-    const wh = document.documentElement.classList.contains('wh');  // в виде WHOOP подсказки всегда капсулами над полем
-    h += `<div class="composer">${empty && !wh ? '' : `<div class="chips">${ps.map(p => `<button class="chip" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div>`}
+    h += note + '</div>';
+    // подсказки над полем — только по нажатию 💡 (Глеб 03.11: «не всплывать на пол экрана»); на пустом экране они и так в чате
+    const tips = !empty && S.coTips;
+    h += `<div class="composer">${tips ? `<div class="chips co-tips">${ps.map(p => `<button class="chip" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div>` : ''}
       <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${F.I.cam}</button>
-      <textarea id="q" rows="1" placeholder="Спроси о чём угодно">${esc(S.qDraft || '')}</textarea>
-      <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div>
-      <p class="co-note">Тренер не врач: при боли, травме, сыпи или плохом самочувствии — к врачу и скажи родителям.</p></div>`;
+      ${empty ? '' : `<button class="send alt co-tip${tips ? ' on' : ''}" data-a="co-tips" aria-label="Подсказки" aria-pressed="${tips ? 'true' : 'false'}">${I.bulb}</button>`}
+      <textarea id="q" rows="1" placeholder="${empty ? 'Спроси о чём угодно' : 'Сообщение'}">${esc(S.qDraft || '')}</textarea>
+      <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div></div>`;
     return h;
   }
   F.views.coach = coachView;
+  F.actions['co-tips'] = () => { F.haptic('select'); F.S.coTips = !F.S.coTips; F.render(false); };
+
+  // ---------- своя прокрутка сообщений ----------
+  const S = F.S, root = document.documentElement, vv = window.visualViewport;
+  const coBox = () => document.querySelector('body.tab-coach .co-scroll');
+  const toEnd = sc => { if (sc) sc.scrollTop = sc.scrollHeight; };
+  S.coBottom = true;
+  // пользователь внизу — новые сообщения и ответ потоком докручиваются; прокрутил вверх читать — не дёргаем
+  document.addEventListener('scroll', e => {
+    const sc = e.target;
+    if (sc && sc.classList && sc.classList.contains('co-scroll')) S.coBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48;
+  }, { capture: true, passive: true });
+  // область меняет высоту (клавиатура, подсказки, поле в несколько строк) — кто был внизу, остаётся внизу
+  const ro = window.ResizeObserver ? new ResizeObserver(() => { if (S.coBottom) toEnd(coBox()); }) : null;
+  let seen = null;
+  // поле ввода — над меню Формы, а с клавиатурой iOS — прямо над ней (visualViewport): страница целиком не едет
+  let maxH = 0, maxW = 0;
+  function fit() {
+    const coach = document.body.classList.contains('tab-coach');
+    const w = window.innerWidth, vh = vv ? vv.height : window.innerHeight, top = vv ? Math.max(0, vv.offsetTop) : 0;
+    if (w !== maxW) { maxW = w; maxH = 0; }
+    maxH = Math.max(maxH, window.innerHeight, vh);
+    const typing = document.activeElement && document.activeElement.id === 'q';
+    const kb = coach && typing && vh < maxH - 120;
+    document.body.classList.toggle('kb', kb);
+    root.style.setProperty('--vv-h', Math.round(vh) + 'px');
+    root.style.setProperty('--vv-top', Math.round(top) + 'px');
+    const bar = document.querySelector('.tabbar');
+    let pad = 16;  // широкий экран: меню слева, внизу только поле
+    if (bar && !F.wide() && !kb) { const r = bar.getBoundingClientRect(); pad = Math.max(16, Math.round(window.innerHeight - r.top) + 8); }
+    root.style.setProperty('--co-pad', (kb ? 8 : pad) + 'px');
+  }
+  F.coLayout = force => {
+    fit();
+    const sc = coBox();
+    if (!sc) { seen = null; return; }
+    if (sc !== seen) { if (ro) { ro.disconnect(); ro.observe(sc); } seen = sc; S.coBottom = true; toEnd(sc); return; }  // открыли вкладку — последние сообщения
+    if (force || S.coBottom) { S.coBottom = true; toEnd(sc); }
+  };
+  if (vv) { vv.addEventListener('resize', () => F.coLayout()); vv.addEventListener('scroll', fit); }
+  addEventListener('resize', () => F.coLayout());
+  document.addEventListener('focusin', e => { if (e.target.id === 'q') setTimeout(() => F.coLayout(), 60); });
+  document.addEventListener('focusout', e => { if (e.target.id === 'q') setTimeout(() => F.coLayout(), 60); });
+
+  // 30 минут тишины — при открытии вкладки чистый лист (сервер отдаёт то же: /api/history — только текущий разговор)
+  F.coFresh = () => {
+    const h = S.history;
+    if (!h || !h.length || S.asking) return false;
+    const at = Date.parse(h[h.length - 1].created || '');
+    if (!at || Date.now() - at < IDLE) return false;
+    S.history = []; S.coTips = false;
+    return true;
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && S.tab === 'coach' && !S.screen && F.coFresh()) F.render(false);
+  });
 });

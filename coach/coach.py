@@ -403,6 +403,28 @@ def profile(uid):
     return db.user(uid)["profile"]
 
 
+CHAT_IDLE = 30 * 60  # сек: столько тишины — и разговор с тренером начинается заново (Глеб 03.11: «каждые 30 минут очищался чат»)
+
+
+def chat_history(uid, n=12, now=None):
+    """Текущий разговор с тренером: последние n сообщений, но только без паузы ≥ CHAT_IDLE между ними и до сейчас.
+    После паузы — пусто: в приложении начальный экран, в контекст Claude старое не идёт (профиль, цели и данные — остаются,
+    они в context()). Старые сообщения в базе остаются (последние 200, store.say) — «📄 Полностью» берёт db.history."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    out, nxt = [], now
+    for m in reversed(db.history(uid, n)):
+        try:
+            t = datetime.datetime.fromisoformat(m["created"])
+            t = t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+        except (TypeError, ValueError):
+            break
+        if (nxt - t).total_seconds() >= CHAT_IDLE:
+            break
+        out.append(m)
+        nxt = t
+    return out[::-1]
+
+
 def context(uid, day=None):
     day = day or today_of(uid)
     text, t = insights.text_context(db, uid, day, profile(uid), whoop.body(db, uid))
@@ -1417,7 +1439,7 @@ def answer(chat, uid, question, photo=None):
     try:
         typing(chat)
         ctx, _ = context(uid)
-        hist = db.history(uid)
+        hist = chat_history(uid)
         try:
             out = ai.claude(ai.chat_prompt(ctx, hist, question), image=photo)
         except ai.AIError as e:
@@ -2111,7 +2133,7 @@ class Web(BaseHTTPRequestHandler):
         if not q:
             return self.reply(400, {"error": "пустой вопрос"})
         ctx, _ = context(uid)
-        prompt = ai.chat_prompt(ctx, db.history(uid), q, full=True)
+        prompt = ai.chat_prompt(ctx, chat_history(uid), q, full=True)
         self.send_response(200)
         for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
             self.send_header(k, v)
@@ -2136,7 +2158,7 @@ class Web(BaseHTTPRequestHandler):
                 raise ai.AIError("Тренер не ответил")
             db.say(uid, "user", q)
             db.say(uid, "coach", full)
-            ev({"done": True, "text": full, "history": db.history(uid, 40)})
+            ev({"done": True, "text": full, "history": chat_history(uid, 40)})
         except ai.AIError as e:
             ev({"error": str(e)})
         except (BrokenPipeError, ConnectionResetError):  # закрыл приложение — ответ не сохраняем наполовину
@@ -2422,10 +2444,10 @@ def photo_api(uid, b):
     ctx, _ = context(uid)
     u = db.user(uid)
     if b.get("mode") == "ask":
-        out = ai.claude(ai.chat_prompt(ctx, db.history(uid), text or PHOTO_ASK, full=True), image=path)
+        out = ai.claude(ai.chat_prompt(ctx, chat_history(uid), text or PHOTO_ASK, full=True), image=path)
         db.say(uid, "user", f"📷 {text}" if text else "📷 Фото")
         db.say(uid, "coach", out)
-        return {"answer": out, "history": db.history(uid, 40)}
+        return {"answer": out, "history": chat_history(uid, 40)}
     est = ai.meal(ctx, text, image=path)
     if est.get("food") is False:
         raise ValueError(first_sentence(est.get("comment") or "не похоже на еду", 140)
@@ -2789,14 +2811,14 @@ def route(uid, path, b):
         if not q:
             raise ValueError("пустой вопрос")
         ctx, _ = context(uid)
-        out = ai.ask(ctx, db.history(uid), q, full=True)  # в приложении — полный ответ, в чате бота — коротко
+        out = ai.ask(ctx, chat_history(uid), q, full=True)  # в приложении — полный ответ, в чате бота — коротко
         db.say(uid, "user", q)
         db.say(uid, "coach", out)
-        return {"answer": out, "history": db.history(uid, 40)}
+        return {"answer": out, "history": chat_history(uid, 40)}
     if path == "/api/photo":
         return photo_api(uid, b)
     if path == "/api/history":
-        return {"history": db.history(uid, 40)}
+        return {"history": chat_history(uid, 40)}
     if path == "/api/history/clear":
         db.clear_history(uid)
         return {"history": []}
