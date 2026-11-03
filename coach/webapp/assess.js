@@ -10,10 +10,9 @@
     next: F.svgi('<path d="M9 5l7 7-7 7"/>'),
   };
   // цвета состояний (наш расчёт на сервере: f_assess.py)
-  const STATE_C = { optimal: 'var(--teal)', over: 'var(--rec-red)', restore: 'var(--rec-blue)' };
   const SLEEP_C = { good: 'var(--teal)', ok: 'var(--rec-yellow)', bad: 'var(--food)' };
   const ZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)'];
-  const M = { as: {}, err: {}, loading: {}, cal: {}, calErr: null, calMonth: null };
+  const M = { as: {}, err: {}, loading: {}, cal: {}, calErr: null, calMonth: null, more: {} };
   const zc = z => F.C[z] || 'rgba(255,255,255,.14)';
   const dl = s => { const d = F.parseDay(s); return `${d.getDate()} ${F.MON_S[d.getMonth()]}`; };
 
@@ -85,22 +84,6 @@
   // столбики и полосы растут через transform, когда карточка уже на экране (без рывков; reduced-motion — сразу)
   const grow = () => requestAnimationFrame(() => requestAnimationFrame(() =>
     document.querySelectorAll('.as-anim:not(.as-go)').forEach(el => el.classList.add('as-go'))));
-  // «×1,05» из текста сервера — понятнее процентами: «105%»
-  const ratioPct = t => String(t || '').replace(/×(\d+),(\d+)/g, (m, a, b) => `${Math.round(parseFloat(`${a}.${b}`) * 100)}%`);
-
-  // «Нагрузка: мало, норма или много?» — шкала и где эта неделя (нагрузка недели к обычной за 4 недели)
-  function stateCard(s) {
-    const col = STATE_C[s.key] || 'var(--hint)';
-    const lo = .5, hi = 1.6, p = r => Math.max(0, Math.min(100, (r - lo) / (hi - lo) * 100));
-    const mp = s.ratio != null ? p(s.ratio) : 0;
-    const mark = s.ratio != null ? `<span class="as-mark${mp < 18 ? ' l' : mp > 82 ? ' r' : ''}" style="left:${mp.toFixed(1)}%"><b class="num">ты здесь · ${Math.round(s.ratio * 100)}%</b></span>` : '';
-    const seg = (w, cls, t) => `<span class="as-gs ${cls}" style="flex:${w.toFixed(1)}"><i></i><em>${t}</em></span>`;
-    return `<section class="card rise">${F.cap('Нагрузка: мало, норма или много?')}<div class="as-word" style="color:${col}">${esc(s.word)}</div>
-      ${s.ratio != null ? `<div class="as-gauge" role="img" aria-label="Нагрузка недели — ${Math.round(s.ratio * 100)}% от обычной: ${esc(s.word)}">
-        ${seg(p(.8), 'lo', 'мало')}${seg(p(1.3) - p(.8), 'ok', 'норма')}${seg(100 - p(1.3), 'hi', 'много')}${mark}</div>` : ''}
-      <p class="small">${esc(ratioPct(s.text))}</p>
-      <p class="as-note">Как считаем: нагрузка за 7 дней против твоей обычной за 4 недели (100% — как обычно) и восстановление.</p></section>`;
-  }
   function sleepCard(s) {
     const col = SLEEP_C[s.key] || 'var(--hint)';
     if (!s.sleep) return `<section class="card rise">${F.cap('Как ты спишь')}<div class="as-word" style="color:${col}">${esc(s.word)}</div><p class="small muted">${esc(s.text)}</p></section>`;
@@ -227,25 +210,83 @@
       <div class="chart-box">${F.line(a.days, key, 'var(--rec-blue)', avg)}</div></section>`;
   }
 
+  // ---------- главное: понятная оценка (Глеб 03.11: «раздел оценок вообще непонятный») ----------
+  // Все тексты — готовые строки с сервера (f_assess.story): итог одной фразой, оценка 1–5 точками, 3–5 строк «что было»
+  // со сравнением словами, лучший и самый тяжёлый день, советы, кружки дней. Цифры и графики — под «Подробнее».
+  const gdots = (n, cls = '') => `<span class="as-g${cls}" role="img" aria-label="${n} из 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</span>`;
+  const ARW = { up: '▲', down: '▼' };
+  const cmpLine = c => !c ? '' : `<span class="as-rc${c.good === true ? ' good' : c.good === false ? ' bad' : ''}">${ARW[c.dir] ? `<i aria-hidden="true">${ARW[c.dir]}</i>` : ''}${esc(c.text)}</span>`;
+  const LV = ['нет данных', 'мало сил', 'средне', 'много сил'];
+  const circle = (lv, extra = '') => `<i class="as-o l${lv}"${extra}></i>`;
+  const circlesKey = () => `<p class="as-key">${[3, 2, 1, 0].map(l => `<span>${circle(l)}${LV[l]}</span>`).join('')}</p>`;
+  function heroCard(a, s) {
+    return `<section class="card rise as-hero"><div class="as-hg"><h2 class="as-hl">${esc(s.title || s.headline)}</h2>${gdots(s.grade.score)}</div>
+      ${s.summary ? `<p class="as-hs">${esc(s.summary)}</p>` : ''}
+      ${s.partial || s.no_prev ? `<p class="as-note">${esc([s.partial, s.no_prev].filter(Boolean).join(' '))}</p>` : ''}</section>`;
+  }
+  function rowsCard(a, s) {
+    return `<section class="card rise as-what">${F.cap(a.period === 'week' ? 'Что было за неделю' : 'Что было за месяц')}
+      ${s.rows.map(r => `<div class="as-row"><span class="as-rn">${esc(r.name)}</span><b class="as-rv">${esc(r.value)}</b>
+        <span class="as-rs">${esc(r.sub)}</span>${cmpLine(r.cmp)}</div>`).join('')}</section>`;
+  }
+  function daysRow(s, isWeek) {
+    const btn = r => `<button class="as-cell" data-a="as-goto" data-v="${r.day}" aria-label="${dl(r.day)}: ${LV[r.level]}">
+      ${isWeek ? `<span class="as-cw">${esc(r.wd)}</span>` : ''}${circle(r.level)}<span class="as-cn num">${r.date}</span></button>`;
+    if (isWeek) return `<div class="as-wrow">${s.days.map(btn).join('')}</div>`;
+    const off = s.days.length ? (F.parseDay(s.days[0].day).getDay() + 6) % 7 : 0;
+    return `<div class="as-mgrid">${['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'].map(w => `<span class="as-cw">${w}</span>`).join('')}
+      ${'<span></span>'.repeat(off)}${s.days.map(btn).join('')}</div>`;
+  }
+  function daysCard2(a, s) {
+    return `<section class="card rise as-cal2">${F.cap(a.period === 'week' ? 'Дни недели' : 'Дни месяца', 'сколько было сил')}
+      ${daysRow(s, a.period === 'week')}${circlesKey()}<p class="as-note">Чем полнее кружок, тем больше сил было утром. Нажми на день — откроется его сводка.</p></section>`;
+  }
+  function daysTopCard(s) {
+    const item = (k, d, word) => d ? `<div class="as-top"><span class="as-tk">${k}</span><b class="as-tt">${esc(d.title)}${word ? ` · ${esc(word)}` : ''}</b><p class="as-tw">${esc(d.why)}</p></div>` : '';
+    if (!s.best && !s.hard) return '';
+    return `<section class="card rise as-tops">${item('Лучший день', s.best, s.best && s.best.word)}${item('Самый тяжёлый день', s.hard)}</section>`;
+  }
+  function tipsCard(a, s) {
+    if (!s.tips || !s.tips.length) return '';
+    return `<section class="card rise as-next">${F.cap(a.period === 'week' ? 'На следующую неделю' : 'На следующий месяц')}
+      <ol class="as-tl">${s.tips.map(x => `<li>${esc(x)}</li>`).join('')}</ol></section>`;
+  }
+  function weeksCard(a) {
+    if (!Array.isArray(a.weeks) || !a.weeks.length) return '';
+    return `<section class="card rise as-weeks">${F.cap('По неделям')}
+      ${a.weeks.map(w => `<div class="as-wkr"><div class="as-wkh"><b>${esc(w.label)}</b>${w.score ? `<span class="as-wkg">${esc(w.word)}${gdots(w.score, ' sm')}</span>` : `<span class="as-wkg muted">${esc(w.word)}</span>`}</div>
+        <p class="as-wkl">${esc(w.line)}</p></div>`).join('')}</section>`;
+  }
+
   // ---------- экраны ----------
   F.screens.assess = (t, d, arg) => {
     const per = arg === 'month' ? 'month' : 'week';
     const a = M.as[per];
     if (!a && !M.loading[per] && !M.err[per]) loadAs(per);
     let h = F.dHead(per === 'week' ? 'Оценка недели' : 'Оценка месяца',
-      a ? `${a.label} · сравнение с ${a.prev_label}` : (per === 'week' ? 'последние 7 полных дней' : 'последние 30 полных дней'), 'var(--teal)');
+      a ? a.label : (per === 'week' ? 'последние 7 дней' : 'последние 30 дней'), 'var(--teal)');
     h += `<div class="seg as-seg" role="tablist">${[['week', 'Неделя'], ['month', 'Месяц']].map(([v, l]) => `<button class="${per === v ? 'on' : ''}" data-a="as-per" data-v="${v}" role="tab">${l}</button>`).join('')}</div>`;
     if (!a && M.err[per]) return h + F.retryCard('Оценка не загрузилась', 'as-retry');
     if (!a) return h + [1, 2, 3].map(() => `<section class="card">${F.skel(3)}</section>`).join('');
-    if (!a.enough) return h + `<div class="empty"><span class="e">${IC.cal}</span><b>Мало данных</b>Нужно хотя бы 3 дня с браслетом за этот период — тогда соберу оценку.</div>`;
-    const tips = `<button class="btn primary as-tips" data-a="summary" data-v="${per}">Советы тренера</button>`;
-    if (per === 'week') {
-      h += stateCard(a.state) + sleepCard(a.sleep) + daysCard(a) + weekdayCard(a) + zonesCard(a) + compareCard(a) + tips;
-    } else {
-      h += recCard(a) + sleepCard(a.sleep) + weeksSleepCard(a) + zonesCard(a) + weekdayCard(a)
+    const s = a.story || {};
+    if (!s.enough) {
+      const any = (s.days || []).some(r => r.level);
+      return h + `<section class="card rise as-hero"><div class="empty"><span class="e">${IC.cal}</span><b>Мало данных</b>${esc(s.empty || 'Нужно больше дней с браслетом.')}</div></section>`
+        + (any ? daysCard2(a, s) : '');
+    }
+    h += heroCard(a, s) + rowsCard(a, s) + daysTopCard(s) + tipsCard(a, s) + (per === 'month' ? weeksCard(a) : '') + daysCard2(a, s);
+    const open = !!M.more[per];
+    h += `<button class="btn tonal as-more${open ? ' on' : ''}" data-a="as-more" aria-expanded="${open}">${open ? 'Скрыть подробности' : 'Подробнее: все цифры и графики'}<i aria-hidden="true">${IC.next}</i></button>`;
+    if (open) {
+      const tips = `<button class="btn primary as-tips" data-a="summary" data-v="${per}">Советы тренера</button>`;
+      if (per === 'week') {
+        h += compareCard(a) + sleepCard(a.sleep) + daysCard(a) + weekdayCard(a) + zonesCard(a) + tips;
+      } else {
+        h += compareCard(a) + recCard(a) + sleepCard(a.sleep) + weeksSleepCard(a) + zonesCard(a) + weekdayCard(a)
         + trendCard(a, 'hrv', 'Запас сил', 'мс', true, 'Чем выше, тем лучше отдохнула нервная система.')
         + trendCard(a, 'rhr', 'Пульс покоя', 'уд/мин', false, 'Чем ниже, тем легче сердцу.')
-        + compareCard(a) + tips;
+        + tips;
+      }
     }
     grow();
     return h;
@@ -281,6 +322,12 @@
   // ---------- действия ----------
   F.actions['as-open'] = (el, v) => { F.haptic('tap'); F.openScreen(v === 'calendar' ? 'calendar' : 'assess', v); };
   F.actions['as-per'] = (el, v) => { if (F.S.screenArg === v) return; F.haptic('select'); F.S.screenArg = v; F.render(false); };
+  // «Подробнее»: раскрыть / свернуть цифры и графики; при раскрытии — плавно прокрутить к ним
+  F.actions['as-more'] = () => {
+    const per = F.S.screenArg === 'month' ? 'month' : 'week', open = !M.more[per];
+    M.more[per] = open; F.haptic('tap'); F.render(false);
+    if (open) requestAnimationFrame(() => { const b = document.querySelector('.as-more'); if (b && b.scrollIntoView) b.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); });
+  };
   F.actions['as-retry'] = () => { const per = F.S.screenArg === 'month' ? 'month' : 'week'; M.err[per] = null; loadAs(per); F.render(false); };
   F.actions['as-cal'] = (el, v) => { if (!v) return; F.haptic('select'); loadCal(v); F.render(false); };
   F.actions['as-cal-retry'] = () => { M.calErr = null; F.render(false); };
@@ -291,8 +338,9 @@
   // ---------- входы: «Здоровье» и «＋» ----------
   F.slots.healthAfterMonitor.push(() => {
     const w = (((F.S.data || {}).ext || {}).assess || {}).week;
-    const dots = w && w.zones ? `<span class="as-dots">${w.zones.map(z => `<i style="background:${zc(z)}"></i>`).join('')}</span>` : '';
-    const st = w && w.enough ? `<b style="color:${STATE_C[w.state.key] || 'var(--hint)'}">${esc(w.state.word)}</b><small>сон: ${esc((w.sleep.word || '').toLowerCase())}</small>` : '<b class="muted">Неделя</b><small>за 7 полных дней</small>';
+    const g = w && w.enough && w.grade;
+    const dots = g ? gdots(g.score, ' sm') : '';
+    const st = g ? `<b>${esc(g.word)}</b><small>${esc(w.summary || w.headline || '')}</small>` : `<b class="muted">${w ? 'Мало данных' : 'Неделя'}</b><small>${w ? 'нужно хотя бы 4 дня с браслетом' : 'последние 7 дней'}</small>`;
     return `<div class="sec rise">${F.cap('Оценки')}<div class="as-entries">
       <button class="tile as-entry" data-a="as-open" data-v="week"><span class="as-ei">${IC.week}</span><span class="tile-k">Оценка недели${w ? `<br><span class="as-el">${esc(w.label)}</span>` : ''}</span><span class="as-ev">${st}</span>${dots}</button>
       <button class="tile as-entry" data-a="as-open" data-v="month"><span class="as-ei">${IC.month}</span><span class="tile-k">Оценка месяца</span><span class="as-ev"><b>30 дней</b><small>сон, пульс, запас сил — против прошлых 30 дней</small></span></button>

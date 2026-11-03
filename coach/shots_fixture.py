@@ -221,6 +221,14 @@ def seed_trends(db, back=200):
             db.put(T.U, kind, T.whoop.rid(kind, r), day, r.get("start") or r.get("created_at") or "", r)
 
 
+def seed_water(db, today):
+    """Вода прошлых дней (для строки «Питание и вода» в оценке недели): нейтральный пример, сегодня не трогаем."""
+    for i, ml in enumerate([1600, 1400, 1900, 1500, 1750, 1300, 1650, 1200, 1500, 1350, 1600, 1250, 1400, 1300], 1):
+        day = (today - datetime.timedelta(days=i)).isoformat()
+        db.add_water(T.U, day, "12:00", ml // 2)
+        db.add_water(T.U, day, "18:00", ml - ml // 2)
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
     seed_trends(db)
@@ -236,6 +244,7 @@ def build(shots=None):
         seed_skin(today)
         seed_reviews(today)
         seed_weight(today)
+        seed_water(db, today)
         allp = coach.route(T.U, "/api/all", {})
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]
@@ -284,6 +293,7 @@ def build(shots=None):
         api["/api/weight/text"] = {"item": {**item, "day": today.isoformat(), "src": "text"}, "found": list(item), "skipped": [], "how": "parser"}
         api["/api/weight/save"] = {**api["/api/weight"], "saved": api["/api/weight"]["last"]}
         api["/api/weight/delete"] = api["/api/weight"]
+        api["/api/assess?period=month"] = coach.route(T.U, "/api/assess", {"period": "month"})  # --serve: оценка месяца
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
@@ -372,7 +382,7 @@ def serve(port, stub=False):
             u = urllib.parse.urlparse(self.path)
             path = u.path
             if path.startswith("/api/"):
-                return self.send(200, api.get(path, {}))
+                return self.send(200, api.get(f"{path}?{u.query}", api.get(path, {})))
             if path in ("/kcal/", "/kcal/index.html") and stub:
                 return self.send(200, KCAL_STUB, "text/html; charset=utf-8")
             if path == "/kcal" or path.startswith("/kcal/"):
