@@ -219,9 +219,44 @@ def rid(kind, r):
     return str(r.get("cycle_id") if kind == "recovery" else r.get("id"))
 
 
+VANISH_MARGIN = datetime.timedelta(minutes=10)  # у края окна выборки WHOOP может не отдать запись — её не трогаем
+
+
+def drop_vanished(db, uid, start, got):
+    """Тренировки, которых WHOOP больше не отдаёт за окно выборки (с start), удалили или заменили в WHOOP —
+    убираем и у нас (разбор по ней уберёт coach.refresh_reviews). got — id, которые WHOOP отдал. -> [id]."""
+    t0 = _parse(start) + VANISH_MARGIN
+    since = (t0 - datetime.timedelta(days=1)).date().isoformat()
+    out = []
+    for r in db.q("SELECT id, start FROM records WHERE user=? AND kind='workout' AND day>=?", (uid, since)):
+        try:
+            t = _parse(r["start"])
+        except ValueError:
+            continue
+        if t and t > t0 and r["id"] not in got and db.drop_record(uid, "workout", r["id"]):
+            out.append(r["id"])
+    return out
+
+
+def drop_deleted(db, uid, typ, wid):
+    """Вебхук WHOOP «workout.deleted» / «sleep.deleted» / «recovery.deleted» (id — тренировки или сна; у
+    восстановления — id сна): убрать запись у нас. -> удалена ли."""
+    kind, wid = str(typ or "").split(".")[0], str(wid or "")
+    if not wid or not str(typ or "").endswith(".deleted"):
+        return False
+    if kind in ("workout", "sleep"):
+        return db.drop_record(uid, kind, wid)
+    if kind == "recovery":
+        since = (datetime.date.today() - datetime.timedelta(days=14)).isoformat()
+        for r in db.records(uid, "recovery", since):
+            if str(r.get("sleep_id")) == wid:
+                return db.drop_record(uid, "recovery", rid("recovery", r))
+    return False
+
+
 def sync(db, uid, client_id, secret, days=3):
     """Подтягивает записи за последние days дней. Возвращает новые оценённые записи [(kind, запись)] —
-    по ним бот присылает разбор утра и тренировки."""
+    по ним бот присылает разбор утра и тренировки. Тренировки, пропавшие из выборки, удаляет (drop_vanished)."""
     cl = Client(db, uid, client_id, secret)
     start = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)) \
         .isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -229,15 +264,19 @@ def sync(db, uid, client_id, secret, days=3):
            - datetime.timedelta(days=days + 2)).isoformat())} for k in PATHS}
     fresh = []
     cycles = {str(c.get("id")): c for c in db.records(uid, "cycle")[-90:]}
+    got = set()
     for kind in ("cycle", "sleep", "workout", "recovery"):
         for r in cl.collection(kind, start):
             if kind == "cycle":
                 cycles[str(r.get("id"))] = r
             day = day_of(kind, r, cycles)
             key = rid(kind, r)
+            if kind == "workout":
+                got.add(key)
             db.put(uid, kind, key, day, r.get("start") or r.get("created_at") or "", r)
             if r.get("score_state") == "SCORED" and old[kind].get(key) != "SCORED":
                 fresh.append((kind, dict(r, _day=day)))
+    drop_vanished(db, uid, start, got)
     if days > 7 or not db.meta(f"body:{uid}") or time.time() - float(db.meta(f"body_at:{uid}") or 0) > 86400:
         try:
             body = cl.get("/v2/user/measurement/body") or {}

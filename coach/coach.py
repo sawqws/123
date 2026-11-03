@@ -530,7 +530,7 @@ def webhook_sync(uid):
         return
     try:
         time.sleep(3)
-        sync_user(uid, days=2, quiet=True)
+        sync_user(uid, days=2, notify=False)  # не quiet: иначе тренировка «уже оценена» и разбора по ней не будет
     except Exception as e:  # WHOOP недоступен — догонит обычная синхронизация
         print("webhook sync:", uid, e)
     finally:
@@ -546,6 +546,10 @@ def sync_user(uid, days=3, quiet=False, notify=True):
         if notify:
             send(uid, err("WHOOP отключился — вход истёк. Подключи заново: /connect"))
         return []
+    try:  # поменяли в WHOOP вид спорта, время, удалили тренировку, пересчитали сон — разборы следом (тихо)
+        refresh_reviews(uid)
+    except Exception:
+        traceback.print_exc()
     if not quiet:
         react(uid, fresh)
     return fresh
@@ -690,27 +694,38 @@ def morning_brief(uid, chat=None, force=False):
         if not t["has_data"]:
             send(chat, err("Данных WHOOP пока нет — подключи браслет: /connect"))
             return True
-        note = ""
-        try:
-            md = ai.morning(text)
-            full = ai.to_html(md)
-            body, _ = short(md, 2, 260)
-        except ai.AIError as e:
-            full = body = rule_brief(t)
-            md = f_reviews.html_md(full)
-            note = f"Claude недоступен: {esc(e)}"
-        db.brief(uid, t["day"], "morning", full)
-        # целиком — в ленте «Разборы за сегодня» (цифры, разбор, режим и привычки); в чат — цифры и 2 строки
-        tail = [f_reviews.html_md(x) for x in (regime_brief(uid, t), habits_brief(uid, t)) if x]
-        rid_ = f_reviews.add(db, uid, t["day"], "morning", morning_title(t), "\n\n".join(
-            x for x in (facts_md(t), md, "\n".join("- " + re.sub(r"^[^\w«(]+", "", ln) for x in tail for ln in x.splitlines())) if x), now_hm(uid))
-        send(chat, box("☀️", "Доброе утро", [headline(t), body], note=note, expand=False),
-             kb([app_button(uid, "📱 Открыть", f"review-{rid_}", style="primary"), btn("💬 Спросить", "q|")]))
+        rid_, msg, buttons = morning_review(uid, text, t)
+        res = send(chat, msg, buttons)
+        if chat == uid:  # данные пересчитаются — это сообщение тихо поправим (refresh_reviews)
+            f_reviews.set_msg(db, rid_, mid_of(res))
         if t["recovery"]:  # разбор с данными за сегодня уже был — расписание второй не пришлёт
             db.once(f"morning:{uid}:{t['day']}")
         return True
     finally:
         busy.discard(uid)
+
+
+def morning_review(uid, text, t, at=None):
+    """Утренний разбор в ленту (тот же день — на том же месте) -> (id разбора, сообщение в чат, кнопки).
+    at — время в ленте (пересоздание оставляет прежнее)."""
+    note = ""
+    try:
+        md = ai.morning(text)
+        full = ai.to_html(md)
+        body, _ = short(md, 2, 260)
+    except ai.AIError as e:
+        full = body = rule_brief(t)
+        md = f_reviews.html_md(full)
+        note = f"Claude недоступен: {esc(e)}"
+    db.brief(uid, t["day"], "morning", full)
+    # целиком — в ленте «Разборы за сегодня» (цифры, разбор, режим и привычки); в чат — цифры и 2 строки
+    tail = [f_reviews.html_md(x) for x in (regime_brief(uid, t), habits_brief(uid, t)) if x]
+    src = f_reviews.morning_src(t) if t.get("recovery") or t.get("sleep") else None
+    rid_ = f_reviews.add(db, uid, t["day"], "morning", morning_title(t), "\n\n".join(
+        x for x in (facts_md(t), md, "\n".join("- " + re.sub(r"^[^\w«(]+", "", ln) for x in tail for ln in x.splitlines())) if x),
+        at or now_hm(uid), src=src)
+    return rid_, box("☀️", "Доброе утро", [headline(t), body], note=note, expand=False), \
+        kb([app_button(uid, "📱 Открыть", f"review-{rid_}", style="primary"), btn("💬 Спросить", "q|")])
 
 
 def app_mod():
@@ -946,6 +961,13 @@ def sport_icon(sport):
 def workout_note(uid, w):
     """Разбор тренировки — как только WHOOP её посчитал: в чат цифры и 2 строки, целиком — в ленту приложения."""
     typing(uid)
+    rid_, msg, buttons = workout_review(uid, w)
+    f_reviews.set_msg(db, rid_, mid_of(send(uid, msg, buttons)))
+
+
+def workout_review(uid, w, at=None):
+    """Разбор тренировки в ленту (та же тренировка — на том же месте) -> (id разбора, сообщение в чат, кнопки).
+    at — время в ленте (пересоздание оставляет прежнее)."""
     text, t = context(uid)
     try:
         md = ai.after_workout(text, w)
@@ -962,11 +984,123 @@ def workout_note(uid, w):
         f"пульс {w['avg_hr']}/{w['max_hr']}" if w.get("avg_hr") else "", f"{w['kcal']} ккал" if w.get("kcal") else "",
         f"тяжёлых минут (зоны 4–5) {hard}" if hard else "") if x)
     title = w["sport"] + (f" · {w['minutes']} мин" if w.get("minutes") else "")
-    rid_ = f_reviews.add(db, uid, t["day"], "workout", title, facts + "\n\n" + md, now_hm(uid), ref=w.get("id") or "")
+    rid_ = f_reviews.add(db, uid, t["day"], "workout", title, facts + "\n\n" + md, at or now_hm(uid),
+                         ref=w.get("id") or "", src=f_reviews.workout_src(w))
     stats = f"Нагрузка <b>{fmt(w['strain'])}</b> · пульс {w['avg_hr'] or '—'}/{w['max_hr'] or '—'}" \
         + (f" · {w['kcal']} ккал" if w.get("kcal") else "")
-    send(uid, box(sport_icon(w["sport"]), esc(title), [stats, body], expand=False),
-         with_app(uid, [], "📱 Открыть", f"review-{rid_}"))
+    return rid_, box(sport_icon(w["sport"]), esc(title), [stats, body], expand=False), \
+        with_app(uid, [], "📱 Открыть", f"review-{rid_}")
+
+
+# ---------- данные поменялись — пересоздать разбор ----------
+# Глеб 03.11: «я изменяю (вид спорта, время), а разбор уже сделан и не меняется». После каждой синхронизации
+# (и вебхука «удалено») сравниваем данные под разборами с нынешними: заметно поменялись — пересоздаём на том же
+# месте тихо (новое сообщение не шлём, прежнее правим, если его id есть); тренировку удалили или она не
+# тренировка — разбор убираем. Вечерний итог не трогаем. Claude — в фоне, один разбор не пересоздаётся дважды разом.
+_redoing = set()
+_redo_lock = threading.Lock()
+
+
+def refresh_reviews(uid):
+    """Разборы за сегодня (тренировки — и за вчера, только убрать) против нынешних данных WHOOP.
+    -> [(вид, id разбора, «redo»|«drop»)]."""
+    today = user_now(db.user(uid)).date()
+    out = []
+    for day in (today - datetime.timedelta(days=1), today):
+        ds = day.isoformat()
+        for rv in f_reviews.rows(db, uid, ds, "workout"):
+            rec, moved = db.record(uid, "workout", rv["ref"]) if rv["ref"] else None, False
+            if rec is None:  # удалили в WHOOP; создали заново (другой id, то же время) — разбор переходит к новой
+                rec = workout_successor(uid, ds, rv)
+                moved = bool(rec)
+                if moved:
+                    f_reviews.retarget(db, rv["id"], rec["id"])
+            if rec is not None and rec.get("score_state") != "SCORED":
+                continue  # WHOOP пересчитывает — дождёмся оценки
+            w = insights.workout_of(rec) if rec is not None and rec.get("_day") == ds else None
+            if not w or not f_reviews.workout_ok(w):
+                f_reviews.remove(db, uid, rv["id"])
+                out.append(("workout", rv["id"], "drop"))
+                continue
+            src = f_reviews.workout_src(w)
+            if rv["src"] is None and not moved:  # разбор старше этой проверки — нынешние данные считаем исходными
+                f_reviews.set_src(db, rv["id"], src)
+            elif day == today and (moved or f_reviews.workout_changed(rv["src"], src)) \
+                    and redo(("workout", rv["id"]), workout_redo, uid, rv, w):
+                out.append(("workout", rv["id"], "redo"))
+    ds = today.isoformat()
+    for rv in f_reviews.rows(db, uid, ds, "morning"):
+        now_src = f_reviews.morning_src(insights.by_day(db, uid, ds, ds).get(ds))
+        if rv["src"] and f_reviews.morning_changed(rv["src"], now_src) and redo(("morning", rv["id"]), morning_redo, uid, rv):
+            out.append(("morning", rv["id"], "redo"))
+    return out
+
+
+def workout_successor(uid, day, rv):
+    """Новая тренировка вместо удалённой (WHOOP может пересоздать её при правке): тот же день, пересекается
+    по времени с прежней, оценена, без своего разбора. Её место занимаем (react второй разбор не пришлёт)."""
+    old = rv.get("src") or {}
+    if not old.get("start") or not old.get("minutes"):
+        return None
+
+    def span(start, minutes):
+        h, m = (int(x) for x in start.split(":"))
+        return h * 60 + m, h * 60 + m + minutes
+    a0, a1 = span(old["start"], old["minutes"])
+    taken = {r["ref"] for r in f_reviews.rows(db, uid, day, "workout")}
+    for rec in db.records(uid, "workout", day, day):
+        w = insights.workout_of(rec)
+        if str(rec.get("id")) in taken or rec.get("score_state") != "SCORED" or not w.get("start") or not w.get("minutes"):
+            continue
+        b0, b1 = span(w["start"], w["minutes"])
+        if a0 < b1 and b0 < a1 and f_reviews.workout_ok(w) and db.once(f"workout:{rec.get('id')}"):
+            return rec
+    return None
+
+
+def redo(key, fn, *args):
+    """Пересоздать разбор в фоне — если этот же уже не пересоздаётся. -> запущено ли."""
+    with _redo_lock:
+        if key in _redoing:
+            return False
+        _redoing.add(key)
+
+    def run():
+        try:
+            fn(*args)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            with _redo_lock:
+                _redoing.discard(key)
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+def quiet_edit(uid, msg, text, buttons):
+    """Тихо поправить прежнее сообщение с разбором (правка в Telegram без уведомления); нет id — ничего не шлём."""
+    if not msg:
+        return
+    try:
+        edit(uid, msg, text, buttons)
+    except Exception as e:  # сообщение старше 48 ч, удалено или текст тот же — лента всё равно обновлена
+        print("review edit:", uid, e)
+
+
+def workout_redo(uid, rv, w):
+    _, msg, buttons = workout_review(uid, w, at=rv["at"])
+    quiet_edit(uid, rv["msg"], msg, buttons)
+
+
+def morning_redo(uid, rv):
+    if not take(uid):
+        return  # тренер сейчас отвечает или утро ещё собирается — пересоздадим со следующей синхронизацией
+    try:
+        text, t = context(uid)
+        _, msg, buttons = morning_review(uid, text, t, at=rv["at"])
+        quiet_edit(uid, rv["msg"], msg, buttons)
+    finally:
+        busy.discard(uid)
 
 
 def day_facts(uid, t, day):
@@ -2102,6 +2236,9 @@ class Web(BaseHTTPRequestHandler):
             db.meta(f"wh:{trace}", int(time.time()))
         uid = next((r["user"] for r in db.q("SELECT user FROM tokens WHERE whoop_id=?", (wid,))), None)
         if uid and allowed(uid):
+            # удалили в WHOOP — убрать запись и разбор по ней сразу (загрузка ниже могла бы и не пройти)
+            if whoop.drop_deleted(db, uid, ev.get("type"), ev.get("id")):
+                bg(refresh_reviews, uid)
             threading.Thread(target=webhook_sync, args=(uid,), daemon=True).start()
 
     def ask_stream(self, uid, body):

@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS kcal_days (user INTEGER NOT NULL, day TEXT NOT NULL, 
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS reviews (id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL,
   ref TEXT NOT NULL DEFAULT '', at TEXT, title TEXT, text TEXT, seen INTEGER NOT NULL DEFAULT 0, created TEXT,
-  UNIQUE (user, day, kind, ref));
+  msg INTEGER, src TEXT, UNIQUE (user, day, kind, ref));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS records_day ON records (user, kind, day);
 CREATE INDEX IF NOT EXISTS meals_day ON meals (user, day);
@@ -95,7 +95,15 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self):
+        """Новые столбцы в старой базе: reviews.msg (id сообщения в Telegram), reviews.src (по каким данным разбор)."""
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(reviews)")}
+        for col, typ in (("msg", "INTEGER"), ("src", "TEXT")):
+            if col not in have:
+                self.db.execute(f"ALTER TABLE reviews ADD COLUMN {col} {typ}")
 
     def q(self, sql, args=()):
         with self.lock:
@@ -197,6 +205,15 @@ class Store:
     def put(self, uid, kind, rid, day, start, data):
         self.x("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?,?)",
                (uid, kind, str(rid), day, start, json.dumps(data, ensure_ascii=False)))
+
+    def record(self, uid, kind, rid):
+        """Одна запись WHOOP (с _day) или None."""
+        r = self.q("SELECT day, data FROM records WHERE user=? AND kind=? AND id=?", (uid, kind, str(rid)))
+        return dict(json.loads(r[0]["data"]), _day=r[0]["day"]) if r else None
+
+    def drop_record(self, uid, kind, rid):
+        """Удалить запись (её удалили в WHOOP). -> удалена ли."""
+        return self.x("DELETE FROM records WHERE user=? AND kind=? AND id=?", (uid, kind, str(rid))).rowcount > 0
 
     def records(self, uid, kind, since=None, until=None):
         sql, args = "SELECT day, data FROM records WHERE user=? AND kind=?", [uid, kind]
