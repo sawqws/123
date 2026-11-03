@@ -282,6 +282,20 @@ class RestSportTest(unittest.TestCase):
         self.assertFalse(f_reviews.workout_ok({**mas, "strain": 6.0}))
 
 
+class MealSaltTest(unittest.TestCase):
+    """Глеб 03.11: «чтобы соль считалась» — соль у еды Формы (и записанной чатом) идёт в итог дня вместе с «Калориями»."""
+    def test_salt_sum_and_clamp(self):
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "s.db"))
+        db.save_meal(U, {"title": "Макароны", "kcal": 900, "salt": "3,4", "day": "2026-11-03"})
+        db.save_meal(U, {"title": "Опечатка", "kcal": 10, "salt": 900, "day": "2026-11-03"})
+        db.save_meal(U, {"title": "Без соли", "kcal": 100, "day": "2026-11-03"})
+        meals = db.meals(U, "2026-11-03")
+        self.assertEqual(sorted(m["salt"] for m in meals), [0, 3.4, 50.0])
+        kc = {"eaten": {"kcal": 100, "protein": 1, "fat": 1, "carbs": 1, "salt": 1.2}, "items": [{}]}
+        self.assertEqual(insights.eaten(meals[:1], kc)["salt"], 4.6)
+        self.assertEqual(insights.eaten(meals[:1])["salt"], 3.4)
+
+
 class SummaryTest(unittest.TestCase):
     """Сводка за день / неделю / месяц / всё время: цифры, с чем сравниваем, советы Claude (подменён) с кэшем."""
 

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE TABLE IF NOT EXISTS meals (
   id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, time TEXT DEFAULT '',
   title TEXT NOT NULL, kcal REAL DEFAULT 0, protein REAL DEFAULT 0, fat REAL DEFAULT 0, carbs REAL DEFAULT 0,
-  note TEXT DEFAULT '', created TEXT
+  note TEXT DEFAULT '', created TEXT, salt REAL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY, user INTEGER NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, created TEXT
@@ -59,7 +59,7 @@ PROFILE_FIELDS = {
 GOALS = ("form", "mass", "dry", "weight")  # форма, набор мышц, рельеф, держать вес к соревнованиям
 MORNING_DEFAULT = "07:00"  # утренний разбор: не раньше этого времени; "off" — не присылать
 MAX_GOALS = 10
-MEAL_FIELDS = ("title", "kcal", "protein", "fat", "carbs", "note", "time", "day")
+MEAL_FIELDS = ("title", "kcal", "protein", "fat", "carbs", "salt", "note", "time", "day")
 
 
 def now_iso():
@@ -100,13 +100,15 @@ class Store:
 
     def _migrate(self):
         """Новые столбцы в старой базе: reviews.msg (id сообщения в Telegram), reviews.src (по каким данным разбор),
-        messages.thread (нить разговора: '' — общий чат, 'skin' — «Спросить» в разделе «Кожа»)."""
+        messages.thread (нить разговора: '' — общий чат, 'skin' — «Спросить» в разделе «Кожа»), meals.salt (соль, г — Глеб 03.11)."""
         have = {r[1] for r in self.db.execute("PRAGMA table_info(reviews)")}
         for col, typ in (("msg", "INTEGER"), ("src", "TEXT")):
             if col not in have:
                 self.db.execute(f"ALTER TABLE reviews ADD COLUMN {col} {typ}")
         if "thread" not in {r[1] for r in self.db.execute("PRAGMA table_info(messages)")}:
             self.db.execute("ALTER TABLE messages ADD COLUMN thread TEXT NOT NULL DEFAULT ''")
+        if "salt" not in {r[1] for r in self.db.execute("PRAGMA table_info(meals)")}:
+            self.db.execute("ALTER TABLE meals ADD COLUMN salt REAL DEFAULT 0")
 
     def q(self, sql, args=()):
         with self.lock:
@@ -247,6 +249,8 @@ class Store:
         for k in ("kcal", "protein", "fat", "carbs"):
             if k in vals:
                 vals[k] = max(0.0, min(float(str(vals[k]).replace(",", ".") or 0), 10000.0))
+        if "salt" in vals:  # соль, г: 0–50 (больше — опечатка)
+            vals["salt"] = round(max(0.0, min(float(str(vals["salt"]).replace(",", ".") or 0), 50.0)), 1)
         if "title" in vals:
             vals["title"] = str(vals["title"]).strip()[:120]
         mid = data.get("id")
