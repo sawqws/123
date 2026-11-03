@@ -423,11 +423,26 @@ STREAK_MAX = 3650  # якорь серии из приложения WHOOP: 0–
 
 
 def wear_days(db, uid, day):
-    """Дни (ISO) до day включительно, когда браслет был на руке ночью: есть сон или восстановление. Только цикл
-    (cycle) или цикл с тренировкой не считается — цикл WHOOP заводит и в дни, когда браслет ночью не носили."""
-    rows = db.q("SELECT DISTINCT day FROM records WHERE user=? AND kind IN ('sleep','recovery') AND day<=?",
-                (uid, day.isoformat()))
-    return {r["day"] for r in rows}
+    """Дни (ISO) до day включительно, когда браслет носили: день покрыт циклом WHOOP. Цикл идёт от пробуждения
+    до пробуждения и бывает длиннее суток — покрыты все календарные дни от его начала до конца по местному
+    времени цикла (timezone_offset); цикл без конца (идёт сейчас) — до day. Так серия совпадает со «стриком»
+    в приложении WHOOP (сверено на живых данных 03.11: ~726 дней)."""
+    out = set()
+    for r in db.q("SELECT data FROM records WHERE user=? AND kind='cycle'", (uid,)):
+        try:
+            c = json.loads(r["data"])
+            off = c.get("timezone_offset") or "+03:00"
+            t0 = whoop._local(c.get("start"), off)
+            t1 = whoop._local(c.get("end"), off) if c.get("end") else None
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if not t0:
+            continue
+        d, last = t0.date(), min(t1.date(), day) if t1 else day
+        while d <= last:
+            out.add(d.isoformat())
+            d += datetime.timedelta(days=1)
+    return out
 
 
 def streak_anchor(db, uid):
@@ -454,11 +469,12 @@ def set_streak_anchor(db, uid, day, n):
 
 
 def wear_streak(db, uid, day):
-    """Сколько дней подряд браслет на руке ночью (есть сон или восстановление — wear_days) по всей истории,
-    как «Streak» в WHOOP. Сегодня WHOOP мог ещё не прислать — серия не рвётся (и не прибавляется).
+    """Сколько дней подряд браслет на руке (день покрыт циклом — wear_days) по всей истории, как «Streak» в WHOOP.
+    Сегодня WHOOP мог ещё не прислать — серия не рвётся (и не прибавляется).
     Якорь (streak_anchor: число из приложения WHOOP на его день) — если после него разрывов не было, серия =
     его число + засчитанные дни после него; был разрыв — считаем по правилу с конца.
-    Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням); 03.11: дни только с циклом давали ~395 дней.
+    Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням); 03.11: по дню начала цикла выходило ~395 дней —
+    длинный цикл (больше суток) оставлял день без «своего» цикла, хотя браслет носили.
     -> {n, since, anchored}."""
     days = wear_days(db, uid, day)
     a = streak_anchor(db, uid)

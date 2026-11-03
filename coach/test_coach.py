@@ -500,28 +500,43 @@ class BotTest(unittest.TestCase):
         empty = store.Store(os.path.join(tempfile.mkdtemp(), "e.db"))
         self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None, "anchored": False})
 
-    def drop_night(self, d):
-        """День d: браслет ночью не носили — сна и восстановления нет, цикл (и тренировка) остаются, как у WHOOP."""
-        self.db.x("DELETE FROM records WHERE user=? AND kind IN ('sleep','recovery') AND day=?", (U, d.isoformat()))
+    @staticmethod
+    def cycles(spans, off="+03:00"):
+        """Пустая база с циклами WHOOP: spans — [(начало, конец или None)] по UTC «ГГГГ-ММ-ДДTЧЧ:ММ»."""
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "w.db"))
+        for i, (a, b) in enumerate(spans):
+            r = {"id": i, "start": a + ":00.000Z", "end": b + ":00.000Z" if b else None, "timezone_offset": off}
+            db.put(U, "cycle", i, a[:10], r["start"], r)
+        return db
 
-    def test_wear_streak_cycle_only_day_breaks(self):
-        d3 = TODAY - datetime.timedelta(days=3)
-        self.assertTrue(self.db.records(U, "cycle", d3, d3))  # цикл за этот день есть
-        self.drop_night(d3)
-        self.assertEqual(insights.wear_streak(self.db, U, TODAY),
-                         {"n": 3, "since": (TODAY - datetime.timedelta(days=2)).isoformat(), "anchored": False})
-        self.drop_night(TODAY)  # сегодня WHOOP ещё не прислал сон — серия не рвётся
-        self.assertEqual(insights.wear_streak(self.db, U, TODAY)["n"], 2)
+    def test_wear_streak_long_cycle_and_gap(self):
+        # 07.10 07:00 → 09.10 08:00 (больше суток: у 08.10 «своего» цикла нет, но браслет на руке) → 11.10 сейчас
+        db = self.cycles([("2026-10-04T04:00", "2026-10-05T04:00"),  # 04–05.10, дальше 06.10 без цикла — пропуск
+                          ("2026-10-07T04:00", "2026-10-09T05:00"), ("2026-10-09T05:00", "2026-10-10T04:30"),
+                          ("2026-10-10T04:30", None)])
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 5, "since": "2026-10-07", "anchored": False})
+        db = self.cycles([("2026-10-07T04:00", "2026-10-09T05:00")])  # сегодня и вчера не покрыты — серии нет
+        self.assertEqual(insights.wear_streak(db, U, TODAY)["n"], 0)
+        db = self.cycles([("2026-10-07T04:00", "2026-10-10T05:00")])  # сегодня ещё пусто — со вчера
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 4, "since": "2026-10-07", "anchored": False})
+
+    def test_wear_streak_timezone(self):
+        # 22:30 UTC 08.10 — у него (+03:00) уже 01:30 09.10: 08.10 не покрыт
+        span = [("2026-10-08T22:30", "2026-10-10T20:00")]
+        self.assertEqual(insights.wear_streak(self.cycles(span), U, TODAY), {"n": 2, "since": "2026-10-09",
+                                                                             "anchored": False})
+        self.assertEqual(insights.wear_streak(self.cycles(span, "-05:00"), U, TODAY), {"n": 3, "since": "2026-10-08", "anchored": False})
 
     def test_wear_streak_anchor(self):
-        d2 = TODAY - datetime.timedelta(days=2)
-        self.db.meta(f"streak:anchor:{U}", json.dumps({"day": d2.isoformat(), "n": 100}))
-        st = insights.wear_streak(self.db, U, TODAY)  # якорь + вчера + сегодня
-        self.assertEqual(st, {"n": 102, "since": (TODAY - datetime.timedelta(days=101)).isoformat(), "anchored": True})
-        self.drop_night(TODAY)  # сегодня ещё пусто — не рвёт и не прибавляет
-        self.assertEqual(insights.wear_streak(self.db, U, TODAY)["n"], 101)
-        self.drop_night(TODAY - datetime.timedelta(days=1))  # разрыв после якоря — по правилу с конца
-        self.assertEqual(insights.wear_streak(self.db, U, TODAY), {"n": 0, "since": None, "anchored": False})
+        db = self.cycles([("2026-10-01T04:00", "2026-10-10T04:00")])  # 01–10.10, сегодня ещё пусто
+        db.meta(f"streak:anchor:{U}", json.dumps({"day": "2026-10-08", "n": 100}))
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 102, "since": "2026-07-01", "anchored": True})
+        db.put(U, "cycle", "now", "2026-10-11", "2026-10-10T04:00:00.000Z",
+               {"id": "now", "start": "2026-10-10T04:00:00.000Z", "end": None, "timezone_offset": "+03:00"})
+        self.assertEqual(insights.wear_streak(db, U, TODAY)["n"], 103)  # и сегодня покрыт
+        db = self.cycles([("2026-10-01T04:00", "2026-10-08T04:00"), ("2026-10-10T04:00", None)])  # 09.10 пропуск
+        db.meta(f"streak:anchor:{U}", json.dumps({"day": "2026-10-07", "n": 100}))
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 2, "since": "2026-10-10", "anchored": False})
 
     def test_streak_api(self):
         r = call("/api/streak", {"n": 50})
