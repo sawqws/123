@@ -37,14 +37,14 @@ class Pairing(unittest.TestCase):
         base = datetime.date(2026, 9, 1)
         for i in range(1, 7):
             d = base + D(days=i)
-            ans[d.isoformat()] = {"caffeine": i % 2 == 1}
+            ans[d.isoformat()] = {"screen": i % 2 == 1}
             rec[d.isoformat()] = 90 if i % 2 == 1 else 40          # тот же день — не должен учитываться
             rec[(d + D(days=1)).isoformat()] = None                 # перезапишем ниже
         for i in range(1, 7):
             nxt = (base + D(days=i + 1)).isoformat()
             rec[nxt] = 40 if i % 2 == 1 else 80                      # наутро: после «да» 40, после «нет» 80
         rec = {k: v for k, v in rec.items() if v is not None}
-        out = {x["key"]: x for x in J.impact(ans, rec)}["caffeine"]
+        out = {x["key"]: x for x in J.impact(ans, rec)}["screen"]
         self.assertEqual((out["yes"], out["no"]), (3, 3))
         self.assertTrue(out["enough"])
         self.assertEqual(out["yes_avg"], 40)
@@ -91,7 +91,7 @@ class Api(unittest.TestCase):
         self.assertEqual(r["selected"], J.DEFAULT)
         self.assertTrue(6 <= len(J.DEFAULT) <= 8)
         self.assertEqual(len(r["habits"]), len(J.HABITS))
-        self.assertGreaterEqual(len(J.HABITS), 17)
+        self.assertGreaterEqual(len(J.HABITS), 12)  # без еды, воды и кофеина (03.11)
         self.assertEqual(r["answers"], {})
         self.assertEqual(r["ext"]["pending"], len(J.DEFAULT))
         # нельзя про сегодня и раньше 30 дней
@@ -106,10 +106,10 @@ class Api(unittest.TestCase):
         y = (T.TODAY - D(days=1)).isoformat()
         r = call("/api/journal/answer", {"day": y, "key": "bed23", "value": True})
         self.assertEqual(r["answers"], {"bed23": True})
-        r = call("/api/journal/answer", {"day": y, "key": "caffeine", "value": False})
-        self.assertEqual(r["answers"], {"bed23": True, "caffeine": False})
+        r = call("/api/journal/answer", {"day": y, "key": "screen", "value": False})
+        self.assertEqual(r["answers"], {"bed23": True, "screen": False})
         self.assertEqual(r["ext"]["answered"], 2)
-        r = call("/api/journal/answer", {"day": y, "key": "caffeine", "value": None})
+        r = call("/api/journal/answer", {"day": y, "key": "screen", "value": None})
         self.assertEqual(r["answers"], {"bed23": True})
         allp = call("/api/all")
         self.assertEqual(allp["ext"]["journal"]["pending"], len(J.DEFAULT) - 1)
@@ -152,11 +152,15 @@ class Api(unittest.TestCase):
         lines = J.context_lines(coach, T.U, T.TODAY)
         self.assertIn("болел — да", lines[0])
 
-    def test_hints_from_real_data(self):
-        y = T.TODAY - D(days=1)
-        self.db.add_water(T.U, y.isoformat(), "10:00", 1800)
-        h = call("/api/journal")["hints"]
-        self.assertEqual(h.get("water2"), "по учёту воды: 1,8 л")
+    def test_no_food_water_caffeine(self):
+        """Глеб 03.11: еду и воду он ведёт в «Калориях», кофеин не пьёт — в дневнике их нет."""
+        r = call("/api/journal")
+        self.assertNotIn("food", [g["key"] for g in r["groups"]])
+        for k in ("caffeine", "late_meal", "sweets", "water2", "protein", "breakfast"):
+            self.assertNotIn(k, J.BY_KEY)
+            self.assertNotIn(k, r["selected"])
+        with self.assertRaises(ValueError):
+            call("/api/journal/answer", {"day": (T.TODAY - D(days=1)).isoformat(), "key": "caffeine", "value": True})
 
 
 if __name__ == "__main__":
