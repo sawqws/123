@@ -223,6 +223,12 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
         how = "по сегодняшним тратам WHOOP"
     goal = goal_code(profile.get("goal"))
     teen = bool(age and age < 18)
+    # подросток растёт: траты WHOOP часто занижены (браслет не всё время на руке, вес в профиле WHOOP мог быть меньше),
+    # поэтому не ниже формулы Миффлина — Сан Жеора × 1,6 + ~6 ккал за минуту тренировки (Глеб 03.11: Форма показывала 1960)
+    if teen and h:
+        floor = (10 * w + 6.25 * h - 5 * age + (-161 if profile.get("sex") == "f" else 5)) * 1.6 + train_minutes * 6
+        if floor > spend:
+            spend, how = floor, "по росту, весу и возрасту (траты WHOOP ниже — для роста мало)"
     k = {"form": 1.0, "weight": 1.0, "mass": 1.1, "dry": 0.95 if teen else 0.88}[goal]
     kcal = round(spend * k / 10) * 10
     protein = round(w * {"form": 1.6, "weight": 1.7, "mass": 1.8, "dry": 1.8 if teen else 2.0}[goal])
