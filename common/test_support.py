@@ -163,6 +163,28 @@ class SupportTest(unittest.TestCase):
                 self.sup.web(OWNER, {"text": "x", "photo": "@@@"})
         self.assertEqual(len(started), 2)
 
+    def test_busy(self):
+        """Тренер в приложении спрашивает busy() перед ремонтом: своё ещё чинится — «уже чиню прошлое»,
+        чинится другой бот — встанет в очередь, свободно — None."""
+        self.assertIsNone(self.sup.busy())
+        seen = []
+        with self.fake_claude(2):
+            orig = support.claude
+
+            def run(*a, **kw):
+                seen.append(self.sup.busy())  # пока Claude работает — занято своим
+                return orig(*a, **kw)
+            with mock.patch.object(support, "claude", run):
+                self.sup.start(OWNER, "поправь кнопку")
+        self.assertEqual(seen, ["self"])
+        self.assertIsNone(self.sup.busy())  # закончил — снова свободно
+        import fcntl
+        with open(support.LOCK, "a") as f:  # блокировку держит поддержка другого бота
+            fcntl.flock(f, fcntl.LOCK_EX)
+            self.assertEqual(self.sup.busy(), "other")
+            fcntl.flock(f, fcntl.LOCK_UN)
+        self.assertIsNone(self.sup.busy())
+
     def test_cancel_button(self):
         self.sup.intercept(self.msg("/fix"))
         self.sup.intercept({"update_id": 4, "callback_query": {"id": "1", "data": "sup|no", "from": {"id": OWNER},

@@ -221,7 +221,7 @@
         <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
-      hist.forEach(m => { h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `${who}<div class="msg them prose">${F.md(m.text)}</div>`; });
+      hist.forEach(m => { h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `${who}<div class="msg them prose">${F.md(m.text)}</div>${F.actChips ? F.actChips(m) : ''}`; });
       if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div>${who}<div class="msg them${S.askLive ? ' prose' : ''}">${S.askLive ? F.md(S.askLive) : '<span class="dots"><i></i><i></i><i></i></span>'}</div>`;
       h += '</div>';
     }

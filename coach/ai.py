@@ -20,6 +20,11 @@ WORK = os.path.join(tempfile.gettempdir(), "coach-ai")
 SAFE_READ = [f"Read(//{d}/**)" for d in ("root", "etc", "home", "proc", "sys", "var", "opt", "usr", "boot", "dev", "run",
                                          "mnt", "media", "srv")]
 NO_TOOLS = ["--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent", *SAFE_READ]
+# Поиск в интернете — только чату приложения (Глеб 03.11: «найди в интернете», как в Claude Code): WebSearch и WebFetch
+# разрешены, всё остальное закрыто так же. Разборы, бот и «Калории» идут с NO_TOOLS.
+WEB_TOOLS = ["--allowedTools", "WebSearch", "WebFetch",
+             "--disallowedTools", *[t for t in NO_TOOLS[1:] if t not in ("WebFetch", "WebSearch")]]
+WEB_TIMEOUT = int(os.environ.get("COACH_WEB_TIMEOUT") or 180)  # поиск + чтение страницы — дольше обычного ответа
 
 
 def persona():
@@ -31,14 +36,15 @@ class AIError(Exception):
     pass
 
 
-def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None, label=None):
+def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None, label=None, web=False):
     """(текст ответа). image — путь к картинке, images — несколько (кадры видео): Claude откроет их инструментом Read.
-    label — своя подпись к нескольким фото (иначе — «кадры видео» или «одна еда с разных сторон»)."""
+    label — своя подпись к нескольким фото (иначе — «кадры видео» или «одна еда с разных сторон»).
+    web — можно искать в интернете (только чат приложения)."""
     os.makedirs(WORK, exist_ok=True)
     copies = []
     pics = ([image] if image else []) + list(images or [])
     try:
-        return _run(prompt, pics, copies, timeout, model, effort, label)
+        return _run(prompt, pics, copies, timeout, model, effort, label, web)
     finally:
         for c in copies:  # копии картинок нужны только на время ответа
             try:
@@ -47,7 +53,7 @@ def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None
                 pass
 
 
-def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None):
+def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None, web=False):
     tools = []
     if pics:
         for src in pics:
@@ -63,7 +69,11 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None):
         else:
             prompt += "\n\nКадры видео по порядку (открой каждый инструментом Read):\n" + "\n".join(copies)
         tools = ["--allowedTools", "Read", "--max-turns", str(3 + len(copies))]
-    cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", persona(), *tools, *NO_TOOLS,
+    deny = NO_TOOLS
+    if web and not pics:
+        deny = WEB_TOOLS
+        timeout = max(timeout, WEB_TIMEOUT)
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", persona(), *tools, *deny,
            *(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
     try:
         p = subprocess.run(cmd, cwd=WORK, capture_output=True, text=True, timeout=timeout,
@@ -88,20 +98,70 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None):
     return res["result"].strip()
 
 
-def chat_prompt(context, history, question, full=False):
+def chat_prompt(context, history, question, full=False, assist=False):
     """Вопрос тренеру — о чём угодно (спорт, сон, еда, кожа, учёба, настроение, быт). full — ответ для приложения
-    (полный, но по делу); без него — короткий для чата бота (целиком он всё равно остаётся в приложении)."""
+    (полный, но по делу); без него — короткий для чата бота (целиком он всё равно остаётся в приложении).
+    assist — чат приложения: тренер ещё и делает (ACTIONS), ищет в интернете и передаёт ошибки в ремонт."""
     talk = "\n".join(("Я: " if m["role"] == "user" else "Тренер: ") + m["text"][:1200] for m in history)
     how = ("Ответ для приложения: полный, но по делу — до ~15 строк, пункты «- …», **жирным** главное. "
            if full else "Ответ для чата: 2–5 коротких строк. ")
     return (f"ДАННЫЕ:\n{context}\n\n" + (f"НЕДАВНИЙ РАЗГОВОР:\n{talk}\n\n" if talk else "")
             + f"ВОПРОС: {question}\n\nОтветь как личный наставник по правилам из системного промпта. {how}"
             "Сначала главный вывод, потом что сделать; опирайся на ДАННЫЕ (цифры, режим, привычки, еду, уход), "
-            "когда они к месту, и не притягивай их, если вопрос о другом.")
+            "когда они к месту, и не притягивай их, если вопрос о другом." + ("\n\n" + ASSIST if assist else ""))
 
 
-def ask(context, history, question, full=False):
-    return claude(chat_prompt(context, history, question, full))
+def ask(context, history, question, full=False, assist=False):
+    return claude(chat_prompt(context, history, question, full, assist), web=assist)
+
+
+# Тренер-помощник в приложении (Глеб 03.11: «как с тобой, Claude Code: добавь, найди в интернете, если ошибка — исправь»).
+ACTION_KINDS = ("water", "meal", "weight", "habit_mark", "goal_add", "fix")
+ASSIST = """ТЫ — ПОМОЩНИК, КОТОРЫЙ ДЕЛАЕТ САМ (это чат приложения).
+Если пользователь сообщает факт или просит что-то сделать в приложении — сделай это сам действием, а не отправляй
+его «добавь в разделе…». Действия — служебной строкой в самом конце ответа (её не видно, приложение выполнит и само
+допишет «✅ Записал: …» — сам такую строку не пиши):
+ACTIONS: [{"type": "water", "ml": 400}]
+Типы (другие не пиши):
+- water {"ml": 400, "time"?: "ЧЧ:ММ"} — выпил воды. Стакан ≈ 250 мл, кружка ≈ 300, бутылка 0,5 л = 500.
+- meal {"title": "Макароны с курицей", "kcal": 650, "protein": 40, "fat": 18, "carbs": 80, "time"?: "ЧЧ:ММ"} — съел.
+  Оцени ккал и БЖУ (граммы) по обычному составу и размеру порции из его слов («большая тарелка» ≈ 400–450 г), как нутрициолог;
+  в ответе одной строкой — сколько получилось и что это значит для нормы на сегодня.
+- weight {"kg": 63.4} — взвесился.
+- habit_mark {"name": "название из ПРИВЫЧКИ И ЦЕЛИ", "done": true} или {"name": "…", "value": 5} — отметить привычку.
+- goal_add {"text": "…", "day": "today" | "tomorrow"} — цель (задача) на день.
+- fix {"text": "…"} — что-то в приложении не работает, выглядит криво, или он просит доработку приложения
+  («исправь», «не грузится», «добавь в приложение кнопку…»). В text — подробно его словами, что не так и где.
+  Ремонт делает отдельный Claude Code на сервере; в ответе — одна строка, что передал в ремонт (без обещаний сроков).
+Правила:
+- Действие — только по последнему ВОПРОСУ и только если он прямо сообщил факт («выпил», «съел», «взвесился»)
+  или попросил («отметь», «поставь цель», «исправь»). Не повторяй действия из прошлых сообщений.
+- Не понял, что или сколько (нет количества воды, непонятное блюдо, нет такой привычки) — переспроси коротко
+  и ничего не записывай. Ничего не выдумывай.
+- Тренировки WHOOP записывает сам — вручную их не добавляй (скажи, что браслет посчитает).
+- Нет действий — последней строкой ACTIONS: []
+
+ПОИСК В ИНТЕРНЕТЕ. У тебя есть WebSearch и WebFetch. Ищи, только если нужны свежие или точные факты, которых нет
+в ДАННЫХ и которые ты не знаешь наверняка: состав и цена продукта в магазине, что лучше взять в конкретном месте,
+расписание, новости спорта, правила соревнований. На обычные вопросы о сне, еде и тренировках — отвечай сразу, без поиска.
+Не пиши «сейчас поищу» — сразу ищи. В конце ответа (перед ACTIONS) — строка «Источники:» и 1–3 короткие
+ссылки вида [сайт.ру](https://…). Ссылки — только реально открытые тобой."""
+
+
+def actions_split(full):
+    """Ответ чата приложения → (текст, действия). Действия — последняя строка «ACTIONS: [...]»: только известные типы
+    (ACTION_KINDS), не больше 5; проверка полей и выполнение — в coach.run_actions."""
+    full = (full or "").strip()
+    i = full.find("ACTIONS:")  # первая: поток показывает текст до неё, всё после (второй ответ модели и т. п.) — нет
+    if i < 0:
+        return full, []
+    text, tail = full[:i].strip(), full[i + 8:].strip()
+    try:
+        raw = json.JSONDecoder().raw_decode(tail)[0]  # только сам список — хвост после него не мешает
+    except ValueError:
+        raw = []
+    acts = [a for a in (raw if isinstance(raw, list) else []) if isinstance(a, dict) and a.get("type") in ACTION_KINDS]
+    return text, acts[:5]
 
 
 def fast(prompt, timeout=120):
@@ -462,11 +522,14 @@ def kcal_chat(app_ctx, whoop_ctx, history, question):
     return {"text": text, "items": items}
 
 
-def claude_stream(prompt, model=None, timeout=120, effort=None):
-    """Ответ Claude по кусочкам (stream-json с частичными сообщениями) — генератор строк текста."""
+def claude_stream(prompt, model=None, timeout=120, effort=None, web=False, on_tool=None):
+    """Ответ Claude по кусочкам (stream-json с частичными сообщениями) — генератор строк текста.
+    web — можно искать в интернете (только чат приложения); on_tool(имя) — Claude начал искать/читать страницу."""
     os.makedirs(WORK, exist_ok=True)
+    if web:
+        timeout = max(timeout, WEB_TIMEOUT)
     cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-           "--append-system-prompt", persona(), *NO_TOOLS, *(["--model", model] if model else []),
+           "--append-system-prompt", persona(), *(WEB_TOOLS if web else NO_TOOLS), *(["--model", model] if model else []),
            *(["--effort", effort] if effort else [])]
     try:
         p = subprocess.Popen(cmd, cwd=WORK, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -474,7 +537,7 @@ def claude_stream(prompt, model=None, timeout=120, effort=None):
         raise AIError("Claude Code не установлен на сервере") from None
     killer = threading.Timer(timeout, p.kill)
     killer.start()
-    got = False
+    got, gap = False, False
     try:
         for line in p.stdout:
             try:
@@ -482,9 +545,17 @@ def claude_stream(prompt, model=None, timeout=120, effort=None):
             except ValueError:
                 continue
             ev = d.get("event") or {}
-            if d.get("type") == "stream_event" and ev.get("type") == "content_block_delta":
+            if d.get("type") == "stream_event" and ev.get("type") == "message_start":
+                gap = got  # после поиска — новый кусок ответа с новой строки, а не слитно с прошлым
+            elif d.get("type") == "stream_event" and ev.get("type") == "content_block_start":
+                blk = ev.get("content_block") or {}
+                if blk.get("type") in ("tool_use", "server_tool_use") and on_tool:
+                    on_tool(str(blk.get("name") or ""))
+            elif d.get("type") == "stream_event" and ev.get("type") == "content_block_delta":
                 t = (ev.get("delta") or {}).get("text") or ""
                 if t:
+                    if gap:
+                        t, gap = "\n\n" + t, False
                     got = True
                     yield t
             elif d.get("type") == "result" and d.get("is_error"):

@@ -345,6 +345,19 @@ document.querySelectorAll('.seg button').forEach(function(b){b.onclick=function(
 </script></body></html>"""
 
 
+_ASK_TEXT = ("**Записал.** Вода за день — 1,15 л из 2,4.\n- До ужина добери ещё 2 стакана\n"
+             "- Макароны с курицей — хороший обед перед тренировкой\n\n"
+             "✅ Записал: вода 400 мл; Макароны с курицей — 680 ккал (Б 42 · Ж 18 · У 86)")
+ASK_DEMO = [{"t": "**Записал.** Вода за день — 1,15 л из 2,4.\n"}, {"t": "- До ужина добери ещё 2 стакана\n- Макароны с курицей — хороший обед перед тренировкой"},
+            {"done": True, "text": _ASK_TEXT, "history": [
+                {"role": "user", "text": "Готов ли я к спаррингу?", "created": "2026-10-11T10:00:00"},
+                {"role": "coach", "text": "Да. Восстановление **82%**, ВСР выше нормы.\n- Разминка 15 мин", "created": "2026-10-11T10:00:05"},
+                {"role": "user", "text": "выпил 400 мл и съел макароны с курицей, большая тарелка", "created": "2026-10-11T13:40:00"},
+                {"role": "coach", "text": _ASK_TEXT, "created": "2026-10-11T13:40:06"}],
+             "actions": [{"kind": "water", "label": "вода 400 мл", "ok": True, "undo": "demo1"},
+                         {"kind": "meal", "label": "Макароны с курицей — 680 ккал", "ok": True, "undo": "demo2"}]}]
+
+
 def serve(port, stub=False):
     """Локальный сервер для проверки вида: приложение как сайт, /api/… — примеры, /kcal/ — «Калории» (или заглушка)."""
     import re
@@ -383,6 +396,12 @@ def serve(port, stub=False):
         def do_GET(self):
             u = urllib.parse.urlparse(self.path)
             path = u.path
+            if path == "/api/ask/stream":  # тренер-помощник: ответ потоком + «✅ Записал …» и чип «Отменить»
+                ev = "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in ASK_DEMO)
+                return self.send(200, ev, "text/event-stream; charset=utf-8")
+            if path == "/api/ask/undo":
+                return self.send(200, {"ok": True, "label": "вода 400 мл", "history": ASK_DEMO[-1]["history"][:-1] + [
+                    {**ASK_DEMO[-1]["history"][-1], "text": ASK_DEMO[-1]["text"] + "\n↩️ Отменил: вода 400 мл"}]})
             if path.startswith("/api/"):
                 return self.send(200, api.get(f"{path}?{u.query}", api.get(path, {})))
             if path in ("/kcal/", "/kcal/index.html") and stub:

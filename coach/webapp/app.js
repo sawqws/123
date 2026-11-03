@@ -119,7 +119,9 @@
     for (let l of lines) {
       l = l.replace(/^#{1,6}\s+(.*)$/, '**$1**').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<b>$1</b>')
         .replace(/(\d) (г|мл|мин|ккал|л|ч|мс|кг|см)(?![а-яё])/g, '$1&nbsp;$2')
-        .replace(/(\d)–(\d)/g, '$1\u2060–\u2060$2');
+        .replace(/(\d)–(\d)/g, '$1\u2060–\u2060$2')
+        // \u00ab\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438:\u00bb \u043f\u043e\u0441\u043b\u0435 \u043f\u043e\u0438\u0441\u043a\u0430 \u0442\u0440\u0435\u043d\u0435\u0440\u0430 \u2014 [\u0441\u0430\u0439\u0442](https://\u2026) \u2192 \u0441\u0441\u044b\u043b\u043a\u0430 (\u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0447\u0435\u0440\u0435\u0437 Telegram, data-a="open")
+        .replace(/\[([^\]]{1,80})\]\((https?:\/\/[^\s()]+)\)/g, '<a class="src" data-a="open" data-v="$2" role="link" tabindex="0">$1</a>');
       const li = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
       if (li) { if (!list) { out += '<ul>'; list = true; } out += `<li>${li[1]}</li>`; continue; }
       if (list) { out += '</ul>'; list = false; }
@@ -1318,7 +1320,7 @@
     if (!hist) return h + '<div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div>';
     h += '<div class="chat">';
     if (!hist.length && !S.asking) h += '<div class="empty"><span class="e">💬</span><b>Спроси что угодно</b>Про тренировки, сон, питание и восстановление — отвечу по твоим данным WHOOP. Можно приложить скрин тренировки.</div>';
-    hist.forEach(m => { h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `<div class="msg them prose">${md(m.text)}</div>`; });
+    hist.forEach(m => { h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `<div class="msg them prose">${md(m.text)}</div>${F.actChips ? F.actChips(m) : ''}`; });
     if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="msg them"><span class="dots"><i></i><i></i><i></i></span></div>`;
     h += '</div>';
     h += `<div class="composer"><div class="chips">${SUGGEST.map(s => `<button class="chip" data-a="suggest" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>
@@ -1342,7 +1344,7 @@
     if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Тренер не ответил — попробуй ещё раз'); }
     const rd = r.body.getReader(), dec = new TextDecoder();
     let buf = '', live = '', queued = false, done = null;
-    const paint = () => { queued = false; const b = [...document.querySelectorAll('.msg.them')].pop(); if (!b || S.tab !== 'coach') return;
+    const paint = () => { queued = false; if (!S.asking) return;  /* ответ уже готов и отрисован целиком (с «✅ Записал») — не затирать */ const b = [...document.querySelectorAll('.msg.them')].pop(); if (!b || S.tab !== 'coach') return;
       const sc = b.closest('.co-scroll');  // докручиваем, только если он и так внизу (S.coBottom — more.js)
       b.classList.add('prose'); b.innerHTML = md(live); if (sc && S.coBottom !== false) sc.scrollTop = sc.scrollHeight; };
     for (;;) {
@@ -1354,11 +1356,13 @@
         const line = buf.slice(0, i).replace(/^data: ?/, ''); buf = buf.slice(i + 2);
         let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
         if (ev.error) throw new Error(ev.error);
+        if (ev.s && !live) { const b = [...document.querySelectorAll('.msg.them')].pop(); if (b && S.tab === 'coach') b.innerHTML = `<span class="dots"><i></i><i></i><i></i></span> <span class="ask-note">${esc(ev.s)}</span>`; }
         if (ev.t) { live += ev.t; S.askLive = live; if (!queued) { queued = true; requestAnimationFrame(paint); } }
         if (ev.done) done = ev;
       }
     }
     if (!done) throw new Error('Ответ оборвался — попробуй ещё раз');
+    if (F.onActs) F.onActs(done);  // тренер что-то записал — чипы «Отменить» под ответом (assist.js)
     return done.history;
   }
   async function ask(q) {

@@ -2269,13 +2269,15 @@ class Web(BaseHTTPRequestHandler):
             threading.Thread(target=webhook_sync, args=(uid,), daemon=True).start()
 
     def ask_stream(self, uid, body):
-        """Вопрос тренеру потоком (text/event-stream): {"t": кусок}…, в конце {"done", "text", "history"} или {"error"}.
-        Вопрос и ответ сохраняются в историю только целиком (Глеб 02.11: «чат очень баговый» — долго ждать пустой экран)."""
+        """Вопрос тренеру потоком (text/event-stream): {"t": кусок}…, {"s": "Ищу в интернете…"} пока ищет, в конце
+        {"done", "text", "history", "actions"} или {"error"}. Вопрос и ответ сохраняются в историю только целиком
+        (Глеб 02.11: «чат очень баговый» — долго ждать пустой экран). Служебную строку «ACTIONS: […]» не показываем:
+        по ней сервер выполняет действия (assist_finish) и дописывает «✅ Записал: …»."""
         q = str(body.get("text") or "").strip()[:2000]
         if not q:
             return self.reply(400, {"error": "пустой вопрос"})
         ctx, _ = context(uid)
-        prompt = ai.chat_prompt(ctx, chat_history(uid), q, full=True)
+        prompt = ai.chat_prompt(ctx, chat_history(uid), q, full=True, assist=True)
         self.send_response(200)
         for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
             self.send_header(k, v)
@@ -2284,23 +2286,35 @@ class Web(BaseHTTPRequestHandler):
         def ev(obj):
             self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
             self.wfile.flush()
-        full = ""
+        searched = []
+
+        def on_tool(name):  # Claude пошёл в интернет — пусть видно, почему ответ дольше
+            if name in ("WebSearch", "WebFetch", "web_search", "web_fetch"):
+                if not searched:
+                    ev({"s": "Ищу в интернете…" if "earch" in name else "Читаю страницу…"})
+                searched.append(name)
+        full, sent = "", 0
         try:
             try:
-                for t in ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None):
+                for t in ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None,
+                                          web=True, on_tool=on_tool):
                     full += t
-                    ev({"t": t})
+                    cut = full.find("ACTIONS:")
+                    safe = cut if cut >= 0 else max(sent, len(full) - 8)  # хвост держим: вдруг это начало «ACTIONS:»
+                    if safe > sent:
+                        ev({"t": full[sent:safe]})
+                        sent = safe
             except ai.AIError:
                 if full:
                     raise
-                full = ai.claude(prompt)  # быстрая модель недоступна — обычная, одним куском
-                ev({"t": full})
-            full = full.strip()
-            if not full:
-                raise ai.AIError("Тренер не ответил")
-            db.say(uid, "user", q)
-            db.say(uid, "coach", full)
-            ev({"done": True, "text": full, "history": chat_history(uid, 40)})
+                full = ai.claude(prompt, web=True)  # быстрая модель недоступна — обычная, одним куском
+                searched.append("?")  # искала ли — не видно: ремонт по такому ответу не запускаем
+            end = full.find("ACTIONS:")
+            end = len(full) if end < 0 else end
+            if end > sent:  # удержанный хвост (или весь запасной ответ) — дослать без ACTIONS
+                ev({"t": full[sent:end]})
+            shown, acts = assist_finish(uid, q, full, bool(searched))
+            ev({"done": True, "text": shown, "history": chat_history(uid, 40), "actions": acts})
         except ai.AIError as e:
             ev({"error": str(e)})
         except (BrokenPipeError, ConnectionResetError):  # закрыл приложение — ответ не сохраняем наполовину
@@ -2556,6 +2570,220 @@ SYNC_RATE = (120, 3600)  # /api/kcal/sync, /forma и /state — каждому �
 KCAL_SITE = os.environ.get("KCAL_SITE") or "https://sawqws.github.io/123/kcal/"  # «Калории» в одно нажатие: + #pair=<токен>
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
+
+
+# ---------- тренер-помощник: действия из чата приложения (Глеб 03.11: «как с тобой, Claude Code») ----------
+# Модель пишет последней строкой ACTIONS: [...] (ai.ASSIST, ai.actions_split) — сервер проверяет поля и выполняет
+# через те же функции, что и экраны приложения. Вода/еда/вес/привычка/цель — с «Отменить» (UNDO), fix — в 🛠 поддержку.
+
+UNDO = {}  # токен → {"uid", "fn", "label", "msg", "until"}
+UNDO_TTL = 60  # клиент показывает «Отменить» 10 с, сервер ждёт с запасом
+_undo_lock = threading.Lock()
+# fix — только если он сам написал про ошибку или доработку (а не текст найденной в интернете страницы)
+FIX_WORDS = re.compile(r"не\s+(работа|груз|откр|сохран|показ|нажим|прокруч|видн|обновл|запис)|слома|ошибк|баг|глюч|"
+                       r"завис|крив|исправ|почин|чини|доработ|поправ|переделай|"
+                       r"добавь\b.*\b(приложени|кнопк|экран|раздел|вкладк)|сделай,?\s+чтобы", re.I)
+
+
+def _fmt(x):
+    x = round(float(x), 1)
+    return (str(int(x)) if x == int(x) else str(x)).replace(".", ",")
+
+
+def _act_num(v, lo, hi, what):
+    if isinstance(v, bool):
+        raise ValueError(f"{what}: нужно число")
+    try:
+        x = float(str(v).replace(",", ".").replace(" ", ""))
+    except (TypeError, ValueError):
+        raise ValueError(f"{what}: нужно число") from None
+    if x != x or not lo <= x <= hi:
+        raise ValueError(f"{what}: от {_fmt(lo)} до {_fmt(hi)}")
+    return x
+
+
+def _act_time(v, now):
+    m = re.fullmatch(r"([01]?\d|2[0-3])[:.]([0-5]\d)", str(v or "").strip())
+    return f"{int(m[1]):02d}:{m[2]}" if m else now.strftime("%H:%M")
+
+
+def _undo_add(uid, fn, label):
+    now = time.time()
+    tok = secrets.token_hex(8)
+    with _undo_lock:
+        for k in [k for k, v in UNDO.items() if v["until"] < now]:
+            UNDO.pop(k, None)
+        UNDO[tok] = {"uid": uid, "fn": fn, "label": label, "until": now + UNDO_TTL, "msg": None}
+    return tok
+
+
+def _find_habit(uid, a):
+    items = [h for h in f_habits.load(db, uid)["items"] if not h.get("archived")]
+    hid, name = str(a.get("id") or ""), " ".join(str(a.get("name") or "").lower().split())
+    h = next((h for h in items if hid and h["id"] == hid), None)
+    if h:
+        return h
+    if name:
+        same = [h for h in items if h["title"].lower() == name]
+        part = same or [h for h in items if name in h["title"].lower() or h["title"].lower() in name]
+        if len(part) == 1:
+            return part[0]
+        if len(part) > 1:
+            raise ValueError(f"привычек «{a.get('name')}» несколько — уточни какую")
+    raise ValueError(f"нет привычки «{a.get('name') or hid}»")
+
+
+def act(uid, a, q, searched=False):
+    """Одно действие → {"kind", "label", "ok", "undo"?}. ValueError — не прошло проверку (покажем «Не записал»)."""
+    kind, u = a.get("type"), db.user(uid)
+    now = user_now(u)
+    today = now.date()
+    if kind != "fix":  # раздел (например, будущий «Вес») может сам взять действие: assist(app, uid, a, today)
+        for m in FEATURES.values():
+            r = m.assist(sys.modules[__name__], uid, a, today) if hasattr(m, "assist") else None
+            if r:
+                fn = r.get("undo")
+                return {"kind": kind, "label": r["label"], "ok": True,
+                        **({"undo": _undo_add(uid, fn, r["label"])} if fn else {})}
+    if kind == "water":
+        ml = int(round(_act_num(a.get("ml"), 10, 5000, "вода, мл")))
+        w = db.add_water(uid, today.isoformat(), _act_time(a.get("time"), now), ml)
+        label = f"вода {_fmt(ml)} мл"
+        return {"kind": kind, "label": label, "ok": True, "undo": _undo_add(uid, lambda: db.delete_water(uid, w["id"]), label)}
+    if kind == "meal":
+        title = " ".join(str(a.get("title") or "").split())[:120]
+        if not title:
+            raise ValueError("еда: непонятно, что съел")
+        kcal = _act_num(a.get("kcal"), 1, 5000, "ккал")
+        p, f, c = (_act_num(a.get(k) or 0, 0, 500, n) for k, n in (("protein", "белки"), ("fat", "жиры"), ("carbs", "углеводы")))
+        m = db.save_meal(uid, {"title": title, "kcal": round(kcal), "protein": round(p), "fat": round(f), "carbs": round(c),
+                               "day": today.isoformat(), "time": _act_time(a.get("time"), now), "note": "записал тренер"})
+        label = f"{title} — {round(kcal)} ккал (Б {round(p)} · Ж {round(f)} · У {round(c)})"
+        return {"kind": kind, "label": label, "ok": True, "undo": _undo_add(uid, lambda: db.delete_meal(uid, m["id"]), label)}
+    if kind == "weight":  # своего раздела веса нет — вес в профиле (его видят тренер и расчёт нормы)
+        kg = round(_act_num(a.get("kg"), 25, 250, "вес, кг"), 1)
+        old = profile(uid).get("weight")
+        db.save_profile(uid, {"weight": kg})
+        label = f"вес {_fmt(kg)} кг"
+        return {"kind": kind, "label": label, "ok": True,
+                "undo": _undo_add(uid, lambda: db.save_profile(uid, {"weight": old if old is not None else ""}), label)}
+    if kind == "habit_mark":
+        h = _find_habit(uid, a)
+        prev = f_habits.day_doc(db, uid, today.isoformat())["v"].get(h["id"], 0)
+        if a.get("value") is not None:
+            f_habits.mark(db, uid, {"id": h["id"], "value": a["value"]}, today)
+        else:
+            f_habits.mark(db, uid, {"id": h["id"], "done": a.get("done") is not False}, today)
+        v = f_habits.day_doc(db, uid, today.isoformat())["v"].get(h["id"], 0)
+        label = (f"«{h['title']}» ✓" if v >= h["target"] else f"«{h['title']}»: {_fmt(v)} из {_fmt(h['target'])}" if v
+                 else f"«{h['title']}» — отметка снята")
+        return {"kind": kind, "label": label, "ok": True,
+                "undo": _undo_add(uid, lambda: f_habits.mark(db, uid, {"id": h["id"], "value": prev}, today), label)}
+    if kind == "goal_add":  # цель на день: сегодня или вперёд до недели (f_habits.goal умеет только сегодня и прошлое)
+        dv = str(a.get("day") or "today").strip().lower()
+        tomorrow = today + datetime.timedelta(days=1)
+        d = tomorrow if dv in ("tomorrow", "завтра") else today if dv in ("today", "сегодня") else None
+        if d is None:
+            try:
+                d = datetime.date.fromisoformat(dv)
+            except ValueError:
+                raise ValueError("цель: день — сегодня или завтра") from None
+            if not today <= d <= today + datetime.timedelta(days=7):
+                raise ValueError("цель: можно на сегодня и до недели вперёд")
+        text = f_habits._text(a.get("text"), "цель")
+        doc = f_habits.day_doc(db, uid, d.isoformat())
+        if len(doc["g"]) >= f_habits.MAX_GOALS:
+            raise ValueError(f"на этот день уже {f_habits.MAX_GOALS} целей")
+        gid = "g" + secrets.token_hex(4)
+        doc["g"].append({"id": gid, "text": text, "done": False})
+        f_habits.put_doc(db, uid, d.isoformat(), doc)
+
+        def undo():
+            dd = f_habits.day_doc(db, uid, d.isoformat())
+            dd["g"] = [g for g in dd["g"] if g["id"] != gid]
+            f_habits.put_doc(db, uid, d.isoformat(), dd)
+        label = f"цель на {'сегодня' if d == today else 'завтра' if d == tomorrow else d.strftime('%d.%m')}: «{text}»"
+        return {"kind": kind, "label": label, "ok": True, "undo": _undo_add(uid, undo, label)}
+    if kind == "fix":
+        return fix_action(uid, a, q, searched)
+    raise ValueError("неизвестное действие")
+
+
+def fix_action(uid, a, q, searched=False):
+    """«Исправь / не работает / доработай» → та же 🛠 поддержка, что /fix и Kit.support (SUP.web): Claude Code правит
+    код Тренера на сервере, гоняет тесты, перезапускает и сам пишет итог в Telegram (с «↩️ Откатить»)."""
+    no = {"kind": "fix", "ok": False}
+    if searched or not FIX_WORDS.search(q):  # просьбу о ремонте пишет сам пользователь, а не найденная страница
+        return {**no, "label": "🛠 В ремонт не передал — напиши прямо, что не работает или что исправить"}
+    if not SUP:
+        return {**no, "label": "🛠 Ремонт ещё запускается — напиши ещё раз через минуту"}
+    state = SUP.busy() if hasattr(SUP, "busy") else None
+    if state == "self":
+        return {**no, "label": "🛠 Уже чиню прошлое — напишу в Telegram, когда закончу. Эту просьбу пришли после"}
+    talk = "\n".join(("Глеб: " if m["role"] == "user" else "Тренер: ") + " ".join(m["text"].split())[:500]
+                     for m in db.history(uid, 10))
+    what = " ".join(str(a.get("text") or "").split())[:1500]
+    body = (f"Глеб написал в чате «Тренер» в приложении Формы: «{q[:1500]}»"
+            + (f"\n\nКак понял тренер: {what}" if what else "")
+            + (f"\n\nПоследние 10 сообщений чата Тренера (до этой просьбы):\n{talk}" if talk else ""))
+    try:
+        SUP.web(uid, {"text": body})
+    except PermissionError:
+        return {**no, "label": "🛠 Ремонт — только для владельца"}
+    return {"kind": "fix", "ok": True, "label": "🛠 Принял, чиню — напишу в Telegram, когда готово"
+            + (" (сначала Claude доделает другого бота)" if state == "other" else "")}
+
+
+def run_actions(uid, acts, q, searched=False):
+    out = []
+    for a in acts:
+        try:
+            out.append(act(uid, a, q, searched))
+        except ValueError as e:
+            out.append({"kind": a.get("type"), "label": str(e).strip("'"), "ok": False, "error": True})
+        except Exception as e:  # действие сломалось — ответ всё равно дойдёт
+            traceback.print_exc()
+            out.append({"kind": a.get("type"), "label": f"не вышло ({e.__class__.__name__})", "ok": False, "error": True})
+    return out
+
+
+def act_lines(res):
+    """Строки под ответом: «✅ Записал: вода 400 мл; …», «🛠 Принял, чиню…», «⚠️ Не записал: …»."""
+    done = [r["label"] for r in res if r["ok"] and r["kind"] != "fix"]
+    lines = ["✅ Записал: " + "; ".join(done)] if done else []
+    lines += [r["label"] for r in res if r["kind"] == "fix"]
+    lines += ["⚠️ Не записал: " + r["label"] for r in res if r.get("error")]
+    return "\n".join(lines)
+
+
+def assist_finish(uid, q, full, searched=False):
+    """Ответ модели целиком → (что показать и сохранить, действия для клиента). Строка ACTIONS в историю не попадает."""
+    text, acts = ai.actions_split(full)
+    res = run_actions(uid, acts, q, searched)
+    lines = act_lines(res)
+    shown = (text + "\n\n" + lines if text and lines else text or lines).strip()
+    if not shown:
+        raise ai.AIError("Тренер не ответил")
+    db.say(uid, "user", q)
+    db.say(uid, "coach", shown)
+    mid = db.q("SELECT MAX(id) AS id FROM messages WHERE user=? AND role='coach'", (uid,))[0]["id"]
+    with _undo_lock:
+        for r in res:
+            if r.get("undo") in UNDO:
+                UNDO[r["undo"]]["msg"] = mid
+    return shown, [{k: r[k] for k in ("kind", "label", "ok", "undo") if k in r} for r in res]
+
+
+def undo_action(uid, tok):
+    with _undo_lock:
+        rec = UNDO.get(str(tok or ""))
+        if not rec or rec["uid"] != uid or rec["until"] < time.time():
+            raise ValueError("Отменить уже нельзя")
+        UNDO.pop(str(tok))
+    rec["fn"]()
+    if rec["msg"]:
+        db.x("UPDATE messages SET text = text || ? WHERE id=? AND user=?", (f"\n↩️ Отменил: {rec['label']}", rec["msg"], uid))
+    return rec["label"]
 
 
 def decode_photo(b):
@@ -2955,10 +3183,12 @@ def route(uid, path, b):
         if not q:
             raise ValueError("пустой вопрос")
         ctx, _ = context(uid)
-        out = ai.ask(ctx, chat_history(uid), q, full=True)  # в приложении — полный ответ, в чате бота — коротко
-        db.say(uid, "user", q)
-        db.say(uid, "coach", out)
-        return {"answer": out, "history": chat_history(uid, 40)}
+        out = ai.ask(ctx, chat_history(uid), q, full=True, assist=True)  # приложение: полный ответ, действия и поиск
+        shown, acts = assist_finish(uid, q, out, searched=True)  # без потока не видно, искал ли, — ремонт только из потока
+        return {"answer": shown, "actions": acts, "history": chat_history(uid, 40)}
+    if path == "/api/ask/undo":  # «Отменить» под ответом тренера (вода, еда, вес, привычка, цель)
+        label = undo_action(uid, b.get("id"))
+        return {"ok": True, "label": label, "history": chat_history(uid, 40), "day": day_payload(uid, today)}
     if path == "/api/photo":
         return photo_api(uid, b)
     if path == "/api/history":

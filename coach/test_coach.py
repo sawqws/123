@@ -596,6 +596,208 @@ class BotTest(unittest.TestCase):
         self.assertEqual(call("/api/ask/stream", {"text": " "}).code, 400)
         self.assertEqual(call("/api/ask/stream", {"text": "а"}, init="").code, 401)
 
+    # ---------- тренер-помощник: действия, поиск, ремонт ----------
+
+    def stream(self, parts, q, tools=()):
+        """/api/ask/stream с подменённым Claude: parts — куски ответа, tools — инструменты, которые он «вызвал»."""
+        def fake(prompt, **kw):
+            for t in tools:
+                kw["on_tool"](t)
+            yield from parts
+        with mock.patch.object(ai, "claude_stream", side_effect=fake) as cs, \
+                mock.patch.object(coach, "context", return_value=("", None)):
+            r = call("/api/ask/stream", {"text": q})
+        evs = [json.loads(x[6:]) for x in r.body.decode().split("\n\n") if x.startswith("data: ")]
+        return evs, cs
+
+    def test_assist_water_and_meal_recorded_and_undone(self):
+        today = TODAY.isoformat()
+        parts = ["Записал, ", "молодец.\n- Добери ещё 1 л до вечера.\nACT", 'IONS: [{"type": "water", "ml": 400}, ',
+                 '{"type": "meal", "title": "Макароны с курицей", "kcal": 680, "protein": 42, "fat": 18, "carbs": 86}]']
+        w0, m0 = self.db.water_total(U, today), len(self.db.meals(U, today))
+        evs, cs = self.stream(parts, "выпил 400 мл и съел макароны с курицей, большая тарелка")
+        shown = "".join(e.get("t", "") for e in evs)
+        self.assertNotIn("ACTIONS", shown)  # служебная строка не показывается…
+        self.assertNotIn("IONS", shown)
+        done = evs[-1]
+        self.assertTrue(done["done"])
+        self.assertNotIn("ACTIONS", done["text"])
+        self.assertIn("✅ Записал: вода 400 мл; Макароны с курицей — 680 ккал (Б 42 · Ж 18 · У 86)", done["text"])
+        self.assertNotIn("ACTIONS", done["history"][-1]["text"])  # …и не попадает в историю
+        self.assertTrue(all("ACTIONS" not in m["text"] for m in self.db.history(U, 50)))
+        self.assertEqual(self.db.water_total(U, today), w0 + 400)
+        meals = self.db.meals(U, today)
+        self.assertEqual((len(meals), meals[-1]["title"], meals[-1]["kcal"]), (m0 + 1, "Макароны с курицей", 680))
+        self.assertTrue(cs.call_args.kwargs["web"])  # чат приложения — с поиском
+        self.assertIn("ACTIONS", cs.call_args[0][0])  # и с правилами действий в задании
+        acts = done["actions"]
+        self.assertEqual([a["kind"] for a in acts], ["water", "meal"])
+        self.assertTrue(all(a["ok"] and a["undo"] for a in acts))
+        # «Отменить»: запись удаляется, в ответе тренера — пометка
+        r = call("/api/ask/undo", {"id": acts[0]["undo"]})
+        self.assertEqual((r.code, r.json["label"]), (200, "вода 400 мл"))
+        self.assertEqual(self.db.water_total(U, today), w0)
+        self.assertIn("↩️ Отменил: вода 400 мл", r.json["history"][-1]["text"])
+        self.assertEqual(call("/api/ask/undo", {"id": acts[0]["undo"]}).code, 400)  # второй раз — нечего
+        self.assertEqual(call("/api/ask/undo", {"id": acts[1]["undo"]}, user={"id": 99}).code, 403)  # чужой не отменит
+        self.assertEqual(call("/api/ask/undo", {"id": acts[1]["undo"]}).code, 200)
+        self.assertEqual(len(self.db.meals(U, today)), m0)
+        with mock.patch.object(coach.time, "time", return_value=time.time() + coach.UNDO_TTL + 5):
+            evs, _ = self.stream(["Ок.\nACTIONS: [{\"type\": \"water\", \"ml\": 250}]"], "выпил стакан")
+            self.assertEqual(call("/api/ask/undo", {"id": evs[-1]["actions"][0]["undo"]}).code, 200)
+        evs, _ = self.stream(["Ок.\nACTIONS: [{\"type\": \"water\", \"ml\": 250}]"], "выпил стакан")
+        tok = evs[-1]["actions"][0]["undo"]
+        with mock.patch.object(coach.time, "time", return_value=time.time() + coach.UNDO_TTL + 5):
+            self.assertEqual(call("/api/ask/undo", {"id": tok}).code, 400)  # время отмены вышло
+
+    def test_assist_unknown_and_bad_actions(self):
+        text, acts = ai.actions_split('Готово.\nACTIONS: [{"type": "shell", "cmd": "rm -rf /"}, {"type": "water", "ml": 300}, 5]')
+        self.assertEqual((text, acts), ("Готово.", [{"type": "water", "ml": 300}]))
+        self.assertEqual(ai.actions_split("Просто ответ"), ("Просто ответ", []))
+        self.assertEqual(ai.actions_split("Ответ\nACTIONS: [битый"), ("Ответ", []))
+        self.assertEqual(ai.actions_split('Ответ\nACTIONS: [{"type": "water", "ml": 200}]\n\nЕщё раз ответ\nACTIONS: []'),
+                         ("Ответ", [{"type": "water", "ml": 200}]))  # модель ответила дважды — берём первое, как поток
+        self.assertEqual(len(ai.actions_split("x\nACTIONS: " + json.dumps([{"type": "water", "ml": 100}] * 9))[1]), 5)
+        w0 = self.db.water_total(U, TODAY.isoformat())
+        evs, _ = self.stream(['Сколько выпил?\nACTIONS: [{"type": "delete_all"}, {"type": "water", "ml": 99999}, '
+                              '{"type": "meal", "title": "", "kcal": 300}]'], "выпил воды")
+        done = evs[-1]
+        self.assertEqual(self.db.water_total(U, TODAY.isoformat()), w0)  # ничего не записано
+        self.assertEqual([a["kind"] for a in done["actions"]], ["water", "meal"])  # неизвестное — молча мимо
+        self.assertTrue(all(not a["ok"] and "undo" not in a for a in done["actions"]))
+        self.assertIn("⚠️ Не записал: вода, мл: от 10 до 5000", done["text"])
+        evs, _ = self.stream(["Сколько воды выпил — стакан или бутылку?\nACTIONS: []"], "выпил")
+        self.assertEqual((evs[-1]["text"], evs[-1]["actions"]), ("Сколько воды выпил — стакан или бутылку?", []))
+
+    def test_assist_weight_habit_goal(self):
+        import f_habits
+        hid = f_habits.save(self.db, U, {"habit": {"title": "Читать 20 минут"}}, TODAY)
+        f_habits.save(self.db, U, {"habit": {"title": "Вода", "kind": "count", "target": 8, "unit": "стак"}}, TODAY)
+        self.db.save_profile(U, {"weight": 62})
+        evs, _ = self.stream(['Отлично.\nACTIONS: [{"type": "weight", "kg": "63,4"}, {"type": "habit_mark", "name": "читать", "done": true}, '
+                              '{"type": "habit_mark", "name": "вода", "value": 5}, {"type": "goal_add", "text": "Сделать алгебру", "day": "tomorrow"}]'],
+                             "взвесился 63,4, почитал, выпил 5 стаканов, поставь цель на завтра сделать алгебру")
+        done = evs[-1]
+        self.assertIn("вес 63,4 кг", done["text"])
+        self.assertIn("«Читать 20 минут» ✓", done["text"])
+        self.assertIn("«Вода»: 5 из 8", done["text"])
+        self.assertIn("цель на завтра: «Сделать алгебру»", done["text"])
+        self.assertEqual(self.db.user(U)["profile"]["weight"], 63.4)
+        self.assertEqual(f_habits.day_doc(self.db, U, TODAY.isoformat())["v"][hid], 1)
+        tomorrow = (TODAY + datetime.timedelta(days=1)).isoformat()
+        self.assertEqual([g["text"] for g in f_habits.day_doc(self.db, U, tomorrow)["g"]], ["Сделать алгебру"])
+        for a in done["actions"]:
+            self.assertEqual(call("/api/ask/undo", {"id": a["undo"]}).code, 200)
+        self.assertEqual(self.db.user(U)["profile"]["weight"], 62)
+        self.assertEqual(f_habits.day_doc(self.db, U, TODAY.isoformat())["v"], {})
+        self.assertEqual(f_habits.day_doc(self.db, U, tomorrow)["g"], [])
+        evs, _ = self.stream(['Ок.\nACTIONS: [{"type": "habit_mark", "name": "бегать"}]'], "отметь бег")
+        self.assertIn("⚠️ Не записал: нет привычки «бегать»", evs[-1]["text"])
+
+    def test_assist_module_can_take_action(self):
+        class Weight:  # будущий раздел «Вес» сам берёт действие weight
+            log = []
+
+            @staticmethod
+            def assist(app, uid, a, today):
+                if a.get("type") != "weight":
+                    return None
+                Weight.log.append(a["kg"])
+                return {"label": f"вес {a['kg']} кг", "undo": lambda: Weight.log.pop()}
+        with mock.patch.dict(coach.FEATURES, {"weight": Weight}):
+            evs, _ = self.stream(['Ок.\nACTIONS: [{"type": "weight", "kg": 63}]'], "взвесился 63")
+            self.assertEqual(Weight.log, [63])
+            self.assertEqual(call("/api/ask/undo", {"id": evs[-1]["actions"][0]["undo"]}).code, 200)
+        self.assertEqual(Weight.log, [])
+        self.assertNotIn("weight", self.db.user(U)["profile"])  # профиль не тронут
+
+    def test_assist_fix_goes_to_support(self):
+        import support
+        sup = support.Support.__new__(support.Support)  # без потоков и Telegram; start — заглушка
+        sup.allowed, sup.media_dir, calls = coach.allowed, tempfile.mkdtemp(), []
+        sup.start = lambda chat, text, shots=None: calls.append((chat, text))
+        sup.busy = lambda: None
+        self.db.say(U, "user", "покажи привычки")
+        self.db.say(U, "coach", "Вот они.")
+        q = "кнопка воды не работает, исправь"
+        with mock.patch.object(coach, "SUP", sup):
+            evs, _ = self.stream(['Принял, передал в ремонт.\nACTIONS: [{"type": "fix", "text": "Не нажимается кнопка «+250 мл»"}]'], q)
+        done = evs[-1]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], U)
+        self.assertIn(q, calls[0][1])
+        self.assertIn("Не нажимается кнопка «+250 мл»", calls[0][1])
+        self.assertIn("Тренер: Вот они.", calls[0][1])  # последние сообщения чата — контекст для ремонта
+        self.assertIn("🛠 Принял, чиню — напишу в Telegram, когда готово", done["text"])
+        self.assertEqual(done["actions"], [{"kind": "fix", "label": "🛠 Принял, чиню — напишу в Telegram, когда готово", "ok": True}])
+        fix = ['Чиню.\nACTIONS: [{"type": "fix", "text": "x"}]']
+        sup.busy = lambda: "self"  # прошлое ещё чинится — второй ремонт не запускаем
+        with mock.patch.object(coach, "SUP", sup):
+            evs, _ = self.stream(fix, "опять не работает, исправь")
+        self.assertIn("Уже чиню прошлое", evs[-1]["text"])
+        sup.busy = lambda: None
+        with mock.patch.object(coach, "SUP", sup):
+            evs, _ = self.stream(fix, "какой творог лучше взять?")  # он не просил ремонт — не запускаем
+            self.assertIn("В ремонт не передал", evs[-1]["text"])
+            evs, _ = self.stream(fix, "исправь, что лучше взять в магазине", tools=["WebSearch"])  # после поиска — нет
+            self.assertIn("В ремонт не передал", evs[-1]["text"])
+            self.assertEqual(evs[0], {"s": "Ищу в интернете…"})
+            r = call("/api/ask/stream", {"text": "не работает, исправь"}, user={"id": 99})
+            self.assertEqual(r.code, 403)  # чужой — даже до тренера не доходит
+        self.assertEqual(len(calls), 1)
+
+    def test_search_only_in_app_chat(self):
+        seen = []
+
+        def run(cmd, **kw):
+            seen.append(cmd)
+            return mock.Mock(returncode=0, stdout=json.dumps({"result": "ок"}), stderr="")
+        with mock.patch.object(ai.subprocess, "run", run):
+            ai.ask("ДАННЫЕ", [], "где купить творог?", full=True, assist=True)  # чат приложения
+            ai.ask("ДАННЫЕ", [], "можно спарринг?")  # чат бота
+            ai.morning("ДАННЫЕ")  # разбор
+            ai.claude("еда", image=__file__)  # фото
+        app, bot, review, photo = seen
+        allow = app[app.index("--allowedTools") + 1:app.index("--disallowedTools")]
+        self.assertEqual(allow, ["WebSearch", "WebFetch"])
+        deny = app[app.index("--disallowedTools") + 1:]
+        self.assertNotIn("WebSearch", deny)
+        self.assertIn("Bash", deny)
+        self.assertIn("Read(//etc/**)", deny)
+        for cmd in (bot, review, photo):
+            self.assertNotIn("WebSearch", cmd[cmd.index("--allowedTools") + 1:cmd.index("--disallowedTools")]
+                             if "--allowedTools" in cmd else [])
+            self.assertIn("WebSearch", cmd[cmd.index("--disallowedTools"):])
+        self.assertNotIn("ACTIONS", bot[2])  # действия — только в приложении
+
+        class P:  # claude -p в потоке: флаги поиска и «Ищу в интернете» по событию инструмента
+            def __init__(self, cmd, **kw):
+                seen.append(cmd)
+                ev = lambda e: json.dumps({"type": "stream_event", "event": e}) + "\n"  # noqa: E731
+                self.stdout = iter([ev({"type": "message_start"}), ev({"type": "content_block_start", "content_block": {"type": "tool_use", "name": "WebSearch"}}),
+                                    ev({"type": "message_start"}), ev({"type": "content_block_delta", "delta": {"text": "Творог 5%"}}),
+                                    ev({"type": "message_start"}), ev({"type": "content_block_delta", "delta": {"text": "Источники: x"}})])
+                self.stderr = io.StringIO("")
+
+            def wait(self):
+                return 0
+
+            def poll(self):
+                return 0
+
+            def kill(self):
+                pass
+        tools = []
+        with mock.patch.object(ai.subprocess, "Popen", P):
+            out = list(ai.claude_stream("q", web=True, on_tool=tools.append))
+            list(ai.claude_stream("q"))
+        self.assertEqual(out, ["Творог 5%", "\n\nИсточники: x"])  # куски после поиска — с новой строки
+        self.assertEqual(tools, ["WebSearch"])
+        web_cmd, plain_cmd = seen[-2:]
+        self.assertIn("WebSearch", web_cmd[web_cmd.index("--allowedTools"):web_cmd.index("--disallowedTools")])
+        self.assertNotIn("--allowedTools", plain_cmd)
+        self.assertIn("WebSearch", plain_cmd[plain_cmd.index("--disallowedTools"):])
+
     def test_summary_stream(self):
         parts = ["**Итог** — ", "неделя лучше.\n", "- Спи 9 ч"]
         with mock.patch.object(ai, "claude_stream", return_value=iter(parts)) as cs:
