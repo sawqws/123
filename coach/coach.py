@@ -2714,9 +2714,10 @@ def act(uid, a, q, searched=False):
             raise ValueError("еда: непонятно, что съел")
         kcal = _act_num(a.get("kcal"), 1, 5000, "ккал")
         p, f, c = (_act_num(a.get(k) or 0, 0, 500, n) for k, n in (("protein", "белки"), ("fat", "жиры"), ("carbs", "углеводы")))
+        salt = round(_act_num(a.get("salt") or 0, 0, 30, "соль"), 1)
         m = db.save_meal(uid, {"title": title, "kcal": round(kcal), "protein": round(p), "fat": round(f), "carbs": round(c),
-                               "day": today.isoformat(), "time": _act_time(a.get("time"), now), "note": "записал тренер"})
-        label = f"{title} — {round(kcal)} ккал (Б {round(p)} · Ж {round(f)} · У {round(c)})"
+                               "salt": salt, "day": today.isoformat(), "time": _act_time(a.get("time"), now), "note": "записал тренер"})
+        label = f"{title} — {round(kcal)} ккал (Б {round(p)} · Ж {round(f)} · У {round(c)}" + (f" · соль {salt:g} г".replace(".", ",") if salt else "") + ")"
         return {"kind": kind, "label": label, "ok": True, "undo": _undo_add(uid, lambda: db.delete_meal(uid, m["id"]), label)}
     if kind == "weight":  # своего раздела веса нет — вес в профиле (его видят тренер и расчёт нормы)
         kg = round(_act_num(a.get("kg"), 25, 250, "вес, кг"), 1)

@@ -257,14 +257,14 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
 
 
 def eaten(meals, kcal=None):
-    """Съедено за день: еда Формы + еда «Калорий» (kcal — поле дня t.kcal или None); соль — только из «Калорий»."""
+    """Съедено за день: еда Формы + еда «Калорий» (kcal — поле дня t.kcal или None); соль — тоже из обеих (Глеб 03.11)."""
     t = {k: round(sum(m.get(k) or 0 for m in meals)) for k in ("kcal", "protein", "fat", "carbs")}
     t["count"] = len(meals)
-    t["salt"] = 0
+    t["salt"] = round(sum(float(m.get("salt") or 0) for m in meals), 1)
     if kcal:
         for k in ("kcal", "protein", "fat", "carbs"):
             t[k] = round(t[k] + kcal["eaten"][k])
-        t["salt"] = kcal["eaten"]["salt"]
+        t["salt"] = round(t["salt"] + float(kcal["eaten"]["salt"] or 0), 1)
         t["count"] += len(kcal["items"])
     return t
 
