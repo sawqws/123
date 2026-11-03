@@ -53,7 +53,7 @@ class Pairing(unittest.TestCase):
 
     def test_not_enough(self):
         base = datetime.date(2026, 9, 1)
-        ans = {(base + D(days=i)).isoformat(): {"stretch": i < 2} for i in range(5)}  # 2 «да», 3 «нет»
+        ans = {(base + D(days=i)).isoformat(): {"cool": i < 2} for i in range(5)}  # 2 «да», 3 «нет»
         rec = {(base + D(days=i + 1)).isoformat(): 60 for i in range(5)}
         x = J.impact(ans, rec)[0]
         self.assertFalse(x["enough"])
@@ -91,7 +91,7 @@ class Api(unittest.TestCase):
         self.assertEqual(r["selected"], J.DEFAULT)
         self.assertTrue(6 <= len(J.DEFAULT) <= 8)
         self.assertEqual(len(r["habits"]), len(J.HABITS))
-        self.assertGreaterEqual(len(J.HABITS), 12)  # без еды, воды и кофеина (03.11)
+        self.assertGreaterEqual(len(J.HABITS), 9)  # без еды, воды, кофеина и тренировок (03.11)
         self.assertEqual(r["answers"], {})
         self.assertEqual(r["ext"]["pending"], len(J.DEFAULT))
         # нельзя про сегодня и раньше 30 дней
@@ -119,8 +119,8 @@ class Api(unittest.TestCase):
         self.assertEqual(call("/api/journal", {"d": d3})["answers"], {"stress": True})
 
     def test_setup(self):
-        r = call("/api/journal/setup", {"keys": ["injury", "sauna", "nope"]})
-        self.assertEqual(r["selected"], ["sauna", "injury"])  # порядок списка, лишнее отброшено
+        r = call("/api/journal/setup", {"keys": ["injury", "cool", "nope"]})
+        self.assertEqual(r["selected"], ["cool", "injury"])  # порядок списка, лишнее отброшено
         with self.assertRaises(ValueError):
             call("/api/journal/setup", {"keys": []})
 
@@ -155,8 +155,8 @@ class Api(unittest.TestCase):
     def test_no_food_water_caffeine(self):
         """Глеб 03.11: еду и воду он ведёт в «Калориях», кофеин не пьёт — в дневнике их нет."""
         r = call("/api/journal")
-        self.assertNotIn("food", [g["key"] for g in r["groups"]])
-        for k in ("caffeine", "late_meal", "sweets", "water2", "protein", "breakfast"):
+        self.assertEqual([g["key"] for g in r["groups"]], ["sleep", "feel"])
+        for k in ("caffeine", "late_meal", "sweets", "water2", "protein", "breakfast", "stretch", "sauna", "double"):
             self.assertNotIn(k, J.BY_KEY)
             self.assertNotIn(k, r["selected"])
         with self.assertRaises(ValueError):
