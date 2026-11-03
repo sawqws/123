@@ -1,4 +1,4 @@
-/* more — экран «Ещё» (как More в WHOOP) и вкладка «Тренер» (как WHOOP Coach). Подключение: window.FormaModules (см. начало app.js). */
+/* more — экран «Ещё» (как More в WHOOP) и вкладка «Чат» (как WHOOP Coach). Подключение: window.FormaModules (см. начало app.js). */
 (window.FormaModules = window.FormaModules || []).push(F => {
   const { esc, num, big, hm, plural } = F;
   // версия ресурсов (?v=… у скрипта) — внизу экрана «Ещё»
@@ -170,7 +170,7 @@
     F.animate();
   }
 
-  // ---------- вкладка «Тренер» (как WHOOP Coach) ----------
+  // ---------- вкладка «Чат» (как WHOOP Coach; id вкладки — 'coach') ----------
   // подсказки по ситуации дня: восстановление, тренировка, сон, еда
   const S0 = () => F.S.data || {};
   function prompts(t) {
@@ -189,6 +189,7 @@
     const sk = S0().ext && S0().ext.skin;  // тренер — по всему: кожа, учёба, настроение
     if (sk && sk.has) add('Что улучшить в уходе за кожей?', I.spark, 'var(--ink)', 'по уходу и разборам фото');
     add('Как улучшить сон?', I.moon, 'var(--sleep)', 'режим и привычки');
+    add('Как не волноваться перед боем?', I.spark, 'var(--ink)', 'поддержка');
     add('Как успевать учёбу и бокс?', I.stats, 'var(--ink)', 'режим дня');
     return out.slice(0, 6);
   }
@@ -200,15 +201,15 @@
   // Чат тренера (Глеб 03.11): шапка и поле стоят, прокручиваются только сообщения (.co-scroll); подсказки — по кнопке 💡,
   // сами не всплывают; после 30 мин тишины — новый разговор (сервер: coach.CHAT_IDLE, chat_history).
   const IDLE = 30 * 60 * 1000;
-  const who = `<div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div>`;
-  const note = '<p class="co-note">Тренер не врач: при боли, травме, сыпи или плохом самочувствии — к врачу и скажи родителям.</p>';
+  const who = `<div class="co-who"><span class="co-dot">${I.spark}</span>Форма</div>`;
+  const note = '<p class="co-note">Чат не заменяет врача: при боли, травме, сыпи или плохом самочувствии — к врачу и скажи родителям.</p>';
   I.bulb = sv('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2v.5h5v-.5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>');
   function coachView() {
     const S = F.S, t = S.data.today, hist = S.history;
     const name = ((S.data.user && S.data.user.name) || '').trim().split(/\s+/)[0];
-    let h = F.hero('Тренер', 'знает твой день — спроси о чём угодно', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
-    // вид WHOOP: вместо большого заголовка — строка «Ф Тренер · бета» и «новый разговор» справа (как WHOOP Coach)
-    h += `<div class="co-top"><span class="co-beta"><i>Ф</i>Тренер · бета</span>${hist && hist.length ? `<button class="co-new" data-a="clear" aria-label="Новый разговор">${I.edit}</button>` : ''}</div>`;
+    let h = F.hero('Чат', 'тренер, врач, психолог, учёба — спроси о чём угодно', hist && hist.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
+    // вид WHOOP: вместо большого заголовка — строка «Ф Чат · бета» и «новый разговор» справа (как WHOOP Coach)
+    h += `<div class="co-top"><span class="co-beta"><i>Ф</i>Чат · бета</span>${hist && hist.length ? `<button class="co-new" data-a="clear" aria-label="Новый разговор">${I.edit}</button>` : ''}</div>`;
     h += F.slots.coachTop.map(fn => { try { return fn(t) || ''; } catch (e) { console.error('coachTop', e); return ''; } }).join('');
     if (!hist && S.historyErr) return h + `<div class="co-scroll">${F.retryCard('Разговор не загрузился', 'history-retry')}</div>`;
     if (!hist) return h + '<div class="co-scroll"><div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div></div>';
@@ -217,7 +218,7 @@
     if (empty) {
       // начальный экран как у WHOOP Coach: первое сообщение тренера и готовые вопросы пузырями
       h += `<div class="chat co-chat rise">${who}
-        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Спрашивай о чём угодно: спорт, сон, еда, кожа, учёба, настроение. Я вижу твой сон, восстановление, нагрузку, еду, режим, привычки и уход.${context(t)}</div>
+        <div class="msg them">${name ? `Привет, ${esc(name)}! ` : ''}Спрашивай о чём угодно: спорт, сон, еда, кожа, учёба, настроение. Отвечу коротко — по твоим данным.${context(t)}</div>
         <div class="co-sugg">${ps.map(p => `<button class="co-s" data-a="suggest" data-v="${esc(p.text)}">${esc(p.text)}</button>`).join('')}</div></div>`;
     } else {
       h += '<div class="chat co-chat">';
@@ -277,6 +278,37 @@
   };
   if (vv) { vv.addEventListener('resize', () => F.coLayout()); vv.addEventListener('scroll', fit); }
   addEventListener('resize', () => F.coLayout());
+
+  // ---------- низ экрана: меню стоит на месте (Глеб 03.11: «панелька как будто вверх подлетела») ----------
+  // Меню — env(safe-area-inset-bottom) + 8 px (--bottom из kit.css). Но на iPhone в приложении с экрана «Домой» окно
+  // бывает короче экрана ровно на полосу «домой», а env всё равно 34 px — отступ считался дважды, меню висело на 34 px выше.
+  // Поэтому --bottom = та часть safe-area, которую окно правда перекрывает; в Telegram — его safeAreaInset (Bot API 8.0).
+  // Клавиатура на это не влияет: на iOS высота окна (innerHeight) с ней не меняется, на Android env = 0.
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  const envPx = side => {
+    const p = document.createElement('div');
+    p.style.cssText = `position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none;height:env(safe-area-inset-${side},0px)`;
+    document.body.append(p); const v = p.offsetHeight; p.remove(); return v;
+  };
+  F.safeBottom = () => {
+    const env = envPx('bottom'), tg = F.tg;
+    let b = env, why = 'env';
+    if (tg && tg.initData && tg.safeAreaInset && typeof tg.safeAreaInset.bottom === 'number' && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0')) {
+      b = Math.max(0, tg.safeAreaInset.bottom + ((tg.contentSafeAreaInset && tg.contentSafeAreaInset.bottom) || 0)); why = 'tg';
+    } else if (standalone && env && envPx('top')) {  // окно идёт под строку состояния (black-translucent) — значит, разница с экраном снизу
+      const sh = innerHeight >= innerWidth ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+      const gap = Math.round(sh - innerHeight);
+      if (gap > 0 && gap < 120) { b = Math.max(0, env - gap); why = 'gap ' + gap; }
+    }
+    root.style.setProperty('--bottom', b + 'px');
+    root.dataset.bottom = `${b} (${why})`;  // для проверки: html[data-bottom]
+    return b;
+  };
+  F.safeBottom();
+  addEventListener('resize', () => F.safeBottom());
+  addEventListener('orientationchange', () => setTimeout(F.safeBottom, 300));
+  if (F.tg && F.tg.onEvent) ['safeAreaChanged', 'contentSafeAreaChanged'].forEach(e => { try { F.tg.onEvent(e, F.safeBottom); } catch (x) { /* старый Telegram */ } });
+
   document.addEventListener('focusin', e => { if (e.target.id === 'q') setTimeout(() => F.coLayout(), 60); });
   document.addEventListener('focusout', e => { if (e.target.id === 'q') setTimeout(() => F.coLayout(), 60); });
 

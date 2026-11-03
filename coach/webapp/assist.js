@@ -27,8 +27,9 @@
     if (!live) return;
     el.disabled = true; F.haptic('tap');
     try {
-      const r = await F.api('/api/ask/undo', { id: v });
-      F.S.history = r.history;
+      const skin = F.S.screen === 'skin' && F.S.snSeg === 'ask';  // чат раздела «Кожа» — своя нить истории
+      const r = await F.api('/api/ask/undo', skin ? { id: v, topic: 'skin' } : { id: v });
+      if (skin) { F.S.snHist = r.history; F.S.sn = null; } else F.S.history = r.history;
       if (r.day && F.S.data && !F.S.dayData) F.S.data.today = r.day;
       live.acts = live.acts.filter(a => a.undo !== v);
       F.toast(`↩️ Отменил: ${r.label}`, 'ok');

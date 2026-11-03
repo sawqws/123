@@ -571,9 +571,10 @@
   const skel = (n = 3) => Array.from({ length: n }, (_, i) => `<div class="sk line" style="width:${[92, 78, 86, 60][i % 4]}%"></div>`).join('');
 
   // ---------- каркас ----------
-  // нижнее меню как в WHOOP: Главная · Здоровье · «＋» по центру (быстрые действия) · Питание · Тренер (Coach — в правом углу)
+  // нижнее меню (Глеб 03.11: «Добавить» — четвёртой, на третье — «Питание»): Главная · Здоровье · Питание · «＋» Добавить
+  // и круг «Чат» справа (универсальный собеседник: тренер, врач-консультант, психолог, учёба). id вкладки чата — 'coach'.
   const TABS = [{ id: 'today', icon: I.home, label: 'Главная' }, { id: 'trends', icon: I.health, label: 'Здоровье' },
-    { id: 'plus', icon: I.plus, label: 'Добавить' }, { id: 'food', icon: I.food, label: 'Питание' }, { id: 'coach', icon: I.coach, label: 'Тренер' }];
+    { id: 'food', icon: I.food, label: 'Питание' }, { id: 'plus', icon: I.plus, label: 'Добавить' }, { id: 'coach', icon: I.coach, label: 'Чат' }];
   let tabs;
   // широкий экран (ноутбук, монитор, iPad боком): меню — колонкой слева, карточки — в 2–3 колонки (layout.css)
   const WIDE = matchMedia('(min-width: 1024px)'), WIDE3 = matchMedia('(min-width: 1600px)');
@@ -858,7 +859,7 @@
       ${S.briefing ? skel(2) : adv ? `<div class="prose advice">${adv}</div>`
         : `<p class="muted">${!isToday ? 'Разбора за этот день нет.' : d.morning === 'off' ? 'Утренний разбор выключен — время в профиле.' : `Разбор придёт утром, с ${esc(d.morning || '07:00')}, как только WHOOP посчитает сон.`}</p>`}
       ${isToday ? `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
-        <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Узнать у тренера</button></div>` : ''}</section>`;
+        <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Спросить в чате</button></div>` : ''}</section>`;
 
     S.outlookHtml = h.slice(h.lastIndexOf('<section class="card outlook'));  // вид WHOOP: совет дня — листом из строки «Прогноз на день»
     const ms = monStat(t), msOk = ms.all && ms.ok === ms.all, sv = c && c.strain != null ? c.strain : null;
@@ -1314,7 +1315,7 @@
   // ---------- Тренер ----------
   const SUGGEST = ['Готов ли я к спаррингу?', 'Что съесть перед тренировкой?', 'Почему упало восстановление?', 'Как улучшить сон?', 'План на неделю'];
   function coachView() {
-    let h = hero('Тренер', 'Врач · тренер · питание', S.history && S.history.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
+    let h = hero('Чат', 'Тренер · врач · психолог · учёба', S.history && S.history.length ? '<button class="avatar ghost" data-a="clear" aria-label="Новый разговор">✕</button>' : '');
     const hist = S.history;
     if (!hist && S.historyErr) return h + retryCard('Разговор не загрузился', 'history-retry');
     if (!hist) return h + '<div class="chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div><div class="sk msg-sk me short"></div></div>';
@@ -1325,7 +1326,7 @@
     h += '</div>';
     h += `<div class="composer"><div class="chips">${SUGGEST.map(s => `<button class="chip" data-a="suggest" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>
       <div class="ask"><button class="send alt" data-a="photo" data-v="ask" aria-label="Фото" ${S.asking ? 'disabled' : ''}>${I.cam}</button>
-      <textarea id="q" rows="1" placeholder="Спроси тренера…">${esc(S.qDraft || '')}</textarea>
+      <textarea id="q" rows="1" placeholder="Спроси о чём угодно…">${esc(S.qDraft || '')}</textarea>
       <button class="send" data-a="ask" aria-label="Отправить" ${S.asking ? 'disabled' : ''}>↑</button></div></div>`;
     return h;
   }
@@ -1341,7 +1342,7 @@
     const headers = { 'X-Init-Data': (tg && tg.initData) || '', 'Content-Type': 'application/json' };
     if (!headers['X-Init-Data']) headers['X-Site'] = '1';
     const r = await fetch('/api/ask/stream', { method: 'POST', headers, body: JSON.stringify({ text: q }) });
-    if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Тренер не ответил — попробуй ещё раз'); }
+    if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Чат не ответил — попробуй ещё раз'); }
     const rd = r.body.getReader(), dec = new TextDecoder();
     let buf = '', live = '', queued = false, done = null;
     const paint = () => { queued = false; if (!S.asking) return;  /* ответ уже готов и отрисован целиком (с «✅ Записал») — не затирать */ const b = [...document.querySelectorAll('.msg.them')].pop(); if (!b || S.tab !== 'coach') return;
@@ -1493,7 +1494,7 @@
       ${row('tab', 'food', I.food, 'var(--food)', 'Еда', 'фото, поиск, БЖУ и соль')}
       ${row('water', '250', I.drop, 'var(--water)', 'Вода +250 мл', 'стакан')}
       ${row('water', '500', I.drop, 'var(--water)', 'Вода +500 мл', 'бутылка')}
-      ${row('tab', 'coach', I.coach, 'var(--teal)', 'Спросить тренера', 'по твоим данным WHOOP')}
+      ${row('tab', 'coach', I.coach, 'var(--teal)', 'Спросить в чате', 'о чём угодно — видит твои данные')}
       ${row('summary', 'week', I.stats, 'var(--rec-blue)', 'Оценка и советы', 'день · неделя · месяц')}
       ${slot('plus', row)}
       ${d.connected ? row('sync', '', I.sync, 'var(--hint)', 'Обновить данные WHOOP', d.synced ? `были в ${clock(d.synced)}` : 'загрузить сейчас') : ''}</div>`);

@@ -867,7 +867,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(coach.chat_history(U, 40, now + datetime.timedelta(minutes=1)), [])  # 30 мин после последнего — пусто
         with mock.patch.object(ai, "claude", return_value="Да.") as c:  # пишет через 29 мин — история сохраняется
             r = call("/api/ask", {"text": "а завтра?"})
-        self.assertIn("Тренер: ответ", c.call_args[0][0])
+        self.assertIn("Форма: ответ", c.call_args[0][0])
         self.assertNotIn("старый", c.call_args[0][0])
         self.assertEqual([m["text"] for m in r.json["history"]], ["вопрос", "ответ", "а завтра?", "Да."])
         self.db.x("UPDATE messages SET created=? WHERE user=?", ((now - datetime.timedelta(minutes=31)).isoformat(), U))
