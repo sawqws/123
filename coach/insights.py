@@ -487,9 +487,12 @@ def wear_streak(db, uid, day):
         if all(d.isoformat() in days for d in after if d != day):  # без разрывов (сегодня может быть ещё пусто)
             got = [d for d in after if d.isoformat() in days]
             n = a["n"] + len(got)
-            last = got[-1] if got else ad
-            return {"n": n, "since": (last - datetime.timedelta(days=n - 1)).isoformat() if n else None,
-                    "anchored": True}
+            start = ad  # начало серии — первый день подряд покрытых (как «Streak started» в WHOOP), не n дней назад
+            while (start - datetime.timedelta(days=1)).isoformat() in days:
+                start -= datetime.timedelta(days=1)
+            by_n = (got[-1] if got else ad) - datetime.timedelta(days=n - 1) if n else ad
+            # раньше из двух: у WHOOP серия могла начаться до первых наших данных — тогда счёт по n
+            return {"n": n, "since": min(start, by_n).isoformat() if n else None, "anchored": True}
     d = day if day.isoformat() in days else day - datetime.timedelta(days=1)
     n = 0
     while d.isoformat() in days:

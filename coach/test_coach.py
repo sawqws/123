@@ -537,6 +537,10 @@ class BotTest(unittest.TestCase):
         db = self.cycles([("2026-10-01T04:00", "2026-10-08T04:00"), ("2026-10-10T04:00", None)])  # 09.10 пропуск
         db.meta(f"streak:anchor:{U}", json.dumps({"day": "2026-10-07", "n": 100}))
         self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 2, "since": "2026-10-10", "anchored": False})
+        # как у Глеба 03.11: WHOOP 724 при 726 покрытых днях — число из WHOOP, начало — первый покрытый день (01.10)
+        db = self.cycles([("2026-10-01T04:00", "2026-10-10T04:00")])
+        db.meta(f"streak:anchor:{U}", json.dumps({"day": "2026-10-10", "n": 8}))
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 8, "since": "2026-10-01", "anchored": True})
 
     def test_streak_api(self):
         r = call("/api/streak", {"n": 50})
