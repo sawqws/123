@@ -37,11 +37,11 @@
     ['rec', 'Восстановление', 'насколько ты готов к нагрузке', I.rec, 'var(--rec-green)'],
     ['strain', 'Нагрузка', 'шкала 0–21 за день', I.bolt, 'var(--strain)'],
     ['sleep', 'Сон', 'сколько нужно и выполнение', I.moon, 'var(--sleep)'],
-    ['hrv', 'Запас сил', 'как отдохнула нервная система', I.heart, 'var(--rec-blue)'],
+    ['hrv', 'Запас сил', 'насколько отдохнул организм — по пульсу во сне', I.heart, 'var(--rec-blue)'],
     ['rhr', 'Пульс покоя', 'сердце во сне', I.pulse, 'var(--rec-blue)'],
     ['resp', 'Дыхание', 'вдохов в минуту во сне', I.lungs, 'var(--rec-blue)'],
     ['spo2', 'Кислород в крови', 'сколько кислорода в крови ночью', I.o2, 'var(--rec-blue)'],
-    ['temp', 'Температура кожи', 'отклонение от нормы', I.temp, 'var(--rec-blue)'],
+    ['temp', 'Температура кожи', 'разница с обычной', I.temp, 'var(--rec-blue)'],
     ['kcal', 'Калории', 'траты за день', I.flame, 'var(--food)'],
     ['zones', 'Пульсовые зоны', 'зоны 1–5 на тренировке', I.zones, 'var(--z4)'],
     ['target', 'Цель нагрузки', 'ориентир на день', I.target, 'var(--strain)'],
@@ -78,6 +78,7 @@
         meta: d.connected ? (synced ? `синхронизация ${synced}` : 'данные ещё не загружены') : d.keys ? 'нажми «Подключить» ниже' : 'инструкция — на главной',
         end: `<i class="more-dot" style="background:${d.connected ? 'var(--teal)' : 'var(--rec-red)'}"></i>` })
       + (d.connected ? row({ a: 'sync', ic: I.sync, title: 'Обновить данные', meta: 'загрузить свежее из WHOOP' }) : '')
+      + row({ a: 'streak', ic: I.flame, title: 'Серия', meta: d.streak && d.streak.anchored ? 'сверено с WHOOP' : 'дней подряд · сверить с WHOOP', end: `<b class="num">${(d.streak && d.streak.n) || 0}</b>` })
       + (d.keys ? row({ a: 'connect', ic: I.plug, title: d.connected ? 'Подключить заново' : 'Подключить WHOOP', meta: d.connected ? 'если данные перестали приходить' : 'вход через аккаунт WHOOP' })
         : d.connected ? '' : row({ a: 'tab', v: 'today', ic: I.plug, title: 'Как подключить', meta: '3 минуты, один раз' })));
     h += group('Как это работает', HELP.map(([k, title, meta, ic, col]) => row({ a: 'more-help', v: k, ic, col, title, meta })).join(''));
@@ -87,7 +88,9 @@
   }
   F.screens.more = moreScreen;
   // аватар в шапке — экран «Ещё»; «Заполнить профиль» в Питании и др. — сразу лист профиля
-  F.actions.profile = el => el.classList.contains('avatar') || el.classList.contains('mepill') ? F.openScreen('more') : F.profileSheet();
+  // огонёк серии в капсуле — лист «Серия» (сверка с WHOOP)
+  F.actions.profile = (el, v, ev) => ev && ev.target.closest && ev.target.closest('.mepill .fl') ? F.streakSheet()
+    : el.classList.contains('avatar') || el.classList.contains('mepill') ? F.openScreen('more') : F.profileSheet();
   F.actions.skin = () => {  // вид: ч/б iOS 26 (по умолчанию, mono.css) ⇄ прежний «как WHOOP» (whoop.css)
     const r = document.documentElement, wh = !r.classList.contains('wh');
     r.classList.toggle('wh', wh); r.classList.toggle('mono', !wh);

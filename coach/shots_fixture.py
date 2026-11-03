@@ -208,6 +208,8 @@ def build(shots=None):
         api["/api/skin/photo"] = coach.route(T.U, "/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
         api["/api/skin/photo/delete"] = coach.route(T.U, "/api/skin/photo/delete", {"day": today.isoformat()})
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
+        if not isinstance(api.get("/api/streak"), dict) or "streak" not in api["/api/streak"]:  # сверка серии с WHOOP — пример
+            api["/api/streak"] = {"streak": {**(allp.get("streak") or {"n": 0, "since": None}), "anchored": True}}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
 

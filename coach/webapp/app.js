@@ -29,6 +29,18 @@
       if (dy > el.offsetHeight / 3 || v > .5) { haptic('select'); el.close(); }
     };
     el.addEventListener('touchend', end); el.addEventListener('touchcancel', end);
+    // клавиатура (iPhone, Telegram): окно не сжимается, а видимая часть уезжает — лист встаёт над клавиатурой и не выше
+    // видимой части, иначе его верх с крестиком уходит за экран (Глеб 03.11: «крестики улетели вверх»)
+    const vv = window.visualViewport;
+    if (vv) {
+      const fit = () => {
+        if (!el.isConnected) { vv.removeEventListener('resize', fit); vv.removeEventListener('scroll', fit); return; }
+        const kb = Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop)), lim = Math.round(vv.height - 12);
+        if (matchMedia('(min-width: 1024px)').matches || (kb < 2 && lim >= innerHeight * .88)) { el.style.bottom = ''; el.style.maxHeight = ''; return; }
+        el.style.bottom = `${kb}px`; el.style.maxHeight = `${Math.min(lim, Math.round(innerHeight * .88))}px`;
+      };
+      vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); fit();
+    }
     return el;
   }
   const $ = (s, el = document) => el.querySelector(s);
@@ -525,7 +537,7 @@
     hrv(rows, prev, n) {
       const b = baseNow().hrv, fmt = v => `${Math.round(v)} мс`;
       return chBlock(`Запас сил за ${PER[n]}`, chartLead(rows, prev, 'hrv', { fmt, goodUp: true, base: b }),
-        line(rows, 'hrv', 'var(--rec-blue)', b, { fmt, label: `Запас сил за ${PER[n]}` }), '<span>Выше — лучше: нервная система отдохнула</span>');
+        line(rows, 'hrv', 'var(--rec-blue)', b, { fmt, label: `Запас сил за ${PER[n]}` }), '<span>Отдых организма по пульсу во сне. Выше — лучше</span>');
     },
     rhr(rows, prev, n) {
       const b = baseNow().rhr, fmt = v => `${Math.round(v)} уд/мин`;
@@ -782,15 +794,17 @@
       <div class="card acts"><div class="acts-h"><b>Активности</b><span class="num">${rows.length || ''}</span></div>${rows.length ? rows.join('') : '<p class="muted small">Сна и тренировок за этот день пока нет — WHOOP пришлёт их после записи.</p>'}</div></div>`;
   }
   // «My Dashboard»: плитки показателей со стрелкой к норме за 30 дней
-  function tile({ k, v, d = 0, unit = '', base, goodUp, ex, sub }) {
+  // «Запас сил» (ВСР/HRV) Глебу непонятен словом (03.11) — у названия везде короткая подпись, что это
+  const HRV_WHAT = 'отдых организма по пульсу во сне', what = s => `<small class="what">${s}</small>`;
+  function tile({ k, v, d = 0, unit = '', base, goodUp, ex, sub, hint }) {
     return `<button class="tile" data-a="explain" data-v="${ex}"><span class="tile-k">${k}</span>
       <span class="tile-v"><b class="num">${v == null ? '—' : cnt(v, d)}</b><small>${unit}</small></span>
-      <span class="tile-d">${vs(v, base, goodUp, d, unit && unit !== '%' ? ' ' + unit : unit) || `<span class="vs flat">${sub || (base != null ? `норма ${num(base, d)}` : 'нет нормы')}</span>`}</span></button>`;
+      <span class="tile-d">${vs(v, base, goodUp, d, unit && unit !== '%' ? ' ' + unit : unit) || `<span class="vs flat">${sub || (base != null ? `норма ${num(base, d)}` : 'нет нормы')}</span>`}</span>${hint ? what(hint) : ''}</button>`;
   }
   function dashboard(t) {
     const r = t.recovery || {}, s = t.sleep || {}, c = t.cycle || {}, b = t.base || {};
     return `<div class="sec rise">${cap('Моя панель', 'к норме за 30 дней')}<div class="tiles">
-      ${tile({ k: 'Запас сил', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv' })}
+      ${tile({ k: 'Запас сил', v: r.hrv, unit: 'мс', base: b.hrv, goodUp: true, ex: 'hrv', hint: HRV_WHAT })}
       ${tile({ k: 'Пульс покоя', v: r.rhr, unit: 'уд/мин', base: b.rhr, goodUp: false, ex: 'rhr' })}
       ${tile({ k: 'Дыхание во сне', v: s.resp, d: 1, unit: 'в мин', base: b.resp, goodUp: null, ex: 'resp' })}
       ${tile({ k: 'Кислород в крови', v: r.spo2, d: 1, unit: '%', goodUp: true, ex: 'spo2', sub: 'норма 95–100%' })}
@@ -812,7 +826,7 @@
     const st = streak(), dd = parseDay(t.day);
     // шапка как в WHOOP: аватар с серией дней · дата в капсуле · справа — когда пришли данные (заряда браслета API не даёт)
     let h = `<header class="wbar"><button class="mepill" data-a="profile" aria-label="Профиль"><span class="avatar">${initial()}</span>
-        ${st.n ? `<span class="fl">${I.flame}<b class="num">${st.n}${st.full ? '+' : ''}</b></span>` : ''}</button>
+        ${st.n ? `<span class="fl" title="Серия: дней подряд с браслетом">${I.flame}<b class="num">${st.n}${st.full ? '+' : ''}</b></span>` : ''}</button>
       <div class="datecap"><button class="pg" data-a="day" data-v="-1" aria-label="Предыдущий день">${I.back}</button>
         <span class="dc-t">${isToday ? 'Сегодня' : `${WD_S[dd.getDay()]}, ${dd.getDate()} ${MON_S[dd.getMonth()]}`}</span>
         <button class="pg" data-a="day" data-v="1" aria-label="Следующий день" ${isToday ? 'disabled' : ''}>${I.next}</button></div>
@@ -838,7 +852,7 @@
     const ms = monStat(t), msOk = ms.all && ms.ok === ms.all, sv = c && c.strain != null ? c.strain : null;
     h += `<div class="mons rise"><button class="mon" data-a="tab" data-v="trends"><span class="mon-k">Монитор здоровья${I.next}</span>
         <span class="mon-s"><i class="mon-b" style="--c:${!ms.all ? 'var(--hint)' : msOk ? 'var(--teal)' : ms.ok >= ms.all - 1 ? C.yellow : C.red}">${msOk ? I.check : '!'}</i>
-        <span><b style="color:${!ms.all ? 'var(--hint)' : msOk ? 'var(--teal)' : ms.ok >= ms.all - 1 ? C.yellow : C.red}">${!ms.all ? 'Нет данных' : msOk ? 'В норме' : 'Есть отклонения'}</b>${ms.all ? `${ms.ok}/${ms.all} показателей` : 'нужна неделя'}</span></span></button>
+        <span><b style="color:${!ms.all ? 'var(--hint)' : msOk ? 'var(--teal)' : ms.ok >= ms.all - 1 ? C.yellow : C.red}">${!ms.all ? 'Нет данных' : msOk ? 'В норме' : 'Обрати внимание'}</b>${ms.all ? `${ms.ok}/${ms.all} показателей` : 'нужна неделя'}</span></span></button>
       <button class="mon" data-a="detail" data-v="strain"><span class="mon-k">Цель нагрузки${I.next}</span>
         <span class="mon-s"><i class="mon-b num" style="--c:var(--strain)">${sv != null ? num(sv, 1) : '—'}</i>
         <span><b style="color:var(--strain)">${t.band ? `${t.band[0]}–${t.band[1]}` : 'Нет цели'}</b>${t.band && sv != null ? (sv < t.band[0] ? 'можно ещё' : sv <= t.band[1] ? 'в цели' : 'выше цели') : 'по восстановлению'}</span></span></button></div>`;
@@ -908,9 +922,10 @@
       <div class="stat"><div class="k">Твоя норма</div><div class="v num">${base == null ? '—' : num(base, dec)}<small>${unit}</small></div><div class="d">${base == null ? '' : goodUp == null ? (v == null ? '' : `${v - base > 0 ? '↑' : '↓'} ${num(Math.abs(v - base), dec)}`) : delta(v, base, goodUp)}</div></div></div>`;
     let h = '';
     if (kind === 'hrv') {
-      h = `<h2>Запас сил</h2>${norm(r.hrv, b.hrv, ' мс', true)}
+      h = `<h2>Запас сил</h2><p class="what-lead">Насколько отдохнул организм — по пульсу во сне.</p>${norm(r.hrv, b.hrv, ' мс', true)}
         <div class="note"><span>${r.hrv != null && b.hrv != null && r.hrv >= b.hrv ? '🟢' : '🟡'}</span><span>${esc(explainHrv(r.hrv, b.hrv))}</span></div>
-        ${box('Что это', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. Чем сильнее они «гуляют», тем лучше отдохнула нервная система. WHOOP меряет это ночью (в самом WHOOP это называется HRV).</p><p><b>Что за число в мс:</b> на сколько тысячных секунды в среднем меняется промежуток между ударами сердца ночью. Само число у всех своё — смотри на стрелку: ▲ больше твоей нормы — организм отдохнул, ▼ меньше — устал.</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
+        ${box('Простыми словами', '<p>Это то, насколько организм успел отдохнуть за ночь. Браслет понимает это по пульсу, пока ты спишь.</p><p><b>Норма</b> — твой обычный уровень за последние 30 дней.</p><p><b>Выше нормы — лучше</b>: ты отдохнул, можно нагружаться. <b>Ниже</b> — организм устал, день лучше полегче.</p>')}
+        ${box('Подробнее', '<p>Сердце бьётся не как метроном: промежутки между ударами чуть-чуть разные. Чем сильнее они «гуляют», тем лучше отдохнула нервная система. WHOOP меряет это ночью (в самом WHOOP это называется HRV).</p><p><b>Что за число в мс:</b> на сколько тысячных секунды в среднем меняется промежуток между ударами сердца ночью. Само число у всех своё — смотри на стрелку: ▲ больше твоей нормы — организм отдохнул, ▼ меньше — устал.</p><p><b>Выше — лучше:</b> нервная система отдохнула. <b>Ниже обычного</b> — усталость, стресс, недосып, болезнь, поздняя еда.</p><p>Сравнивай только со своей нормой — у всех она своя, чужие цифры не важны. Стрелка ↑/↓ — разница с твоей нормой за 30 дней.</p>')}
         ${box('Как поднять', '<ul><li>Спать 8–9 ч и ложиться в одно время</li><li>После тяжёлого дня — лёгкий</li><li>Пить воду в течение дня</li><li>Не есть плотно за 2–3 ч до сна, вечером без экрана</li></ul>')}`;
     } else if (kind === 'rhr') {
       h = `<h2>Пульс покоя</h2>${norm(r.rhr, b.rhr, ' уд/мин', false)}
@@ -926,7 +941,7 @@
     } else if (kind === 'resp') {
       const s = t.sleep || {};
       h = `<h2>Частота дыхания</h2>${norm(s.resp, b.resp, ' в мин', null, 1)}
-        ${box('Что это', '<p>Сколько вдохов в минуту ты делаешь во сне. У здорового человека она очень стабильна — обычно 12–18.</p><p>Заметный рост (на 1–2 и больше) бывает при простуде, жаре в комнате или сильной усталости. Важна не сама цифра, а отклонение от твоей нормы.</p>')}
+        ${box('Что это', '<p>Сколько вдохов в минуту ты делаешь во сне. У здорового человека она очень стабильна — обычно 12–18.</p><p>Заметный рост (на 1–2 и больше) бывает при простуде, жаре в комнате или сильной усталости. Важна не сама цифра, а разница с твоей нормой.</p>')}
         ${box('Что делать', '<ul><li>Проветривай комнату, спи в прохладе (18–20 °C)</li><li>Если дыхание выше нормы вместе с пульсом — сегодня без тяжёлой тренировки</li></ul>')}`;
     } else if (kind === 'spo2') {
       h = `<h2>Кислород в крови</h2>${norm(r.spo2, null, ' %', true, 1)}
@@ -991,8 +1006,8 @@
     const col = goodUp == null ? 'flat' : (goodUp ? x > 0 : x < 0) ? 'good' : 'bad';
     return `<i class="tri ${x > 0 ? 'up' : 'down'} ${col}"></i>`;
   }
-  const crow = (ic, k, v, ind, ex) => `<button class="crow" ${ex ? `data-a="explain" data-v="${ex}"` : 'type="button" tabindex="-1"'}><span class="cic">${ic}</span>
-    <span class="ck">${k}</span>${ind.startsWith('<span class="seg3') ? ind + `<span class="cv num">${v}</span>` : `<span class="cv num">${v}</span>${ind}`}</button>`;
+  const crow = (ic, k, v, ind, ex, hint) => `<button class="crow" ${ex ? `data-a="explain" data-v="${ex}"` : 'type="button" tabindex="-1"'}><span class="cic">${ic}</span>
+    <span class="ck">${k}${hint ? what(hint) : ''}</span>${ind.startsWith('<span class="seg3') ? ind + `<span class="cv num">${v}</span>` : `<span class="cv num">${v}</span>${ind}`}</button>`;
   const vsFoot = '<div class="cfoot"><i class="tri up good"></i><i class="tri down bad"></i><b>Сегодня</b>&nbsp;против 30 дней</div>';
   // три деления «плохо / достаточно / оптимально»; границы — наш расчёт (WHOOP свои не публикует)
   const lvl3 = (v, a, b) => v == null ? -1 : v < a ? 0 : v < b ? 1 : 2;
@@ -1051,7 +1066,7 @@
     h += bigRing(r.score / 100, C[r.zone], `${cnt(r.score)}<small>%</small>`, 'Восстановление');
     if (r.calibrating) h += '<div class="note rise"><span>⏳</span><span>WHOOP ещё калибруется — первые недели цифры неточные.</span></div>';
     const perfs = (d.series || []).filter(x => x.day < t.day).map(x => x.perf).filter(x => x != null), pb = perfs.length >= 5 ? perfs.reduce((a, x) => a + x, 0) / perfs.length : null;
-    h += `<section class="wcon rise">${crow(I.hrv, 'Запас сил', r.hrv != null ? `${Math.round(r.hrv)}<small>мс</small>` : '—', tri(r.hrv, b.hrv, true), 'hrv')}
+    h += `<section class="wcon rise">${crow(I.hrv, 'Запас сил', r.hrv != null ? `${Math.round(r.hrv)}<small>мс</small>` : '—', tri(r.hrv, b.hrv, true), 'hrv', HRV_WHAT)}
       ${crow(I.rhr, 'Пульс покоя', r.rhr != null ? `${r.rhr}<small>уд/мин</small>` : '—', tri(r.rhr, b.rhr, false), 'rhr')}
       ${crow(I.lungs, 'Дыхание во сне', s.resp != null ? `${num(s.resp, 1)}<small>в мин</small>` : '—', tri(s.resp, b.resp, null, 1), 'resp')}
       ${crow(I.moon, 'Сон от нужного', s.performance != null ? s.performance + '%' : '—', tri(s.performance, pb, true))}${vsFoot}</section>`;
@@ -1115,7 +1130,7 @@
     const s = z.summary, x = s.stats, p = s.prev || {};
     const fmtD = iso => { const d = parseDay(iso); return `${d.getDate()} ${MON_S[d.getMonth()]}`; };
     const range = per === 'day' ? dateLine(s.until) : `${fmtD(s.since)} — ${fmtD(s.until)} · ${s.span} ${plural(s.span, 'день', 'дня', 'дней')}`;
-    const tile = (k, v, c) => `<div class="stat"><div class="k">${k}</div><div class="v sm num">${v}</div><div class="d">${c || ''}</div></div>`;
+    const tile = (k, v, c, hint) => `<div class="stat"><div class="k">${k}${hint ? what(hint) : ''}</div><div class="v sm num">${v}</div><div class="d">${c || ''}</div></div>`;
     const dd = s.day || {};
     const recV = per === 'day' ? (dd.recovery ? dd.recovery.score : null) : x.recovery;
     const hrvV = per === 'day' ? (dd.recovery ? dd.recovery.hrv : null) : x.hrv;
@@ -1124,7 +1139,7 @@
     const stV = per === 'day' ? (dd.cycle ? dd.cycle.strain : null) : x.strain;
     let h = `<p class="small muted">${range} · сравнение: ${esc(s.prev_label)}</p>
       <div class="grid2">${tile('Восстановление', recV != null ? Math.round(recV) + '%' : '—', cmp(recV, p.recovery, true, '%'))}
-      ${tile('Запас сил', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true, ' мс'))}
+      ${tile('Запас сил', hrvV != null ? Math.round(hrvV) + ' мс' : '—', cmp(hrvV, p.hrv, true, ' мс'), HRV_WHAT)}
       ${tile('Пульс покоя', rhrV != null ? Math.round(rhrV) + ' уд/мин' : '—', cmp(rhrV, p.rhr, false, ' уд/мин'))}
       ${tile('Сон', hHuman(slV), cmp(slV != null ? slV * 60 : null, p.sleep != null ? p.sleep * 60 : null, true, ' мин'))}
       ${tile('Нагрузка', stV != null ? num(stV, 1) + ' из 21' : '—', cmp(stV, p.strain, null, '', 1))}
@@ -1215,7 +1230,7 @@
   // «Health Monitor»: каждый показатель против твоего обычного уровня. Точных границ WHOOP не публикует —
   // здесь наши: «в норме» — в пределах tol от нормы за 30 дней, «заметно» — до 2×tol, дальше — «сильно».
   const MONITOR = [
-    { k: 'Запас сил', ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
+    { k: 'Запас сил', what: HRV_WHAT, ex: 'hrv', unit: 'мс', get: t => (t.recovery || {}).hrv, base: b => b.hrv, tol: b => b * .15 },
     { k: 'Пульс покоя', ex: 'rhr', unit: 'уд/мин', get: t => (t.recovery || {}).rhr, base: b => b.rhr, tol: () => 3 },
     { k: 'Дыхание во сне', ex: 'resp', unit: 'в мин', d: 1, get: t => (t.sleep || {}).resp, base: b => b.resp, tol: () => 1 },
     { k: 'Кислород в крови', ex: 'spo2', unit: '%', d: 1, get: t => (t.recovery || {}).spo2, base: () => 97.5, tol: () => 2.5, range: '95–100' },
@@ -1240,7 +1255,7 @@
         if (x <= 1) { ok++; col = C.green; word = 'в норме'; } else if (x <= 2) { col = C.yellow; word = 'заметно'; } else { col = C.red; word = 'сильно'; }
       } else if (v != null) word = 'нет нормы';
       return `<button class="mrow" data-a="explain" data-v="${m.ex}"><i class="mdot" style="background:${col}"></i>
-        <span class="mk">${m.k}<small>${range ? `обычно ${range}` : word}</small></span>
+        <span class="mk">${m.k}${m.what ? what(m.what) : ''}<small>${range ? `обычно ${range}` : word}</small></span>
         <span class="mv"><b class="num">${v == null ? '—' : num(v, m.d || 0)}</b><small>${m.unit}</small><em style="color:${col}">${word}</em></span></button>`;
     }).join('');
     return `<section class="card monitor rise">${cap('Монитор здоровья', all ? `<b class="num" style="color:${ok === all ? C.green : ok >= all - 1 ? C.yellow : C.red}">${ok}/${all}</b> в норме` : '')}${rows}</section>`;
@@ -1419,6 +1434,37 @@
       });
     });
   }
+  // серия ношения (огонёк в шапке): число должно совпадать с WHOOP — «Сверить с WHOOP» ставит его вручную (POST /api/streak {n})
+  function streakBody() {
+    const st = streak(), a = S.data.streak && S.data.streak.anchored;
+    const sd = st.since ? parseDay(st.since) : st.n ? new Date(parseDay(S.data.today.day).getTime() - (st.n - 1) * 864e5) : null;
+    return `<div class="grid2"><div class="stat"><div class="k">Дней подряд</div><div class="v num">${st.n}${st.full ? '+' : ''}</div><div class="d">${a ? 'сверено с WHOOP' : 'по данным браслета'}</div></div>
+      <div class="stat"><div class="k">Началась</div><div class="v sm num">${sd ? `${sd.getDate()} ${MON_S[sd.getMonth()]}` : '—'}</div><div class="d">${sd ? sd.getFullYear() : ''}</div></div></div>`;
+  }
+  function streakSheet() {
+    haptic('tap');
+    const el = sheet(`<h2>Серия</h2><p class="what-lead">Сколько дней подряд браслет на руке. Пропустил день — серия начинается заново.</p>
+      <div class="sk-body">${streakBody()}</div>
+      <div class="label">Сверить с WHOOP</div>
+      <form class="card sk-form"><p class="small muted">В WHOOP другое число? Впиши его — дальше серия пойдёт от него.</p>
+        <div class="sk-row"><input name="n" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-label="Дней подряд в WHOOP" placeholder="${streak().n}">
+        <button class="btn primary" type="submit">Сохранить</button></div></form>`);
+    $('.sk-form', el).addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const inp = ev.target.elements.n, raw = inp.value.trim(), n = Number(raw);
+      if (!/^\d{1,4}$/.test(raw) || n > 3650) { haptic('error'); toast('Число от 0 до 3650', 'err'); inp.focus(); return; }
+      await busy(ev.submitter || $('.sk-form button', el), async () => {
+        try {
+          const r = await api('/api/streak', { n });
+          S.data.streak = r.streak || { n, anchored: true };
+          inp.value = ''; inp.placeholder = String(S.data.streak.n); inp.blur();
+          morph($('.sk-body', el), streakBody());
+          render(false);  // тихо: огонёк в шапке и «Ещё» — только отличия
+          haptic('success'); toast('Серия обновлена', 'ok');
+        } catch (e) { fail(e); }
+      });
+    });
+  }
   function progressSheet() {
     if (!S.progress) return;
     sheet(`<h2>Разбор прогресса</h2><p class="small muted">от ${dateLine(S.progress.day)}</p><div class="prose">${tgHtml(S.progress.text)}</div>`);
@@ -1473,6 +1519,7 @@
     else if (a === 'workout') openScreen('strain');
     else if (a === 'plan-open') openScreen('plan');
     else if (a === 'about') aboutSheet(v);
+    else if (a === 'streak') streakSheet();
     else if (a === 'ask-go') { go('coach'); ask(v); }  // без модуля activity.js — общий экран нагрузки
     else if (a === 'tab') { const t = TABS.find(x => x.id === v); if (t) { haptic('select'); go(v); } }
     else if (a === 'connect') connect();
@@ -1639,7 +1686,7 @@
   Object.assign(F, { morph, S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
     isoDay, parseDay, dateWord, dateLine, md, tgHtml, cnt, dial, ring, bar, bars, line, avg, animate, render, go, openScreen, closeScreen,
     dHead, cap, head, hero, chartCard, chBlock, chartLead, CHARTS, PER, prevOf, longest, metric, skel, retryCard, vs, sportIcon, strainScale, explain, ask, loadHistory, loadSeries,
-    summarySheet, profileSheet, refresh, shiftTo, svgi, lastRows, sub0, nav, theme, wide });
+    summarySheet, profileSheet, streakSheet, refresh, shiftTo, svgi, lastRows, sub0, nav, theme, wide });
   // вид WHOOP: «Прогноз на день» открывает совет дня листом (карточки над «Моим днём» у WHOOP нет)
   if (!F.actions.outlook) F.actions.outlook = () => { if (S.outlookHtml) sheet(`<h2>Прогноз на день</h2>${S.outlookHtml}`); else openScreen('rec'); };
   (window.FormaModules || []).forEach(m => { try { m(F); } catch (e) { console.error('модуль', e); } });

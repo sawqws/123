@@ -64,8 +64,8 @@
   // «лучше / хуже, чем раньше» — словами, для строки вывода
   const better = (v, p, goodUp) => v == null || p == null || Math.abs(v - p) < .5 ? 'как раньше' : (goodUp ? v > p : v < p) ? 'лучше, чем раньше' : 'хуже, чем раньше';
   // плитка сравнения: значение, разница и «было …»
-  const tile = (k, v, unit, d, was) => `<div class="tile as-tile"><span class="tile-k">${k}</span><span class="tile-v"><b>${v}</b><small>${unit}</small></span>
-    <span class="tile-d as-td">${d}${was != null ? `<span class="as-was">было ${was}</span>` : ''}</span></div>`;
+  const tile = (k, v, unit, d, was, hint) => `<div class="tile as-tile"><span class="tile-k">${k}</span><span class="tile-v"><b>${v}</b><small>${unit}</small></span>
+    <span class="tile-d as-td">${d}${was != null ? `<span class="as-was">было ${was}</span>` : ''}</span>${hint ? `<small class="what">${hint}</small>` : ''}</div>`;
   // строка вывода под заголовком карточки: крупно — главный итог, мельче — пояснение
   const lead = (t, sub) => `<p class="as-lead">${t}</p>${sub ? `<p class="as-sub">${sub}</p>` : ''}`;
   const periodWas = a => a.period === 'week' ? 'прошлая неделя' : 'прошлые 30 дней';
@@ -165,7 +165,7 @@
     const w = (v, u = '') => has && v != null ? `${v}${u}` : null;
     return `<div class="sec rise">${F.cap('Было → стало')}<div class="tiles as-cmp">
       ${tile('Восстановление', num(c.recovery), '%', chg(c.recovery, p.recovery, { unit: '%', good: true }), w(num(p.recovery), '%'))}
-      ${tile('Запас сил', num(c.hrv), 'мс', chg(c.hrv, p.hrv, { unit: `${NB}мс`, good: true }), w(num(p.hrv), `${NB}мс`))}
+      ${tile('Запас сил', num(c.hrv), 'мс', chg(c.hrv, p.hrv, { unit: `${NB}мс`, good: true }), w(num(p.hrv), `${NB}мс`), 'отдых организма по пульсу во сне')}
       ${tile('Пульс покоя', num(c.rhr), 'уд/мин', chg(c.rhr, p.rhr, { good: false }), w(num(p.rhr)))}
       ${tile('Сон за ночь', durS(c.sleep), '', chg(c.sleep != null ? Math.round(c.sleep * 60) : null, p.sleep != null ? Math.round(p.sleep * 60) : null, { unit: `${NB}мин`, good: true, eps: 3 }), w(durS(p.sleep)))}
       ${tile('Нагрузка в день', num(c.strain, 1), 'из 21', chg(c.strain, p.strain, { d: 1 }), w(num(p.strain, 1)))}
@@ -243,7 +243,7 @@
       h += stateCard(a.state) + sleepCard(a.sleep) + daysCard(a) + weekdayCard(a) + zonesCard(a) + compareCard(a) + tips;
     } else {
       h += recCard(a) + sleepCard(a.sleep) + weeksSleepCard(a) + zonesCard(a) + weekdayCard(a)
-        + trendCard(a, 'hrv', 'Запас сил', 'мс', true, 'Чем выше, тем лучше отдохнула нервная система.')
+        + trendCard(a, 'hrv', 'Запас сил', 'мс', true, 'Насколько отдохнул организм — по пульсу во сне. Чем выше, тем лучше.')
         + trendCard(a, 'rhr', 'Пульс покоя', 'уд/мин', false, 'Чем ниже, тем легче сердцу.')
         + compareCard(a) + tips;
     }
@@ -295,7 +295,7 @@
     const st = w && w.enough ? `<b style="color:${STATE_C[w.state.key] || 'var(--hint)'}">${esc(w.state.word)}</b><small>сон: ${esc((w.sleep.word || '').toLowerCase())}</small>` : '<b class="muted">Неделя</b><small>за 7 полных дней</small>';
     return `<div class="sec rise">${F.cap('Оценки')}<div class="as-entries">
       <button class="tile as-entry" data-a="as-open" data-v="week"><span class="as-ei">${IC.week}</span><span class="tile-k">Оценка недели${w ? `<br><span class="as-el">${esc(w.label)}</span>` : ''}</span><span class="as-ev">${st}</span>${dots}</button>
-      <button class="tile as-entry" data-a="as-open" data-v="month"><span class="as-ei">${IC.month}</span><span class="tile-k">Оценка месяца</span><span class="as-ev"><b>30 дней</b><small>сон, пульс, запас сил — против прошлых 30 дней</small></span></button>
+      <button class="tile as-entry" data-a="as-open" data-v="month"><span class="as-ei">${IC.month}</span><span class="tile-k">Оценка месяца</span><span class="as-ev"><b>30 дней</b><small>сон, пульс, отдых организма — против прошлых 30 дней</small></span></button>
       <button class="tile as-entry as-cal" data-a="as-open" data-v="calendar"><span class="as-ei">${IC.cal}</span><span class="tile-k">Календарь</span><span class="as-ev"><b>По дням</b><small>восстановление за полгода</small></span></button>
     </div></div>`;
   });
