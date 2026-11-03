@@ -295,6 +295,8 @@ def build(shots=None):
         api["/api/weight/delete"] = api["/api/weight"]
         api["/api/assess?period=month"] = coach.route(T.U, "/api/assess", {"period": "month"})  # --serve: оценка месяца
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
+        if not isinstance(api.get("/api/streak"), dict) or "streak" not in api["/api/streak"]:  # сверка серии с WHOOP — пример
+            api["/api/streak"] = {"streak": {**(allp.get("streak") or {"n": 0, "since": None}), "anchored": True}}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
 
