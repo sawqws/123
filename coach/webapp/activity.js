@@ -134,7 +134,7 @@
   function hints(qs) {
     qs = qs.filter(Boolean).slice(0, 3);
     if (!qs.length) return '';
-    return `<section class="card actv-coach rise">${F.cap(`<span class="actv-spark">${spark}</span>Спросить тренера`, 'по твоим данным')}
+    return `<section class="card actv-coach rise">${F.cap(`<span class="actv-spark">${spark}</span>Спросить в чате`, 'по твоим данным')}
       ${qs.map(q => `<button class="actv-q" data-a="actv-ask" data-v="${esc(q)}"><span>${esc(q)}</span>${chev}</button>`).join('')}</section>`;
   }
   F.actions['actv-ask'] = async (el, q) => {
@@ -172,7 +172,7 @@
   }
 
   // ---------- тренды 1Н / 1М / 6М в разборах ----------
-  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, 'Полгода']];
+  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, '6 месяцев']];
   F.S.actvRange = F.S.actvRange || { sleep: 7, rec: 7, strain: 7 };
   const pending = new Set(), asked = new Set(), failed = new Set();
   const longest = F.longest;

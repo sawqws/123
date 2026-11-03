@@ -132,8 +132,8 @@
     if (!t) return F.S.snFail ? '' : `<div class="sec rise">${cap('Кожа')}${skel(2)}</div>`;
     if (!d.has) {
       return `<div class="sec rise">${cap('Кожа')}<section class="card sn-card sn-empty">
-        <span class="sn-ei">${I.face}</span><p><b>Расскажи, какой у тебя уход</b>Утро, вечер, маски — буду отмечать шаги, а тренер подскажет, что улучшить.</p>
-        <div class="sn-btns"><button class="btn primary" data-a="sn-import">Заполнить списком</button><button class="btn" data-a="sn-open">Подробнее</button></div></section></div>`;
+        <span class="sn-ei">${I.face}</span><p><b>Расскажи, какой у тебя уход</b>Утро, вечер, маски — буду отмечать шаги и подскажу, что улучшить.</p>
+        <div class="sn-btns"><button class="btn primary" data-a="sn-import">Заполнить списком</button><button class="btn" data-a="sn-open">Подробнее</button></div>${door()}</section></div>`;
     }
     // сейчас утро — утренние шаги; утро уже сделано (или шагов нет) — вечерние
     const np = nowPart(), other = np === 'am' ? 'pm' : 'am';
@@ -145,8 +145,11 @@
         ${list.length ? `<div class="sn-list"><div class="sn-lh">${p === 'am' ? 'Утро' : 'Уход на вечер'}</div>${list.map(x => step(x)).join('')}</div>` : ''}
         ${more > 0 || due.length ? `<button class="sn-more" data-a="sn-open"><span>${due.length ? `Сегодня ещё: ${esc(due.map(x => x.title.toLowerCase()).join(', '))}` : `Ещё ${more}`}</span><span class="chev"></span></button>` : ''}
         <div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div>
-        <div class="sn-aibox" data-sn-ai>${aiRow(lastAi())}</div></section></div>`;
+        <div class="sn-aibox" data-sn-ai>${aiRow(lastAi())}</div>${door()}</section></div>`;
   });
+  // заметная плитка входа в раздел (Глеб 03.11: «отдельный раздел кожи, как Питание»)
+  const door = () => `<button type="button" class="sn-door" data-a="sn-open"><span class="sn-di" aria-hidden="true">${I.face}</span>
+    <span class="sn-ct"><b>Раздел «Кожа»</b><small>уход · фото · спросить про кожу</small></span><span class="chev" aria-hidden="true"></span></button>`;
   F.slots.plus.push(row => row('sn-open', '', I.face, 'var(--ink)', 'Кожа', 'уход и разбор по фото'));
 
   // ---------- вечерний чек-лист «Режима»: уход берём отсюда, не дублируем ----------
@@ -162,49 +165,182 @@
   const same = (a, b) => { const x = norm(a), y = norm(b); return !!x.length && !!y.length && (x.join() === y.join() || (x[0] === y[0] && x[0].length >= 4)); };
   F.rgHide = text => { const t = today(); return !!(t && (t.pm || []).some(x => same(text, x.title))); };
 
-  // ---------- экран «Кожа» ----------
+  // ---------- экран «Кожа» — раздел как «Питание» (Глеб 03.11: «отдельный раздел кожи — писать, консультироваться, поправлять») ----------
+  // Сверху сегменты «Сегодня · Уход · Фото · Спросить» (F.S.snSeg). «Спросить» — встроенный чат по коже: тот же /api/ask/stream
+  // с topic: "skin" (своя нить истории, к вопросу — уход, заметки и разборы фото), «поменяй вечерний уход…» — действие skin_routine.
+  const SEGS = [['today', 'Сегодня'], ['care', 'Уход'], ['photo', 'Фото'], ['ask', 'Спросить']];
+  const seg = () => F.S.snSeg || 'today';
+  const segBar = () => `<div class="seg sn-seg" role="tablist" aria-label="Кожа">${SEGS.map(([k, l]) =>
+    `<button type="button" class="${seg() === k ? 'on' : ''}" data-a="sn-seg" data-v="${k}" role="tab" aria-selected="${seg() === k}">${l}</button>`).join('')}</div>`;
+  function todayPart(d, t) {
+    if (!d.has) {
+      return `<section class="card sn-card sn-empty sn-hero rise"><span class="sn-ei">${I.face}</span>
+        <p><b>Расскажи, какой у тебя уход</b>Напиши списком, что делаешь утром и вечером и какие маски бывают, — я разложу по шагам. Или попроси в «Спросить»: «добавь утром умывание пенкой».</p>
+        <div class="sn-btns"><button class="btn primary" data-a="sn-import">Заполнить списком</button><button class="btn" data-a="sn-seg" data-v="ask">Спросить</button></div></section>`
+        + `<div class="sec rise">${cap('Фото лба', badge(t))}<section class="card sn-card"><div class="sn-list"><div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div></div></section></div>`;
+    }
+    const s = d.stats || {};
+    let h = `<section class="card sn-card sn-hero rise"><div class="sn-parts">${partBtn(t, 'am')}${partBtn(t, 'pm')}</div>
+      <div class="sn-stats"><div><b class="num" data-sn-streak>${d.streak}</b><span>${F.plural(d.streak, 'день', 'дня', 'дней')} подряд</span></div>
+        <div><b class="num">${d.best}</b><span>лучшая серия</span></div>
+        <div data-sn-aistat>${aiStat(s)}</div></div>
+      <div class="sn-aibox" data-sn-ai>${aiRow(lastAi())}</div></section>`;
+    ['am', 'pm'].forEach(p => {
+      if (!(t[p] || []).length) return;
+      h += `<div class="sec rise">${cap(PART[p], `<span class="num" data-sn-cnt="${p}">${cnt(t, p)}</span>`)}<section class="card sn-card"><div class="sn-list">${t[p].map(x => step(x)).join('')}</div></section></div>`;
+    });
+    // процедуры на сегодня; «Фото лба» (раз в 3 дня) — первой строкой: в свой день — как отметка дня, в другие — тише
+    h += `<div class="sec rise">${cap('Процедуры', badge(t))}<section class="card sn-card"><div class="sn-list">
+        <div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div>
+        ${(t.extra || []).map(x => step(x, `сегодня · ${extraMeta(x)}`)).join('')}
+        ${(t.later || []).map(x => `<div class="sn-later">${step(x, extraMeta(x))}</div>`).join('')}</div></section></div>`;
+    return h;
+  }
+  function carePart(d) {
+    const r = d.routine, notes = d.notes || {}, nt = [notes.type, notes.react, notes.avoid].filter(Boolean).join(' · ');
+    const part = (p, xs, meta) => `<div class="sec rise">${cap(PART[p], `<span class="num">${xs.length}</span>`)}<section class="card sn-card"><div class="sn-plain">
+      ${xs.length ? xs.map((x, i) => `<div class="sn-pl"><span class="sn-pn num">${i + 1}</span><span class="sn-ct"><b>${esc(x.title)}</b>${meta(x) ? `<small>${esc(meta(x))}</small>` : ''}</span></div>`).join('')
+        : '<p class="small muted">Шагов нет</p>'}</div></section></div>`;
+    let h = '';
+    if (d.has) h += part('am', r.am, x => x.product) + part('pm', r.pm, x => x.product) + part('extra', r.extra, x => [x.product, x.sched].filter(Boolean).join(' · '));
+    h += `<div class="sec rise">${cap('Изменить')}<div class="list">
+      <button class="row tap" data-a="sn-seg" data-v="ask" data-q="Поменяй мой уход: "><span class="ic">${F.I.coach}</span><span class="main"><div class="title">Попросить в чате</div><div class="meta">«убери скраб», «добавь вечером сыворотку»</div></span><span class="end chev"></span></button>
+      <button class="row tap" data-a="sn-edit"><span class="ic">${I.edit}</span><span class="main"><div class="title">${d.has ? 'Изменить по шагам' : 'Добавить по шагам'}</div><div class="meta">${d.has ? `утро ${r.am.length} · вечер ${r.pm.length} · процедуры ${r.extra.length}` : 'утро, вечер, маски по дням'}</div></span><span class="end chev"></span></button>
+      <button class="row tap" data-a="sn-import"><span class="ic">${I.list}</span><span class="main"><div class="title">Заполнить списком</div><div class="meta">каждая строка — шаг</div></span><span class="end chev"></span></button>
+      <button class="row tap" data-a="sn-notes"><span class="ic">${I.note}</span><span class="main"><div class="title">Заметки о коже</div><div class="meta">${esc(nt || 'тип кожи, на что реагирует, что не подходит')}</div></span><span class="end chev"></span></button></div></div>`;
+    return h + '<p class="foot">Сыпь, сильные или болезненные прыщи, зуд, отёк, пятна, которые меняются, — скажи родителям и сходи к дерматологу. Новое средство сначала пробуй на маленьком участке.</p>';
+  }
+  function photoPart(d, t) {
+    return `<div class="sec rise">${cap('Фото лба', badge(t))}<section class="card sn-card"><div class="sn-list"><div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div></div>
+        <button class="btn" data-a="sn-photos">Все снимки</button></section></div>
+      <div class="sec rise">${cap('Разборы по фото')}<section class="card sn-card" data-sn-feed>${feed(d)}</section></div>
+      <p class="foot">Фото видишь только ты. Разбор — не диагноз: что-то болит или меняется — к дерматологу.</p>`;
+  }
+
+  // ---------- «Спросить»: чат по коже ----------
+  const ASKS = ['Что улучшить в уходе?', 'Поменяй вечерний уход', 'Почему появляются прыщи?', 'Какой крем от солнца взять?'];
+  const snq = () => document.getElementById('snq');
+  const toEnd = () => requestAnimationFrame(() => { if (document.querySelector('.sn-chat')) window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }); });
+  async function loadChat() {
+    if (F.S.snHistLoading) return;
+    F.S.snHistLoading = true; F.S.snHistErr = false;
+    try { F.S.snHist = (await F.api('/api/history', { topic: 'skin' })).history || []; } catch (e) { F.S.snHistErr = true; }
+    F.S.snHistLoading = false;
+    if (F.S.screen === 'skin' && seg() === 'ask') { F.render(false); toEnd(); }
+  }
+  function askPart() {
+    const hist = F.S.snHist, asking = F.S.snAsking;
+    if (!hist && F.S.snHistErr) return `<section class="card"><div class="empty"><span class="e">⚠️</span><b>Разговор не загрузился</b>Проверь интернет.</div><button class="btn tonal" data-a="sn-chat-retry">Повторить</button></section>`;
+    if (!hist) { setTimeout(loadChat, 0); return '<div class="chat sn-chat"><div class="sk msg-sk me"></div><div class="sk msg-sk"></div></div>'; }
+    const empty = !hist.length && !asking;
+    let h = '<div class="chat sn-chat" role="log">';
+    if (empty) {
+      h += `<div class="msg them sn-hi">Спроси про кожу или попроси поменять уход — «убери скраб», «добавь вечером сыворотку». Я вижу твой уход, заметки и разборы фото. Отвечу коротко.</div>
+        <div class="sn-asks">${ASKS.map(q => `<button type="button" class="chip" data-a="sn-ask" data-v="${esc(q)}">${esc(q)}</button>`).join('')}</div>`;
+    }
+    hist.forEach(m => { h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>` : `<div class="msg them prose">${F.md(m.text)}</div>${F.actChips ? F.actChips(m) : ''}`; });
+    if (asking) h += `<div class="msg me">${esc(asking)}</div><div class="msg them${F.S.snLive ? ' prose' : ''}" data-sn-live>${F.S.snLive ? F.md(F.S.snLive) : '<span class="dots"><i></i><i></i><i></i></span>'}</div>`;
+    h += '</div>';
+    h += `<div class="composer sn-composer"><div class="ask">
+      <textarea id="snq" rows="1" placeholder="${empty ? 'Спроси про кожу' : 'Сообщение'}" aria-label="Вопрос про кожу">${esc(F.S.snDraft || '')}</textarea>
+      <button class="send" data-a="sn-ask" aria-label="Отправить" ${asking ? 'disabled' : ''}>↑</button></div>
+      ${hist.length && !asking ? '<button class="link sn-new" data-a="sn-chat-new">Новый разговор</button>' : ''}</div>
+      <p class="co-note">Чат не заменяет врача: сыпь, боль, гной, отёк — к дерматологу и скажи родителям.</p>`;
+    return h;
+  }
+  // ответ потоком: дописываем только последний пузырь раз в кадр, экран не перерисовывается
+  async function askStream(q) {
+    const tg = F.tg, headers = { 'X-Init-Data': (tg && tg.initData) || '', 'Content-Type': 'application/json' };
+    if (!headers['X-Init-Data']) headers['X-Site'] = '1';
+    const r = await fetch('/api/ask/stream', { method: 'POST', headers, body: JSON.stringify({ text: q, topic: 'skin' }) });
+    if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Чат не ответил — попробуй ещё раз'); }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '', live = '', queued = false, done = null;
+    const paint = () => { queued = false; if (!F.S.snAsking) return; const b = document.querySelector('[data-sn-live]'); if (!b) return; b.classList.add('prose'); b.innerHTML = F.md(live); };
+    for (;;) {
+      const { value, done: end } = await rd.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i).replace(/^data: ?/, ''); buf = buf.slice(i + 2);
+        let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.error) throw new Error(ev.error);
+        if (ev.s && !live) { const b = document.querySelector('[data-sn-live]'); if (b) b.innerHTML = `<span class="dots"><i></i><i></i><i></i></span> <span class="ask-note">${esc(ev.s)}</span>`; }
+        if (ev.t) { live += ev.t; F.S.snLive = live; if (!queued) { queued = true; requestAnimationFrame(paint); } }
+        if (ev.done) done = ev;
+      }
+    }
+    if (!done) throw new Error('Ответ оборвался — попробуй ещё раз');
+    return done;
+  }
+  async function ask(q) {
+    q = String(q || '').trim(); if (!q || F.S.snAsking) return;
+    F.S.snAsking = q; F.S.snLive = ''; F.S.snDraft = ''; vib('tap');
+    const el = snq(); if (el) { el.value = ''; el.style.height = ''; }
+    F.render(false); toEnd();
+    try {
+      const done = await askStream(q);
+      F.S.snHist = done.history;
+      if (F.onActs) F.onActs(done);  // чипы «Отменить» под ответом (assist.js)
+      if ((done.actions || []).some(a => a.ok && a.kind === 'skin_routine')) load(false);  // уход поменялся — подтянуть
+      vib('success');
+    } catch (e) { F.fail(e); F.S.snDraft = q; }
+    F.S.snAsking = false; F.S.snLive = '';
+    if (F.S.screen === 'skin') { F.render(false); const el2 = snq(); if (el2 && F.S.snDraft) el2.value = F.S.snDraft; toEnd(); }
+  }
+  F.actions['sn-ask'] = (el, v) => ask(v || (snq() || {}).value);
+  F.actions['sn-chat-retry'] = () => { F.S.snHistErr = false; F.render(false); };
+  F.actions['sn-chat-new'] = async () => {
+    vib('select');
+    try { await F.api('/api/history/clear', { topic: 'skin' }); F.S.snHist = []; F.render(false); } catch (e) { F.fail(e); }
+  };
+  // «Спросить» из листа разбора — раздел «Кожа» → «Спросить» и сразу вопрос
+  F.actions['sn-ask-go'] = (el, v) => {
+    F.S.snSeg = 'ask';
+    if (F.S.screen !== 'skin') F.openScreen('skin'); else F.render(false);
+    if (v) setTimeout(() => ask(v), 50);
+  };
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' && !ev.shiftKey && ev.target && ev.target.id === 'snq') { ev.preventDefault(); ask(ev.target.value); }
+  });
+  document.addEventListener('input', ev => { if (ev.target && ev.target.id === 'snq') F.S.snDraft = ev.target.value; });
+
   F.screens.skin = () => {
     const d = F.S.sn, t = today();
-    const title = F.dHead('Кожа', t ? `${F.dateWord(t.day)}, ${F.dateLine(t.day)}` : 'уход и дневник', 'var(--ink)');
+    const title = F.dHead('Кожа', t ? `${F.dateWord(t.day)}, ${F.dateLine(t.day)}` : 'уход, фото и вопросы', 'var(--ink)');
+    if (seg() === 'ask') return title + segBar() + askPart();
     if (!d || !d.routine) {
-      if (F.S.snErr) return title + `<section class="card sn-empty"><p>Не загрузилось.</p><button class="btn primary" data-a="sn-retry">Повторить</button></section>`;
+      if (F.S.snErr) return title + segBar() + '<section class="card sn-empty"><p>Не загрузилось.</p><button class="btn primary" data-a="sn-retry">Повторить</button></section>';
       load(true);
-      return title + skel(5);
+      return title + segBar() + skel(5);
     }
-    const s = d.stats || {}, r = d.routine;
-    let h = title;
-    if (d.has) {
-      h += `<section class="card sn-card sn-hero rise"><div class="sn-parts">${partBtn(t, 'am')}${partBtn(t, 'pm')}</div>
-        <div class="sn-stats"><div><b class="num" data-sn-streak>${d.streak}</b><span>${F.plural(d.streak, 'день', 'дня', 'дней')} подряд</span></div>
-          <div><b class="num">${d.best}</b><span>лучшая серия</span></div>
-          <div data-sn-aistat>${aiStat(s)}</div></div></section>`;
-      ['am', 'pm'].forEach(p => {
-        if (!(t[p] || []).length) return;
-        h += `<div class="sec rise">${cap(PART[p], `<span class="num" data-sn-cnt="${p}">${cnt(t, p)}</span>`)}<section class="card sn-card"><div class="sn-list">${t[p].map(x => step(x)).join('')}</div></section></div>`;
-      });
-      // процедуры по расписанию; «Фото лба» (раз в 3 дня) — первой строкой: в свой день — как отметка дня, в другие — тише
-      h += `<div class="sec rise">${cap('Процедуры', badge(t))}<section class="card sn-card"><div class="sn-list">
-          <div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div>
-          ${(t.extra || []).map(x => step(x, `сегодня · ${extraMeta(x)}`)).join('')}
-          ${(t.later || []).map(x => `<div class="sn-later">${step(x, extraMeta(x))}</div>`).join('')}</div></section></div>`;
-    } else {
-      h += `<section class="card sn-card sn-empty sn-hero rise"><span class="sn-ei">${I.face}</span>
-        <p><b>Расскажи, какой у тебя уход</b>Напиши списком, что делаешь утром и вечером и какие маски бывают, — я разложу по шагам. Каждый день отмечай одним нажатием, а тренер будет видеть уход и советовать.</p>
-        <div class="sn-btns"><button class="btn primary" data-a="sn-import">Заполнить списком</button><button class="btn" data-a="sn-edit">По шагам</button></div></section>`;
-      h += `<div class="sec rise">${cap('Фото лба', badge(t))}<section class="card sn-card"><div class="sn-list"><div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div></div></section></div>`;
-    }
-    h += `<div class="sec rise">${cap('Разборы по фото')}<section class="card sn-card" data-sn-feed>${feed(d)}</section></div>`;
-    const notes = d.notes || {}, nt = [notes.type, notes.react, notes.avoid].filter(Boolean).join(' · ');
-    h += `<div class="sec rise">${cap('Мой уход')}<div class="list">
-      <button class="row tap" data-a="sn-edit"><span class="ic">${I.edit}</span><span class="main"><div class="title">${d.has ? 'Изменить уход' : 'Добавить по шагам'}</div><div class="meta">${d.has ? `утро ${r.am.length} · вечер ${r.pm.length} · процедуры ${r.extra.length}` : 'утро, вечер, маски по дням'}</div></span><span class="end chev"></span></button>
-      <button class="row tap" data-a="sn-import"><span class="ic">${I.list}</span><span class="main"><div class="title">Заполнить списком</div><div class="meta">каждая строка — шаг</div></span><span class="end chev"></span></button>
-      <button class="row tap" data-a="sn-notes"><span class="ic">${I.note}</span><span class="main"><div class="title">Заметки о коже</div><div class="meta">${esc(nt || 'тип кожи, на что реагирует, что не подходит')}</div></span><span class="end chev"></span></button>
-      <button class="row tap" data-a="ask-go" data-v="Посмотри мой уход за кожей и последние разборы фото: что улучшить?"><span class="ic">${F.I.coach}</span><span class="main"><div class="title">Спросить тренера</div><div class="meta">видит твой уход и разборы фото</div></span><span class="end chev"></span></button></div></div>`;
-    h += '<p class="foot">Сыпь, сильные или болезненные прыщи, зуд, отёк, пятна, которые меняются, — скажи родителям и сходи к дерматологу. Новое средство сначала пробуй на маленьком участке.</p>';
-    return h;
+    return title + segBar() + (seg() === 'care' ? carePart(d) : seg() === 'photo' ? photoPart(d, t) : todayPart(d, t));
   };
+  F.actions['sn-seg'] = (el, v) => {
+    if (!SEGS.some(([k]) => k === v)) return;
+    const q = el && el.dataset && el.dataset.q;
+    if (q) F.S.snDraft = q;
+    if (seg() === v && !q) return;
+    vib('select'); F.S.snSeg = v;
+    if (F.S.screen !== 'skin') { F.openScreen('skin'); return; }
+    F.render(false);
+    if (v === 'ask') { toEnd(); if (q) setTimeout(() => { const e = snq(); if (e) { e.value = q; e.focus(); } }, 60); } else window.scrollTo({ top: 0 });
+  };
+  // входы в раздел: «Здоровье» и «Ещё» (в нижнем меню места нет — там 4 вкладки и «Чат»)
+  F.slots.healthAfterMonitor.push(() => `<div class="sec rise">${cap('Кожа')}<div class="list"><button class="row tap" data-a="sn-open"><span class="ic">${I.face}</span>
+    <span class="main"><div class="title">Уход, фото, вопросы</div><div class="meta">${esc(entryMeta())}</div></span><span class="end chev"></span></button></div></div>`);
+  F.slots.moreProfile = F.slots.moreProfile || [];
+  F.slots.moreProfile.push(row => row({ a: 'sn-open', ic: I.face, title: 'Кожа', meta: 'уход, фото лба, вопросы' }));
+  function entryMeta() {
+    const d = data(), t = d && d.today;
+    if (!t) return 'раздел о коже';
+    if (!d.has) return 'расскажи, какой у тебя уход';
+    const a = lastAi();
+    return [`утро ${cnt(t, 'am')}`, `вечер ${cnt(t, 'pm')}`, a && a.status !== 'wait' ? (AIW[a.status] || '').toLowerCase() : ''].filter(Boolean).join(' · ');
+  }
   // ---------- действия ----------
-  F.actions['sn-open'] = () => { if (F.S.screen === 'skin') return; vib('tap'); F.openScreen('skin'); };
+  F.actions['sn-open'] = () => { if (F.S.screen === 'skin') return; vib('tap'); F.S.snSeg = 'today'; F.openScreen('skin'); };
   F.actions['sn-retry'] = () => { F.S.snErr = false; F.render(false); };
   F.actions['sn-import'] = () => importSheet();
   F.actions['sn-edit'] = () => { if (!(F.S.sn && F.S.sn.routine)) { load(true).then(() => F.S.sn && F.S.sn.routine && editSheet()); return; } editSheet(); };
@@ -283,7 +419,7 @@
         : `<div class="prose sn-ap">${F.md(x.text || '')}</div>`;
       const btns = x.status === 'wait' ? ''
         : x.status === 'none' ? (x.retake ? '<button class="btn primary" type="button" data-shoot>Переснять</button>' : '<button class="btn primary" type="button" data-re>Повторить</button>')
-          : `<button class="btn" type="button" data-a="ask-go" data-v="${esc(q(x))}">${F.I.coach}<span>Спросить тренера</span></button><button class="btn" type="button" data-re>Разобрать заново</button>`;
+          : `<button class="btn" type="button" data-a="sn-ask-go" data-v="${esc(q(x))}">${F.I.coach}<span>Спросить</span></button><button class="btn" type="button" data-re>Разобрать заново</button>`;
       const th = thumbs.get(x.day);  // миниатюра уже в памяти — сразу в разметке (morph не снимет её при обновлении)
       return `<div class="sn-ah"><span class="sn-ath"><img alt="" data-day="${esc(x.day)}"${th ? ` src="${th}" class="in"` : ''}></span>
           <div class="sn-at"><h2>Разбор кожи</h2><div class="sn-ak">${dot(x.status)}<b>${esc(AIW[x.status] || '')}</b></div><p class="small muted">${esc(meta)}</p></div></div>
@@ -299,7 +435,7 @@
     box.innerHTML = html(); thumb();
     aiOpen = { el, day, draw };
     el.addEventListener('click', async ev => {
-      if (ev.target.closest('[data-a="ask-go"]')) { el.close(); return; }
+      if (ev.target.closest('[data-a="sn-ask-go"]')) { el.close(); return; }
       if (ev.target.closest('[data-shoot]')) { el.close(); F.actions['sn-photo'](); return; }
       const re = ev.target.closest('[data-re]'); if (!re) return;
       await F.busy(re, async () => {
@@ -537,7 +673,7 @@
     const el = F.sheet('<div class="sn-phs" data-sn-phs></div>', () => { document.removeEventListener('keydown', keys); token++; });
     const box = el.querySelector('[data-sn-phs]');
     const grid = () => !list ? `<h2>Фото лба</h2><div class="sn-grid">${'<span class="sn-tile sk"><span class="sn-tw"></span></span>'.repeat(6)}</div>`
-      : `<h2>Фото лба</h2><p class="small muted sn-phh">${list.length ? `${list.length} ${F.plural(list.length, 'снимок', 'снимка', 'снимков')} · видишь только ты, тренер смотрит их только для разбора. Нажми, чтобы открыть.` : 'Пока нет снимков. Раз в 3 дня вечером после умывания — так видно, как меняется кожа.'}</p>
+      : `<h2>Фото лба</h2><p class="small muted sn-phh">${list.length ? `${list.length} ${F.plural(list.length, 'снимок', 'снимка', 'снимков')} · видишь только ты, Форма смотрит их только для разбора. Нажми, чтобы открыть.` : 'Пока нет снимков. Раз в 3 дня вечером после умывания — так видно, как меняется кожа.'}</p>
         ${list.length ? `<div class="sn-grid">${list.map((p, i) => `<button type="button" class="sn-tile" data-i="${i}" aria-label="Фото ${esc(dayShort(p.day))}">
           <span class="sn-tw"><img alt="" data-day="${esc(p.day)}"><span class="sn-eye" aria-hidden="true">${I.hide}</span></span><small>${esc(dayShort(p.day))}</small></button>`).join('')}</div>`
         : `<button class="btn primary sn-first" type="button" data-shoot>${I.cam}<span>Сделать фото</span></button>`}`;

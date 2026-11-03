@@ -344,8 +344,8 @@
     return `<div class="sec rise">${F.cap('Оценки')}<div class="as-entries">
       <button class="tile as-entry" data-a="as-open" data-v="week"><span class="as-ei">${IC.week}</span><span class="tile-k">Оценка недели${w ? `<br><span class="as-el">${esc(w.label)}</span>` : ''}</span><span class="as-ev">${st}</span>${dots}</button>
       <button class="tile as-entry" data-a="as-open" data-v="month"><span class="as-ei">${IC.month}</span><span class="tile-k">Оценка месяца</span><span class="as-ev"><b>30 дней</b><small>сон, пульс, отдых организма — против прошлых 30 дней</small></span></button>
-      <button class="tile as-entry as-cal" data-a="as-open" data-v="calendar"><span class="as-ei">${IC.cal}</span><span class="tile-k">Календарь</span><span class="as-ev"><b>По дням</b><small>восстановление за полгода</small></span></button>
+      <button class="tile as-entry as-cal" data-a="as-open" data-v="calendar"><span class="as-ei">${IC.cal}</span><span class="tile-k">Календарь</span><span class="as-ev"><b>По дням</b><small>восстановление за 6 месяцев</small></span></button>
     </div></div>`;
   });
-  F.slots.plus.push(row => row('as-open', 'calendar', IC.cal, 'var(--rec-green)', 'Календарь', 'восстановление по дням, полгода'));
+  F.slots.plus.push(row => row('as-open', 'calendar', IC.cal, 'var(--rec-green)', 'Календарь', 'восстановление по дням, 6 месяцев'));
 });

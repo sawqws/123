@@ -564,7 +564,7 @@ def calendar(app, uid, today, month=None):
         raise ValueError("Месяц пишется так: 2026-10")
     lo = today - datetime.timedelta(days=CAL_DAYS)
     if last < lo or first > today:
-        raise ValueError("Календарь показывает последние полгода")
+        raise ValueError("Календарь показывает последние 6 месяцев")
     data = _load(app, uid, first.isoformat(), min(last, today).isoformat())
     days = []
     for i in range((last - first).days + 1):

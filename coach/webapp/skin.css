@@ -242,3 +242,34 @@
   .sn-part, .sn-box, .sn-box .ico, .sn-ad::before, .sn-ai, .sn-er, .sn-ph, .sn-sb, .sn-go, .sn-tile, .sn-tw img, .sn-view, .sn-vimg img,
   .sn-tile.sk .sn-tw { transition: none !important; animation: none !important; }
 }
+
+/* ---------- раздел «Кожа»: сегменты, плитка входа, «Уход» списком, чат «Спросить» (Глеб 03.11) ---------- */
+.sn-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin: 0 0 16px; position: sticky; top: calc(var(--top, 0px) + 6px); z-index: 5; }
+.sn-seg button { min-width: 0; min-height: 36px; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sn-door { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 12px; border: 0; border-radius: 20px;
+  background: var(--card-2); color: var(--ink); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform .35s var(--spring-bounce, ease); }
+.sn-door:active { transform: scale(.97); transition-duration: .1s; }
+.sn-di { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--ink); color: var(--on-ink, var(--bg)); }
+.sn-di .ico { width: 20px; height: 20px; }
+.sn-door .sn-ct { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sn-door b { font: 650 15.5px/1.2 var(--head); }
+.sn-door small { font-size: 13px; color: var(--hint); }
+.sn-plain { display: grid; gap: 2px; }
+.sn-pl { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.sn-pl + .sn-pl { border-top: .5px solid var(--sep, rgba(127, 127, 127, .2)); }
+.sn-pn { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--fill); font-size: 13px; color: var(--hint); }
+.sn-pl .sn-ct { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sn-pl b { font: 600 15.5px/1.25 var(--head); }
+.sn-pl small { font-size: 13px; color: var(--hint); }
+.sn-chat { min-height: 30vh; }
+.sn-chat .msg.them { max-width: 92%; }
+.sn-asks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.sn-asks .chip { min-height: 36px; }
+.sn-composer { margin-top: 14px; }
+.sn-new { display: flex; justify-content: center; width: fit-content; margin: 8px auto 0; }
+@media (min-width: 1024px) {
+  html:root body:not(.tab-coach) #view > div:has(> .sn-seg) { columns: 1; max-width: 760px; margin: 0 auto; }
+  .sn-seg { top: 12px; }
+}
+@media (max-width: 374px) { html:root .sn-seg button { font-size: 12.5px !important; padding: 0 1px !important; letter-spacing: -.2px !important; } }

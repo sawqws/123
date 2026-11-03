@@ -309,12 +309,12 @@ class ApiTest(unittest.TestCase):
             r = self.call("/api/ask", {"text": "Что делать с кожей?"})
         p = c.call_args[0][0]
         for want in ("ПРОФИЛЬ", "ЦЕЛИ", "восстановление", "РЕЖИМ НА СЕГОДНЯ", "ПРИВЫЧКИ И ЦЕЛИ", "УХОД ЗА КОЖЕЙ",
-                     "СЕЙЧАС: 21:10, среда", "ВОПРОС: Что делать с кожей?", "Ответ для приложения"):
+                     "СЕЙЧАС: 21:10, среда", "ВОПРОС: Что делать с кожей?", "КРАТКО", "2–5 коротких строк"):
             self.assertIn(want, p)
         self.assertEqual(r["answer"], "Ок")
         with mock.patch.object(ai, "claude", return_value="Ок") as c:
             self.call("/api/ask", {"text": "А ещё?"})
-        self.assertIn("НЕДАВНИЙ РАЗГОВОР:\nЯ: Что делать с кожей?\nТренер: Ок", c.call_args[0][0])
+        self.assertIn("НЕДАВНИЙ РАЗГОВОР:\nЯ: Что делать с кожей?\nФорма: Ок", c.call_args[0][0])
         # чат бота — тот же контекст, но коротко
         sent = []
         with mock.patch.object(ai, "claude", return_value="Коротко") as c, \
@@ -646,6 +646,140 @@ class AiTest(PhotoBase):
         self.assertIn("последний разбор 04.11 — есть что поправить: - Пара воспалений - Покажи дерматологу", p)
         self.assertNotIn("data:image", p)
         self.assertIsNone(c.call_args[1].get("image"))
+
+
+class BriefTest(unittest.TestCase):
+    """Глеб 03.11: «в чате слишком много пишет — кратко, понятно, чётко»: правило в промпте и мягкий предел длины."""
+
+    def test_prompt_has_brevity_rule(self):
+        p = ai.chat_prompt("ДАННЫЕ", [], "Как улучшить сон?", full=True, assist=True)
+        for want in ("КРАТКО", "2–5 коротких строк", "Без вступлений", "не больше 4 пунктов"):
+            self.assertIn(want, p)
+        self.assertNotIn("до ~15 строк", p)
+        self.assertIn("до ~15 строк", ai.chat_prompt("", [], "Распиши подробно план на неделю", full=True))
+        persona = ai.persona()
+        for want in ("личный помощник по всему", "психолог", "врач-консультант", "учёбе", "КРАТКО", "2–5 коротких строк",
+                     "рецептурных", "8-800-2000-122", "дерматолог"):
+            self.assertIn(want, persona)
+
+    def test_wants_long(self):
+        for q in ("подробно расскажи", "Распиши план", "составь план тренировок", "план на неделю"):
+            self.assertTrue(ai.wants_long(q), q)
+        for q in ("Как улучшить сон?", "что съесть", "выпил 400 мл"):
+            self.assertFalse(ai.wants_long(q), q)
+
+    def test_trim_answer(self):
+        short = "**Ложись в 22:30.**\n- Ужин до 20:00\n- Без экрана за час"
+        self.assertEqual(ai.trim_answer(short), (short, False))
+        long = "\n".join(f"- Пункт номер {i}: сделай вот это и вот это." for i in range(12))
+        out, cut = ai.trim_answer(long)
+        self.assertTrue(cut)
+        self.assertLessEqual(len(out.splitlines()), ai.SHORT_LIMIT[0])
+        self.assertTrue(out.endswith("."))  # целыми строками, не на полуслове
+        self.assertEqual(len(ai.trim_answer(long, long=True)[0].splitlines()), 12)
+        para = "Первое предложение про сон и режим дня. " * 30
+        out, cut = ai.trim_answer(para.strip())
+        self.assertTrue(cut and out.endswith(".") and len(out) <= ai.SHORT_LIMIT[1])
+        src = long + "\nИсточники: [vk.ru](https://vk.ru)"
+        self.assertTrue(ai.trim_answer(src)[0].endswith("Источники: [vk.ru](https://vk.ru)"))
+        out = ai.trim_answer("**Главное: " + "слово " * 200 + "конец**")[0]
+        self.assertTrue(out.endswith("…"))
+
+    def test_stream_stops_and_trims(self):
+        coach.db, _ = T.seeded(os.path.join(tempfile.mkdtemp(), "brief.db"))
+        coach.db.meta("owner", T.U)
+        chunks = [f"- Строка {i}: совет про сон и еду на сегодня.\n" for i in range(30)] + ['ACTIONS: []']
+        with mock.patch.object(ai, "claude_stream", return_value=iter(chunks)), \
+                mock.patch.object(coach, "context", return_value=("", None)):
+            r = T.call("/api/ask/stream", {"text": "Как спать?"})
+        evs = [coach.json.loads(x[6:]) for x in r.body.decode().split("\n\n") if x.startswith("data: ")]
+        streamed = "".join(e.get("t", "") for e in evs)
+        self.assertLessEqual(len(streamed), ai.SHORT_LIMIT[1] + 260)
+        self.assertNotIn("ACTIONS", streamed)
+        text = evs[-1]["text"]
+        self.assertLessEqual(len(text.splitlines()), ai.SHORT_LIMIT[0])
+        self.assertTrue(text.endswith("на сегодня."))
+
+
+class SkinChatTest(ApiTest):
+    """Раздел «Кожа» → «Спросить»: своя нить истории, контекст ухода и разборов, правка ухода действием skin_routine."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.meta("owner", T.U)
+        self.db.clear_history(T.U)
+
+    def stream(self, text, answer, topic="skin"):
+        now = datetime.datetime.combine(TODAY, datetime.time(21, 10), tzinfo=ZoneInfo("Europe/Moscow"))
+        with mock.patch.object(ai, "claude_stream", return_value=iter([answer])) as cs, \
+                mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: TODAY):
+            r = T.call("/api/ask/stream", {"text": text, **({"topic": topic} if topic else {})})
+        evs = [coach.json.loads(x[6:]) for x in r.body.decode().split("\n\n") if x.startswith("data: ")]
+        return evs[-1], cs.call_args[0][0]
+
+    def test_kind_whitelisted(self):
+        self.assertIn("skin_routine", ai.ACTION_KINDS)
+        self.assertIn("skin_routine", ai.ASSIST)
+        t, acts = ai.actions_split('Ок.\nACTIONS: [{"type": "skin_routine", "part": "pm", "op": "add", "text": "Сыворотка"}]')
+        self.assertEqual((t, acts[0]["part"]), ("Ок.", "pm"))
+
+    def test_thread_and_context(self):
+        self.setup_routine()
+        K._set_ai(self.db, T.U, "2026-11-03", {"status": "attention", "text": "- Пара покраснений над бровью", "time": "21:00",
+                                               "photo": "2026-11-03", "compare": "так же"})
+        self.db.say(T.U, "user", "общий вопрос")
+        self.db.say(T.U, "coach", "общий ответ")
+        done, prompt = self.stream("Что поменять в уходе?", "Добавь увлажнение.\nACTIONS: []")
+        self.assertEqual(done["thread"], "skin")
+        self.assertEqual([m["text"] for m in done["history"]], ["Что поменять в уходе?", "Добавь увлажнение."])
+        for want in ("ТЕМА РАЗГОВОРА: КОЖА", "КОЖА ПОДРОБНО", "Вечер: 1) Умыться; 2) Крем на ночь", "Пара покраснений над бровью",
+                     "skin_routine"):
+            self.assertIn(want, prompt)
+        self.assertNotIn("общий вопрос", prompt)  # общий чат в нить кожи не попадает
+        self.assertEqual([m["text"] for m in self.call("/api/history", {"topic": "skin"})["history"]],
+                         ["Что поменять в уходе?", "Добавь увлажнение."])
+        self.assertEqual([m["text"] for m in self.call("/api/history", {})["history"]], ["общий вопрос", "общий ответ"])
+        self.call("/api/history/clear", {"topic": "skin"})  # «Новый разговор» в коже — общий чат цел
+        self.assertEqual(self.call("/api/history", {"topic": "skin"})["history"], [])
+        self.assertEqual(len(self.call("/api/history", {})["history"]), 2)
+        _, prompt = self.stream("а сон?", "Ложись в 22:30.\nACTIONS: []", topic=None)
+        self.assertNotIn("ТЕМА РАЗГОВОРА: КОЖА", prompt)
+        self.assertIn("Форма: общий ответ", prompt)
+
+    def test_routine_add_remove_replace_undo(self):
+        self.setup_routine()
+        acts = lambda *xs: "Готово.\nACTIONS: " + coach.json.dumps(list(xs), ensure_ascii=False)  # noqa: E731
+        done, _ = self.stream("Добавь вечером сыворотку", acts({"type": "skin_routine", "part": "pm", "op": "add",
+                                                               "text": "Сыворотка — ниацинамид"}))
+        self.assertTrue(done["actions"][0]["ok"], done["actions"])
+        self.assertIn("✅ Записал: уход (вечер): + Сыворотка", done["text"])
+        pm = K.load(self.db, T.U)["pm"]
+        self.assertEqual([(x["title"], x["product"]) for x in pm][-1], ("Сыворотка", "Ниацинамид"))
+        # отмена — уход как был, история — своей нити
+        r = self.call("/api/ask/undo", {"id": done["actions"][0]["undo"], "topic": "skin"})
+        self.assertEqual([x["title"] for x in K.load(self.db, T.U)["pm"]], ["Умыться", "Крем на ночь"])
+        self.assertIn("↩️ Отменил", r["history"][-1]["text"])
+        ids = [x["id"] for x in K.load(self.db, T.U)["pm"]]
+        done, _ = self.stream("Замени крем на ночь на гель", acts({"type": "skin_routine", "part": "pm", "op": "replace",
+                                                                  "old": "крем на ночь", "text": "Гель — алоэ"}))
+        pm = K.load(self.db, T.U)["pm"]
+        self.assertEqual([x["title"] for x in pm], ["Умыться", "Гель"])
+        self.assertEqual([x["id"] for x in pm], ids)  # шаг заменён на месте — отметка дня не теряется
+        done, _ = self.stream("Убери умывание вечером", acts({"type": "skin_routine", "part": "pm", "op": "remove", "text": "умыться"}))
+        self.assertEqual([x["title"] for x in K.load(self.db, T.U)["pm"]], ["Гель"])
+        done, _ = self.stream("Поменяй утро полностью", acts({"type": "skin_routine", "part": "am", "op": "replace",
+                                                              "text": "Пенка, сыворотка, крем SPF"}))
+        self.assertEqual([x["title"] for x in K.load(self.db, T.U)["am"]], ["Пенка", "Сыворотка", "Крем SPF"])
+        done, _ = self.stream("Маску по субботам", acts({"type": "skin_routine", "part": "extra", "op": "add", "text": "Маска с глиной по субботам"}))
+        self.assertEqual(K.load(self.db, T.U)["extra"][-1]["days"], [5])
+        # ошибки — «Не записал», уход не меняется
+        before = K.load(self.db, T.U)
+        for bad in ({"part": "pm", "op": "remove", "text": "пилинг"}, {"part": "night", "op": "add", "text": "крем"},
+                    {"part": "pm", "op": "drop", "text": "крем"}, {"part": "pm", "op": "add", "text": "Гель"}):
+            done, _ = self.stream("поменяй уход", acts({"type": "skin_routine", **bad}))
+            self.assertFalse(done["actions"][0]["ok"], bad)
+            self.assertIn("⚠️ Не записал: уход", done["text"])
+        self.assertEqual(K.load(self.db, T.U), before)
 
 
 if __name__ == "__main__":

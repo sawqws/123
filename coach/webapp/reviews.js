@@ -67,7 +67,7 @@
     const el = F.sheet(`<div class="rv-sheet"><div class="rv-k"><span class="rv-ic">${IC[x.kind] || ''}</span>${esc(title(x))} · <span class="num">${esc(x.time)}</span></div>
       <h2>${esc(x.kind === 'workout' ? x.title : x.title || title(x))}</h2>
       <div class="prose rv-prose">${F.md(x.text)}</div>
-      <button class="btn rv-ask" data-a="ask-go" data-v="${esc(q)}">${F.I.coach}Спросить тренера</button></div>`);
+      <button class="btn rv-ask" data-a="ask-go" data-v="${esc(q)}">${F.I.coach}Спросить в чате</button></div>`);
     el.addEventListener('click', ev => { if (ev.target.closest('[data-a="ask-go"]')) el.close(); });
     if (!x.seen) seen(x);
   }

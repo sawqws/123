@@ -408,13 +408,13 @@ def profile(uid):
 CHAT_IDLE = 30 * 60  # сек: столько тишины — и разговор с тренером начинается заново (Глеб 03.11: «каждые 30 минут очищался чат»)
 
 
-def chat_history(uid, n=12, now=None):
+def chat_history(uid, n=12, now=None, thread=""):
     """Текущий разговор с тренером: последние n сообщений, но только без паузы ≥ CHAT_IDLE между ними и до сейчас.
     После паузы — пусто: в приложении начальный экран, в контекст Claude старое не идёт (профиль, цели и данные — остаются,
     они в context()). Старые сообщения в базе остаются (последние 200, store.say) — «📄 Полностью» берёт db.history."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     out, nxt = [], now
-    for m in reversed(db.history(uid, n)):
+    for m in reversed(db.history(uid, n, thread)):
         try:
             t = datetime.datetime.fromisoformat(m["created"])
             t = t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
@@ -681,6 +681,21 @@ def short(md, lines=5, chars=600):
     return ai.to_html(text), cut
 
 
+def progress_ctx(uid, day, days=60):
+    """Всё для разбора прогресса: WHOOP по неделям за days дней + полный контекст тренера (цели, профиль, вес, еда и вода
+    «Калорий», привычки, кожа, режим и план, последние 14 дней) + еда и вода за 14 дней. → (текст, сводка progress)."""
+    ctx, p = insights.progress_context(db, uid, day, profile(uid), whoop.body(db, uid), days)
+    parts = [ctx]
+    try:
+        parts.append("СЕЙЧАС И ВСЁ ОСТАЛЬНОЕ:\n" + context(uid, day)[0])
+        food = insights.food_period(db, uid, day)
+        if food:
+            parts.append(food)
+    except Exception:  # раздел сломался — разбор всё равно по WHOOP
+        traceback.print_exc()
+    return "\n\n".join(parts), p
+
+
 def progress_report(uid, chat=None, week=False):
     """Разбор прогресса за 60 дней (или итог недели — week=True). В чат — только итог, весь разбор — в приложении."""
     chat = chat or uid
@@ -690,7 +705,7 @@ def progress_report(uid, chat=None, week=False):
     try:
         typing(chat)
         day = today_of(uid)
-        ctx, p = insights.progress_context(db, uid, day, profile(uid), whoop.body(db, uid), 28 if week else 60)
+        ctx, p = progress_ctx(uid, day, 28 if week else 60)
         if not any(w["days"] for w in p["weeks"]):
             send(chat, err("Данных WHOOP пока нет — подключи браслет: /connect"))
             return
@@ -2276,8 +2291,10 @@ class Web(BaseHTTPRequestHandler):
         q = str(body.get("text") or "").strip()[:2000]
         if not q:
             return self.reply(400, {"error": "пустой вопрос"})
-        ctx, _ = context(uid)
-        prompt = ai.chat_prompt(ctx, chat_history(uid), q, full=True, assist=True)
+        thread = chat_thread(body)
+        ctx = chat_context(uid, thread)
+        prompt = ai.chat_prompt(ctx, chat_history(uid, thread=thread), q, full=True, assist=True, topic=thread or None)
+        limit = (ai.LONG_LIMIT if ai.wants_long(q) else ai.SHORT_LIMIT)[1] + 200  # мягкий предел: дальше не шлём, конец — trim_answer
         self.send_response(200)
         for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
             self.send_header(k, v)
@@ -2301,6 +2318,7 @@ class Web(BaseHTTPRequestHandler):
                     full += t
                     cut = full.find("ACTIONS:")
                     safe = cut if cut >= 0 else max(sent, len(full) - 8)  # хвост держим: вдруг это начало «ACTIONS:»
+                    safe = min(safe, max(sent, limit))  # слишком длинно — дальше не показываем (ACTIONS в конце всё равно дочитаем)
                     if safe > sent:
                         ev({"t": full[sent:safe]})
                         sent = safe
@@ -2310,11 +2328,11 @@ class Web(BaseHTTPRequestHandler):
                 full = ai.claude(prompt, web=True)  # быстрая модель недоступна — обычная, одним куском
                 searched.append("?")  # искала ли — не видно: ремонт по такому ответу не запускаем
             end = full.find("ACTIONS:")
-            end = len(full) if end < 0 else end
+            end = min(len(full) if end < 0 else end, max(sent, limit))
             if end > sent:  # удержанный хвост (или весь запасной ответ) — дослать без ACTIONS
                 ev({"t": full[sent:end]})
-            shown, acts = assist_finish(uid, q, full, bool(searched))
-            ev({"done": True, "text": shown, "history": chat_history(uid, 40), "actions": acts})
+            shown, acts = assist_finish(uid, q, full, bool(searched), thread)
+            ev({"done": True, "text": shown, "history": chat_history(uid, 40, thread=thread), "actions": acts, "thread": thread})
         except ai.AIError as e:
             ev({"error": str(e)})
         except (BrokenPipeError, ConnectionResetError):  # закрыл приложение — ответ не сохраняем наполовину
@@ -2358,6 +2376,44 @@ class Web(BaseHTTPRequestHandler):
         except ai.AIError as e:
             ev({"error": str(e)})
         except (BrokenPipeError, ConnectionResetError):  # закрыл лист — ответ всё равно не сохраняем наполовину
+            pass
+
+    def progress_stream(self, uid, body):
+        """Разбор прогресса потоком (text/event-stream): {"t": кусок Markdown}…, в конце {"done", "text", "progress":
+        {day, text — HTML, как в briefs}} или {"error"}. Глеб 03.11: «разбор должен быть намного легче… неплавный» —
+        раньше минуту ждал пустую заглушку. Сохраняется только целиком (как POST /api/progress {make})."""
+        today = today_of(uid)
+        ctx, p = progress_ctx(uid, today)
+        if not any(w["days"] for w in p["weeks"]):
+            return self.reply(400, {"error": "Данных WHOOP пока нет — подключи браслет"})
+        prompt = ai.progress_prompt(ctx)
+        self.send_response(200)
+        for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
+            self.send_header(k, v)
+        self.end_headers()
+
+        def ev(obj):
+            self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+        full = ""
+        try:
+            try:
+                for t in ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None, timeout=240):
+                    full += t
+                    ev({"t": t})
+            except ai.AIError:
+                if full:
+                    raise
+                full = ai.progress(ctx)  # быстрая модель недоступна — одним куском
+                ev({"t": full})
+            if not full.strip():
+                raise ai.AIError("Claude не ответил")
+            html_ = ai.to_html(full)
+            db.brief(uid, today.isoformat(), "progress", html_)
+            ev({"done": True, "text": full.strip(), "progress": {"day": today.isoformat(), "text": html_}})
+        except ai.AIError as e:
+            ev({"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):  # закрыл приложение — наполовину не сохраняем
             pass
 
     def kcal_chat_stream(self, uid, body):
@@ -2498,6 +2554,8 @@ class Web(BaseHTTPRequestHandler):
             return self.ask_stream(uid, body)
         if path == "/api/summary/stream":  # «Итог и советы» по кусочкам — первые слова через пару секунд
             return self.summary_stream(uid, body)
+        if path == "/api/progress/stream":  # разбор прогресса по кусочкам — первые слова через пару секунд
+            return self.progress_stream(uid, body)
         try:
             self.reply(200, route(uid, path, body))
         except PermissionError as e:
@@ -2756,16 +2814,37 @@ def act_lines(res):
     return "\n".join(lines)
 
 
-def assist_finish(uid, q, full, searched=False):
-    """Ответ модели целиком → (что показать и сохранить, действия для клиента). Строка ACTIONS в историю не попадает."""
+def chat_thread(b):
+    """Нить разговора из запроса: 'skin' — «Спросить» в разделе «Кожа», иначе общий чат ('')."""
+    return "skin" if str((b or {}).get("topic") or "") == "skin" else ""
+
+
+def chat_context(uid, thread=""):
+    """Данные для вопроса в чат; в нити «Кожа» — ещё уход целиком, заметки и последние разборы фото (f_skin.ask_context)."""
+    ctx, _ = context(uid)
+    if thread == "skin":
+        try:
+            extra = f_skin.ask_context(sys.modules[__name__], uid, today_of(uid))
+        except Exception:  # контекст кожи не собрался — ответим по общим данным
+            traceback.print_exc()
+            extra = []
+        if extra:
+            ctx += "\n\nКОЖА ПОДРОБНО:\n" + "\n".join(extra)
+    return ctx
+
+
+def assist_finish(uid, q, full, searched=False, thread=""):
+    """Ответ модели целиком → (что показать и сохранить, действия для клиента). Строка ACTIONS в историю не попадает.
+    Текст — не длиннее мягкого предела (ai.trim_answer: целыми строками, по концу предложения)."""
     text, acts = ai.actions_split(full)
+    text = ai.trim_answer(text, ai.wants_long(q))[0]
     res = run_actions(uid, acts, q, searched)
     lines = act_lines(res)
     shown = (text + "\n\n" + lines if text and lines else text or lines).strip()
     if not shown:
         raise ai.AIError("Тренер не ответил")
-    db.say(uid, "user", q)
-    db.say(uid, "coach", shown)
+    db.say(uid, "user", q, thread)
+    db.say(uid, "coach", shown, thread)
     mid = db.q("SELECT MAX(id) AS id FROM messages WHERE user=? AND role='coach'", (uid,))[0]["id"]
     with _undo_lock:
         for r in res:
@@ -3193,23 +3272,24 @@ def route(uid, path, b):
         q = str(b.get("text") or "").strip()[:2000]
         if not q:
             raise ValueError("пустой вопрос")
-        ctx, _ = context(uid)
-        out = ai.ask(ctx, chat_history(uid), q, full=True, assist=True)  # приложение: полный ответ, действия и поиск
-        shown, acts = assist_finish(uid, q, out, searched=True)  # без потока не видно, искал ли, — ремонт только из потока
-        return {"answer": shown, "actions": acts, "history": chat_history(uid, 40)}
-    if path == "/api/ask/undo":  # «Отменить» под ответом тренера (вода, еда, вес, привычка, цель)
+        thread = chat_thread(b)
+        out = ai.ask(chat_context(uid, thread), chat_history(uid, thread=thread), q, full=True, assist=True,
+                     topic=thread or None)  # приложение: действия и поиск
+        shown, acts = assist_finish(uid, q, out, True, thread)  # без потока не видно, искал ли, — ремонт только из потока
+        return {"answer": shown, "actions": acts, "history": chat_history(uid, 40, thread=thread), "thread": thread}
+    if path == "/api/ask/undo":  # «Отменить» под ответом чата (вода, еда, вес, привычка, цель, уход за кожей); topic — нить
         label = undo_action(uid, b.get("id"))
-        return {"ok": True, "label": label, "history": chat_history(uid, 40), "day": day_payload(uid, today)}
+        return {"ok": True, "label": label, "history": chat_history(uid, 40, thread=chat_thread(b)), "day": day_payload(uid, today)}
     if path == "/api/photo":
         return photo_api(uid, b)
     if path == "/api/history":
-        return {"history": chat_history(uid, 40)}
-    if path == "/api/history/clear":
-        db.clear_history(uid)
+        return {"history": chat_history(uid, 40, thread=chat_thread(b))}
+    if path == "/api/history/clear":  # «Новый разговор» — только эта нить (общий чат или «Кожа»)
+        db.clear_history(uid, chat_thread(b))
         return {"history": []}
     if path == "/api/progress":
         if b.get("make"):
-            ctx, _ = insights.progress_context(db, uid, today, profile(uid), whoop.body(db, uid), 60)
+            ctx, _ = progress_ctx(uid, today)
             db.brief(uid, today.isoformat(), "progress", ai.to_html(ai.progress(ctx)))
         last = db.q("SELECT day, text FROM briefs WHERE user=? AND kind='progress' ORDER BY day DESC LIMIT 1", (uid,))
         return {"progress": last[0] if last else None}

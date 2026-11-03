@@ -153,7 +153,7 @@
         <span class="main"><div class="title num">${nf(x.kg)} кг</div><div class="meta">${esc(meta)}</div></span><span class="end chev"></span></button>`;
     }).join('')}</div>${d.items.length > shown.length ? `<button class="btn wt-more" data-a="wt-all">Показать все ${d.count}</button>` : ''}</div>`;
     h += `<div class="sec rise"><div class="list"><button class="row tap" data-a="ask-go" data-v="Посмотри мои замеры веса и состава тела: как они меняются и что это значит для тренировок и еды?">
-      <span class="ic">${F.I.coach}</span><span class="main"><div class="title">Спросить тренера</div><div class="meta">видит замеры и тренд</div></span><span class="end chev"></span></button></div>
+      <span class="ic">${F.I.coach}</span><span class="main"><div class="title">Спросить в чате</div><div class="meta">видит замеры и тренд</div></span><span class="end chev"></span></button></div>
       <p class="foot">Вес у подростка растёт вместе с ростом и мышцами — смотри на тренд за недели, а не на один день. Нормы еды, воды и белка Форма считает по последнему замеру.</p></div>`;  // подвал — в одном блоке с кнопкой: на широком не остаётся колонкой один
     return h;
   };
