@@ -1,5 +1,6 @@
-"""Кожа: модель ухода, расписание процедур, отметки, серия, дневник кожи, «Заполнить списком», лимиты, контекст тренера,
-связь с режимом (напоминание об отбое), фото лба (раз в 3 дня, только владельцу) и персона тренера «по всему».
+"""Кожа: модель ухода, расписание процедур, отметки, серия, «Заполнить списком», лимиты, контекст тренера,
+связь с режимом (напоминание об отбое), фото лба (раз в 3 дня, только владельцу), разбор фото Claude (в фоне; Claude —
+мок) вместо ручной оценки и персона тренера «по всему».
 usage: python3 coach/test_skin.py
 """
 import base64
@@ -198,35 +199,53 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(r["best"], 2)
         self.assertTrue(r["diary"][-3]["ok"])
 
-    def test_diary_and_stats(self):
+    def test_old_rating_kept_but_not_shown(self):
+        """Ручная оценка убрана из выдачи (Глеб 03.11), API /rate — для совместимости; старые оценки в данных остаются."""
+        self.setup_routine()
+        r = self.call("/api/skin/rate", {"rating": 4, "note": "  чуть  суше  "})
+        for k in ("rating", "word", "note"):
+            self.assertNotIn(k, r["today"])
+        self.assertTrue(all("r" not in x for x in r["diary"]))
+        self.assertNotIn("rated", self.call("/api/all")["ext"]["skin"])
+        doc = K.day_doc(self.db, T.U, TODAY.isoformat())
+        self.assertEqual((doc["r"], doc["t"]), (4, "чуть суше"))  # в данных — как было
+        self.call("/api/skin/rate", {"rating": None})
+        self.assertIsNone(K.day_doc(self.db, T.U, TODAY.isoformat())["r"])
+        lines = "\n".join(K.context_lines(coach, T.U, TODAY))
+        self.assertNotIn("Дневник кожи", lines)
+        self.assertNotIn("оценивает сам", lines)
+        self.assertEqual(len(r["diary"]), 30)
+        self.assertIn("Фото лба раз в 3 дня", r["stats"]["summary"])
+        self.assertEqual((r["stats"]["total"], r["ai"]), (0, {"last": None, "days": []}))
+
+    def test_ai_stats_and_link(self):
+        """Сводка по разборам за 30 дней и связь «всё нормально» с вечерним уходом (2 из 3 вечеров до фото)."""
         r = self.setup_routine()
         pm = self.ids(r, "pm")
-        self.assertIn("Оценивай кожу", r["stats"]["summary"])
-        r = self.call("/api/skin/rate", {"rating": 4, "note": "  чуть  суше  "})
-        self.assertEqual((r["today"]["rating"], r["today"]["word"], r["today"]["note"]), (4, "хорошо", "чуть суше"))
-        r = self.call("/api/skin/rate", {"note": ""})
-        self.assertEqual((r["today"]["rating"], r["today"]["note"]), (4, ""))
-        r = self.call("/api/skin/rate", {"rating": None})
-        self.assertIsNone(r["today"]["rating"])
-        # 14 дней: неделю назад 2, последняя неделя 4; вечерний уход — в дни с 4
-        for back in range(1, 7):
-            d = (TODAY - datetime.timedelta(days=back)).isoformat()
-            self.call("/api/skin/rate", {"rating": 4, "day": d})
-            for i in pm:
-                self.call("/api/skin/mark", {"id": i, "done": True, "day": d})
-        for back in range(7, 14):  # дальше недели назад через API нельзя — пишем день напрямую
-            K.put_doc(self.db, T.U, (TODAY - datetime.timedelta(days=back)).isoformat(), {"m": [], "r": 2, "t": "", "a": False, "p": False})
         st = K.load(self.db, T.U)
         st["created"] = "2026-10-01"
         K.store(self.db, T.U, st)
+        # фото раз в 3 дня: 4 раза с вечерним уходом — всё нормально, 3 раза без — есть что поправить
+        for i, back in enumerate((1, 4, 7, 10, 13, 16, 19)):
+            d = TODAY - datetime.timedelta(days=back)
+            care = i < 4
+            for e in (1, 2, 3):
+                K.put_doc(self.db, T.U, (d - datetime.timedelta(days=e)).isoformat(),
+                          {"m": pm if care else [], "a": False, "p": care, "ok": False})
+            K._set_ai(self.db, T.U, d.isoformat(), {"status": "ok" if care else "attention", "text": "x", "photo": d.isoformat(),
+                                                    "compare": "лучше" if back == 1 else None, "time": "21:00"})
         r = self.call("/api/skin")
         s = r["stats"]
-        self.assertEqual((s["avg7"], s["prev7"], s["trend"], s["rated"]), (4.0, 2.0, "лучше", 13))
-        self.assertEqual(s["link"], {"with": 4.0, "without": 2.0})
-        self.assertIn("Последняя неделя лучше прошлой", s["summary"])
-        self.assertIn("Когда вечерний уход сделан, кожа в среднем 4, без него — 2", s["summary"])
-        self.assertEqual([x["r"] for x in r["diary"][-3:]], [4, 4, None])
-        self.assertEqual(len(r["diary"]), 30)
+        self.assertEqual((s["total"], s["ok"], s["attention"]), (7, 4, 3))
+        self.assertEqual(s["link"], {"with": [4, 4], "without": [0, 3]})
+        self.assertIn("За 30 дней 7 разборов: всё нормально — 4, есть что поправить — 3.", s["summary"])
+        self.assertIn("На последнем фото кожа лучше, чем на прошлом.", s["summary"])
+        self.assertIn("«всё нормально» в 4 из 4, когда пропускаешь — в 0 из 3", s["summary"])
+        self.assertEqual([x["day"] for x in r["ai"]["days"]][:2], ["2026-11-03", "2026-10-31"])
+        self.assertEqual(r["ai"]["last"]["day"], "2026-11-03")
+        lines = "\n".join(K.context_lines(coach, T.U, TODAY))
+        self.assertIn("последний разбор 03.11 — всё нормально, по сравнению с прошлым фото — лучше: x", lines)
+        self.assertIn("С вечерним уходом «всё нормально» в 4 из 4 разборов, без него — в 0 из 3", lines)
 
     def test_import(self):
         text = "Утро: умыться гелем, крем\nВечер:\nумыться\nкрем на ночь\nМаска 2 раза в неделю: вт, сб\nТип кожи: нормальная"
@@ -253,17 +272,21 @@ class ApiTest(unittest.TestCase):
         self.call("/api/skin/save", {"notes": {"type": "комбинированная", "avoid": "спиртовые лосьоны"}})
         self.call("/api/skin/mark", {"id": self.ids(r, "am")[0], "done": True})
         self.call("/api/skin/mark", {"id": self.ids(r, "pm")[0], "done": True})
-        self.call("/api/skin/rate", {"rating": 3, "note": "пара прыщиков"})
+        K._set_ai(self.db, T.U, "2026-11-03", {"status": "attention", "photo": "2026-11-03", "time": "21:05",
+                                               "text": "- Пара воспалений у линии волос\n- Не пропускай вечернее умывание"})
         with mock.patch.object(coach, "today_of", lambda uid: TODAY):
             ctx = coach.context(T.U, TODAY)[0]
         self.assertIn("УХОД ЗА КОЖЕЙ (настроил сам): утро — Умыться (мягкий гель), Крем; вечер — Умыться, Крем на ночь; "
                       "процедуры — Маска (вт, сб), Скраб (1 раз в неделю)", ctx)
         self.assertIn("Про кожу (написал сам): тип и особенности — комбинированная; что не подходит — спиртовые лосьоны", ctx)
         self.assertIn("утренний уход 1/2; вечерний 1/2 (осталось: Крем на ночь); скраб по плану сегодня — не сделано", ctx)
-        self.assertIn("сегодня 3 — нормально («пара прыщиков»)", ctx)
+        self.assertIn("последний разбор 03.11 — есть что поправить: - Пара воспалений у линии волос "
+                      "- Не пропускай вечернее умывание", ctx)
+        self.assertNotIn("Дневник кожи", ctx)
         self.assertIn("к дерматологу и сказать родителям", ctx)
         ext = self.call("/api/all")["ext"]["skin"]
-        self.assertEqual((ext["has"], ext["today"]["am_done"], ext["today"]["rating"], ext["notes"]), (True, 1, 3, True))
+        self.assertEqual((ext["has"], ext["today"]["am_done"], ext["notes"]), (True, 1, True))
+        self.assertEqual((ext["ai"]["last"]["day"], ext["ai"]["last"]["status"]), ("2026-11-03", "attention"))
         # фото лба ещё ни разу не делал — сегодня день фото: второй строкой
         self.assertEqual(K.remind_line(self.db, T.U, TODAY), "Уход на ночь: Крем на ночь, Скраб\n" + K.PHOTO_LINE)
         # напоминание об отбое: уход — из «Кожи», одинаковые пункты режима («Крем на лицо») не повторяются
@@ -309,9 +332,8 @@ class ApiTest(unittest.TestCase):
             self.assertIn(want, p)
 
 
-class PhotoTest(unittest.TestCase):
-    """Фото лба: сохранение (одно на день, повтор заменяет), список, отдача только владельцу, плохие даты, удаление,
-    расписание раз в 3 дня, строка напоминания, контекст тренера (без самих фото)."""
+class PhotoBase(unittest.TestCase):
+    """Общее для фото: своя база, папка DATA, фоновый разбор — сразу и с поддельным Claude."""
     OTHER = T.U + 1
 
     @classmethod
@@ -322,9 +344,18 @@ class PhotoTest(unittest.TestCase):
         coach.db = self.db
         self.db.x("DELETE FROM meta WHERE key LIKE 'skin:%'")
         self.root = tempfile.mkdtemp()
-        p = mock.patch.object(coach, "DATA", self.root)
-        p.start()
-        self.addCleanup(p.stop)
+        # фоновый разбор фото — сразу и с поддельным Claude (настоящий claude в тестах не зовём)
+        self.jobs, self.hold = [], False
+        self.skin = mock.MagicMock(return_value={"status": "ok", "text": ai.SKIN_OK + "\nЧисто, без воспалений.", "compare": None})
+        for p in (mock.patch.object(coach, "DATA", self.root), mock.patch.object(coach, "bg", self.bg),
+                  mock.patch.object(ai, "skin", self.skin)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def bg(self, target, *args, chat=None):
+        self.jobs.append((target, args))
+        if not self.hold:
+            target(*args)
 
     def call(self, path, body=None, day=TODAY, uid=T.U):
         now = datetime.datetime.combine(day, datetime.time(21, 10), tzinfo=ZoneInfo("Europe/Moscow"))
@@ -333,6 +364,11 @@ class PhotoTest(unittest.TestCase):
 
     def file(self, day, uid=T.U, thumb=False):
         return os.path.join(self.root, "photos", "skin", str(uid), f"{day}{'.t' if thumb else ''}.jpg")
+
+
+class PhotoTest(PhotoBase):
+    """Фото лба: сохранение (одно на день, повтор заменяет), список, отдача только владельцу, плохие даты, удаление,
+    расписание раз в 3 дня, строка напоминания, контекст тренера (без самих фото)."""
 
     def test_save_replace_list_get(self):
         r = self.call("/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
@@ -455,6 +491,161 @@ class PhotoTest(unittest.TestCase):
         self.assertIsNone(c.call_args[1].get("image"))  # картинки тренеру не уходят
         ext = self.call("/api/all", day=D(2026, 11, 7))["ext"]["skin"]["today"]["photo"]
         self.assertEqual((ext["due"], ext["count"]), (True, 2))
+
+
+SKIN = ai.skin  # настоящий ai.skin (в PhotoTest и AiTest он подменён моком)
+
+
+class AiTest(PhotoBase):
+    """Разбор фото лба Claude: в фоне после загрузки, формат ok/attention, ошибка → none, повтор /analyze."""
+
+    def test_upload_starts_background_analysis(self):
+        self.hold = True  # ответ загрузки не ждёт Claude: сначала «разбираю»
+        r = self.call("/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
+        self.assertEqual(len(self.jobs), 1)
+        last = r["ai"]["last"]
+        self.assertEqual((last["status"], last["day"], last["photo"]), ("wait", "2026-11-04", "2026-11-04"))
+        self.assertNotIn("id", last)
+        self.skin.assert_not_called()
+        target, args = self.jobs[0]
+        with mock.patch.object(coach, "user_now", lambda u: datetime.datetime(2026, 11, 4, 21, 12)):
+            target(*args)
+        a = K.day_doc(self.db, T.U, "2026-11-04")["ai"]
+        self.assertEqual((a["status"], a["text"], a["time"], a["photo"], a["compare"]),
+                         ("ok", "Всё нормально, идём дальше.\nЧисто, без воспалений.", "21:12", "2026-11-04", None))
+        self.assertTrue(K.day_doc(self.db, T.U, "2026-11-04")["f"])  # прежние поля дня не тронуты
+        r = self.call("/api/skin")
+        self.assertEqual(r["ai"]["last"]["status"], "ok")
+        self.assertEqual([(x["day"], x["status"]) for x in r["ai"]["days"]], [("2026-11-04", "ok")])
+        self.assertEqual(self.call("/api/all")["ext"]["skin"]["ai"]["last"]["status"], "ok")
+        # отметка шага после разбора не стирает его
+        self.call("/api/skin/save", {"routine": ROUTINE})
+        sid = self.call("/api/skin")["routine"]["pm"][0]["id"]
+        self.call("/api/skin/mark", {"id": sid, "done": True})
+        self.assertEqual(K.day_doc(self.db, T.U, "2026-11-04")["ai"]["status"], "ok")
+
+    def test_context_for_claude_and_compare(self):
+        self.call("/api/skin/save", {"routine": ROUTINE}, day=D(2026, 11, 1))
+        self.call("/api/skin/save", {"notes": {"type": "комбинированная", "react": "горячая вода", "avoid": "спирт"}},
+                  day=D(2026, 11, 1))
+        r = self.call("/api/skin", day=D(2026, 11, 3))
+        for x in r["today"]["pm"]:
+            self.call("/api/skin/mark", {"id": x["id"], "done": True}, day=D(2026, 11, 3))
+        self.skin.return_value = {"status": "attention", "compare": None,
+                                  "text": "- Пара воспалений на лбу\n- Умывайся вечером мягким гелем"}
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 1))
+        self.assertIsNone(self.skin.call_args[0][2])  # первое фото — сравнивать не с чем
+        self.skin.return_value = {"status": "ok", "text": ai.SKIN_OK + "\nВоспалений меньше.", "compare": "лучше"}
+        self.call("/api/skin/photo", {"image": GRAY_URL}, day=D(2026, 11, 4))
+        facts, cur, prev = self.skin.call_args[0]
+        self.assertEqual((cur, prev), (self.file("2026-11-04"), self.file("2026-11-01")))
+        for want in ("МОЙ УХОД: утро — Умыться (мягкий гель), Крем; вечер — Умыться, Крем на ночь; процедуры — Маска (вт, сб)",
+                     "ПРО МОЮ КОЖУ: тип и особенности — комбинированная; на что реагирует — горячая вода; "
+                     "что не подходит — спирт", "ОТМЕТКИ УХОДА ЗА 7 ДНЕЙ", "29.10 — ничего не отмечено",
+                     "03.11 — утро не всё, вечер ✓",
+                     "ПРОШЛЫЙ РАЗБОР (01.11): есть что поправить — - Пара воспалений на лбу - Умывайся вечером мягким гелем",
+                     "ПРОШЛОЕ ФОТО: 01.11"):
+            self.assertIn(want, facts)
+        self.assertNotIn("base64", facts)
+        a = self.call("/api/skin", day=D(2026, 11, 4))["ai"]
+        self.assertEqual((a["last"]["compare"], a["last"]["prev"]), ("лучше", "2026-11-01"))
+        self.assertEqual([x["status"] for x in a["days"]], ["ok", "attention"])
+
+    def test_error_none_and_retry(self):
+        self.skin.side_effect = ai.AIError("лимит")
+        self.call("/api/skin/photo", {"image": GRAY_URL})
+        last = self.call("/api/skin")["ai"]["last"]
+        self.assertEqual((last["status"], last["text"]), ("none", "Не удалось разобрать фото — попробуй позже"))
+        self.skin.side_effect = ValueError("сломанный ответ")  # любая ошибка — тоже «none», а не падение потока
+        self.call("/api/skin/analyze", {})
+        self.assertEqual(self.call("/api/skin")["ai"]["last"]["status"], "none")
+        self.skin.side_effect = None
+        r = self.call("/api/skin/analyze", {"day": "2026-11-04"})
+        self.assertEqual((r["ai"]["last"]["status"], self.skin.call_count), ("ok", 3))
+        for bad in ({"day": "2026-11-03"}, {"day": "../x"}, {"day": "2026-11-05"}):
+            with self.assertRaises(ValueError, msg=bad):
+                self.call("/api/skin/analyze", bad)
+        # разбор уже идёт — второй не запускаем
+        self.hold = True
+        self.call("/api/skin/analyze", {})
+        n = len(self.jobs)
+        self.call("/api/skin/analyze", {})
+        self.assertEqual(len(self.jobs), n)
+        # «идёт» дольше AI_WAIT (поток умер при перезапуске) — показываем «не вышло», повтор снова можно
+        doc = K.day_doc(self.db, T.U, "2026-11-04")
+        doc["ai"]["ts"] -= K.AI_WAIT + 1
+        K.put_doc(self.db, T.U, "2026-11-04", doc)
+        self.assertEqual(self.call("/api/skin")["ai"]["last"]["status"], "none")
+        self.call("/api/skin/analyze", {})
+        self.assertEqual(len(self.jobs), n + 1)
+
+    def test_stale_answer_and_delete(self):
+        self.hold = True
+        self.call("/api/skin/photo", {"image": GRAY_URL})
+        old = self.jobs[-1]
+        self.call("/api/skin/photo", {"image": GRAY_URL})  # переснял, пока шёл разбор
+        self.skin.return_value = {"status": "attention", "text": "- старое фото", "compare": None}
+        old[0](*old[1])  # ответ на старое фото пришёл позже — мимо
+        self.assertEqual(K.day_doc(self.db, T.U, "2026-11-04")["ai"]["status"], "wait")
+        self.skin.return_value = {"status": "ok", "text": ai.SKIN_OK, "compare": None}
+        self.jobs[-1][0](*self.jobs[-1][1])
+        self.assertEqual(K.day_doc(self.db, T.U, "2026-11-04")["ai"]["status"], "ok")
+        r = self.call("/api/skin/photo/delete", {"day": "2026-11-04"})  # фото удалил — разбор про него уходит
+        self.assertEqual(r["ai"], {"last": None, "days": []})
+        self.assertNotIn("ai", K.day_doc(self.db, T.U, "2026-11-04"))
+
+    def test_ai_skin_format(self):
+        """ai.skin: ok — «Всё нормально, идём дальше» + почему; attention — 2–4 пункта; retake — none с просьбой
+        переснять; без статуса — AIError. Фото уходят Claude картинками (с подписью, какое сегодняшнее)."""
+        cur, prev = self.file("x"), self.file("y")
+
+        def run(answer, prev_=None):
+            with mock.patch.object(ai, "claude", return_value=answer) as c:
+                return SKIN("ФАКТЫ", cur, prev_), c
+        out, c = run('{"status": "ok", "why": "Кожа ровная, воспалений нет", "points": [], "compare": "лучше"}')
+        self.assertEqual(out, {"status": "ok", "text": "Всё нормально, идём дальше.\nКожа ровная, воспалений нет", "compare": None})
+        self.assertEqual(c.call_args.kwargs["images"], [cur])
+        self.assertIn("ФАКТЫ", c.call_args[0][0])
+        self.assertEqual(c.call_args.kwargs["model"], ai.SKIN_MODEL)
+        out, c = run('Вот: {"status": "attention", "points": ["Пара красных точек у волос", "**Умывайся** вечером", "a", "b", "c"],'
+                     ' "compare": "хуже"}', prev)
+        self.assertEqual(out["status"], "attention")
+        self.assertEqual(out["text"].split("\n"), ["- Пара красных точек у волос", "- Умывайся вечером", "- a", "- b"])
+        self.assertEqual(out["compare"], "хуже")
+        self.assertEqual(c.call_args.kwargs["images"], [cur, prev])
+        self.assertIn("первое — сегодня", c.call_args.kwargs["label"])
+        out, _ = run('{"status": "retake", "why": "Темно, лба не видно"}')
+        self.assertEqual((out["status"], out["retake"]), ("none", True))
+        self.assertIn("темно, лба не видно", out["text"])
+        for bad in ("не json", '{"status": "attention", "points": []}', '{"status": "плохо"}'):
+            with self.assertRaises(ai.AIError, msg=bad):
+                run(bad)
+        # модель с картинками не ответила — повтор моделью по умолчанию
+        with mock.patch.object(ai, "claude", side_effect=[ai.AIError("нет модели"), '{"status": "ok", "why": ""}']) as c:
+            self.assertEqual(SKIN("Ф", cur)["text"], ai.SKIN_OK)
+        self.assertNotIn("model", c.call_args.kwargs)
+        # подпись к нескольким фото — своя, а не «кадры видео»
+        src = os.path.join(self.root, "a.jpg")
+        with open(src, "wb") as f:
+            f.write(GRAY_JPEG)
+        with mock.patch.object(ai.subprocess, "run") as sp:
+            sp.return_value = mock.Mock(returncode=0, stdout='{"result": "ok"}', stderr="")
+            ai.claude("q", images=[src, src], label="ПОДПИСЬ:")
+        prompt = sp.call_args[0][0][2]
+        self.assertIn("ПОДПИСЬ:", prompt)
+        self.assertNotIn("Кадры видео", prompt)
+
+    def test_coach_sees_last_analysis_not_photos(self):
+        self.call("/api/skin/save", {"routine": ROUTINE})
+        self.skin.return_value = {"status": "attention", "compare": None,
+                                  "text": "- Пара воспалений\n- Покажи дерматологу и скажи родителям"}
+        self.call("/api/skin/photo", {"image": GRAY_URL})
+        with mock.patch.object(ai, "claude", return_value="Ок") as c:
+            self.call("/api/ask", {"text": "Как кожа?"})
+        p = c.call_args[0][0]
+        self.assertIn("последний разбор 04.11 — есть что поправить: - Пара воспалений - Покажи дерматологу", p)
+        self.assertNotIn("data:image", p)
+        self.assertIsNone(c.call_args[1].get("image"))
 
 
 if __name__ == "__main__":

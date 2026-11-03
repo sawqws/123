@@ -31,13 +31,14 @@ class AIError(Exception):
     pass
 
 
-def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None):
-    """(текст ответа). image — путь к картинке, images — несколько (кадры видео): Claude откроет их инструментом Read."""
+def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None, label=None):
+    """(текст ответа). image — путь к картинке, images — несколько (кадры видео): Claude откроет их инструментом Read.
+    label — своя подпись к нескольким фото (иначе — «кадры видео» или «одна еда с разных сторон»)."""
     os.makedirs(WORK, exist_ok=True)
     copies = []
     pics = ([image] if image else []) + list(images or [])
     try:
-        return _run(prompt, pics, copies, timeout, model, effort)
+        return _run(prompt, pics, copies, timeout, model, effort, label)
     finally:
         for c in copies:  # копии картинок нужны только на время ответа
             try:
@@ -46,7 +47,7 @@ def claude(prompt, image=None, timeout=240, images=None, model=None, effort=None
                 pass
 
 
-def _run(prompt, pics, copies, timeout, model=None, effort=None):
+def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None):
     tools = []
     if pics:
         for src in pics:
@@ -55,6 +56,8 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None):
             copies.append(dst)
         if len(copies) == 1:
             prompt += f"\n\nФото: {copies[0]} (открой его инструментом Read)."
+        elif label:
+            prompt += f"\n\n{label}\n" + "\n".join(copies)
         elif model:  # несколько фото одной тарелки (сверху, сбоку)
             prompt += "\n\nФото одной и той же еды с разных сторон (открой каждое инструментом Read):\n" + "\n".join(copies)
         else:
@@ -317,6 +320,61 @@ def plate(image, text="", age=None, images=None):
     if not items:
         return {"food": False, "items": [], "comment": ""}
     return {"food": True, "items": items[:30], "comment": str(out.get("comment") or "").strip()[:200]}
+
+
+SKIN_ASK = (
+    "Посмотри фото лба (сделано вечером после умывания) и скажи коротко: всё ли нормально с кожей и что поправить в уходе. "
+    "Выше — мой уход, заметки о коже и отметки ухода за неделю.\n"
+    "Верни ТОЛЬКО JSON без пояснений вокруг:\n"
+    '{"status": "ok", "why": "…", "points": [], "compare": null}\n'
+    "Правила:\n"
+    "- status \"ok\" — кожа в порядке или как обычно, менять ничего не надо: why — одна короткая строка почему "
+    "(до 120 символов), points — [].\n"
+    "- status \"attention\" — есть что поправить: points — 2–4 коротких пункта (до 160 символов каждый): что видно "
+    "простыми словами и что сделать — из того, что у меня уже есть в уходе (чаще, реже, не пропускать вечер, убрать то, "
+    "что раздражает), или базовое безрецептурное (мягкое умывание, лёгкий увлажняющий крем, крем от солнца днём, "
+    "не трогать и не выдавливать, чистая наволочка). why — пусто.\n"
+    "- Без диагнозов и названий болезней, без рецептурных средств и лекарств, без новых брендов. Пиши на «ты», "
+    "просто, как старший друг, без латиницы и терминов.\n"
+    "- Много воспалённых прыщей, гной, боль, сильное покраснение или отёк, или резко хуже прошлого фото — status "
+    "\"attention\" и отдельным пунктом: «Покажи дерматологу и скажи родителям».\n"
+    "- status \"retake\" — лба не видно, темно, размыто или это не лицо: why — что не так с фото.\n"
+    "- compare — только если есть прошлое фото: \"лучше\", \"так же\" или \"хуже\" (сравни кожу, не свет); "
+    "нет прошлого фото — null.")
+SKIN_MODEL = os.environ.get("SKIN_PHOTO_MODEL", "sonnet")  # модель с картинками; не ответила — модель по умолчанию
+SKIN_OK = "Всё нормально, идём дальше."
+COMPARE = ("лучше", "так же", "хуже")
+
+
+def _line(v, top):
+    return " ".join(str(v or "").replace("**", "").split()).strip(" -•")[:top].strip()
+
+
+def skin(facts, photo, prev=None):
+    """Разбор фото лба → {"status": ok|attention|none, "text", "compare", "retake"?}. prev — прошлое фото для сравнения.
+    Ответ без понятного статуса — AIError (разбор будет «none»)."""
+    pics = [photo] + ([prev] if prev else [])
+    label = ("Фото по порядку (открой оба инструментом Read): первое — сегодня, второе — прошлое, для сравнения:"
+             if prev else None)
+    q = f"{facts}\n\n" + ("Есть прошлое фото — сравни.\n" if prev else "Прошлого фото нет — compare: null.\n") + SKIN_ASK
+    try:
+        out = parse_json(claude(q, images=pics, model=SKIN_MODEL or None, effort=CHAT_EFFORT or None, label=label,
+                                timeout=150))
+    except AIError:
+        if not SKIN_MODEL:
+            raise
+        out = parse_json(claude(q, images=pics, label=label))
+    st, why = out.get("status"), _line(out.get("why"), 160)
+    cmp_ = out.get("compare") if prev and out.get("compare") in COMPARE else None
+    if st == "retake":
+        return {"status": "none", "retake": True, "compare": None,
+                "text": f"Фото не получилось разобрать{': ' + why[:1].lower() + why[1:] if why else ''}. Сними ещё раз при свете."}
+    if st == "ok":
+        return {"status": "ok", "text": SKIN_OK + (f"\n{why}" if why else ""), "compare": cmp_}
+    pts = [p for p in (_line(x, 200) for x in (out.get("points") or []) if isinstance(x, str)) if p][:4]
+    if st == "attention" and pts:
+        return {"status": "attention", "text": "\n".join(f"- {p}" for p in pts), "compare": cmp_}
+    raise AIError("Claude не разобрал фото")
 
 
 KCAL_CHAT = (
