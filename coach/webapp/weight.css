@@ -80,3 +80,4 @@
 .wt-read p b { display: block; font: 650 17px/1.25 var(--head); color: var(--ink); }
 .wt-del { width: 100%; }
 .wt-del.sure { background: var(--err, #ff453a) !important; color: #fff !important; }
+.link[data-a="wt-open"] { min-width: 44px; min-height: 36px; display: inline-flex; align-items: center; justify-content: flex-end; }
