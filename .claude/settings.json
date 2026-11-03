@@ -13,5 +13,6 @@
     ]
   },
   "model": "opus",
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "autoCompactWindow": 483000
 }

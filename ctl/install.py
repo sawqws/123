@@ -42,7 +42,15 @@ def ours(group):
                for h in group.get("hooks", []))
 
 
+# Автосжатие чата на 450k токенов (Глеб, 03.11): окно 483k минус буфер 33k = 450k.
+COMPACT_WINDOW = 483000
+
+
 def merge(cfg, add=True):
+    if add:
+        cfg["autoCompactWindow"] = COMPACT_WINDOW
+    elif cfg.get("autoCompactWindow") == COMPACT_WINDOW:
+        del cfg["autoCompactWindow"]
     hk = cfg.setdefault("hooks", {})
     for ev in list(hk):
         hk[ev] = [g for g in hk[ev] if not ours(g)]
