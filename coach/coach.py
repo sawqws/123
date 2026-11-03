@@ -82,6 +82,8 @@ REPO = os.path.dirname(HERE)
 NAME = "Форма"
 SYNC_EVERY = 15 * 60
 SYNC_MORNING = 5 * 60  # утром, пока ждём сон для разбора
+SYNC_DAY = 2 * 60  # днём (06:00–24:00) — почти без задержки (Глеб 03.11: «бери чаще, до минуты»); ~4 запроса за раз — в лимите WHOOP 10 000/день
+SYNC_FULL = 30 * 60  # раз в 30 мин — за 3 дня (WHOOP пересчитывает старые записи), в остальные разы — только за сутки
 SYNC_RETRY = 10 * 60  # после неудачной загрузки WHOOP — не раньше чем через 10 минут
 
 db = store.Store(os.environ.get("COACH_DB") or os.path.join(DATA, "coach.db"))
@@ -517,6 +519,22 @@ def first_sync(uid):
     except Exception as e:
         traceback.print_exc()
         send(uid, err("Не получилось загрузить данные WHOOP — повтори через пару минут."), kb([btn("🔄 Загрузить", "s|")]))
+
+
+_wh_lock = threading.Lock()
+
+
+def webhook_sync(uid):
+    """Синхронизация по вебхуку: пачку событий (сон + восстановление приходят вместе) сводим в одну загрузку."""
+    if not _wh_lock.acquire(blocking=False):
+        return
+    try:
+        time.sleep(3)
+        sync_user(uid, days=2, quiet=True)
+    except Exception as e:  # WHOOP недоступен — догонит обычная синхронизация
+        print("webhook sync:", uid, e)
+    finally:
+        _wh_lock.release()
 
 
 def sync_user(uid, days=3, quiet=False, notify=True):
@@ -1854,11 +1872,14 @@ def tick():
             last = tok.get("synced")
             age = time.time() - datetime.datetime.fromisoformat(last).timestamp() if last else 1e9
             every = SYNC_MORNING if morning_waiting(u, now) and night_ready(uid, now.date().isoformat()) != "full" \
-                else SYNC_EVERY
+                else SYNC_DAY if now.hour >= 6 else SYNC_EVERY
             failed = float(db.meta(f"sync_fail:{uid}") or 0)
             if age >= every and time.time() - failed > SYNC_RETRY:  # после ошибки не долбим WHOOP каждую минуту
                 try:
-                    sync_user(uid, days=3 if db.record_count(uid) else 60, quiet=not db.record_count(uid))
+                    full = time.time() - float(db.meta(f"sync_full:{uid}") or 0) >= SYNC_FULL
+                    sync_user(uid, days=(3 if full else 1) if db.record_count(uid) else 60, quiet=not db.record_count(uid))
+                    if full:
+                        db.meta(f"sync_full:{uid}", time.time())
                     if failed:
                         db.meta(f"sync_fail:{uid}", 0)
                 except Exception as e:
@@ -2059,6 +2080,30 @@ class Web(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
 
+    def whoop_webhook(self, raw):
+        """Вебхук WHOOP v2 ({user_id, id, type, trace_id}): подпись — base64(HMAC-SHA256(секрет приложения,
+        X-WHOOP-Signature-Timestamp + тело)). Отвечаем сразу 204, синхронизацию запускаем в фоне."""
+        _, sec = creds()
+        ts, sig = self.headers.get("X-WHOOP-Signature-Timestamp") or "", self.headers.get("X-WHOOP-Signature") or ""
+        if not (sec and ts and sig):
+            return self.reply(401, {"error": "нет подписи"})
+        good = base64.b64encode(hmac.new(sec.encode(), ts.encode() + raw, hashlib.sha256).digest()).decode()
+        if not hmac.compare_digest(good, sig):
+            return self.reply(401, {"error": "неверная подпись"})
+        try:
+            ev = json.loads(raw or b"{}")
+            wid, trace = str(ev.get("user_id") or ""), str(ev.get("trace_id") or "")
+        except (ValueError, AttributeError):
+            return self.reply(400, {"error": "bad json"})
+        self.reply(204, "")
+        if trace and db.meta(f"wh:{trace}"):
+            return  # повтор того же события
+        if trace:
+            db.meta(f"wh:{trace}", int(time.time()))
+        uid = next((r["user"] for r in db.q("SELECT user FROM tokens WHERE whoop_id=?", (wid,))), None)
+        if uid and allowed(uid):
+            threading.Thread(target=webhook_sync, args=(uid,), daemon=True).start()
+
     def ask_stream(self, uid, body):
         """Вопрос тренеру потоком (text/event-stream): {"t": кусок}…, в конце {"done", "text", "history"} или {"error"}.
         Вопрос и ответ сохраняются в историю только целиком (Глеб 02.11: «чат очень баговый» — долго ждать пустой экран)."""
@@ -2235,6 +2280,9 @@ class Web(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/whoop/webhook":  # WHOOP сам сообщает об обновлении — данные подтягиваем сразу
+            n = max(0, int(self.headers.get("Content-Length") or 0))
+            return self.whoop_webhook(self.rfile.read(min(n, 65536)) if n else b"")
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
             limit = (3 if path == "/api/kcal/photo" else 1) * MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64

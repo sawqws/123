@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import hmac
 import io
+import base64
 import json
 import os
 import random
@@ -1503,6 +1504,79 @@ def site_call(path, body=None, cookie="", extra=None):
     except ValueError:
         out.json = None
     return out
+
+
+def hook_call(body, secret="sec", ts="1730000000000", sig=None):
+    """POST /whoop/webhook с подписью WHOOP v2: base64(HMAC-SHA256(секрет, timestamp + тело))."""
+    raw = json.dumps(body).encode()
+    if sig is None:
+        sig = base64.b64encode(hmac.new(secret.encode(), ts.encode() + raw, hashlib.sha256).digest()).decode()
+    h = coach.Web.__new__(coach.Web)
+    h.headers = {"Content-Length": str(len(raw)), "X-WHOOP-Signature": sig, "X-WHOOP-Signature-Timestamp": ts}
+    h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
+    h.path = "/whoop/webhook"
+    out = Resp()
+    h.send_response = lambda c: setattr(out, "code", c)
+    h.send_header = lambda k, v: out.headers.__setitem__(k, v)
+    h.end_headers = lambda: None
+    h.do_POST()
+    return out
+
+
+class WebhookTest(unittest.TestCase):
+    """Глеб 03.11: «данные актуальные до минуты» — вебхук WHOOP и частая синхронизация днём."""
+    def setUp(self):
+        self.db, _ = seeded(os.path.join(tempfile.mkdtemp(), "wh.db"))
+        self.db.meta("owner", U)
+        self.db.meta("whoop_client_secret", "sec")
+        self.db.x("UPDATE tokens SET whoop_id=? WHERE user=?", ("777", U))
+        self.p = [mock.patch.object(coach, "db", self.db), mock.patch.dict(os.environ, {"WHOOP_CLIENT_SECRET": ""}),
+                  mock.patch.object(coach.threading, "Thread", SyncThread),
+                  mock.patch.object(coach, "maybe_morning"), mock.patch.object(coach, "tg", return_value={"ok": True, "result": {}})]
+        for p in self.p:
+            p.start()
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+        self.db.db.close()
+
+    def ago(self, sec):
+        t = datetime.datetime.fromtimestamp(time.time() - sec).isoformat(timespec="seconds")
+        self.db.x("UPDATE tokens SET synced=? WHERE user=?", (t, U))
+
+    def test_signed_event_syncs_once(self):
+        ev = {"user_id": 777, "id": "abc", "type": "workout.updated", "trace_id": "t1"}
+        with mock.patch.object(coach, "sync_user") as su, mock.patch.object(coach.time, "sleep"):
+            self.assertEqual(hook_call(ev).code, 204)
+            self.assertEqual(hook_call(ev).code, 204)  # повтор того же trace_id — без второй загрузки
+        su.assert_called_once()
+        self.assertEqual(su.call_args[0][0], U)
+
+    def test_bad_signature_and_unknown_user(self):
+        ev = {"user_id": 777, "id": "abc", "type": "sleep.updated", "trace_id": "t2"}
+        with mock.patch.object(coach, "sync_user") as su:
+            self.assertEqual(hook_call(ev, sig="AAAA").code, 401)
+            self.assertEqual(hook_call(ev, secret="other").code, 401)
+            self.assertEqual(hook_call({**ev, "user_id": 1, "trace_id": "t3"}).code, 204)
+        su.assert_not_called()
+
+    def test_day_sync_every_two_minutes(self):
+        self.ago(150)
+        day = datetime.datetime(2026, 10, 11, 14, 0)
+        with mock.patch.object(coach, "user_now", return_value=day), mock.patch.object(coach, "sync_user") as su:
+            coach.tick()
+        self.assertTrue(su.called)
+        self.assertEqual(su.call_args.kwargs["days"], 3)  # первая за полчаса — за 3 дня
+        self.ago(150)
+        with mock.patch.object(coach, "user_now", return_value=day), mock.patch.object(coach, "sync_user") as su2:
+            coach.tick()
+        self.assertEqual(su2.call_args.kwargs["days"], 1)  # дальше — только за сутки
+        self.ago(150)
+        with mock.patch.object(coach, "user_now", return_value=datetime.datetime(2026, 10, 11, 3, 0)), \
+                mock.patch.object(coach, "sync_user") as su3:
+            coach.tick()
+        su3.assert_not_called()  # ночью — раз в 15 мин
 
 
 class SiteTest(unittest.TestCase):
