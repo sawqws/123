@@ -278,14 +278,17 @@
     for (const [x, y, anchor] of spots) { const t = labels([{ x, y, t: text, anchor, cls: 'norm-t' }], PW, taken); if (t) return s + t; }
     return s;
   }
+  // полоса «обычно у тебя» [от, до]: заливка под данными и пунктирные края
+  const bandRect = (b, y, PW) => `<rect class="ch-band" x="0" y="${f1(y(b[1]))}" width="${PW}" height="${f1(Math.max(1, y(b[0]) - y(b[1])))}"/>`;
+  const bandEdges = (b, y, PW) => b.map(v => `<line class="ch-band-e" x1="0" x2="${PW}" y1="${f1(y(v))}" y2="${f1(y(v))}"/>`).join('');
   // o: max, color (цвет или функция строки), bands [[от, до, слово]], norm {v, t}, fmt (подпись значения с единицей),
-  // tip (строка -> [значение, пояснение, цвет точки]), label (для экранного диктора)
+  // tip (строка -> [значение, пояснение, цвет точки]), label (для экранного диктора), band [от, до] — полоса «обычно у тебя», w — своя ширина
   function bars(rows, key, o = {}) {
-    const W = chartW(), G = o.bands ? GUT : 0, PW = W - G, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
+    const W = o.w || chartW(), G = o.bands ? GUT : 0, PW = W - G, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
     const vals = rows.map(r => r[key]).filter(v => v != null);
     if (!vals.length) return '<div class="chart-empty">Нет данных за этот период</div>';
     const nv = o.norm && o.norm.v != null ? o.norm.v : null;
-    const top = o.max || Math.max(1, ...vals, nv || 0) * 1.1, base = TP + CH;
+    const top = o.max || Math.max(1, ...vals, nv || 0, o.band ? o.band[1] : 0) * 1.1, base = TP + CH;
     const y = v => base - Math.max(0, Math.min(v, top)) / top * CH;
     const bw = n > 60 ? Math.max(1, slot - 1) : n > 20 ? Math.max(2, slot - 2) : Math.min(24, slot * .6);
     const fmt = o.fmt || (v => num(v)), col = r => typeof o.color === 'function' ? o.color(r) : o.color || 'var(--ink)';
@@ -294,6 +297,7 @@
       if (a > 0) s += `<line class="grid" x1="0" x2="${PW}" y1="${f1(y(a))}" y2="${f1(y(a))}"/>`;
       s += `<text class="band-t" x="${PW + 10}" y="${f1((y(a) + y(b)) / 2 + 4)}">${word}</text>`;
     });
+    if (o.band) s += bandRect(o.band, y, PW);
     s += `<line class="axis" x1="0" x2="${PW}" y1="${base + .5}" y2="${base + .5}"/>`;
     const hw = Math.min(slot, Math.max(bw + 10, 16));
     s += `<rect class="ch-hb" x="${f1((slot - hw) / 2)}" y="${TP - 6}" width="${f1(hw)}" height="${CH + 6}" rx="${Math.min(8, hw / 2)}"/>`;
@@ -309,6 +313,7 @@
       const tp = o.tip ? o.tip(r) : [fmt(v), ''];
       tips.push([dayTip(r.day), tp[0], tp[1] || '', y(v), tp[2] || '']);
     });
+    if (o.band) s += bandEdges(o.band, y, PW);  // края полосы — поверх столбиков, иначе их не видно
     const taken = [];
     // подписи: последний день (жирно), максимум, минимум
     const at = (i, cls) => i < 0 ? null : { x: (i + .5) * slot, y: y(rows[i][key]) - 6, t: fmt(rows[i][key]), cls };
@@ -340,15 +345,16 @@
   }
   // base — твоя норма (линия «норма …»); o.fmt — подпись с единицей («92 мс»), o.label — для диктора
   function line(rows, key, color, base, o = {}) {
-    const W = chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
+    const W = o.w || chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
     const pts = rows.map((r, i) => [(i + .5) * slot, r[key], i]).filter(p => p[1] != null);
     if (pts.length < 2) return '<div class="chart-empty">Мало данных для графика</div>';
     const fmt = o.fmt || (v => num(v));
-    const vs = pts.map(p => p[1]).concat(base != null ? [base] : []);
+    const vs = pts.map(p => p[1]).concat(base != null ? [base] : [], o.band || []);
     let lo = Math.min(...vs), hi = Math.max(...vs); const sp = (hi - lo) || 1; lo -= sp * .06; hi += sp * .06;
     const y = v => TP + 4 + (hi - v) / (hi - lo) * (CH - 24);  // снизу место под подпись минимума
     const P = pts.map(p => [p[0], y(p[1])]), d = smooth(P), bottom = TP + CH;
-    let s = `<line class="axis" x1="0" x2="${PW}" y1="${bottom + .5}" y2="${bottom + .5}"/>`;
+    let s = o.band ? bandRect(o.band, y, PW) + bandEdges(o.band, y, PW) : '';
+    s += `<line class="axis" x1="0" x2="${PW}" y1="${bottom + .5}" y2="${bottom + .5}"/>`;
     s += `<g class="ch-hl"><line class="ch-x" x1="${f1(slot / 2)}" x2="${f1(slot / 2)}" y1="${TP - 6}" y2="${bottom}"/></g>`;
     s += `<path class="fillin" d="${d} L${f1(P[P.length - 1][0])},${bottom} L${f1(P[0][0])},${bottom} Z" fill="${color}"/>`;
     s += `<path class="draw" pathLength="1" d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -1258,7 +1264,7 @@
         : pr ? `<p class="small muted">от ${dateLine(pr.day)}</p><div class="prose ${pr.text.length > 320 ? 'clamp' : ''}" id="prog">${tgHtml(pr.text)}</div>${pr.text.length > 320 ? '<button class="link" data-a="more">Читать целиком</button>' : ''}`
         : `<p class="muted small">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</p>
            <button class="btn primary" data-a="progress">Разобрать прогресс</button>`}</section>`;
-    h += `<div class="sec rise">${cap('Тренды')}<div class="seg" role="tablist">${RANGES.map(([n, l]) => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${l}</button>`).join('')}</div></div>`;
+    h += `<div class="sec rise">${cap('Тренды', F.screens.trends ? '<button class="link" data-a="tr-open">Все показатели</button>' : '')}<div class="seg" role="tablist">${RANGES.map(([n, l]) => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${l}</button>`).join('')}</div></div>`;
     const rows = S.series[S.range] || (S.range === 30 ? S.data.series : null);
     if (!rows && S.seriesErr === S.range) return h + retryCard('Графики не загрузились', 'series-retry');
     if (!rows) return h + [1, 2, 3].map(() => '<section class="card"><div class="sk line" style="width:40%"></div><div class="sk" style="height:130px;margin-top:14px"></div></section>').join('');
