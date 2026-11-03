@@ -60,12 +60,16 @@
 - `today` (`POST /api/regime {}` → `{"cfg", "today", "week": [7 дней как today]}`; `/api/regime/save` — cfg; `/api/regime/check {"id", "done"}`):
 ```json
 {"day": "2026-11-01", "mode": "vacation|school|weekend", "bed": "23:45", "wake": "08:30",
- "train": {"on": true, "time": "10:00", "minutes": 90, "intensity": "full|light|rest", "why": "3-й день бокса подряд — техника"},
+ "train": {"on": true, "time": "10:00", "minutes": 90, "intensity": "full|light|rest", "why": "3-й день бокса подряд — техника",
+           "src": "plan|whoop"},
  "massage": false, "kcal": 3400, "protein": 130, "water": 3000,
  "checklist": [{"id": "e0", "text": "Душ и умыть лицо", "done": false}],
  "tips": ["Сегодня восстановление 32% — без тяжёлой работы"]}
 ```
 - intensity: recovery < 34 → light; 3-й день тренировок подряд → light; иначе full; нет тренировки → rest.
+- `src: "whoop"` — день подстроен по WHOOP (Глеб 03.11): настоящая тренировка (не массаж/сауна, от 15 мин) — `on`, время
+  и минуты самой длинной, `why` «по WHOOP: бокс в 18:10, 85 мин», нормы еды и воды — как в день тренировки; прошедший день
+  по плану с тренировкой, а её не было — `on: false`, «по WHOOP: тренировки не было». cfg не меняется.
 - Бот: напоминание за `remind` минут до отбоя (раз в день, таблица sent), в утреннем разборе — строки режима (context_lines).
 
 ## 5. Одно приложение: «Калории» внутри Формы (Глеб 01.11: «это надо совместить»)

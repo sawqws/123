@@ -498,7 +498,55 @@ class BotTest(unittest.TestCase):
         self.assertGreater(st["n"], 30 - 1)  # по всей истории, а не по 30 дням
         self.assertEqual(call("/api/all").json["streak"], st)
         empty = store.Store(os.path.join(tempfile.mkdtemp(), "e.db"))
-        self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None})
+        self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None, "anchored": False})
+
+    @staticmethod
+    def cycles(spans, off="+03:00"):
+        """Пустая база с циклами WHOOP: spans — [(начало, конец или None)] по UTC «ГГГГ-ММ-ДДTЧЧ:ММ»."""
+        db = store.Store(os.path.join(tempfile.mkdtemp(), "w.db"))
+        for i, (a, b) in enumerate(spans):
+            r = {"id": i, "start": a + ":00.000Z", "end": b + ":00.000Z" if b else None, "timezone_offset": off}
+            db.put(U, "cycle", i, a[:10], r["start"], r)
+        return db
+
+    def test_wear_streak_long_cycle_and_gap(self):
+        # 07.10 07:00 → 09.10 08:00 (больше суток: у 08.10 «своего» цикла нет, но браслет на руке) → 11.10 сейчас
+        db = self.cycles([("2026-10-04T04:00", "2026-10-05T04:00"),  # 04–05.10, дальше 06.10 без цикла — пропуск
+                          ("2026-10-07T04:00", "2026-10-09T05:00"), ("2026-10-09T05:00", "2026-10-10T04:30"),
+                          ("2026-10-10T04:30", None)])
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 5, "since": "2026-10-07", "anchored": False})
+        db = self.cycles([("2026-10-07T04:00", "2026-10-09T05:00")])  # сегодня и вчера не покрыты — серии нет
+        self.assertEqual(insights.wear_streak(db, U, TODAY)["n"], 0)
+        db = self.cycles([("2026-10-07T04:00", "2026-10-10T05:00")])  # сегодня ещё пусто — со вчера
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 4, "since": "2026-10-07", "anchored": False})
+
+    def test_wear_streak_timezone(self):
+        # 22:30 UTC 08.10 — у него (+03:00) уже 01:30 09.10: 08.10 не покрыт
+        span = [("2026-10-08T22:30", "2026-10-10T20:00")]
+        self.assertEqual(insights.wear_streak(self.cycles(span), U, TODAY), {"n": 2, "since": "2026-10-09",
+                                                                             "anchored": False})
+        self.assertEqual(insights.wear_streak(self.cycles(span, "-05:00"), U, TODAY), {"n": 3, "since": "2026-10-08", "anchored": False})
+
+    def test_wear_streak_anchor(self):
+        db = self.cycles([("2026-10-01T04:00", "2026-10-10T04:00")])  # 01–10.10, сегодня ещё пусто
+        db.meta(f"streak:anchor:{U}", json.dumps({"day": "2026-10-08", "n": 100}))
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 102, "since": "2026-07-01", "anchored": True})
+        db.put(U, "cycle", "now", "2026-10-11", "2026-10-10T04:00:00.000Z",
+               {"id": "now", "start": "2026-10-10T04:00:00.000Z", "end": None, "timezone_offset": "+03:00"})
+        self.assertEqual(insights.wear_streak(db, U, TODAY)["n"], 103)  # и сегодня покрыт
+        db = self.cycles([("2026-10-01T04:00", "2026-10-08T04:00"), ("2026-10-10T04:00", None)])  # 09.10 пропуск
+        db.meta(f"streak:anchor:{U}", json.dumps({"day": "2026-10-07", "n": 100}))
+        self.assertEqual(insights.wear_streak(db, U, TODAY), {"n": 2, "since": "2026-10-10", "anchored": False})
+
+    def test_streak_api(self):
+        r = call("/api/streak", {"n": 50})
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.json["streak"], {"n": 50, "since": (TODAY - datetime.timedelta(days=49)).isoformat(),
+                                            "anchored": True})
+        self.assertEqual(call("/api/all").json["streak"]["n"], 50)
+        for bad in (-1, 3651, "x", None, True):
+            self.assertEqual(call("/api/streak", {"n": bad}).code, 400, bad)
+        self.assertEqual(call("/api/all").json["streak"]["n"], 50)  # неверное не сохранилось
 
     def test_clean_photos_keeps_skin(self):
         tmp = tempfile.mkdtemp()
@@ -595,6 +643,36 @@ class BotTest(unittest.TestCase):
         self.assertEqual(r.json["day"]["eaten"]["kcal"], 450)
         self.assertEqual(call("/api/meal/delete", {"id": mid}).json["day"]["eaten"]["kcal"], 100)
 
+    def test_chat_idle(self):
+        """Пауза ≥ 30 мин — новый разговор: приложение получает пустую историю, Claude — без старых сообщений."""
+        self.assertEqual(coach.CHAT_IDLE, 30 * 60)
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def put(role, text, ago_min):
+            self.db.x("INSERT INTO messages (user, role, text, created) VALUES (?,?,?,?)",
+                      (U, role, text, (now - datetime.timedelta(minutes=ago_min)).isoformat(timespec="seconds")))
+        put("user", "старый вопрос", 120)
+        put("coach", "старый ответ", 119)
+        put("user", "вопрос", 50)  # пауза 69 мин — разговор начался заново
+        put("coach", "ответ", 29)  # 21 мин между ними — тот же разговор
+        hist = coach.chat_history(U, 40, now)
+        self.assertEqual([m["text"] for m in hist], ["вопрос", "ответ"])
+        self.assertEqual([m["text"] for m in call("/api/history").json["history"]], ["вопрос", "ответ"])
+        self.assertEqual(coach.chat_history(U, 40, now + datetime.timedelta(minutes=1)), [])  # 30 мин после последнего — пусто
+        with mock.patch.object(ai, "claude", return_value="Да.") as c:  # пишет через 29 мин — история сохраняется
+            r = call("/api/ask", {"text": "а завтра?"})
+        self.assertIn("Тренер: ответ", c.call_args[0][0])
+        self.assertNotIn("старый", c.call_args[0][0])
+        self.assertEqual([m["text"] for m in r.json["history"]], ["вопрос", "ответ", "а завтра?", "Да."])
+        self.db.x("UPDATE messages SET created=? WHERE user=?", ((now - datetime.timedelta(minutes=31)).isoformat(), U))
+        self.assertEqual(call("/api/history").json["history"], [])  # через 30 мин тишины — начальный экран
+        with mock.patch.object(ai, "claude", return_value="Привет.") as c:
+            r = call("/api/ask", {"text": "новый вопрос"})
+        self.assertNotIn("НЕДАВНИЙ РАЗГОВОР", c.call_args[0][0])  # старое в контекст не идёт
+        self.assertIn("восстановление: 82%", c.call_args[0][0])  # данные и память — остаются
+        self.assertEqual([m["text"] for m in r.json["history"]], ["новый вопрос", "Привет."])
+        self.assertEqual(len(self.db.history(U, 200)), 8)  # в базе ничего не стёрто
+
     def test_ask_keeps_history(self):
         with mock.patch.object(ai, "claude", return_value="**Да**, но без спарринга.") as c:
             r = call("/api/ask", {"text": "Можно спарринг?"})
@@ -628,7 +706,8 @@ class BotTest(unittest.TestCase):
         self.assertIn("бокс в полную", self.db.brief(U, "2026-10-11")["text"])
         with mock.patch.object(ai, "claude", side_effect=ai.AIError("нет")):
             coach.morning_brief(U)
-        self.assertIn("Ориентир нагрузки", self.texts()[-1])
+        self.assertIn("ккал", self.texts()[-1])  # без Claude — правила: еда, вода, отбой
+        self.assertNotIn("Ориентир нагрузки", self.texts()[-1])  # как тренироваться — не советуем (Глеб 03.11)
         # react: тренировка -> разбор один раз; утренний разбор шлёт расписание, а не react
         with mock.patch.object(coach.threading, "Thread") as th:
             rec = {"_day": "2026-10-11", "cycle_id": 1}

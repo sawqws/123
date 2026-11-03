@@ -12,6 +12,7 @@ shots.json — список снимков для shots.js ([{"name": ..., "clic
 KCAL_STUB по договору coach/SYNC.md, п. 5 (сегменты сверху, отступ под меню Формы, тема, kcal-changed).
 Ответы на POST с телом здесь не различаются: shots.js отдаёт один ответ на путь. Свои /api/… разделов (f_*.py)
 добавляются сами: для каждого пути из EXTRA_PATHS вызывается route с пустым телом.
+Пути из LIVE_PATHS (тренды) в --serve считаются на лету по телу запроса.
 """
 import datetime
 import json
@@ -30,7 +31,9 @@ import coach  # noqa: E402
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
-               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/skin/rate", "/api/reviews"]
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends"]
+# пути, где ответ зависит от тела запроса: в --serve считаются на лету (тренды: показатель, период, конец периода)
+LIVE_PATHS = {"/api/trends"}
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -47,6 +50,9 @@ REGIME_CFG = {"train_days": [0, 2, 4, 5, 6], "train_time": "10:00", "train_minut
               "shift": {"from": "2026-10-09", "bed": "23:45", "wake": "08:30", "step": 30, "every": 2},
               "evening": ["Душ и умыть лицо", "Ужин: белок и углеводы", "Крем на лицо", "Телефон в сторону"],
               "remind": 45}
+
+
+NOW = datetime.datetime.combine(T.TODAY, datetime.time(13, 40))
 
 
 def regime_sample(today):
@@ -108,28 +114,46 @@ SKIN = """Утро: умыться мягким гелем, увлажняющи
 Скраб раз в неделю
 Тип кожи: комбинированная
 Не подходит: спиртовые лосьоны"""
-SKIN_RATES = [3, 3, 4, 3, 2, 3, 3, 4, 4, 3, 3, 4, 4, 5, 4, 3, 4, 4, 4, 5, 4, 4, 3, 4, 5, 4, 4, 5, 4]  # 29 дней до сегодня
+SKIN_DAYS = 29  # дней ухода до сегодня
 
 
 def seed_skin(today):
-    """Уход и дневник кожи за месяц (не каждый день всё по плану — как в жизни); сегодня утро сделано, вечер — нет."""
+    """Уход за месяц (не каждый день всё по плану — как в жизни), фото лба и разборы; сегодня утро сделано, вечер — нет."""
     coach.route(T.U, "/api/skin/import", {"text": SKIN})
     st = coach.f_skin.load(coach.db, T.U)
     st["created"] = (today - datetime.timedelta(days=29)).isoformat()
     coach.f_skin.store(coach.db, T.U, st)
     am, pm = [s["id"] for s in st["am"]], [s["id"] for s in st["pm"]]
-    for back, r in enumerate(reversed(SKIN_RATES), 1):
+    for back in range(1, SKIN_DAYS + 1):
         d = today - datetime.timedelta(days=back)
         full = back < 6 or back % 4 != 0
         m = am + (pm if full else []) + ([st["extra"][0]["id"]] if d.weekday() in (1, 5) else [])
-        coach.f_skin.put_doc(coach.db, T.U, d.isoformat(), {"m": m, "r": r if back % 7 != 3 else None, "t": "",
-                                                            "a": True, "p": full, "ok": full})
-    coach.f_skin.put_doc(coach.db, T.U, today.isoformat(), {"m": am, "r": 4, "t": "", "a": True, "p": False, "ok": False})
+        coach.f_skin.put_doc(coach.db, T.U, d.isoformat(), {"m": m, "a": True, "p": full, "ok": full})
+    coach.f_skin.put_doc(coach.db, T.U, today.isoformat(), {"m": am, "a": True, "p": False, "ok": False})
     # фото лба раз в 3 дня — серые заглушки (никаких настоящих лиц); последнее 3 дня назад — сегодня день фото
     from test_skin import GRAY_URL
     for back in (15, 12, 9, 6, 3):
         coach.f_skin.save_photo(coach.db, coach.DATA, T.U, {"image": GRAY_URL, "thumb": GRAY_URL},
                                 today - datetime.timedelta(days=back))
+    # разборы фото (как ответил бы Claude) — нейтральный пример: сначала было что поправить, потом всё нормально
+    for back, (st, cmp_, text) in SKIN_AI.items():
+        d = (today - datetime.timedelta(days=back)).isoformat()
+        prev = (today - datetime.timedelta(days=back + 3)).isoformat() if back < 15 else None
+        coach.f_skin._set_ai(coach.db, T.U, d, {"status": st, "compare": cmp_, "text": text, "time": "21:40", "photo": d,
+                                               **({"prev": prev} if prev else {})})
+
+
+SKIN_AI = {
+    15: ("attention", None, "- Несколько мелких красных точек у линии волос — так бывает, когда пот и волосы касаются лба\n"
+                            "- Вечером умывайся до конца, к линии волос, и не пропускай крем на ночь\n"
+                            "- Днём не трогай лоб руками и убирай чёлку"),
+    12: ("attention", "так же", "- Точки у линии волос на месте, новых нет\n"
+                                "- Скраб пока отложи — он может раздражать, хватит мягкого геля\n"
+                                "- Наволочку меняй раз в 3–4 дня"),
+    9: ("ok", "лучше", "Всё нормально, идём дальше.\nКрасных точек меньше, кожа ровнее."),
+    6: ("ok", "так же", "Всё нормально, идём дальше.\nНовых воспалений нет, уход работает."),
+    3: ("ok", "так же", "Всё нормально, идём дальше.\nКожа чистая и ровная, без раздражения."),
+}
 
 
 # Разборы за сегодня — нейтральный пример: утро (уже открыт) и после тренировки (новый); вечер ещё впереди
@@ -156,18 +180,71 @@ def seed_reviews(today):
             coach.f_reviews.seen(coach.db, T.U, rid)
 
 
+# Вес — нейтральный пример (обычный подросток, вес медленно растёт с ростом): утренние замеры раз в 3–5 дней за 2 месяца
+WEIGHT = [(58, 61.6, 15.4, 47.9), (52, 61.9, None, None), (47, 61.8, 15.2, 48.2), (41, 62.2, 15.1, 48.5), (36, 62.1, None, None),
+          (30, 62.4, 14.9, 48.9), (25, 62.6, 14.8, 49.1), (20, 62.5, 14.8, 49.2), (15, 62.9, 14.6, 49.5), (11, 63.0, 14.5, 49.7),
+          (6, 63.1, 14.4, 49.8), (3, 63.0, None, None)]
+
+
+def seed_weight(today):
+    for back, kg, fat, muscle in WEIGHT:
+        d = today - datetime.timedelta(days=back)
+        coach.f_weight.save(coach.db, T.U, {"day": d.isoformat(), "time": "07:%02d" % (10 + back % 20), "kg": kg, "fat_pct": fat,
+                                            "muscle_kg": muscle, "src": "manual" if fat is None else "photo"}, today)
+    coach.f_weight.save(coach.db, T.U, {"day": today.isoformat(), "time": "07:32", "kg": 63.2, "fat_pct": 14.3, "muscle_kg": 50.0,
+                                        "lean_kg": 54.2, "water_pct": 58.6, "bone_kg": 2.7, "visceral": 3, "bmr": 1640, "bmi": 20.2,
+                                        "protein_pct": 18.4, "src": "photo"}, today)
+
+
+def seed_trends(db, back=200):
+    """Для «Трендов»: шаги в циклах (step_count) и история до полугода (те же поддельные данные, только старше)."""
+    import random
+    rnd = random.Random(7)
+    for r in db.records(T.U, "cycle"):
+        r.pop("_day", None)
+        r["step_count"] = rnd.randint(5500, 12500)
+        db.put(T.U, "cycle", T.whoop.rid("cycle", r), T.whoop.day_of("cycle", r), r.get("start") or "", r)
+    first = db.first_day(T.U)
+    data = T.fake_whoop(back, seed=3)
+    cycles = {str(c["id"]): c for c in data["cycle"]}
+    for kind in ("cycle", "sleep", "workout", "recovery"):
+        for r in data[kind]:
+            day = T.whoop.day_of(kind, r, cycles)
+            if not day or day >= first:
+                continue
+            if kind == "cycle":
+                r = dict(r, id=r["id"] + 100000, step_count=rnd.randint(5000, 12000))
+            elif kind == "recovery":
+                r = dict(r, cycle_id=r["cycle_id"] + 100000)
+            else:
+                r = dict(r, id=f"old-{r['id']}")
+            db.put(T.U, kind, T.whoop.rid(kind, r), day, r.get("start") or r.get("created_at") or "", r)
+
+
+def seed_water(db, today):
+    """Вода прошлых дней (для строки «Питание и вода» в оценке недели): нейтральный пример, сегодня не трогаем."""
+    for i, ml in enumerate([1600, 1400, 1900, 1500, 1750, 1300, 1650, 1200, 1500, 1350, 1600, 1250, 1400, 1300], 1):
+        day = (today - datetime.timedelta(days=i)).isoformat()
+        db.add_water(T.U, day, "12:00", ml // 2)
+        db.add_water(T.U, day, "18:00", ml - ml // 2)
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
+    seed_trends(db)
     coach.db = db
     today = T.TODAY
     now = datetime.datetime.combine(today, datetime.time(13, 40))
     with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: today), \
-            mock.patch.object(coach, "DATA", tempfile.mkdtemp()):  # фото лба — во временную папку, не в coach/data
+            mock.patch.object(coach, "DATA", tempfile.mkdtemp()), \
+            mock.patch.object(coach, "bg", lambda *a, **k: None):  # фото лба — во временную папку; разбор Claude не зовём
         db.save_profile(T.U, {"age": "15", "sex": "m", "sport": "бокс", "goal": "form"})
         db.add_goal(T.U, "ложиться до 23:00")
         seed_habits(today)
         seed_skin(today)
         seed_reviews(today)
+        seed_weight(today)
+        seed_water(db, today)
         allp = coach.route(T.U, "/api/all", {})
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]
@@ -202,11 +279,21 @@ def build(shots=None):
         api["/api/skin/import"] = coach.f_skin.import_text(db, T.U, "Утром: тоник\nКрем от солнца утром\nПатчи по субботам",
                                                            today, preview=True)  # предпросмотр «Заполнить списком»
         # фото лба: список, снимок (серый), сохранение сегодня и удаление — последними (меняют данные)
+        api["/api/skin/analyze"] = coach.route(T.U, "/api/skin/analyze", {"day": api["/api/skin"]["ai"]["last"]["day"]})
         api["/api/skin/photos"] = coach.route(T.U, "/api/skin/photos", {})
         api["/api/skin/photo/get"] = coach.route(T.U, "/api/skin/photo/get", {"day": api["/api/skin/photos"]["photos"][0]["day"]})
         from test_skin import GRAY_URL
         api["/api/skin/photo"] = coach.route(T.U, "/api/skin/photo", {"image": GRAY_URL, "thumb": GRAY_URL})
         api["/api/skin/photo/delete"] = coach.route(T.U, "/api/skin/photo/delete", {"day": today.isoformat()})
+        # вес: предпросмотр скрина и текста (без Claude — как вернул бы разбор), сохранение и удаление — тот же список
+        prev = {"kg": 63.2, "fat_pct": 14.3, "muscle_kg": 50.0, "water_pct": 58.6, "bmr": 1640, "day": today.isoformat(), "time": "07:32"}
+        api["/api/weight/photo"] = {"item": {**prev, "src": "photo"}, "found": [k for k in prev if k not in ("day", "time")],
+                                    "skipped": [], "how": "claude"}
+        item, _ = coach.f_weight.parse_text("вес 63,2 жир 14,3% мышцы 50 вода 58,6%")
+        api["/api/weight/text"] = {"item": {**item, "day": today.isoformat(), "src": "text"}, "found": list(item), "skipped": [], "how": "parser"}
+        api["/api/weight/save"] = {**api["/api/weight"], "saved": api["/api/weight"]["last"]}
+        api["/api/weight/delete"] = api["/api/weight"]
+        api["/api/assess?period=month"] = coach.route(T.U, "/api/assess", {"period": "month"})  # --serve: оценка месяца
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
     return {"base": "/", "api": api, "shots": shots or [{"name": "home"}]}
 
@@ -279,14 +366,23 @@ def serve(port, stub=False):
             self.wfile.write(body)
 
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            path = urllib.parse.urlparse(self.path).path
+            if path in LIVE_PATHS:
+                try:
+                    body = json.loads(raw or b"{}")
+                    with mock.patch.object(coach, "user_now", lambda u: NOW), \
+                            mock.patch.object(coach, "today_of", lambda uid: T.TODAY):
+                        return self.send(200, coach.route(T.U, path, body))
+                except (KeyError, ValueError) as e:
+                    return self.send(400, {"error": str(e)})
             self.do_GET()
 
         def do_GET(self):
             u = urllib.parse.urlparse(self.path)
             path = u.path
             if path.startswith("/api/"):
-                return self.send(200, api.get(path, {}))
+                return self.send(200, api.get(f"{path}?{u.query}", api.get(path, {})))
             if path in ("/kcal/", "/kcal/index.html") and stub:
                 return self.send(200, KCAL_STUB, "text/html; charset=utf-8")
             if path == "/kcal" or path.startswith("/kcal/"):

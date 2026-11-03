@@ -6,6 +6,7 @@
 Ориентиры нагрузки и питания — наши (общие спортивные рекомендации), не WHOOP.
 """
 import datetime
+import json
 import statistics
 
 import water
@@ -208,7 +209,9 @@ def load_ratio(days, day):
 # ---------- питание ----------
 
 def weight_of(profile, body):
-    return profile.get("weight") or body.get("weight_kilogram")
+    """Свежий замер умных весов (body["scale"], f_weight) — раньше веса из профиля и WHOOP: те введены руками без даты."""
+    scale = body.get("scale") or {}
+    return scale.get("kg") or profile.get("weight") or body.get("weight_kilogram")
 
 
 def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
@@ -249,7 +252,8 @@ def nutrition(profile, body, base, today_kcal=None, train_minutes=0):
     floor = (2100 if profile.get("sex") == "f" else 2600) if teen else 0
     water = round((max(w * 35, floor) + train_minutes * 10) / 50) * 50
     return {"kcal": kcal, "protein": protein, "fat": fat, "carbs": carbs, "water": water, "spend": round(spend),
-            "how": how, "goal": goal, "teen": teen}
+            "how": how, "goal": goal, "teen": teen,
+            "weight": round(float(w), 1), "weight_day": (body.get("scale") or {}).get("day") if (body.get("scale") or {}).get("kg") else None}
 
 
 def eaten(meals, kcal=None):
@@ -418,18 +422,80 @@ def today(db, uid, day, profile, body):
     }
 
 
+STREAK_MAX = 3650  # якорь серии из приложения WHOOP: 0–3650 дней
+
+
+def wear_days(db, uid, day):
+    """Дни (ISO) до day включительно, когда браслет носили: день покрыт циклом WHOOP. Цикл идёт от пробуждения
+    до пробуждения и бывает длиннее суток — покрыты все календарные дни от его начала до конца по местному
+    времени цикла (timezone_offset); цикл без конца (идёт сейчас) — до day. Так серия совпадает со «стриком»
+    в приложении WHOOP (сверено на живых данных 03.11: ~726 дней)."""
+    out = set()
+    for r in db.q("SELECT data FROM records WHERE user=? AND kind='cycle'", (uid,)):
+        try:
+            c = json.loads(r["data"])
+            off = c.get("timezone_offset") or "+03:00"
+            t0 = whoop._local(c.get("start"), off)
+            t1 = whoop._local(c.get("end"), off) if c.get("end") else None
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if not t0:
+            continue
+        d, last = t0.date(), min(t1.date(), day) if t1 else day
+        while d <= last:
+            out.add(d.isoformat())
+            d += datetime.timedelta(days=1)
+    return out
+
+
+def streak_anchor(db, uid):
+    """Якорь серии {day, n} — число «стрик» из самого приложения WHOOP (в API v2 его нет), или None."""
+    try:
+        a = json.loads(db.meta(f"streak:anchor:{uid}") or "null")
+        datetime.date.fromisoformat(a["day"])
+        n = int(a["n"])
+    except (ValueError, TypeError, KeyError):
+        return None
+    return {"day": a["day"], "n": n} if 0 <= n <= STREAK_MAX else None
+
+
+def set_streak_anchor(db, uid, day, n):
+    """Запомнить «стрик» из WHOOP на день day (n 0–3650, иначе ValueError) -> новая серия (wear_streak)."""
+    try:
+        n = None if isinstance(n, (bool, float)) else int(n)
+    except (TypeError, ValueError):
+        n = None
+    if n is None or not 0 <= n <= STREAK_MAX:
+        raise ValueError("серия — число дней от 0 до 3650")
+    db.meta(f"streak:anchor:{uid}", json.dumps({"day": day.isoformat(), "n": n}))
+    return wear_streak(db, uid, day)
+
+
 def wear_streak(db, uid, day):
-    """Сколько дней подряд браслет на руке (есть цикл, сон или восстановление) по всей истории, как «Streak» в WHOOP.
-    Сегодня WHOOP мог ещё не прислать — серия не рвётся. Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням)."""
-    rows = db.q("SELECT DISTINCT day FROM records WHERE user=? AND kind IN ('cycle','sleep','recovery') AND day<=?",
-                (uid, day.isoformat()))
-    days = {r["day"] for r in rows}
+    """Сколько дней подряд браслет на руке (день покрыт циклом — wear_days) по всей истории, как «Streak» в WHOOP.
+    Сегодня WHOOP мог ещё не прислать — серия не рвётся (и не прибавляется).
+    Якорь (streak_anchor: число из приложения WHOOP на его день) — если после него разрывов не было, серия =
+    его число + засчитанные дни после него; был разрыв — считаем по правилу с конца.
+    Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням); 03.11: по дню начала цикла выходило ~395 дней —
+    длинный цикл (больше суток) оставлял день без «своего» цикла, хотя браслет носили.
+    -> {n, since, anchored}."""
+    days = wear_days(db, uid, day)
+    a = streak_anchor(db, uid)
+    if a and a["day"] <= day.isoformat():
+        ad = datetime.date.fromisoformat(a["day"])
+        after = [ad + datetime.timedelta(days=i) for i in range(1, (day - ad).days + 1)]
+        if all(d.isoformat() in days for d in after if d != day):  # без разрывов (сегодня может быть ещё пусто)
+            got = [d for d in after if d.isoformat() in days]
+            n = a["n"] + len(got)
+            last = got[-1] if got else ad
+            return {"n": n, "since": (last - datetime.timedelta(days=n - 1)).isoformat() if n else None,
+                    "anchored": True}
     d = day if day.isoformat() in days else day - datetime.timedelta(days=1)
     n = 0
     while d.isoformat() in days:
         n += 1
         d -= datetime.timedelta(days=1)
-    return {"n": n, "since": (d + datetime.timedelta(days=1)).isoformat() if n else None}
+    return {"n": n, "since": (d + datetime.timedelta(days=1)).isoformat() if n else None, "anchored": False}
 
 
 def series(db, uid, day, n):
@@ -728,7 +794,8 @@ def profile_line(p, body):
     w = weight_of(p, body)
     h = p.get("height") or ((body.get("height_meter") or 0) * 100) or None
     if w:
-        parts.append(f"вес {w} кг")
+        sc = body.get("scale") or {}
+        parts.append(f"вес {w} кг" + (f" (умные весы, {sc['day'][8:10]}.{sc['day'][5:7]})" if sc.get("kg") and sc.get("day") else ""))
     if h:
         parts.append(f"рост {round(h)} см")
     if body.get("max_heart_rate"):

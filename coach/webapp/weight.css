@@ -1,0 +1,83 @@
+/* weight — «Вес и состав тела»: карточка на главной с мини-графиком, экран (крупный вес, плитки состава, график,
+   список замеров), лист замера. Только токены темы (ч/б: --ink, --hint, --card-2, --fill…), движение — transform/opacity,
+   шрифт ≥ 11 px. Цвета нет: вес у подростка — не «хорошо/плохо», изменения — нейтрально. */
+.wt-card { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
+.wt-empty { justify-items: start; }
+.wt-empty p { margin: 0; font-size: 15px; line-height: 1.4; color: var(--hint); }
+.wt-empty p b { display: block; margin-bottom: 4px; font: 650 18px/1.25 var(--head); color: var(--ink); }
+.wt-ei { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--fill); color: var(--ink); }
+.wt-ei .ico { width: 26px; height: 26px; }
+.wt-ei.pulse { animation: wt-pulse 1.4s ease-in-out infinite; }
+@keyframes wt-pulse { 50% { transform: scale(.9); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .wt-ei.pulse { animation: none; } }
+.wt-btns { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.wt-btns .btn { flex: 1 1 0; min-width: 0; margin: 0; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; }
+.wt-btns .btn .ico { width: 18px; height: 18px; flex: none; }
+.wt-hint { margin: 0; font-size: 12.5px; line-height: 1.35; color: var(--hint); }
+
+/* ---------- главная ---------- */
+.wt-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 64px; padding: 0; border: 0;
+  background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform .35s var(--spring-bounce, ease); }
+.wt-main:active { transform: scale(.98); transition-duration: .1s; }
+.wt-now { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wt-now b { font: 700 40px/1 var(--num); letter-spacing: -.02em; }
+.wt-now b small { margin-left: 4px; font: 600 16px/1 var(--head); color: var(--hint); letter-spacing: 0; }
+.wt-when { font-size: 14px; line-height: 1.3; color: var(--hint); }
+.wt-spark { flex: none; width: 120px; height: 44px; color: var(--ink); opacity: .9; }
+.wt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wt-chips span { padding: 6px 10px; border-radius: 999px; background: var(--fill); font-size: 13px; line-height: 1.2; color: var(--ink); }
+.wt-home .wt-btns .btn { min-height: 40px; }
+
+/* ---------- экран ---------- */
+.wt-hero { gap: 10px; }
+.wt-big { display: flex; align-items: baseline; gap: 8px; }
+.wt-big b { font: 700 64px/.95 var(--num); letter-spacing: -.03em; }
+.wt-big span { font: 600 22px/1 var(--head); color: var(--hint); }
+.wt-ch { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 14px; color: var(--hint); }
+.wt-ch b { font-weight: 650; color: var(--ink); }
+.wt-hero .wt-btns { margin-top: 6px; }
+
+.wt-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; }
+.wt-tile { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 14px 16px; border-radius: 24px; background: var(--card); }
+.wt-tk { font: 600 13px/1.2 var(--head); color: var(--hint); }
+.wt-tile b { font: 700 24px/1.1 var(--num); letter-spacing: -.01em; }
+.wt-tile b small { margin-left: 3px; font: 600 13px/1 var(--head); color: var(--hint); }
+.wt-td { font-size: 12px; line-height: 1.3; color: var(--hint); overflow-wrap: anywhere; }
+.wt-td .num { color: var(--ink); font-weight: 600; }
+
+.wt-seg { margin: 0 0 10px; }
+.wt-seg + .wt-seg { margin-top: -2px; }
+.wt-list .row .title { font-weight: 650; }
+.wt-more { width: 100%; margin-top: 8px; }
+
+/* ---------- лист замера ---------- */
+.wt-form h2 { margin-bottom: 8px; }
+.wt-form form { display: grid; gap: 12px; }
+.wt-form .field { margin: 0 !important; }
+.wt-kg input { font: 700 28px/1.1 var(--num) !important; letter-spacing: -.01em; min-height: 56px; }
+.wt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.wt-grid .field > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wt-f input, .wt-dt input { min-height: 46px; }
+.wt-dt input { width: 100%; min-width: 0; }
+.wt-moref { border-radius: 18px; }
+.wt-moref summary { display: flex; align-items: center; min-height: 44px; padding: 0 6px; font: 600 15px/1.2 var(--head); color: var(--ink);
+  cursor: pointer; list-style: none; }
+.wt-moref summary::-webkit-details-marker { display: none; }
+.wt-moref summary::after { content: ""; width: 8px; height: 8px; margin-left: 10px; border: solid var(--hint); border-width: 0 2px 2px 0;
+  transform: translateY(-2px) rotate(45deg); transition: transform .3s var(--ios, ease); }
+.wt-moref[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+.wt-moref .wt-grid { padding: 4px 0 2px; }
+.wt-paste { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin: 0 0 8px; padding: 0 14px; border: 0; border-radius: 14px;
+  background: var(--fill); color: var(--ink); font: 500 14px/1.2 var(--head); text-align: left; cursor: pointer; }
+.wt-paste .ico { width: 18px; height: 18px; flex: none; }
+.wt-paste.on { background: var(--fill-2); }
+.wt-pastebox { display: grid; gap: 8px; margin-bottom: 12px; }
+.wt-pastebox[hidden] { display: none; }
+.wt-pastebox textarea { width: 100%; padding: 12px 14px; border-radius: 14px; font: 15px/1.4 var(--head); resize: vertical; }
+.wt-read { display: flex; align-items: center; gap: 14px; margin: 8px 0 16px; }
+.wt-read p { margin: 0; font-size: 14px; line-height: 1.4; color: var(--hint); }
+.wt-read p b { display: block; font: 650 17px/1.25 var(--head); color: var(--ink); }
+.wt-del { width: 100%; }
+.wt-del.sure { background: var(--err, #ff453a) !important; color: #fff !important; }
+.link[data-a="wt-open"] { min-width: 44px; min-height: 36px; display: inline-flex; align-items: center; justify-content: flex-end; }

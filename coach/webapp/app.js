@@ -278,14 +278,17 @@
     for (const [x, y, anchor] of spots) { const t = labels([{ x, y, t: text, anchor, cls: 'norm-t' }], PW, taken); if (t) return s + t; }
     return s;
   }
+  // полоса «обычно у тебя» [от, до]: заливка под данными и пунктирные края
+  const bandRect = (b, y, PW) => `<rect class="ch-band" x="0" y="${f1(y(b[1]))}" width="${PW}" height="${f1(Math.max(1, y(b[0]) - y(b[1])))}"/>`;
+  const bandEdges = (b, y, PW) => b.map(v => `<line class="ch-band-e" x1="0" x2="${PW}" y1="${f1(y(v))}" y2="${f1(y(v))}"/>`).join('');
   // o: max, color (цвет или функция строки), bands [[от, до, слово]], norm {v, t}, fmt (подпись значения с единицей),
-  // tip (строка -> [значение, пояснение, цвет точки]), label (для экранного диктора)
+  // tip (строка -> [значение, пояснение, цвет точки]), label (для экранного диктора), band [от, до] — полоса «обычно у тебя», w — своя ширина
   function bars(rows, key, o = {}) {
-    const W = chartW(), G = o.bands ? GUT : 0, PW = W - G, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
+    const W = o.w || chartW(), G = o.bands ? GUT : 0, PW = W - G, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
     const vals = rows.map(r => r[key]).filter(v => v != null);
     if (!vals.length) return '<div class="chart-empty">Нет данных за этот период</div>';
     const nv = o.norm && o.norm.v != null ? o.norm.v : null;
-    const top = o.max || Math.max(1, ...vals, nv || 0) * 1.1, base = TP + CH;
+    const top = o.max || Math.max(1, ...vals, nv || 0, o.band ? o.band[1] : 0) * 1.1, base = TP + CH;
     const y = v => base - Math.max(0, Math.min(v, top)) / top * CH;
     const bw = n > 60 ? Math.max(1, slot - 1) : n > 20 ? Math.max(2, slot - 2) : Math.min(24, slot * .6);
     const fmt = o.fmt || (v => num(v)), col = r => typeof o.color === 'function' ? o.color(r) : o.color || 'var(--ink)';
@@ -294,6 +297,7 @@
       if (a > 0) s += `<line class="grid" x1="0" x2="${PW}" y1="${f1(y(a))}" y2="${f1(y(a))}"/>`;
       s += `<text class="band-t" x="${PW + 10}" y="${f1((y(a) + y(b)) / 2 + 4)}">${word}</text>`;
     });
+    if (o.band) s += bandRect(o.band, y, PW);
     s += `<line class="axis" x1="0" x2="${PW}" y1="${base + .5}" y2="${base + .5}"/>`;
     const hw = Math.min(slot, Math.max(bw + 10, 16));
     s += `<rect class="ch-hb" x="${f1((slot - hw) / 2)}" y="${TP - 6}" width="${f1(hw)}" height="${CH + 6}" rx="${Math.min(8, hw / 2)}"/>`;
@@ -309,6 +313,7 @@
       const tp = o.tip ? o.tip(r) : [fmt(v), ''];
       tips.push([dayTip(r.day), tp[0], tp[1] || '', y(v), tp[2] || '']);
     });
+    if (o.band) s += bandEdges(o.band, y, PW);  // края полосы — поверх столбиков, иначе их не видно
     const taken = [];
     // подписи: последний день (жирно), максимум, минимум
     const at = (i, cls) => i < 0 ? null : { x: (i + .5) * slot, y: y(rows[i][key]) - 6, t: fmt(rows[i][key]), cls };
@@ -340,15 +345,16 @@
   }
   // base — твоя норма (линия «норма …»); o.fmt — подпись с единицей («92 мс»), o.label — для диктора
   function line(rows, key, color, base, o = {}) {
-    const W = chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
+    const W = o.w || chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
     const pts = rows.map((r, i) => [(i + .5) * slot, r[key], i]).filter(p => p[1] != null);
     if (pts.length < 2) return '<div class="chart-empty">Мало данных для графика</div>';
     const fmt = o.fmt || (v => num(v));
-    const vs = pts.map(p => p[1]).concat(base != null ? [base] : []);
+    const vs = pts.map(p => p[1]).concat(base != null ? [base] : [], o.band || []);
     let lo = Math.min(...vs), hi = Math.max(...vs); const sp = (hi - lo) || 1; lo -= sp * .06; hi += sp * .06;
     const y = v => TP + 4 + (hi - v) / (hi - lo) * (CH - 24);  // снизу место под подпись минимума
     const P = pts.map(p => [p[0], y(p[1])]), d = smooth(P), bottom = TP + CH;
-    let s = `<line class="axis" x1="0" x2="${PW}" y1="${bottom + .5}" y2="${bottom + .5}"/>`;
+    let s = o.band ? bandRect(o.band, y, PW) + bandEdges(o.band, y, PW) : '';
+    s += `<line class="axis" x1="0" x2="${PW}" y1="${bottom + .5}" y2="${bottom + .5}"/>`;
     s += `<g class="ch-hl"><line class="ch-x" x1="${f1(slot / 2)}" x2="${f1(slot / 2)}" y1="${TP - 6}" y2="${bottom}"/></g>`;
     s += `<path class="fillin" d="${d} L${f1(P[P.length - 1][0])},${bottom} L${f1(P[0][0])},${bottom} Z" fill="${color}"/>`;
     s += `<path class="draw" pathLength="1" d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -578,6 +584,7 @@
     if (tab === 'plus') { tabs.set(S.tab); plusSheet(); return; }
     if (S.tab === tab && !S.screen) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     const from = S.tab;
+    if (tab === 'coach' && F.coFresh) F.coFresh();  // 30 мин тишины — новый разговор
     S.tab = tab; S.screen = null; tabs.set(tab);
     // «Питание» — живая рамка «Калорий» (kcal.js): без снимка всей страницы с рамкой, она сама проявляется (kcal.css)
     nav('tab', () => { render(true); window.scrollTo(0, 0); }, from === 'food' || tab === 'food');
@@ -639,7 +646,8 @@
     if (moving) stagger();
     animate(document, !moving);
     if (F.navSync) F.navSync();
-    if (S.tab === 'coach' && anim !== false) window.scrollTo(0, document.body.scrollHeight);
+    if (F.coLayout) F.coLayout(S.coForce);  // чат тренера: своя прокрутка сообщений (more.js), страница стоит
+    S.coForce = false;
   }
   const initial = () => { const n = ((S.data && S.data.user && S.data.user.name) || '').trim(); return n ? esc(n[0].toUpperCase()) : I.user; };
   const avatar = () => `<button class="avatar" data-a="profile" aria-label="Профиль">${initial()}</button>`;
@@ -674,11 +682,13 @@
 
   function waterCard(w, full) {
     if (!w) return '';
-    const q = full ? [[250, 'стакан'], [500, 'бутылка'], [1000, 'литр']] : [[250, 'стакан'], [500, 'бутылка']];
+    // Глеб 03.11: «больше градаций — кружки у меня больше 250» — ряд листается вбок, на широком экране — в 2 строки
+    const q = [[150, 'глоток'], [200, 'стакан'], [250, 'стакан'], [300, 'кружка'], [350, 'кружка'], [400, 'кружка'],
+      [500, 'бутылка'], [750, 'бутылка'], ...(full ? [[1000, 'литр']] : [])];
     return `<section class="card rise">${head(`<span class="hico" style="--hc:var(--water)">${I.drop}</span>Вода`, `<span class="num"><b>${liters(w.drank)}</b> / ${liters(w.target)}</span>`)}
       ${bar(pct(w.drank, w.target), 'var(--water)')}
       ${w.note ? `<p class="small muted">${esc(w.note)}</p>` : ''}
-      <div class="btns">${q.map(([ml, k]) => `<button class="btn tonal water-b" data-a="water" data-v="${ml}"><b class="num">+${ml}</b><span>${k}</span></button>`).join('')}</div>
+      <div class="btns wq">${q.map(([ml, k]) => `<button class="btn tonal water-b" data-a="water" data-v="${ml}" aria-label="Вода +${ml} мл"><b class="num">+${ml}</b><span>${k}</span></button>`).join('')}</div>
       ${full && w.log.length ? `<div class="logs">${w.log.map(x => x.src === 'kcal'
         ? `<span class="pill num kc" title="Записано в «Калориях»">${esc(x.time)} · ${x.ml} мл<i>Калории</i></span>`
         : `<span class="pill num">${esc(x.time)} · ${x.ml} мл<button data-a="water-del" data-v="${x.id}" aria-label="Удалить">✕</button></span>`).join('')}</div>` : ''}
@@ -1258,7 +1268,7 @@
         : pr ? `<p class="small muted">от ${dateLine(pr.day)}</p><div class="prose ${pr.text.length > 320 ? 'clamp' : ''}" id="prog">${tgHtml(pr.text)}</div>${pr.text.length > 320 ? '<button class="link" data-a="more">Читать целиком</button>' : ''}`
         : `<p class="muted small">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</p>
            <button class="btn primary" data-a="progress">Разобрать прогресс</button>`}</section>`;
-    h += `<div class="sec rise">${cap('Тренды')}<div class="seg" role="tablist">${RANGES.map(([n, l]) => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${l}</button>`).join('')}</div></div>`;
+    h += `<div class="sec rise">${cap('Тренды', F.screens.trends ? '<button class="link" data-a="tr-open">Все показатели</button>' : '')}<div class="seg" role="tablist">${RANGES.map(([n, l]) => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${l}</button>`).join('')}</div></div>`;
     const rows = S.series[S.range] || (S.range === 30 ? S.data.series : null);
     if (!rows && S.seriesErr === S.range) return h + retryCard('Графики не загрузились', 'series-retry');
     if (!rows) return h + [1, 2, 3].map(() => '<section class="card"><div class="sk line" style="width:40%"></div><div class="sk" style="height:130px;margin-top:14px"></div></section>').join('');
@@ -1304,7 +1314,7 @@
   }
   async function loadHistory() {
     S.historyErr = false;
-    try { S.history = (await api('/api/history', {})).history; } catch (e) { fail(e); S.historyErr = true; }
+    try { S.history = (await api('/api/history', {})).history; if (F.coFresh) F.coFresh(); } catch (e) { S.historyErr = true; }  // без всплывающей ошибки: в чате — «Повторить»
     if (S.tab === 'coach') render();
   }
   // поле ввода очищаем сами: тихое обновление (morph) не трогает поле, в котором стоит курсор
@@ -1318,8 +1328,8 @@
     const rd = r.body.getReader(), dec = new TextDecoder();
     let buf = '', live = '', queued = false, done = null;
     const paint = () => { queued = false; const b = [...document.querySelectorAll('.msg.them')].pop(); if (!b || S.tab !== 'coach') return;
-      const stick = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
-      b.classList.add('prose'); b.innerHTML = md(live); if (stick) window.scrollTo(0, document.documentElement.scrollHeight); };
+      const sc = b.closest('.co-scroll');  // докручиваем, только если он и так внизу (S.coBottom — more.js)
+      b.classList.add('prose'); b.innerHTML = md(live); if (sc && S.coBottom !== false) sc.scrollTop = sc.scrollHeight; };
     for (;;) {
       const { value, done: end } = await rd.read();
       if (end) break;
@@ -1338,7 +1348,7 @@
   }
   async function ask(q) {
     q = (q || '').trim(); if (!q || S.asking) return;
-    S.asking = q; S.askLive = ''; S.qDraft = ''; clearQ(); haptic('tap'); render();
+    S.asking = q; S.askLive = ''; S.qDraft = ''; S.coTips = false; S.coForce = true; clearQ(); haptic('tap'); render();
     try { S.history = await askStream(q); haptic('success'); }
     catch (e) { fail(e); S.qDraft = q; }
     S.asking = false; S.askLive = '';
@@ -1367,7 +1377,7 @@
       if (!f) return;
       haptic('tap');
       const text = ($('#q') || {}).value || '';
-      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; clearQ(); render();
+      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; S.coForce = true; clearQ(); render();
       try { const r = await api('/api/photo', { image: await shrink(f), mode: 'ask', text: text.trim() }); S.history = r.history; haptic('success'); }
       catch (e) { fail(e); }
       S.asking = false; if (S.tab === 'coach') render();

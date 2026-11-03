@@ -93,6 +93,9 @@
     if (opened) return;
     opened = true;
     const m = (new URLSearchParams(location.search).get('p') || '').match(/^\/?review-(\d+)$/);
-    if (m) setTimeout(() => open(m[1]), 350);
+    if (!m) return;
+    setTimeout(() => open(m[1]), 350);  // это его нажатие в Telegram — открыть можно
+    // убрать ?p=review-… из адреса: перезагрузка или возврат в приложение лист сами больше не откроют (Глеб 03.11)
+    try { const u = new URL(location.href); u.searchParams.delete('p'); history.replaceState(history.state, '', u.pathname + u.search + u.hash); } catch (e) { /* старый браузер */ }
   });
 });

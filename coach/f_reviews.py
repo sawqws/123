@@ -8,12 +8,19 @@
   (`take_workout`), каждая — один раз;
 - вечер — один раз: за час до отбоя по режиму (если напоминание об отбое раньше — в его время и одним сообщением
   с ним), без режима — в 21:00 (`evening_due`).
-Хранение — таблица reviews (store.SCHEMA): текст — Markdown для приложения; «новый» (seen=0), пока не открыт.
+Данные поменялись в WHOOP (Глеб 03.11: «я изменяю, а разбор уже сделан и не меняется») — coach.refresh_reviews после
+каждой синхронизации: у тренировки сменились вид спорта, время или нагрузка (≥ 0,3) — разбор пересоздаётся на том же
+месте (новый текст, снова «новый», прежнее сообщение в Telegram — тихо правится, нового нет); тренировку удалили или
+она стала «не тренировкой» (массаж, короче 15 мин) — разбор убирается и место за день освобождается. Утро — так же,
+если восстановление сдвинулось на ≥ 3 или сон на ≥ 0,25 ч. Вечерний итог не пересоздаётся.
+Хранение — таблица reviews (store.SCHEMA): текст — Markdown для приложения; «новый» (seen=0), пока не открыт;
+msg — id сообщения в Telegram, src — по каким данным сделан (workout_src / morning_src).
 API: POST /api/reviews {day?} → {day, items: [{id, kind, time, title, text, seen}]}, POST /api/reviews/seen {id}.
 В /api/all — ext.reviews {items, new} (сегодня). Тренер видит первые строки сегодняшних разборов.
 """
 import datetime
 import html
+import json
 import re
 
 import f_regime
@@ -28,6 +35,8 @@ EVENING_DEFAULT = datetime.time(21, 0)  # режим не настроен
 EVENING_LATE = datetime.timedelta(hours=2)  # сервер лежал дольше — вечерний итог за этот день уже не шлём
 BACK_DAYS = 7  # ленту можно открыть за сегодня и 7 дней назад
 TEXT_MAX, TITLE_MAX = 6000, 80
+STRAIN_STEP = 0.3  # нагрузка тренировки пересчиталась на столько — разбор пересоздать
+RECOVERY_STEP, SLEEP_STEP = 3, 0.25  # утро: восстановление (%), сон (ч)
 
 
 # ---------- правила: когда разбор ----------
@@ -47,6 +56,50 @@ def take_workout(db, uid, day, wid):
     if not db.once(f"workout:{wid}"):
         return False
     return any(db.once(f"review-workout:{uid}:{day}:{i}") for i in range(1, WORKOUT_MAX + 1))
+
+
+def free_workout(db, uid, day):
+    """Разбор тренировки убран (её удалили в WHOOP) — место за день снова свободно."""
+    for i in range(WORKOUT_MAX, 0, -1):
+        if db.was_sent(f"review-workout:{uid}:{day}:{i}"):
+            db.unsend(f"review-workout:{uid}:{day}:{i}")
+            return
+
+
+# ---------- данные поменялись: пересоздать разбор ----------
+
+def workout_src(w):
+    """По каким данным разбор тренировки (insights.workout_of): вид спорта, начало, минуты, нагрузка."""
+    return {"sport": w.get("sport_key") or w.get("sport") or "", "start": w.get("start") or "",
+            "minutes": w.get("minutes"), "strain": w.get("strain")}
+
+
+def workout_changed(old, new):
+    """Тренировка в WHOOP заметно поменялась: вид спорта, время (начало или длина) или нагрузка на ≥ 0,3."""
+    if not old:
+        return False
+    if (old.get("sport"), old.get("start"), old.get("minutes")) != (new.get("sport"), new.get("start"), new.get("minutes")):
+        return True
+    a, b = old.get("strain"), new.get("strain")
+    return a is None and b is not None or a is not None and b is not None and abs(b - a) >= STRAIN_STEP - 1e-9
+
+
+def morning_src(d):
+    """По каким данным утренний разбор: восстановление (%) и часы сна за день (insights.by_day / today)."""
+    d = d or {}
+    return {"recovery": (d.get("recovery") or {}).get("score"), "sleep": (d.get("sleep") or {}).get("hours")}
+
+
+def morning_changed(old, new):
+    """WHOOP пересчитал утро заметно: восстановление ±3, сон ±0,25 ч (или появилось то, чего не было).
+    Пропало (снова считается) — ждём, не пересоздаём."""
+    if not old:
+        return False
+    for k, step in (("recovery", RECOVERY_STEP), ("sleep", SLEEP_STEP)):
+        a, b = old.get(k), new.get(k)
+        if b is not None and (a is None or abs(b - a) >= step - 1e-9):
+            return True
+    return False
 
 
 def _at(d, hhmm, tz):
@@ -84,18 +137,55 @@ def html_md(h):
     return html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
 
 
-def add(db, uid, day, kind, title, text, at, ref=""):
-    """Сохранить разбор (тот же день, вид и ref — заменить и снова сделать «новым»). -> id."""
+def add(db, uid, day, kind, title, text, at, ref="", src=None):
+    """Сохранить разбор (тот же день, вид и ref — заменить и снова сделать «новым»). src — по каким данным
+    (workout_src / morning_src). -> id."""
     if kind not in KINDS:
         raise ValueError("нет такого разбора")
     title = " ".join(str(title or "").split())[:TITLE_MAX]
     text = str(text or "").strip()[:TEXT_MAX]
-    db.x("INSERT INTO reviews (user, day, kind, ref, at, title, text, seen, created) VALUES (?,?,?,?,?,?,?,0,?) "
+    src = json.dumps(src, ensure_ascii=False) if src else None
+    db.x("INSERT INTO reviews (user, day, kind, ref, at, title, text, seen, created, src) VALUES (?,?,?,?,?,?,?,0,?,?) "
          "ON CONFLICT (user, day, kind, ref) DO UPDATE SET at=excluded.at, title=excluded.title, text=excluded.text, "
-         "seen=0, created=excluded.created",
-         (uid, str(day), kind, str(ref or ""), at, title, text, datetime.datetime.now().isoformat(timespec="seconds")))
+         "seen=0, created=excluded.created, src=excluded.src",
+         (uid, str(day), kind, str(ref or ""), at, title, text, datetime.datetime.now().isoformat(timespec="seconds"), src))
     r = db.q("SELECT id FROM reviews WHERE user=? AND day=? AND kind=? AND ref=?", (uid, str(day), kind, str(ref or "")))
     return r[0]["id"] if r else None
+
+
+def rows(db, uid, day, kind):
+    """Разборы вида kind за день — для пересоздания: {id, ref, at, msg, src (dict или None)}."""
+    out = db.q("SELECT id, ref, at, msg, src FROM reviews WHERE user=? AND day=? AND kind=?", (uid, str(day), kind))
+    for r in out:
+        try:
+            r["src"] = json.loads(r["src"]) if r["src"] else None
+        except ValueError:
+            r["src"] = None
+    return out
+
+
+def set_msg(db, rid, msg):
+    """Запомнить сообщение в Telegram с этим разбором — пересоздание правит его тихо, нового не шлёт."""
+    if rid and msg:
+        db.x("UPDATE reviews SET msg=? WHERE id=?", (int(msg), rid))
+
+
+def set_src(db, rid, src):
+    """Разбор сделан до того, как стали запоминать данные, — запомнить нынешние как исходные (без пересоздания)."""
+    db.x("UPDATE reviews SET src=? WHERE id=?", (json.dumps(src, ensure_ascii=False), rid))
+
+
+def retarget(db, rid, ref):
+    """Тренировку в WHOOP заменили новой (удалили и создали заново) — разбор переходит к ней."""
+    db.x("UPDATE reviews SET ref=? WHERE id=?", (str(ref), rid))
+
+
+def remove(db, uid, rid):
+    """Убрать разбор (тренировку удалили в WHOOP или она не тренировка). Место за день освобождается."""
+    r = db.q("SELECT day, kind FROM reviews WHERE id=? AND user=?", (rid, uid))
+    db.x("DELETE FROM reviews WHERE id=? AND user=?", (rid, uid))
+    if r and r[0]["kind"] == "workout":
+        free_workout(db, uid, r[0]["day"])
 
 
 def items(db, uid, day):

@@ -1,25 +1,35 @@
-"""Кожа: мой уход (утро, вечер, процедуры по расписанию, заметки о коже), отметки на сегодня, серия, дневник кожи 1–5.
+"""Кожа: мой уход (утро, вечер, процедуры по расписанию, заметки о коже), отметки на сегодня, серия, разбор фото лба.
 
 Подключение — FEATURES в coach.py: route / extra / context_lines.
   POST /api/skin {}                                       → payload (ниже)
   POST /api/skin/save {routine: {am?, pm?, extra?}}       → заменить присланные части ухода (шаги с id сохраняют отметки)
                       {notes: {type?, react?, avoid?}}    → заметки о коже (меняются только присланные поля)
   POST /api/skin/mark {id, done, day?}                    → отметка шага или процедуры (сегодня и до 7 дней назад)
-  POST /api/skin/rate {rating: 1–5 | null, note?, day?}   → оценка кожи за день и короткая заметка
+  POST /api/skin/rate {rating: 1–5 | null, note?, day?}   → прежняя ручная оценка (Глеб 03.11: убрана из интерфейса,
+                                                             API — для совместимости; старые оценки в данных остаются)
   POST /api/skin/import {text, preview?, drop?: [ключ…]}  → «Заполнить списком»: preview — только разобрать
                                                              (ключи частей «am:0», «pm:1», «extra:0» — для drop)
   POST /api/skin/photo {image, thumb?}                    → фото лба за сегодня (JPEG base64 / data:URL; одно на день,
-                                                             повтор заменяет) → payload + photos
+                                                             повтор заменяет) → payload + photos; в фоне — разбор фото
+  POST /api/skin/analyze {day?}                           → разобрать фото дня заново (в фоне) → payload
   POST /api/skin/photo {day, thumb?} (или /photo/get, GET ?day=) → {day, image: data:URL} — только своё (по сессии)
   POST /api/skin/photos {}                                → {photos: [{day}] (новые сверху), count}
   POST /api/skin/photo/delete {day}                       → payload + photos
-Ответ всех, кроме preview и фото, — payload: {has, routine, notes, today, streak, best, diary (30 дней), stats, limits};
+Ответ всех, кроме preview и фото, — payload: {has, routine, notes, today, streak, best, diary (30 дней), stats, ai, limits};
 today.photo — {due, done, count, last, next, days, every}: «Фото лба» раз в 3 дня (через 2 дня после последнего).
+ai — {last, days (30 дней, новые сверху)}: разбор {day, status, text, compare, time, photo, prev?, retake?};
+status: ok («Всё нормально, идём дальше» + почему) | attention (2–4 пункта, что поправить) | none (не вышло — повтор) |
+wait (идёт; дольше AI_WAIT — уже none).
+
+Разбор фото (Глеб 03.11: «по моей фотке разбирай и говори, что да как; всё нормально — так и скажи»): после загрузки фото
+сервер в фоне (coach.bg, ответ загрузки не ждёт) отдаёт Claude (ai.skin, модель с картинками) фото, прошлое фото для
+сравнения, уход, заметки, отметки за 7 дней и прошлый разбор. Хранится в дне: skin:d:<uid>:<день> → поле «ai».
 
 Хранение (meta): skin:<uid> — {"am": [шаг], "pm": [шаг], "extra": [процедура], "notes": {type, react, avoid}, "n", "created"};
-skin:d:<uid>:<ГГГГ-ММ-ДД> — {"m": [id отмеченных], "r": 1–5 | null, "t": заметка, "a": утро сделано, "p": вечер сделан,
-"f": фото лба сделано}. Фото — файлы <DATA>/photos/skin/<uid>/<день>.jpg (+ <день>.t.jpg — миниатюра), только владельцу;
-в репозиторий и тренеру (Claude) не попадают — тренер видит лишь даты и число.
+skin:d:<uid>:<ГГГГ-ММ-ДД> — {"m": [id отмеченных], "r": 1–5 | null (старое), "t": заметка (старое), "a": утро сделано,
+"p": вечер сделан, "f": фото лба сделано, "ai": разбор фото}. Фото — файлы <DATA>/photos/skin/<uid>/<день>.jpg
+(+ <день>.t.jpg — миниатюра), только владельцу; в репозиторий не попадают; Claude видит их только для разбора,
+тренер в чате — лишь даты, число и текст разборов.
 Флаги «a»/«p» считаются в момент отметки по тогдашнему уходу — правка ухода не переписывает прошлые дни.
 Шаг: {id, title, product}; процедура: + days [0..6] (пн = 0) или weekly N (N раз в неделю, в любой день).
 Серия — дни подряд, когда сделан весь утренний и вечерний уход (сегодня ещё идёт — не обрывает).
@@ -30,6 +40,9 @@ import json
 import os
 import re
 import tempfile
+import threading
+import time
+import uuid
 
 import f_habits as H  # общий разбор строк списка (дни недели, «N раз в неделю», время) и проверки
 
@@ -45,13 +58,16 @@ DIARY_DAYS = 30
 HISTORY = 400  # серию считаем не дальше
 NOTE_KEYS = ("type", "react", "avoid")
 NOTE_WORD = {"type": "тип и особенности", "react": "на что реагирует", "avoid": "что не подходит"}
-RATE_WORD = {1: "плохо", 2: "так себе", 3: "нормально", 4: "хорошо", 5: "отлично"}
 WD = H.WD_SHORT
 PHOTO_EVERY = 3  # «Фото лба» — раз в 3 дня: через 2 дня после последнего фото (пропустил — напоминаем каждый день)
 MAX_PHOTO = 640 * 1024  # JPEG из приложения ≤ 1280 px, обычно 150–400 КБ; тело POST в coach.py — до 1 МБ (base64 ×4/3)
 MAX_THUMB = 48 * 1024  # миниатюра для сетки «Фото лба»
 MAX_SIDE = 2048
 PHOTO_LINE = "📸 Сегодня фото лба после умывания"
+AI_WAIT = 300  # разбор «идёт» дольше 5 мин — поток умер (перезапуск): показываем «не вышло», можно повторить
+AI_NONE = "Не удалось разобрать фото — попробуй позже"
+AI_WORD = {"ok": "всё нормально", "attention": "есть что поправить", "none": "не разобрано", "wait": "разбираю"}
+LOCK = threading.RLock()  # день кожи меняют и запросы, и фоновый разбор — читаем-пишем под замком
 DAY_RX = re.compile(r"\d{4}-\d{2}-\d{2}")
 FILE_RX = re.compile(r"(\d{4}-\d{2}-\d{2})\.jpg")
 
@@ -138,13 +154,34 @@ def _dkey(uid, day):
     return f"skin:d:{uid}:{day}"
 
 
+def _clean_ai(v):
+    """Разбор фото дня (или None): только известные поля нужных типов."""
+    if not isinstance(v, dict) or v.get("status") not in AI_WORD:
+        return None
+    out = {"status": v["status"], "text": str(v.get("text") or "")[:1200],
+           "compare": v.get("compare") if v.get("compare") in ("лучше", "так же", "хуже") else None,
+           "time": str(v.get("time") or "")[:5], "photo": str(v.get("photo") or "")[:10]}
+    for k in ("prev", "id"):
+        if v.get(k):
+            out[k] = str(v[k])[:40]
+    if isinstance(v.get("ts"), (int, float)) and not isinstance(v.get("ts"), bool):
+        out["ts"] = float(v["ts"])
+    if v.get("retake"):
+        out["retake"] = True
+    return out
+
+
 def _clean_doc(v):
     v = v if isinstance(v, dict) else {}
     r = v.get("r")
-    return {"m": [str(x) for x in (v.get("m") or []) if isinstance(x, str)],
-            "r": r if isinstance(r, int) and not isinstance(r, bool) and 1 <= r <= 5 else None,
-            "t": str(v.get("t") or "")[:MAX_DAY_NOTE], "a": bool(v.get("a")), "p": bool(v.get("p")), "ok": bool(v.get("ok")),
-            "f": bool(v.get("f"))}
+    doc = {"m": [str(x) for x in (v.get("m") or []) if isinstance(x, str)],
+           "r": r if isinstance(r, int) and not isinstance(r, bool) and 1 <= r <= 5 else None,
+           "t": str(v.get("t") or "")[:MAX_DAY_NOTE], "a": bool(v.get("a")), "p": bool(v.get("p")), "ok": bool(v.get("ok")),
+           "f": bool(v.get("f"))}
+    a = _clean_ai(v.get("ai"))
+    if a:
+        doc["ai"] = a
+    return doc
 
 
 def day_doc(db, uid, day):
@@ -240,44 +277,43 @@ def day_ok(st, doc):
     return all(s["id"] in m for s in st["am"] + st["pm"])
 
 
-def _avg(xs):
-    xs = [x for x in xs if x is not None]
-    return round(sum(xs) / len(xs), 1) if xs else None
-
-
-def fnum(x):
-    return "—" if x is None else (f"{x:.1f}".rstrip("0").rstrip(".")).replace(".", ",")
-
-
-def stats(c):
-    days = [c.today - datetime.timedelta(days=i) for i in range(DIARY_DAYS)]
-    rs = [(d, c.doc(d)["r"]) for d in days]
-    rated = [r for _, r in rs if r]
-    avg7, avg30 = _avg(r for d, r in rs[:7]), _avg(rated)
-    prev7 = _avg(r for d, r in rs[7:14])
-    trend = None
-    if avg7 is not None and prev7 is not None:
-        trend = "лучше" if avg7 - prev7 >= .3 else "хуже" if prev7 - avg7 >= .3 else "так же"
-    with_, without = [], []
-    first = c.start()
-    for d, r in rs:
-        if r and c.st["pm"] and d >= first:
-            (with_ if (c.doc(d)["p"] if d != c.today else _part_done(c.st, c.doc(d), "pm")) else without).append(r)
-    link = ({"with": _avg(with_), "without": _avg(without)} if len(with_) >= 3 and len(without) >= 3 else None)
-    if link and abs(link["with"] - link["without"]) < .3:  # разницы почти нет — не говорим о связи
-        link = None
-    word = RATE_WORD[min(5, max(1, round(avg30)))] if avg30 else None
-    if len(rated) < 3:
-        summary = "Оценивай кожу каждый день — через неделю покажу, как она меняется и что ей помогает."
+def stats(c, items):
+    """Сводка разборов фото за 30 дней и связь с вечерним уходом: «всё нормально» чаще, когда вечерний уход делался
+    (хотя бы 2 из 3 вечеров до фото)? Связь — только при ≥ 2 разборах с уходом и без и разнице ≥ 30 %."""
+    done = [x for x in items if x["status"] in ("ok", "attention")]
+    ok = sum(x["status"] == "ok" for x in done)
+    link, first = None, c.start()
+    if c.st["pm"]:
+        with_, without = [], []
+        for x in done:
+            d = datetime.date.fromisoformat(x["day"])
+            evs = [d - datetime.timedelta(days=i) for i in (1, 2, 3)]
+            evs = [e for e in evs if e >= first]
+            if len(evs) < 2:
+                continue
+            (with_ if sum(bool(c.doc(e)["p"]) for e in evs) * 3 >= len(evs) * 2 else without).append(x["status"] == "ok")
+        if len(with_) >= 2 and len(without) >= 2:
+            link = {"with": [sum(with_), len(with_)], "without": [sum(without), len(without)]}
+            if abs(sum(with_) / len(with_) - sum(without) / len(without)) < .3:
+                link = None
+    if not done:
+        summary = "Фото лба раз в 3 дня — после каждого скажу, всё ли нормально и что поправить в уходе."
     else:
-        summary = f"За 30 дней кожа в среднем {fnum(avg30)} из 5 — «{word}»."
-        if trend:
-            summary += {"лучше": " Последняя неделя лучше прошлой.", "хуже": " Последняя неделя хуже прошлой.",
-                        "так же": " Последняя неделя — как прошлая."}[trend]
+        summary = (f"За 30 дней {len(done)} {_pl(len(done), 'разбор', 'разбора', 'разборов')}: всё нормально — {ok}, "
+                   f"есть что поправить — {len(done) - ok}.")
+        summary += {"лучше": " На последнем фото кожа лучше, чем на прошлом.",
+                    "хуже": " На последнем фото кожа хуже, чем на прошлом.",
+                    "так же": " На последнем фото — так же, как на прошлом."}.get(done[0].get("compare"), "")
     if link:
-        summary += (f" Когда вечерний уход сделан, кожа в среднем {fnum(link['with'])}, без него — {fnum(link['without'])}.")
-    return {"avg7": avg7, "avg30": avg30, "prev7": prev7, "trend": trend, "rated": len(rated), "word": word,
-            "link": link, "summary": summary}
+        w, wo = link["with"], link["without"]
+        summary += (f" Когда вечерний уход делаешь, «всё нормально» в {w[0]} из {w[1]}, когда пропускаешь — "
+                    f"в {wo[0]} из {wo[1]}.")
+    return {"total": len(done), "ok": ok, "attention": len(done) - ok, "link": link, "summary": summary}
+
+
+def _pl(n, one, few, many):
+    n = abs(n) % 100
+    return few if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else one if n % 10 == 1 and n != 11 else many
 
 
 def _part_done(st, doc, part):
@@ -297,8 +333,8 @@ def payload(db, uid, today):
     diary = []
     for i in range(DIARY_DAYS - 1, -1, -1):
         d = today - datetime.timedelta(days=i)
-        dd = c.doc(d)
-        diary.append({"day": d.isoformat(), "wd": d.weekday(), "r": dd["r"], "ok": c.ok(d)})
+        diary.append({"day": d.isoformat(), "wd": d.weekday(), "ok": c.ok(d)})
+    items = ai_items(hist, today)
     routine = {"am": [{k: s[k] for k in ("id", "title", "product")} for s in st["am"]],
                "pm": [{k: s[k] for k in ("id", "title", "product")} for s in st["pm"]],
                "extra": [{**{k: x[k] for k in ("id", "title", "product", "days", "weekly")}, "sched": sched(x)} for x in st["extra"]]}
@@ -308,9 +344,9 @@ def payload(db, uid, today):
                   "extra": [x for x in extras if x["due"]], "later": [x for x in extras if not x["due"]],
                   "am_done": sum(x["done"] for x in steps["am"]), "am_total": len(steps["am"]),
                   "pm_done": sum(x["done"] for x in steps["pm"]), "pm_total": len(steps["pm"]),
-                  "ok": day_ok(st, doc), "rating": doc["r"], "word": RATE_WORD.get(doc["r"]), "note": doc["t"],
-                  "photo": photo_info(hist, today, has_routine(st))},
-        "streak": c.streak(), "best": c.best(), "diary": diary, "stats": stats(c),
+                  "ok": day_ok(st, doc), "photo": photo_info(hist, today, has_routine(st))},
+        "streak": c.streak(), "best": c.best(), "diary": diary, "stats": stats(c, items),
+        "ai": {"last": items[0] if items else None, "days": items},
         "limits": {"steps": MAX_STEPS, "extra": MAX_EXTRA, "text": MAX_TEXT, "notes": MAX_NOTES, "note": MAX_DAY_NOTE},
     }
 
@@ -324,11 +360,12 @@ def _new_id(st, part):
 
 def _touch_today(db, uid, st, today):
     """После правки ухода — пересчитать «сделано» сегодня (новый шаг — ещё не сделан)."""
-    doc = day_doc(db, uid, today.isoformat())
-    if doc["m"] or doc["ok"]:
-        doc["ok"] = day_ok(st, doc)
-        _flags(st, doc)
-        put_doc(db, uid, today.isoformat(), doc)
+    with LOCK:
+        doc = day_doc(db, uid, today.isoformat())
+        if doc["m"] or doc["ok"]:
+            doc["ok"] = day_ok(st, doc)
+            _flags(st, doc)
+            put_doc(db, uid, today.isoformat(), doc)
 
 
 def save(db, uid, b, today):
@@ -378,30 +415,32 @@ def mark(db, uid, b, today):
     st = load(db, uid)
     if not any(s["id"] == sid for p in PARTS for s in st[p]):
         raise ValueError("нет такого шага")
-    doc = day_doc(db, uid, d.isoformat())
-    doc["m"] = [x for x in doc["m"] if x != sid] + ([sid] if b["done"] else [])
-    doc["ok"] = day_ok(st, doc)
-    _flags(st, doc)
-    if st["created"] and d.isoformat() < st["created"]:  # отметил день до «создания» — уход, значит, старше
-        st["created"] = d.isoformat()
-        store(db, uid, st)
-    put_doc(db, uid, d.isoformat(), doc)
+    with LOCK:
+        doc = day_doc(db, uid, d.isoformat())
+        doc["m"] = [x for x in doc["m"] if x != sid] + ([sid] if b["done"] else [])
+        doc["ok"] = day_ok(st, doc)
+        _flags(st, doc)
+        if st["created"] and d.isoformat() < st["created"]:  # отметил день до «создания» — уход, значит, старше
+            st["created"] = d.isoformat()
+            store(db, uid, st)
+        put_doc(db, uid, d.isoformat(), doc)
 
 
 def rate(db, uid, b, today):
+    """Прежняя ручная оценка 1–5 — только для совместимости (в интерфейсе её нет с 03.11)."""
     d = H._day(b.get("day"), today)
     if "rating" not in b and "note" not in b:
         raise ValueError("Оценка: нужен rating или note")
-    doc = day_doc(db, uid, d.isoformat())
-    if "rating" in b:
-        r = b["rating"]
-        if r in (None, "", 0):
-            doc["r"] = None
-        else:
-            doc["r"] = H._int(r, 1, 5, "Оценка")
-    if "note" in b:
-        doc["t"] = _plain(b["note"], MAX_DAY_NOTE, "Заметка")
-    put_doc(db, uid, d.isoformat(), doc)
+    r = b.get("rating")
+    r = None if r in (None, "", 0) else H._int(r, 1, 5, "Оценка") if "rating" in b else None
+    note = _plain(b["note"], MAX_DAY_NOTE, "Заметка") if "note" in b else None
+    with LOCK:
+        doc = day_doc(db, uid, d.isoformat())
+        if "rating" in b:
+            doc["r"] = r
+        if "note" in b:
+            doc["t"] = note
+        put_doc(db, uid, d.isoformat(), doc)
 
 
 # ---------- «Заполнить списком» ----------
@@ -710,10 +749,11 @@ def photo_days(root, uid):
 
 
 def _set_flag(db, uid, day, on):
-    doc = day_doc(db, uid, day)
-    if doc["f"] != on:
-        doc["f"] = on
-        put_doc(db, uid, day, doc)
+    with LOCK:
+        doc = day_doc(db, uid, day)
+        if doc["f"] != on:
+            doc["f"] = on
+            put_doc(db, uid, day, doc)
 
 
 def save_photo(db, root, uid, b, today):
@@ -772,6 +812,143 @@ def delete_photo(db, root, uid, b):
     if not gone:
         raise ValueError("Фото за этот день нет")
     _set_flag(db, uid, day, False)
+    _set_ai(db, uid, day, None)  # разбор был про это фото — уходит вместе с ним
+
+
+# ---------- разбор фото (Claude) ----------
+
+def _ai_view(day, a, now=None):
+    """Разбор для выдачи: «идёт» дольше AI_WAIT — уже «не вышло» (поток умер при перезапуске)."""
+    x = {"day": day, **{k: v for k, v in a.items() if k not in ("ts", "id")}}
+    if x["status"] == "wait" and (now or time.time()) - a.get("ts", 0) > AI_WAIT:
+        x.update(status="none", text=AI_NONE)
+    return x
+
+
+def ai_items(hist, today, days=DIARY_DAYS):
+    """Разборы за days дней, новые сверху."""
+    lo = (today - datetime.timedelta(days=days - 1)).isoformat()
+    now = time.time()
+    return [_ai_view(d, hist[d]["ai"], now) for d in sorted(hist, reverse=True)
+            if lo <= d <= today.isoformat() and hist[d].get("ai")]
+
+
+def _set_ai(db, uid, day, a, only=None):
+    """Записать разбор в день; only — id разбора, который ещё ждём (пришёл старый ответ после нового фото — мимо)."""
+    with LOCK:
+        doc = day_doc(db, uid, day)
+        if only is not None and (doc.get("ai") or {}).get("id") != only:
+            return False
+        if a is None:
+            doc.pop("ai", None)
+        else:
+            doc["ai"] = a
+        put_doc(db, uid, day, doc)
+        return True
+
+
+def _hm(app, uid):
+    try:
+        return app.user_now(uid).strftime("%H:%M")
+    except Exception:  # без часового пояса пользователя — время сервера
+        return datetime.datetime.now().strftime("%H:%M")
+
+
+def _photo_path(root, uid, day):
+    return os.path.join(photo_dir(root, uid), f"{day}.jpg")
+
+
+def analysis_facts(db, uid, day, prev_day=None):
+    """Что Claude знает к фото: уход, заметки, отметки за 7 дней до фото (включая день фото), прошлый разбор."""
+    st = load(db, uid)
+    d0 = datetime.date.fromisoformat(day)
+    hist = history(db, uid, d0 - datetime.timedelta(days=60), d0)
+    out = []
+    if has_routine(st):
+        parts = []
+        for p, w in (("am", "утро"), ("pm", "вечер")):
+            if st[p]:
+                parts.append(f"{w} — " + _steps(st[p]))
+        if st["extra"]:
+            parts.append("процедуры — " + ", ".join(f"{x['title']} ({sched(x)})" for x in st["extra"]))
+        out.append("МОЙ УХОД: " + "; ".join(parts))
+    else:
+        out.append("МОЙ УХОД: пока не записан.")
+    notes = {k: v for k, v in st["notes"].items() if v}
+    if notes:
+        out.append("ПРО МОЮ КОЖУ: " + "; ".join(f"{NOTE_WORD[k]} — {v}" for k, v in notes.items()))
+    if has_routine(st):
+        titles = {x["id"]: x["title"].lower() for x in st["extra"]}
+        rows = []
+        for i in range(6, -1, -1):
+            d = d0 - datetime.timedelta(days=i)
+            doc = hist.get(d.isoformat())
+            if not doc or not doc["m"]:
+                rows.append(f"{d:%d.%m} — ничего не отмечено")
+                continue
+            bits = []
+            if st["am"]:
+                bits.append("утро " + ("✓" if doc["a"] else "не всё"))
+            if st["pm"]:
+                bits.append("вечер " + ("✓" if doc["p"] else "не всё"))
+            bits += [titles[m] for m in doc["m"] if m in titles]
+            rows.append(f"{d:%d.%m} — " + ", ".join(bits))
+        out.append("ОТМЕТКИ УХОДА ЗА 7 ДНЕЙ (отмечаю сам, могу забыть отметить): " + "; ".join(rows))
+    prev = next(((d, x["ai"]) for d, x in sorted(hist.items(), reverse=True)
+                 if d < day and x.get("ai") and x["ai"]["status"] in ("ok", "attention")), None)
+    if prev:
+        d, a = prev
+        out.append(f"ПРОШЛЫЙ РАЗБОР ({d[8:10]}.{d[5:7]}): {AI_WORD[a['status']]} — " + " ".join(a["text"].split("\n")))
+    if prev_day:
+        out.append(f"ПРОШЛОЕ ФОТО: {prev_day[8:10]}.{prev_day[5:7]} (второе фото).")
+    return "\n".join(out)
+
+
+def start_analysis(app, uid, day):
+    """Пометить «разбираю» и отдать разбор в фон (ответ загрузки его не ждёт)."""
+    rid = uuid.uuid4().hex[:12]
+    _set_ai(app.db, uid, day, {"status": "wait", "text": "", "compare": None, "time": _hm(app, uid), "photo": day,
+                               "id": rid, "ts": time.time()})
+    run = getattr(app, "bg", None)
+    if run:
+        run(analyze_job, app, uid, day, rid)
+    else:
+        threading.Thread(target=analyze_job, args=(app, uid, day, rid), daemon=True).start()
+    return rid
+
+
+def analyze_job(app, uid, day, rid):
+    """Фоновый разбор: Claude смотрит фото (и прошлое), ответ — в день; ошибка — «none» с повтором по кнопке."""
+    root = app.DATA
+    cur = _photo_path(root, uid, day)
+    prev_day = next((d for d in reversed(photo_days(root, uid)) if d < day), None)
+    res = {"status": "none", "text": AI_NONE, "compare": None}
+    try:
+        if not os.path.isfile(cur):
+            raise ValueError("нет фото")
+        facts = analysis_facts(app.db, uid, day, prev_day)
+        res = app.ai.skin(facts, cur, _photo_path(root, uid, prev_day) if prev_day else None)
+    except Exception as e:  # Claude не ответил, лимит, сломанный ответ — «не вышло», можно повторить
+        print("skin ai:", uid, day, type(e).__name__, e)
+    a = {"status": res.get("status") if res.get("status") in ("ok", "attention", "none") else "none",
+         "text": str(res.get("text") or AI_NONE), "compare": res.get("compare") if prev_day else None,
+         "time": _hm(app, uid), "photo": day, "id": rid}
+    if prev_day:
+        a["prev"] = prev_day
+    if res.get("retake"):
+        a["retake"] = True
+    _set_ai(app.db, uid, day, a, only=rid)
+
+
+def analyze(app, uid, b, today):
+    """POST /api/skin/analyze {day?}: разобрать фото дня заново (в фоне). Уже идёт — второй раз не запускаем."""
+    day = _pday(b["day"]) if b.get("day") not in (None, "") else today.isoformat()
+    if day > today.isoformat() or not os.path.isfile(_photo_path(app.DATA, uid, day)):
+        raise ValueError("Фото за этот день нет — сначала сделай фото лба")
+    a = day_doc(app.db, uid, day).get("ai")
+    if a and _ai_view(day, a)["status"] == "wait":
+        return
+    start_analysis(app, uid, day)
 
 
 # ---------- подключение ----------
@@ -799,11 +976,15 @@ def route(app, uid, path, b, today):
     root = app.DATA
     if path in ("/api/skin/photo", "/api/skin/photo/get"):
         if path == "/api/skin/photo" and "image" in b:
-            save_photo(db, root, uid, b, today)
+            day = save_photo(db, root, uid, b, today)
+            start_analysis(app, uid, day)
             return {**payload(db, uid, today), **list_photos(db, root, uid, today)}
         return get_photo(root, uid, b)
     if path == "/api/skin/photos":
         return list_photos(db, root, uid, today)
+    if path == "/api/skin/analyze":
+        analyze(app, uid, b, today)
+        return payload(db, uid, today)
     if path == "/api/skin/photo/delete":
         delete_photo(db, root, uid, b)
         return {**payload(db, uid, today), **list_photos(db, root, uid, today)}
@@ -813,8 +994,8 @@ def route(app, uid, path, b, today):
 def extra(app, uid, today):
     """В /api/all (ext.skin): только сегодня, серия и есть ли уход — главной и вечернему чек-листу режима."""
     p = payload(app.db, uid, today)
-    return {"has": p["has"], "today": p["today"], "streak": p["streak"],
-            "rated": p["stats"]["rated"], "notes": any(p["notes"].values())}
+    return {"has": p["has"], "today": p["today"], "streak": p["streak"], "ai": {"last": p["ai"]["last"]},
+            "notes": any(p["notes"].values())}
 
 
 def _steps(xs):
@@ -826,7 +1007,8 @@ def context_lines(app, uid, today):
     notes = {k: v for k, v in p["notes"].items() if v}
     s, t = p["stats"], p["today"]
     ph = t["photo"]
-    if not p["has"] and not notes and not s["rated"] and not ph["count"]:
+    items = [x for x in p["ai"]["days"] if x["status"] in ("ok", "attention")]
+    if not p["has"] and not notes and not items and not ph["count"]:
         return []
     out = []
     r = p["routine"]
@@ -854,19 +1036,16 @@ def context_lines(app, uid, today):
             bits.append(f"фото лба по плану сегодня — {'сделано' if ph['done'] else 'не сделано'}")
         bits.append(f"серия ухода {p['streak']} дн. (лучшая {p['best']})")
         out.append("Кожа сегодня (отмечает сам): " + "; ".join(bits))
-    rated = [(x["day"], x["r"]) for x in p["diary"] if x["r"]]
-    if rated:
-        line = "Дневник кожи (оценивает сам, 1 — плохо, 5 — отлично): "
-        line += (f"сегодня {t['rating']} — {t['word']}" + (f" («{t['note']}»)" if t["note"] else "") + "; ") if t["rating"] else "сегодня не оценил; "
-        if s["avg7"] is not None:
-            line += f"за 7 дней в среднем {fnum(s['avg7'])}"
-        if s["avg30"] is not None:
-            line += f", за 30 — {fnum(s['avg30'])}"
-        if s["trend"]:
-            line += f", неделя {s['trend']} прошлой" if s["trend"] != "так же" else ", неделя как прошлая"
-        line += "; последние оценки: " + ", ".join(f"{d[8:10]}.{d[5:7]} — {v}" for d, v in rated[-7:])
+    if items:  # разбор фото лба (Claude) — вместо прежней ручной оценки 1–5
+        x = items[0]
+        line = (f"Кожа по фото лба (разбирает Claude после каждого фото): последний разбор {x['day'][8:10]}.{x['day'][5:7]} — "
+                f"{AI_WORD[x['status']]}" + (f", по сравнению с прошлым фото — {x['compare']}" if x.get("compare") else "")
+                + ": " + " ".join(x["text"].split("\n")))
+        if len(items) > 1:
+            line += "; раньше: " + ", ".join(f"{y['day'][8:10]}.{y['day'][5:7]} — {AI_WORD[y['status']]}" for y in items[1:6])
         if s["link"]:
-            line += (f". С вечерним уходом кожа в среднем {fnum(s['link']['with'])}, без него — {fnum(s['link']['without'])}")
+            w, wo = s["link"]["with"], s["link"]["without"]
+            line += (f". С вечерним уходом «всё нормально» в {w[0]} из {w[1]} разборов, без него — в {wo[0]} из {wo[1]}")
         out.append(line)
     if ph["count"]:
         d = ph["last"]

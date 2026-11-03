@@ -1,8 +1,11 @@
 /* skin — «Кожа»: мой уход утром и вечером, процедуры по расписанию, заметки о коже, отметки на сегодня, серия,
-   дневник кожи 1–5 и график за 30 дней. Карточка на главной, экран ?p=skin, пункт в «＋», вечерний уход — в чек-листе
-   «Режима» (F.slots.rgEvening; одинаковые пункты режима прячет F.rgHide).
+   разбор фото лба (Claude, на сервере в фоне). Карточка на главной, экран ?p=skin, пункт в «＋», вечерний уход —
+   в чек-листе «Режима» (F.slots.rgEvening; одинаковые пункты режима прячет F.rgHide).
    Данные — F.S.sn (полный ответ /api/skin) или F.S.data.ext.skin (кратко из /api/all). Сервер — coach/f_skin.py.
-   Отметка и оценка меняют только свою строку (без перерисовки экрана); запросы — по очереди.
+   Отметка меняет только свою строку (без перерисовки экрана); запросы — по очереди.
+   Ручной оценки 1–5 нет (Глеб 03.11: «убери оценку — ты по моей фотке разбирай и говори, что да как»): после фото —
+   строка «Разбираю фото…» (тихий опрос раз в 3 с, до 60 с), потом «Последний разбор: Всё нормально · 03.11» или
+   «Есть что поправить · 03.11»; полный текст — листом по нажатию, сам ничего не открывается. На экране — лента разборов.
    Фото лба (раз в 3 дня вечером после умывания): строка «Фото лба» (карточка и «Процедуры»), фронтальная камера,
    сжатие ≤ 1280 px; снимок крупно не показывается — миниатюра улетает в значок с числом снимков (угол карточки
    или экрана); лист «Фото лба» — сетка размытых миниатюр, нажатие — открыть одно, удалить. */
@@ -22,7 +25,7 @@
     hide: svgi('<path d="M3.5 12s3-6 8.5-6c1.6 0 3 .5 4.2 1.2M20.5 12s-3 6-8.5 6c-1.6 0-3-.5-4.2-1.2"/><path d="M4.5 19.5l15-15"/>'),
   };
   const WD = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-  const WORD = { 1: 'плохо', 2: 'так себе', 3: 'нормально', 4: 'хорошо', 5: 'отлично' };
+  const AIW = { ok: 'Всё нормально', attention: 'Есть что поправить', none: 'Не удалось разобрать', wait: 'Разбираю фото…' };
   const PART = { am: 'Утро', pm: 'Вечер', extra: 'Процедуры' };
   const HOME_MAX = 4;
 
@@ -35,10 +38,13 @@
     F.S.sn = { ...(F.S.sn || {}), ...r };
     if (F.S.data) {
       F.S.data.ext = F.S.data.ext || {};
-      F.S.data.ext.skin = { has: r.has, today: r.today, streak: r.streak, rated: r.stats ? r.stats.rated : 0,
+      const old = F.S.data.ext.skin;
+      F.S.data.ext.skin = { has: r.has, today: r.today, streak: r.streak,
+        ai: r.ai ? { last: r.ai.last } : (old && old.ai) || null,
         notes: r.notes ? Object.values(r.notes).some(Boolean) : false };
     }
   }
+  const lastAi = () => { const d = data(); return (d && d.ai && d.ai.last) || null; };
   let queue = Promise.resolve(), pending = 0;
   function send(path, body, apply = true) {
     pending++;
@@ -49,14 +55,20 @@
   async function load(screen) {
     if (F.S.snLoading) return;
     F.S.snLoading = true;
-    try { put(await F.api('/api/skin', {})); F.S.snFail = F.S.snErr = false; } catch (e) { F.S.snFail = !data(); if (screen) { F.S.snErr = true; F.fail(e); } }
+    try { put(await F.api('/api/skin', {})); F.S.snFail = F.S.snErr = false; setTimeout(watch, 0); } catch (e) { F.S.snFail = !data(); if (screen) { F.S.snErr = true; F.fail(e); } }
     F.S.snLoading = false;
     if (F.S.screen === 'skin' || (!F.S.screen && F.S.tab === 'today')) F.render(false);
   }
   F.onData.push(d => {
     const e = d.ext && d.ext.skin;
-    if (e && e.today && F.S.sn && !pending) F.S.sn = { ...F.S.sn, today: e.today, streak: e.streak, has: e.has };
+    if (e && e.today && F.S.sn && !pending) {
+      const a = e.ai && e.ai.last, b = F.S.sn.ai && F.S.sn.ai.last;
+      F.S.sn = { ...F.S.sn, today: e.today, streak: e.streak, has: e.has };
+      // разбор поменялся (готов на сервере, пока приложение было свёрнуто) — ленту и сводку подтянем тихо
+      if (a && (!b || a.day !== b.day || a.status !== b.status)) { F.S.sn.ai = { ...(F.S.sn.ai || {}), last: a }; if (a.status !== 'wait') load(false); }
+    }
     if (!e && !F.S.snTried) { F.S.snTried = true; load(false); }
+    setTimeout(watch, 0);
   });
   const vib = kind => {
     F.haptic(kind);
@@ -86,14 +98,32 @@
       <span class="sn-pt"><b>${PART[p]}</b><small class="num" data-sn-cnt="${p}">${none ? 'нет шагов' : cnt(t, p)}</small></span>
       <span class="sn-pm" aria-hidden="true">${F.I.check}</span></button>`;
   }
-  function rateRow(t, big) {
-    const r = t.rating;
-    return `<div class="sn-rate${big ? ' big' : ''}" data-sn-rate>
-      <div class="sn-rh"><span>${big ? 'Оценка за день' : 'Кожа сегодня'}</span><b data-sn-word>${r ? `${r} · ${WORD[r]}` : 'не оценил'}</b></div>
-      <div class="sn-rb" role="group" aria-label="Оценка кожи от 1 до 5">${[1, 2, 3, 4, 5].map(n =>
-        `<button type="button" class="num${r === n ? ' on' : ''}" data-a="sn-rate" data-v="${n}" aria-pressed="${r === n}" aria-label="${n} — ${WORD[n]}">${n}</button>`).join('')}</div>
-      ${big ? '<div class="sn-rl" aria-hidden="true"><span>плохо</span><span>отлично</span></div>' : ''}</div>`;
+  // ---------- разбор фото лба: строка «Последний разбор», лента, лист с текстом ----------
+  const dd = s => { const d = F.parseDay(s); return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  // статус точкой без цвета: ○ всё нормально, ● есть что поправить, пунктир — не вышло, мигает — разбираю
+  const dot = st => `<span class="sn-ad ${esc(st)}" aria-hidden="true"></span>`;
+  const short = x => {
+    const lines = String(x.text || '').split('\n').map(s => s.replace(/^\s*[-•*]\s*/, '').replace(/\*\*/g, '').trim()).filter(Boolean);
+    if (x.status === 'wait') return 'обычно до минуты';
+    if (x.status === 'ok') return lines[1] || 'идём дальше';
+    return lines[0] || '';
+  };
+  function aiRow(a) {
+    if (!a) return '';
+    const wait = a.status === 'wait';
+    return `<button type="button" class="sn-ai${wait ? ' wait' : ''}" data-a="sn-ai" data-v="${esc(a.day)}"${wait ? ' aria-busy="true"' : ''}
+      aria-label="Последний разбор кожи: ${esc(AIW[a.status] || '')}, ${esc(dd(a.day))}">${dot(a.status)}
+      <span class="sn-ct"><small>Последний разбор</small><b>${wait ? AIW.wait : `${esc(AIW[a.status] || '')} <span class="sn-fd num">· ${esc(dd(a.day))}</span>`}</b></span>
+      <span class="chev" aria-hidden="true"></span></button>`;
   }
+  function feed(d) {
+    const xs = (d.ai && d.ai.days) || [], s = d.stats || {};
+    const list = xs.length ? `<div class="sn-feed">${xs.map(x => `<button type="button" class="sn-fr" data-a="sn-ai" data-v="${esc(x.day)}">${dot(x.status)}
+        <span class="sn-ct"><b>${esc(AIW[x.status] || '')} <span class="sn-fd num">· ${esc(dd(x.day))}</span></b><small>${esc(short(x))}</small></span>
+        <span class="chev" aria-hidden="true"></span></button>`).join('')}</div>` : '';
+    return `${list}<p class="sn-sum">${esc(s.summary || '')}</p>`;
+  }
+  const aiStat = s => s && s.total ? `<b class="num">${s.ok}/${s.total}</b><span>всё нормально</span>` : '<b class="num">—</b><span>разборов пока нет</span>';
 
   // ---------- карточка на главной ----------
   F.slots.homeAfterMyDay.push((t0, isToday) => {
@@ -115,9 +145,9 @@
         ${list.length ? `<div class="sn-list"><div class="sn-lh">${p === 'am' ? 'Утро' : 'Уход на вечер'}</div>${list.map(x => step(x)).join('')}</div>` : ''}
         ${more > 0 || due.length ? `<button class="sn-more" data-a="sn-open"><span>${due.length ? `Сегодня ещё: ${esc(due.map(x => x.title.toLowerCase()).join(', '))}` : `Ещё ${more}`}</span><span class="chev"></span></button>` : ''}
         <div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div>
-        ${rateRow(t)}</section></div>`;
+        <div class="sn-aibox" data-sn-ai>${aiRow(lastAi())}</div></section></div>`;
   });
-  F.slots.plus.push(row => row('sn-open', '', I.face, 'var(--ink)', 'Кожа', 'уход утром и вечером, оценка'));
+  F.slots.plus.push(row => row('sn-open', '', I.face, 'var(--ink)', 'Кожа', 'уход и разбор по фото'));
 
   // ---------- вечерний чек-лист «Режима»: уход берём отсюда, не дублируем ----------
   F.slots.rgEvening = F.slots.rgEvening || [];
@@ -147,7 +177,7 @@
       h += `<section class="card sn-card sn-hero rise"><div class="sn-parts">${partBtn(t, 'am')}${partBtn(t, 'pm')}</div>
         <div class="sn-stats"><div><b class="num" data-sn-streak>${d.streak}</b><span>${F.plural(d.streak, 'день', 'дня', 'дней')} подряд</span></div>
           <div><b class="num">${d.best}</b><span>лучшая серия</span></div>
-          <div><b class="num">${s.avg7 == null ? '—' : F.num(s.avg7, 1).replace(/,0$/, '')}</b><span>кожа за 7 дней</span></div></div></section>`;
+          <div data-sn-aistat>${aiStat(s)}</div></div></section>`;
       ['am', 'pm'].forEach(p => {
         if (!(t[p] || []).length) return;
         h += `<div class="sec rise">${cap(PART[p], `<span class="num" data-sn-cnt="${p}">${cnt(t, p)}</span>`)}<section class="card sn-card"><div class="sn-list">${t[p].map(x => step(x)).join('')}</div></section></div>`;
@@ -163,30 +193,16 @@
         <div class="sn-btns"><button class="btn primary" data-a="sn-import">Заполнить списком</button><button class="btn" data-a="sn-edit">По шагам</button></div></section>`;
       h += `<div class="sec rise">${cap('Фото лба', badge(t))}<section class="card sn-card"><div class="sn-list"><div class="sn-shotbox" data-sn-shotbox>${shotRow(t)}</div></div></section></div>`;
     }
-    h += `<div class="sec rise">${cap('Как кожа сегодня')}<section class="card sn-card">${rateRow(t, true)}
-      <input class="sn-note" type="text" maxlength="200" enterkeyhint="done" value="${esc(t.note || '')}" placeholder="Заметка: что заметил (по желанию)" aria-label="Заметка о коже за сегодня"></section></div>`;
-    h += `<div class="sec rise">${cap('30 дней', s.rated ? `<span class="num">${s.rated} ${F.plural(s.rated, 'оценка', 'оценки', 'оценок')}</span>` : '')}<section class="card sn-card">
-      <div data-sn-chart>${chart(d.diary || [])}</div><p class="sn-sum" data-sn-sum>${esc(s.summary || '')}</p></section></div>`;
+    h += `<div class="sec rise">${cap('Разборы по фото')}<section class="card sn-card" data-sn-feed>${feed(d)}</section></div>`;
     const notes = d.notes || {}, nt = [notes.type, notes.react, notes.avoid].filter(Boolean).join(' · ');
     h += `<div class="sec rise">${cap('Мой уход')}<div class="list">
       <button class="row tap" data-a="sn-edit"><span class="ic">${I.edit}</span><span class="main"><div class="title">${d.has ? 'Изменить уход' : 'Добавить по шагам'}</div><div class="meta">${d.has ? `утро ${r.am.length} · вечер ${r.pm.length} · процедуры ${r.extra.length}` : 'утро, вечер, маски по дням'}</div></span><span class="end chev"></span></button>
       <button class="row tap" data-a="sn-import"><span class="ic">${I.list}</span><span class="main"><div class="title">Заполнить списком</div><div class="meta">каждая строка — шаг</div></span><span class="end chev"></span></button>
       <button class="row tap" data-a="sn-notes"><span class="ic">${I.note}</span><span class="main"><div class="title">Заметки о коже</div><div class="meta">${esc(nt || 'тип кожи, на что реагирует, что не подходит')}</div></span><span class="end chev"></span></button>
-      <button class="row tap" data-a="ask-go" data-v="Посмотри мой уход за кожей и оценки кожи: что улучшить?"><span class="ic">${F.I.coach}</span><span class="main"><div class="title">Спросить тренера</div><div class="meta">видит твой уход и оценки</div></span><span class="end chev"></span></button></div></div>`;
+      <button class="row tap" data-a="ask-go" data-v="Посмотри мой уход за кожей и последние разборы фото: что улучшить?"><span class="ic">${F.I.coach}</span><span class="main"><div class="title">Спросить тренера</div><div class="meta">видит твой уход и разборы фото</div></span><span class="end chev"></span></button></div></div>`;
     h += '<p class="foot">Сыпь, сильные или болезненные прыщи, зуд, отёк, пятна, которые меняются, — скажи родителям и сходи к дерматологу. Новое средство сначала пробуй на маленьком участке.</p>';
     return h;
   };
-  function chart(diary) {
-    const n = diary.length, mid = diary[Math.floor(n / 2)];
-    const dl = x => { const dd = F.parseDay(x.day); return `${dd.getDate()} ${F.MON_S[dd.getMonth()]}`; };
-    return `<div class="sn-chart" role="img" aria-label="Оценки кожи за 30 дней">
-      <div class="sn-ax" aria-hidden="true"><span>5</span><span>3</span><span>1</span></div>
-      <div class="sn-bars">${diary.map((x, i) => `<span class="sn-bar${i === n - 1 ? ' now' : ''}${x.ok ? ' ok' : ''}" title="${esc(dl(x))}: ${x.r ? `${x.r} — ${WORD[x.r]}` : 'нет оценки'}">
-        <i style="--h:${x.r ? x.r / 5 : 0}"${x.r ? '' : ' class="none"'}></i></span>`).join('')}</div></div>
-      ${n ? `<div class="sn-xl" aria-hidden="true"><span>${esc(dl(diary[0]))}</span><span>${esc(dl(mid))}</span><span>сегодня</span></div>` : ''}
-      <p class="sn-leg"><span><i class="sn-lb"></i>оценка</span><span><i class="sn-lo"></i>уход сделан</span></p>`;
-  }
-
   // ---------- действия ----------
   F.actions['sn-open'] = () => { if (F.S.screen === 'skin') return; vib('tap'); F.openScreen('skin'); };
   F.actions['sn-retry'] = () => { F.S.snErr = false; F.render(false); };
@@ -223,35 +239,76 @@
     try { await send('/api/skin/mark', { id, done: x.done }); const tt = today(); if (tt) patch(tt, false); }
     catch (e) { F.fail(e); await load(false); F.render(false); }
   };
-  F.actions['sn-rate'] = async (el, v) => {
-    const t = today(); if (!t) return;
-    const n = Number(v);
-    if (t.rating === n) return;
-    t.rating = n; vib('select');
-    document.querySelectorAll('[data-sn-rate]').forEach(box => {
-      box.querySelectorAll('[data-a="sn-rate"]').forEach(b => { const on = Number(b.dataset.v) === n; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
-      box.querySelector('[data-sn-word]').textContent = `${n} · ${WORD[n]}`;
-    });
-    try { await send('/api/skin/rate', { rating: n }); afterRate(); }
-    catch (e) { F.fail(e); await load(false); F.render(false); }
+  // ---------- разбор фото: тихий опрос, точечное обновление, лист ----------
+  let polling = false, aiOpen = null;  // aiOpen — открытый лист разбора {el, day, draw}
+  function patchAi() {
+    const d = data(); if (!d) return;
+    document.querySelectorAll('[data-sn-ai]').forEach(el => F.morph(el, aiRow(lastAi())));
+    if (F.S.sn && F.S.sn.ai) {
+      document.querySelectorAll('[data-sn-feed]').forEach(el => F.morph(el, feed(F.S.sn)));
+      document.querySelectorAll('[data-sn-aistat]').forEach(el => F.morph(el, aiStat(F.S.sn.stats)));
+    }
+    if (aiOpen && aiOpen.el.isConnected) aiOpen.draw();
+  }
+  // идёт разбор — раз в 3 с спрашиваем сервер (до 60 с), меняем только строки разбора
+  function watch() {
+    const a = lastAi();
+    if (polling || !a || a.status !== 'wait') return;
+    polling = true;
+    const t0 = Date.now();
+    const tick = async () => {
+      try { const r = await F.api('/api/skin', {}); if (!pending) put(r); } catch (e) { /* сеть — попробуем ещё раз */ }
+      const b = lastAi();
+      if (b && b.status === 'wait' && Date.now() - t0 < 60000) { setTimeout(tick, 3000); return; }
+      polling = false;
+      patchAi();
+      if (b && b.status !== 'wait') { vib('select'); document.querySelectorAll('.sn-ai').forEach(el => { el.classList.remove('new'); void el.offsetWidth; el.classList.add('new'); }); }
+    };
+    setTimeout(tick, 3000);
+  }
+  const findAi = day => {
+    const xs = (F.S.sn && F.S.sn.ai && F.S.sn.ai.days) || [], l = lastAi();
+    return xs.find(x => x.day === day) || (l && l.day === day ? l : null);
   };
-  // ответ сервера: график и вывод — тихо, только эти куски
-  function afterRate() {
-    const d = F.S.sn; if (!d || !d.diary) return;
-    document.querySelectorAll('[data-sn-chart]').forEach(el => F.morph(el, chart(d.diary)));
-    document.querySelectorAll('[data-sn-sum]').forEach(el => { el.textContent = (d.stats && d.stats.summary) || ''; });
+  function aiSheet(day) {
+    vib('tap');
+    const el = F.sheet('<div class="sn-as" data-sn-as></div>', () => { if (aiOpen && aiOpen.el === el) aiOpen = null; });
+    const box = el.querySelector('[data-sn-as]');
+    const q = x => `Разбор кожи по фото от ${dd(x.day)}: ${short(x)}. Что ещё сделать в уходе?`;
+    const html = () => {
+      const x = findAi(day);
+      if (!x) return '<h2>Разбор кожи</h2><p class="muted">Разбора за этот день нет.</p>';
+      const meta = [F.dateLine(x.day), x.time, x.compare ? `по сравнению с прошлым фото — ${x.compare}` : ''].filter(Boolean).join(' · ');
+      const body = x.status === 'wait' ? '<p class="sn-aw">Смотрю фото — обычно до минуты. Можно закрыть, разбор появится сам.</p>'
+        : `<div class="prose sn-ap">${F.md(x.text || '')}</div>`;
+      const btns = x.status === 'wait' ? ''
+        : x.status === 'none' ? (x.retake ? '<button class="btn primary" type="button" data-shoot>Переснять</button>' : '<button class="btn primary" type="button" data-re>Повторить</button>')
+          : `<button class="btn" type="button" data-a="ask-go" data-v="${esc(q(x))}">${F.I.coach}<span>Спросить тренера</span></button><button class="btn" type="button" data-re>Разобрать заново</button>`;
+      const th = thumbs.get(x.day);  // миниатюра уже в памяти — сразу в разметке (morph не снимет её при обновлении)
+      return `<div class="sn-ah"><span class="sn-ath"><img alt="" data-day="${esc(x.day)}"${th ? ` src="${th}" class="in"` : ''}></span>
+          <div class="sn-at"><h2>Разбор кожи</h2><div class="sn-ak">${dot(x.status)}<b>${esc(AIW[x.status] || '')}</b></div><p class="small muted">${esc(meta)}</p></div></div>
+        ${body}${btns ? `<div class="sn-abtns">${btns}</div>` : ''}
+        ${x.status === 'attention' ? '<p class="foot sn-af">Это не диагноз. Сильные или болезненные прыщи, гной, отёк — покажи дерматологу и скажи родителям.</p>' : ''}`;
+    };
+    const thumb = async () => {
+      const img = box.querySelector('.sn-ath img'); if (!img || img.classList.contains('in')) return;
+      try { const src = await getImg(img.dataset.day, true); if (src && img.isConnected) { img.onload = () => img.classList.add('in'); img.src = src; } }
+      catch (e) { img.closest('.sn-ath').classList.add('none'); }
+    };
+    const draw = () => { F.morph(box, html()); thumb(); };
+    box.innerHTML = html(); thumb();
+    aiOpen = { el, day, draw };
+    el.addEventListener('click', async ev => {
+      if (ev.target.closest('[data-a="ask-go"]')) { el.close(); return; }
+      if (ev.target.closest('[data-shoot]')) { el.close(); F.actions['sn-photo'](); return; }
+      const re = ev.target.closest('[data-re]'); if (!re) return;
+      await F.busy(re, async () => {
+        try { await send('/api/skin/analyze', { day }); vib('select'); draw(); patchAi(); watch(); }
+        catch (e) { F.fail(e); }
+      });
+    });
   }
-  async function saveNote(input) {
-    const t = today(); if (!t) return;
-    const note = input.value.trim().replace(/\s+/g, ' ').slice(0, 200);
-    if (note === (t.note || '')) return;
-    t.note = note;
-    try { await send('/api/skin/rate', { note }); vib('select'); F.toast(note ? 'Заметка сохранена' : 'Заметка убрана', 'ok'); } catch (e) { F.fail(e); }
-  }
-  document.addEventListener('keydown', ev => {
-    if (ev.key === 'Enter' && ev.target.classList && ev.target.classList.contains('sn-note')) { ev.preventDefault(); ev.stopPropagation(); ev.target.blur(); }
-  }, true);
-  document.addEventListener('focusout', ev => { if (ev.target.classList && ev.target.classList.contains('sn-note')) saveNote(ev.target); });
+  F.actions['sn-ai'] = (el, day) => { if (day) aiSheet(day); };
 
   // ---------- лист «Мой уход»: утро, вечер, процедуры ----------
   function editSheet() {
@@ -411,7 +468,8 @@
       thumbs.delete(t.day);
       if (r && r.photos) F.S.snPhotos = r.photos;
       await landed;
-      vib('success'); F.toast('Фото сохранено', 'ok');
+      vib('success'); F.toast('Фото сохранено — разбираю', 'ok');
+      patchAi(); watch();
     } catch (e) {
       await landed;
       const tt = today(); if (tt) tt.photo = was;
@@ -479,7 +537,7 @@
     const el = F.sheet('<div class="sn-phs" data-sn-phs></div>', () => { document.removeEventListener('keydown', keys); token++; });
     const box = el.querySelector('[data-sn-phs]');
     const grid = () => !list ? `<h2>Фото лба</h2><div class="sn-grid">${'<span class="sn-tile sk"><span class="sn-tw"></span></span>'.repeat(6)}</div>`
-      : `<h2>Фото лба</h2><p class="small muted sn-phh">${list.length ? `${list.length} ${F.plural(list.length, 'снимок', 'снимка', 'снимков')} · видишь только ты. Нажми, чтобы открыть.` : 'Пока нет снимков. Раз в 3 дня вечером после умывания — так видно, как меняется кожа.'}</p>
+      : `<h2>Фото лба</h2><p class="small muted sn-phh">${list.length ? `${list.length} ${F.plural(list.length, 'снимок', 'снимка', 'снимков')} · видишь только ты, тренер смотрит их только для разбора. Нажми, чтобы открыть.` : 'Пока нет снимков. Раз в 3 дня вечером после умывания — так видно, как меняется кожа.'}</p>
         ${list.length ? `<div class="sn-grid">${list.map((p, i) => `<button type="button" class="sn-tile" data-i="${i}" aria-label="Фото ${esc(dayShort(p.day))}">
           <span class="sn-tw"><img alt="" data-day="${esc(p.day)}"><span class="sn-eye" aria-hidden="true">${I.hide}</span></span><small>${esc(dayShort(p.day))}</small></button>`).join('')}</div>`
         : `<button class="btn primary sn-first" type="button" data-shoot>${I.cam}<span>Сделать фото</span></button>`}`;

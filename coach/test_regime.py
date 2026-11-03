@@ -88,7 +88,7 @@ class CalcTest(unittest.TestCase):
         p = R.day_plan(c, D(2026, 11, 2))  # пн каникул
         self.assertEqual(p["mode"], "vacation")
         self.assertEqual(p["train"], {"on": True, "time": "10:00", "minutes": 90, "intensity": "full",
-                                      "why": "Можно в полную силу"})
+                                      "why": "Можно в полную силу", "src": "plan"})
         self.assertTrue(R.day_plan(c, D(2026, 11, 8))["massage"])  # вс — массаж в каникулы
         self.assertFalse(R.day_plan(c, D(2026, 11, 15))["massage"])  # вс после каникул — нет
         self.assertTrue(R.day_plan(c, D(2026, 11, 12))["massage"])  # чт — всегда
@@ -115,6 +115,31 @@ class CalcTest(unittest.TestCase):
         p = R.day_plan(cfg(), D(2026, 11, 5), nutrition=nut, water_norm=2150)  # без «Калорий» — наш расчёт
         self.assertEqual((p["kcal"], p["protein"], p["water"]), (2600, 98, 2150))
         self.assertEqual(R.day_plan(cfg(), D(2026, 11, 5))["kcal"], None)
+
+    def test_whoop_adjusts_day(self):
+        """Глеб 03.11: «стоит, что четверг отдых, а я тренировался — пусть сам подтягивает по моим данным»."""
+        goals = {"goals": {"train": {"kcal": 3400, "p": 130}, "rest": {"kcal": 2800, "p": 125}},
+                 "water": {"train": 3000, "rest": 2500}}
+        box = {"sport": "Бокс", "start": "18:10", "minutes": 85, "rest": False}
+        c = cfg()
+        p = R.day_plan(c, D(2026, 11, 5), kcal_goals=goals, workouts=[box, {"sport": "Бег", "start": "09:00",
+                                                                         "minutes": 20, "rest": False}])  # чт — отдых
+        tr = p["train"]
+        self.assertEqual((tr["on"], tr["time"], tr["minutes"], tr["src"]), (True, "18:10", 85, "whoop"))
+        self.assertEqual(tr["why"], "по WHOOP: бокс в 18:10, 85 мин")
+        self.assertEqual((p["kcal"], p["protein"], p["water"]), (3400, 130, 3000))  # нормы — как в день тренировки
+        self.assertEqual(c["train_days"], cfg()["train_days"])  # настройки не тронуты
+        massage = {"sport": "Массаж", "start": "12:00", "minutes": 89, "rest": True}
+        p = R.day_plan(c, D(2026, 11, 5), kcal_goals=goals, workouts=[massage, dict(box, minutes=10)])
+        self.assertEqual((p["train"]["on"], p["train"]["src"], p["kcal"]), (False, "plan", 2800))  # массаж и 10 мин — нет
+        # по плану тренировка в 10:00 (каникулы), а была в 12:30 — фактическое время
+        p = R.day_plan(c, D(2026, 11, 2), workouts=[dict(box, start="12:30")])
+        self.assertEqual((p["train"]["time"], p["train"]["src"]), ("12:30", "whoop"))
+        # по плану тренировка, её ещё нет: сегодня — как в плане, прошедший день — «не было»
+        p = R.day_plan(c, D(2026, 11, 2), workouts=[])
+        self.assertEqual((p["train"]["on"], p["train"]["time"], p["train"]["src"]), (True, "10:00", "plan"))
+        p = R.day_plan(c, D(2026, 11, 2), workouts=[], past=True)
+        self.assertEqual((p["train"]["on"], p["train"]["src"], p["train"]["why"]), (False, "whoop", "по WHOOP: тренировки не было"))
 
     def test_due(self):
         c = cfg(vacation=None, shift=None)  # пн: отбой 22:00, за 45 мин
@@ -195,6 +220,29 @@ class ApiTest(unittest.TestCase):
         self.assertIsNotNone(r["today"]["kcal"])  # без «Калорий» — наш расчёт по весу
         self.assertFalse(R.configured(self.db, T.U))
         self.assertEqual(coach.context(T.U, self.TODAY)[0].count("РЕЖИМ НА СЕГОДНЯ"), 0)  # не настроен — тренер не видит
+
+    def test_rest_day_with_whoop_workout(self):
+        z = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.000Z")  # noqa: E731
+        t0 = datetime.datetime(2026, 11, 3, 15, 10)  # 18:10 у него (+03:00); вт — по расписанию отдых
+        recs = [("wbox", "boxing", 85), ("wmas", "massage-therapy", 60)]
+        for wid, sport, mins in recs:
+            start = t0 if wid == "wbox" else t0 - datetime.timedelta(hours=5)
+            self.db.put(T.U, "workout", wid, "2026-11-03", z(start), {
+                "id": wid, "start": z(start), "end": z(start + datetime.timedelta(minutes=mins)), "timezone_offset": "+03:00",
+                "sport_name": sport, "score_state": "SCORED", "score": {"strain": 12.0, "kilojoule": 2000}})
+        try:
+            r = self.call("/api/regime")
+            tr = r["today"]["train"]
+            self.assertEqual((tr["on"], tr["time"], tr["minutes"], tr["src"]), (True, "18:10", 85, "whoop"))
+            self.assertIn("бокс в 18:10", tr["why"])
+            self.assertNotIn(1, r["cfg"]["train_days"])  # расписание то же
+            self.assertTrue(all(x["train"]["src"] == "plan" for x in r["week"][1:]))
+            now = datetime.datetime.combine(self.TODAY, datetime.time(20, 0), tzinfo=ZoneInfo("Europe/Moscow"))
+            with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: self.TODAY):
+                self.assertTrue(coach.kcal_forma(T.U)["train_today"])  # «Калории» — тот же тренировочный день
+        finally:
+            for wid, _, _ in recs:
+                self.db.drop_record(T.U, "workout", wid)
 
     def test_save_check_and_context(self):
         r = self.call("/api/regime/save", {"cfg": CFG})

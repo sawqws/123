@@ -177,8 +177,42 @@ class FlowTest(unittest.TestCase):
             coach.react(U, self.fresh())
         self.assertEqual(len(self.msgs("Доброе утро")), 1)
         it = self.items()
-        self.assertIn("Ориентир нагрузки", it[0]["text"])
+        self.assertIn("ккал", it[0]["text"])
         self.assertNotIn("<b>", it[0]["text"])  # в приложение — Markdown, не HTML
+
+    def test_morning_no_training_advice(self):
+        """Глеб 03.11: «у меня чёткое расписание тренировок» — в разборах не советуем, как тренироваться."""
+        coach.route(U, "/api/regime/save", {"cfg": {"bed": "22:30", "wake": "07:00", "train_days": [3, 4, 5, 6],
+                                                    "train_time": "18:00"}})
+        rec = self.db.records(U, "recovery", DAY, DAY)[0]
+        rec["score"].update(recovery_score=21, hrv_rmssd_milli=30, resting_heart_rate=70)  # красный день, 4-й подряд
+        self.db.put(U, "recovery", rec["cycle_id"], DAY, rec.get("created_at") or "", {k: v for k, v in rec.items() if k != "_day"})
+        banned = ("лёгк", "легк", "интенсив", "техник", "пропуст", "в полную", "Ориентир нагрузки", "спарринг",
+                  "разгрузоч", "не форсируй", "полсилы")
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):  # правила без Claude
+            self.now = at(7, 40)
+            coach.react(U, self.fresh())
+            early = coach.rule_early({"yesterday": {"strain": 16}, "nutrition": None})
+        m = self.msgs("Доброе утро")
+        self.assertEqual(len(m), 1)
+        it = self.items()[0]
+        self.assertIn("Восстановление **21%**", it["text"])
+        self.assertIn("Тренировка 18:00", it["text"])  # тренировку — как факт
+        for text in (m[0]["text"], it["text"], early):
+            for w in banned:
+                self.assertNotIn(w.lower(), text.lower(), w)
+        ctx = "\n".join(coach.f_regime.context_lines(coach, U, TODAY))
+        for w in ("лёгк", "техник", "в полную"):
+            self.assertNotIn(w, ctx)
+        # промпты всех разборов дня — с явным запретом
+        for fn, args in ((ai.morning, ("x",)), (ai.morning_early, ("x",)), (ai.evening, ("x", "y")),
+                         (ai.after_workout, ("x", coach.insights.workout_of(workout("w1")))),):
+            self.prompts.clear()
+            fn(*args)
+            self.assertIn("НЕ СОВЕТУЙ, КАК ТРЕНИРОВАТЬСЯ", self.prompts[0][0], fn.__name__)
+            self.assertNotIn("ориентир нагрузки, что заменить", self.prompts[0][0])
+        with open(os.path.join(HERE, "prompt.md"), encoding="utf-8") as f:
+            self.assertIn("не советуй, как тренироваться", f.read())
 
     def test_sync_more_often_from_five(self):
         u = self.db.user(U)
@@ -209,6 +243,149 @@ class FlowTest(unittest.TestCase):
         self.now = at(19, 0, TODAY + datetime.timedelta(days=1))
         coach.react(U, [("workout", workout("w4", day=TODAY + datetime.timedelta(days=1)))])
         self.assertEqual(len(self.msgs("Бокс · 60 мин")), 3)
+
+    # ---------- данные поменялись в WHOOP — разбор следом ----------
+
+    def put_workout(self, r):
+        self.db.put(U, "workout", r["id"], r["_day"], r["start"], {k: v for k, v in r.items() if k != "_day"})
+
+    def reviewed(self, *ws):
+        """Тренировки в базе и по ним разборы, как после синхронизации."""
+        self.now = at(19, 0)
+        for w in ws:
+            self.put_workout(w)
+        coach.react(U, [("workout", w) for w in ws])
+        return [x for x in self.items() if x["kind"] == "workout"]
+
+    def edits(self):
+        return [kw for m, kw in self.sent if m == "editMessageText"]
+
+    def test_workout_sport_changed_redone_quietly(self):
+        w = workout("w1", hour=10)
+        before = self.reviewed(w)[0]
+        msg = self.msgs("Бокс · 60 мин")[0]
+        RV.seen(self.db, U, before["id"])
+        sent = len(self.msgs(""))
+        self.assertEqual(coach.refresh_reviews(U), [])  # ничего не поменялось — не трогаем
+        w["sport_name"] = "running"  # поменял в WHOOP вид спорта
+        self.put_workout(w)
+        self.assertEqual(coach.refresh_reviews(U), [("workout", before["id"], "redo")])
+        after = [x for x in self.items() if x["kind"] == "workout"]
+        self.assertEqual(len(after), 1)
+        self.assertEqual((after[0]["id"], after[0]["time"], after[0]["title"], after[0]["seen"]),
+                         (before["id"], before["time"], "Бег · 60 мин", False))  # то же место, снова «новый»
+        self.assertEqual(len(self.msgs("")), sent)  # нового сообщения в Telegram нет
+        ed = self.edits()
+        self.assertEqual(len(ed), 1)  # прежнее — тихо поправлено
+        self.assertEqual(ed[0]["message_id"], self.sent.index(next(x for x in self.sent if x[1] is msg)) + 1)
+        self.assertIn("Бег · 60 мин", ed[0]["text"])
+        self.assertEqual(coach.refresh_reviews(U), [])  # второй раз — уже по новым данным
+
+    def test_workout_time_and_strain(self):
+        w = workout("w1", hour=10)
+        rid = self.reviewed(w)[0]["id"]
+        w["score"]["strain"] = 12.2  # пересчёт на 0,2 — мелочь
+        self.put_workout(w)
+        self.assertEqual(coach.refresh_reviews(U), [])
+        w["score"]["strain"] = 12.6
+        self.put_workout(w)
+        self.assertEqual(coach.refresh_reviews(U), [("workout", rid, "redo")])
+        self.assertIn("Нагрузка **12,6**", self.items()[0]["text"])
+        w["end"] = w["end"].replace("T08:00", "T08:30")  # закончил на 30 мин позже: 90 мин
+        self.put_workout(w)
+        self.assertEqual(coach.refresh_reviews(U), [("workout", rid, "redo")])
+        self.assertEqual(self.items()[0]["title"], "Бокс · 90 мин")
+        self.db.x("UPDATE reviews SET msg=NULL")  # id сообщения не сохранён — пересоздаём молча, ничего не шлём
+        n = len(self.sent)
+        w["sport_name"] = "running"
+        self.put_workout(w)
+        self.assertEqual(coach.refresh_reviews(U), [("workout", rid, "redo")])
+        self.assertEqual([m for m, _ in self.sent[n:]], [])
+
+    def test_workout_deleted_or_massage_dropped(self):
+        w1, w2 = workout("w1", hour=10), workout("w2", hour=15)
+        r1, r2 = (x["id"] for x in self.reviewed(w1, w2))
+        coach.react(U, [("workout", workout("w3", hour=17))])
+        self.assertEqual(len(self.msgs("Бокс")), 2)  # лимит 2 за день
+        self.db.drop_record(U, "workout", "w1")  # удалил в WHOOP
+        self.assertEqual(coach.refresh_reviews(U), [("workout", r1, "drop")])
+        w2["sport_name"] = "massage-therapy"  # это был массаж
+        self.put_workout(w2)
+        self.assertEqual(coach.refresh_reviews(U), [("workout", r2, "drop")])
+        self.assertEqual([x for x in self.items() if x["kind"] == "workout"], [])
+        sent = len(self.sent)
+        w4 = workout("w4", hour=18)  # места за день освободились — новая тренировка получит разбор
+        self.put_workout(w4)
+        coach.react(U, [("workout", w4)])
+        self.assertEqual(len([x for x in self.items() if x["kind"] == "workout"]), 1)
+        self.assertGreater(len(self.sent), sent)
+
+    def test_workout_recreated_keeps_review(self):
+        """WHOOP пересоздал тренировку при правке (новый id, то же время) — разбор переходит к ней, без нового сообщения."""
+        w1 = workout("w1", hour=10)
+        rid = self.reviewed(w1)[0]["id"]
+        self.db.drop_record(U, "workout", "w1")
+        nw = dict(workout("w1b", hour=10), sport_name="kickboxing")
+        self.put_workout(nw)
+        sent = len(self.msgs(""))
+        self.assertEqual(coach.refresh_reviews(U), [("workout", rid, "redo")])
+        coach.react(U, [("workout", nw)])  # та же синхронизация принесла её как новую — второго разбора нет
+        its = [x for x in self.items() if x["kind"] == "workout"]
+        self.assertEqual([(x["id"], x["title"]) for x in its], [(rid, "Кикбоксинг · 60 мин")])
+        self.assertEqual(len(self.msgs("")), sent)
+
+    def test_webhook_deleted_and_vanished(self):
+        w1 = workout("w1", hour=10)
+        self.reviewed(w1)
+        self.assertFalse(coach.whoop.drop_deleted(self.db, U, "workout.updated", "w1"))
+        self.assertTrue(coach.whoop.drop_deleted(self.db, U, "workout.deleted", "w1"))
+        self.assertEqual([x for x, _, a in coach.refresh_reviews(U) if a == "drop"], ["workout"])
+        # пропала из выборки WHOOP: внутри окна — удалить, у края окна и раньше — не трогать
+        z = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.000Z")  # noqa: E731
+        t0 = datetime.datetime(2026, 10, 10, 12, 0)
+        self.db.x("DELETE FROM records WHERE kind='workout'")
+        for wid, start in (("in", t0 + datetime.timedelta(hours=5)), ("edge", t0 + datetime.timedelta(minutes=5)),
+                           ("old", t0 - datetime.timedelta(hours=5)), ("kept", t0 + datetime.timedelta(hours=6))):
+            self.db.put(U, "workout", wid, start.date().isoformat(), z(start), {"id": wid, "start": z(start)})
+        self.assertEqual(coach.whoop.drop_vanished(self.db, U, z(t0), {"kept"}), ["in"])
+
+    def test_morning_redone_on_notable_change(self):
+        self.now = at(7, 40)
+        coach.react(U, self.fresh())
+        rid = self.items()[0]["id"]
+        self.assertEqual(len(self.msgs("Доброе утро")), 1)
+        rec = self.db.records(U, "recovery", DAY, DAY)[0]
+
+        def recovery(score):
+            rec["score"]["recovery_score"] = score
+            self.db.put(U, "recovery", rec["cycle_id"], DAY, rec.get("created_at") or "",
+                        {k: v for k, v in rec.items() if k != "_day"})
+        recovery(84)  # +2 — мелочь
+        self.assertEqual(coach.refresh_reviews(U), [])
+        slp = self.db.records(U, "sleep", DAY, DAY)[0]
+        slp["score"]["stage_summary"]["total_light_sleep_time_milli"] += 600000  # +10 мин сна — мелочь
+        self.db.put(U, "sleep", slp["id"], DAY, slp["start"], {k: v for k, v in slp.items() if k != "_day"})
+        self.assertEqual(coach.refresh_reviews(U), [])
+        recovery(74)  # WHOOP пересчитал: −8
+        self.now = at(9, 0)
+        self.assertEqual(coach.refresh_reviews(U), [("morning", rid, "redo")])
+        it = self.items()[0]
+        self.assertEqual((it["id"], it["time"], it["title"]), (rid, "07:40", "Восстановление 74%"))
+        self.assertIn("Восстановление **74%**", it["text"])
+        self.assertEqual(len(self.msgs("Доброе утро")), 1)  # нового сообщения нет
+        self.assertEqual(len(self.edits()), 1)
+        self.assertIn("74%", self.edits()[0]["text"])
+        slp["score"]["stage_summary"]["total_light_sleep_time_milli"] += 1200000  # ещё +20 мин: от утра +30 мин
+        self.db.put(U, "sleep", slp["id"], DAY, slp["start"], {k: v for k, v in slp.items() if k != "_day"})
+        self.assertEqual(coach.refresh_reviews(U), [("morning", rid, "redo")])
+        self.assertEqual(coach.refresh_reviews(U), [])
+
+    def test_evening_not_redone(self):
+        self.tick(21, 0)
+        self.assertEqual(len([x for x in self.items() if x["kind"] == "evening"]), 1)
+        w = workout("late", hour=19)
+        self.put_workout(w)
+        self.assertEqual(coach.refresh_reviews(U), [])
 
     # ---------- вечер ----------
 

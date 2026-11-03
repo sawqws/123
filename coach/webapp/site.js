@@ -21,7 +21,7 @@
       s.src = src; s.async = false;
       document.body.appendChild(s);
     });
-    if (!standalone) setTimeout(installHint, 1500);
+    // «На экран „Домой“» — строкой в «Ещё» (more.js, home-hint), не всплывающей плашкой (Глеб 03.11)
   }
 
   let shown = false;
@@ -76,19 +76,6 @@
     }
     box.querySelector('form').addEventListener('submit', e => { e.preventDefault(); submit(); });
     setTimeout(() => inp.focus(), 300);
-  }
-
-  function installHint() {
-    try { if (localStorage.getItem('forma-hint')) return; } catch (e) { /* без хранилища */ }
-    const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    const el = document.createElement('div');
-    el.className = 'site-hint';
-    el.setAttribute('role', 'status');
-    el.innerHTML = `<img src="icon-180.png" alt="" width="40" height="40"><div><b>Форма на экран «Домой»</b>
-      <span>${ios ? 'Нажми «Поделиться» внизу → «На экран „Домой“»' : 'Меню браузера → «Установить приложение»'}</span></div>
-      <button type="button" aria-label="Закрыть">✕</button>`;
-    el.querySelector('button').onclick = () => { el.remove(); try { localStorage.setItem('forma-hint', '1'); } catch (e) { /* ничего */ } };
-    document.body.appendChild(el);
   }
 
   fetch('/site/me', { headers: { 'X-Init-Data': '' } })
