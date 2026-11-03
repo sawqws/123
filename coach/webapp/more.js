@@ -203,7 +203,7 @@
       h += '<div class="chat co-chat">';
       hist.forEach(m => {
         h += m.role === 'user' ? `<div class="msg me">${esc(m.text)}</div>`
-          : `<div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them prose">${F.md(m.text)}</div>`;
+          : `<div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them prose">${F.md(m.text)}</div>${F.actChips ? F.actChips(m) : ''}`;
       });
       if (S.asking) h += `<div class="msg me">${esc(S.asking)}</div><div class="co-who"><span class="co-dot">${I.spark}</span>Тренер</div><div class="msg them${S.askLive ? ' prose' : ''}">${S.askLive ? F.md(S.askLive) : '<span class="dots"><i></i><i></i><i></i></span>'}</div>`;
       h += '</div>';
