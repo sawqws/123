@@ -51,6 +51,13 @@ const sum = (arr, k) => arr.reduce((a, i) => a + (i[k] || 0), 0);
 const toastText = page => page.textContent('#toast');
 const dayTypeOf = (S, d) => S.days[d].type || S.days[d].ftype;
 
+const RECIPE_PARSE = { text: 'Сырники: пачка творога 200 г, 2 яйца, 3 ложки муки, жарил на масле, вышло 2 порции', name: 'Сырники', servings: 2, out: 0,
+  method: 'жарка на масле', note: '2 яйца ≈ 110 г, 3 ложки муки ≈ 75 г', items: [ // ответ /api/kcal/recipe/parse (сервер подменён)
+    { name: 'Творог 5%', g: 200, est: false, kcal: 242, p: 34, f: 10, c: 6, salt: 0.2 }, { name: 'Яйцо', g: 110, est: true, kcal: 172, p: 14, f: 12, c: 1, salt: 0.4 },
+    { name: 'Мука пшеничная', g: 75, est: true, kcal: 256, p: 7.7, f: 0.8, c: 53, salt: 0 }, { name: 'Масло подсолнечное', g: 17, est: true, kcal: 153, p: 0, f: 17, c: 0, salt: 0 }] };
+const rsum = page => page.$$eval('#rsum > div', els => { const c = els.map(e => e.textContent.trim()), out = []; for (let i = 6; i < c.length; i += 6) out.push(c.slice(i, i + 6)); return out; }); // итог рецепта по строкам
+const digits = v => +String(v).replace(/\D/g, '');
+
 async function addFood(page, q, grams, meal) {
   if (meal) await page.click(`[data-add="${meal}"] >> nth=0`, { position: { x: 30, y: 20 } }); else await page.click('#addTab');
   await sleep(550);
@@ -1067,6 +1074,241 @@ async function addFood(page, q, grams, meal) {
       ok((await items(page)).length === 2, 'внутри Формы — одно нажатие → каша + авокадо');
       await shot(page, '18-embed');
       ok(page.errors.length === 0, 'нет ошибок в консоли (embed, быстрый завтрак)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 21. «Мои рецепты» (Глеб 03.11): текст → предпросмотр (сервер подменён) → правка → сохранить → поиск, «Мои рецепты»,
+       одно нажатие, «Часто», правка пересчитывает (записанное не меняется), удаление с подтверждением, sync с u */
+    {
+      const parses = [];
+      const { ctx, page } = await newPage(browser, { init: () => localStorage.setItem('kcal.token', 'tokrec') });
+      await ctx.route(API + '/api/kcal/recipe/parse', r => { parses.push({ body: JSON.parse(r.request().postData()), auth: r.request().headers().authorization });
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(RECIPE_PARSE) }); });
+      await page.click('#addTab'); await sleep(550);
+      ok(await page.isVisible('#recipeCta') && (await text(page, '#recipeCta')).includes('Мой рецепт'), 'в «Добавить» — кнопка «Мой рецепт»');
+      ok((await text(page, '#recs')) === '', 'рецептов нет — блока «Мои рецепты» нет');
+      await page.fill('#q', 'сыр'); await sleep(150);
+      ok(!(await page.isVisible('#recipeCta')), 'при поиске кнопка рецепта прячется');
+      await page.fill('#q', ''); await sleep(150);
+      await page.click('#recipeCta'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Мой рецепт' && await page.isVisible('#mic') && await page.isVisible('#recText'), 'лист «Мой рецепт»: микрофон и поле для текста');
+      ok((await text(page, '#recSt')).includes('Нажми и говори'), 'подсказка у микрофона', await text(page, '#recSt'));
+      const micBox = await page.locator('#mic').boundingBox();
+      ok(micBox.width >= 88 && micBox.height >= 88, 'кнопка микрофона большая', JSON.stringify(micBox));
+      await shot(page, '21-recipe-new');
+      await page.click('#recGo'); await sleep(200);
+      ok(parses.length === 0 && (await toastText(page)).includes('Напиши'), 'пустой текст — подсказка, на сервер не уходит');
+      await page.fill('#recText', RECIPE_PARSE.text); await page.click('#recGo'); await sleep(800);
+      ok(parses.length === 1 && parses[0].body.text === RECIPE_PARSE.text && parses[0].auth === 'Bearer tokrec' && !parses[0].body.audio, 'текст → /api/kcal/recipe/parse с токеном', JSON.stringify(parses[0]));
+      ok((await text(page, '#sheetTitle')) === 'Новый рецепт' && (await page.inputValue('#rn')) === 'Сырники', 'предпросмотр: название', await text(page, '#sheetTitle'));
+      ok((await page.locator('#ings .ing').count()) === 4 && (await page.locator('#ings .est').count()) === 3, 'предпросмотр: 4 продукта, оценённые граммы — с «≈»');
+      ok((await text(page, '.rec-said')).includes('пачка творога'), 'видно, что сказал');
+      let rows = await rsum(page);
+      ok(rows.length === 3 && rows[0][0] === 'Всё блюдо402 г' && digits(rows[0][1]) === 823 && rows[2][0] === 'Порция201 г' && digits(rows[2][1]) === 412, 'итог: всё блюдо 402 г — 823 ккал, порция 201 г — 412', JSON.stringify(rows));
+      ok(digits(rows[1][1]) === 205 && rows[1][5] === '0,1', 'на 100 г готового — 205 ккал, соль 0,1', JSON.stringify(rows[1]));
+      ok(((await state(page)).recipes || []).length === 0 && (await items(page)).length === 0, 'предпросмотр ничего не сохраняет');
+      await shot(page, '21-recipe-preview');
+      // правка граммов, удаление строки, порции, вес готового — пересчёт сразу
+      await page.fill('#ig0', '300'); await sleep(120);
+      rows = await rsum(page);
+      ok(digits(rows[0][1]) === 944 && (await page.locator('#ings [data-i="0"] .est').count()) === 0, 'творог 200 → 300 г: 944 ккал', JSON.stringify(rows[0]));
+      await page.click('#ings [data-i="1"] [data-d="1"]'); await sleep(120);
+      ok((await page.inputValue('#ig1')) === '120' && digits((await rsum(page))[0][1]) === 960, 'яйцо +10 г кнопкой → 120 г, 960 ккал', await page.inputValue('#ig1'));
+      await page.click('#ings [data-x="3"]'); await sleep(150);
+      rows = await rsum(page);
+      ok((await page.locator('#ings .ing').count()) === 3 && digits(rows[0][1]) === 807, 'масло убрано: 807 ккал', JSON.stringify(rows[0]));
+      await page.click('[data-sv="1"]'); await sleep(100);
+      ok((await text(page, '#rsv')) === '3' && (await rsum(page))[2][0] === 'Порция165 г', '3 порции → порция 165 г', JSON.stringify(await rsum(page)));
+      await page.fill('#rout', '450'); await sleep(100);
+      rows = await rsum(page);
+      ok(rows[0][0] === 'Всё блюдо450 г' && rows[2][0] === 'Порция150 г' && digits(rows[1][1]) === 179, 'вес готового 450 г: на 100 г — 179 ккал, порция 150 г', JSON.stringify(rows));
+      // свой продукт через поиск по базе
+      await page.fill('#rn', 'Сырники Глеба');
+      await page.click('#ingAdd'); await sleep(600);
+      ok((await text(page, '#sheetTitle')) === 'Продукт', '«Добавить продукт» — поиск по базе');
+      await page.fill('#iq', 'сметана'); await sleep(400);
+      const sm = await text(page, '#ires [data-p] >> nth=0');
+      await page.click('#ires [data-p] >> nth=0'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Новый рецепт' && (await page.locator('#ings .ing').count()) === 4 && (await page.inputValue('#rn')) === 'Сырники Глеба'
+        && (await page.inputValue('#rout')) === '450' && (await text(page, '#rsv')) === '3', 'продукт добавлен, правки не потерялись', sm);
+      // своё — название и КБЖУ
+      await page.click('#ingAdd'); await sleep(600);
+      await page.fill('#inN', 'Изюм'); await page.fill('#inG', '30'); await page.fill('#inK', '300'); await page.click('#inOk'); await sleep(650);
+      ok((await page.locator('#ings .ing').count()) === 5 && (await text(page, '#ings [data-i="4"]')).includes('Изюм') && (await page.inputValue('#ig4')) === '30', 'своё: изюм 30 г');
+      await page.click('#ings [data-x="3"]'); await sleep(120); // сметану обратно
+      // сохранить
+      await page.click('#rsave'); await sleep(800);
+      let S1 = await state(page), R = S1.recipes[0];
+      ok(S1.recipes.length === 1 && R.name === 'Сырники Глеба' && R.servings === 3 && R.out === 450 && R.ings.length === 4 && R.u > 0 && R.text === RECIPE_PARSE.text,
+        'рецепт сохранён на устройстве', JSON.stringify(R));
+      ok(R.ings[0].g === 300 && R.ings[0].est === false && R.ings[2].est === true && R.ings[3].name === 'Изюм' && Math.round(R.ings[3].kcal) === 90 && !('k' in R.ings[0]), 'продукты с граммами и «оценкой»', JSON.stringify(R.ings));
+      ok((await text(page, '#sheetTitle')) === 'Добавить' && (await text(page, '#recs')).includes('Сырники Глеба') && (await toastText(page)).includes('в моих рецептах'), 'после сохранения — в «Мои рецепты» наверху «Добавить»');
+      await shot(page, '21-recipe-in-add');
+      await sleep(2300);
+      const sent = ctx.syncs.map(x => x.body.recipes).filter(Boolean).pop();
+      ok(sent && sent.length === 1 && sent[0].id === R.id && sent[0].u === R.u && sent[0].ings.length === 4 && !('k' in sent[0].ings[0]), 'рецепт ушёл на сервер в sync (с u)', JSON.stringify(ctx.syncs.map(x => x.body.recipes)));
+      ok((await state(page)).recU === R.u, 'recU — принятое сервером u', (await state(page)).recU);
+      // поиск: как обычное блюдо, порция — одна порция
+      await page.fill('#q', 'сырники гл'); await sleep(300);
+      const r0 = await text(page, '#results [data-k] >> nth=0');
+      ok(r0.includes('Сырники Глеба') && r0.includes('Мой рецепт') && r0.includes('порция 150 г'), 'рецепт находится поиском', r0);
+      await page.click('#results [data-k] >> nth=0'); await sleep(550);
+      ok((await page.inputValue('#g')) === '150' && (await text(page, '#units')).includes('всё блюдо · 450 г') && await page.isVisible('#recOpen'), 'порция рецепта: 150 г, чип «всё блюдо», кнопка «Рецепт»', await text(page, '#units'));
+      const perServ = await page.evaluate(() => { const f = recFood(recLive()[0]); return f.kcal * 1.5; });
+      await page.click('#ok'); await sleep(700);
+      let its = await items(page);
+      ok(its.length === 1 && its[0].name === 'Сырники Глеба' && its[0].g === 150 && Math.abs(its[0].kcal - perServ) < 0.01 && its[0].per100 && its[0].unit.g === 150, 'записан в дневник: 150 г', JSON.stringify(its[0]));
+      // одно нажатие из «Мои рецепты»
+      await page.click('#addTab'); await sleep(550);
+      ok((await text(page, '#recs [data-ro="0"]')).includes('150 г'), 'в «Мои рецепты» — привычная порция 150 г', await text(page, '#recs'));
+      await page.click('#recs [data-ra="0"]'); await sleep(400);
+      its = await items(page);
+      ok(its.length === 2 && its[1].g === 150 && await page.isVisible('#q') && (await toastText(page)).includes('Сырники Глеба'), '«+» — в дневник в одно нажатие, лист не закрылся', JSON.stringify(its.map(i => i.g)));
+      await page.click('#sheetClose'); await sleep(600);
+      // «Часто»: добавлен 2 раза — там, а в «Мои рецепты» не дублируется
+      await page.click('#addTab'); await sleep(600);
+      ok((await text(page, '#fav')).includes('Сырники Глеба') && !(await page.locator('#recs [data-ro]').count()) && (await text(page, '#recAll')).includes('1'), 'рецепт в «Часто», в «Мои рецепты» — «Все · 1»', await text(page, '#recs'));
+      // правка: граммы → пересчёт, записанное не меняется
+      const before = (await items(page)).map(i => i.kcal);
+      await page.click('#recAll'); await sleep(600);
+      ok((await text(page, '#sheetTitle')) === 'Мои рецепты' && (await page.locator('#recList [data-rid]').count()) === 1 && await page.isVisible('#recNew'), 'лист «Мои рецепты»: список и «Новый рецепт»');
+      await shot(page, '21-recipes');
+      await page.click('#recList [data-rid] >> nth=0'); await sleep(600);
+      ok((await text(page, '#sheetTitle')) === 'Рецепт' && (await page.inputValue('#ig0')) === '300' && await page.isVisible('#rdel'), 'рецепт открывается для правки');
+      await page.fill('#ig0', '200'); await page.fill('#rn', 'Сырники'); await page.click('#rsave'); await sleep(700);
+      S1 = await state(page);
+      const R2 = S1.recipes[0];
+      ok(R2.id === R.id && R2.name === 'Сырники' && R2.ings[0].g === 200 && Math.round(R2.ings[0].kcal) === 242 && R2.u > R.u, 'правка: творог 200 г, новое имя, u больше', JSON.stringify(R2));
+      ok(JSON.stringify((await items(page)).map(i => i.kcal)) === JSON.stringify(before) && (await items(page))[0].name === 'Сырники Глеба', 'записанное в дневник не изменилось');
+      // удаление — два нажатия, «Вернуть»
+      await page.click('#recList [data-rid] >> nth=0'); await sleep(600);
+      await page.click('#rdel'); await sleep(150);
+      ok((await text(page, '#rdel')).includes('ещё раз') && !(await state(page)).recipes[0].del, 'первое нажатие «Удалить» — только подтверждение');
+      await page.click('#rdel'); await sleep(500);
+      S1 = await state(page);
+      ok(S1.recipes.length === 1 && S1.recipes[0].del === true && S1.recipes[0].u > R2.u && (await text(page, '#sheetTitle')) === 'Мои рецепты' && (await toastText(page)).includes('Рецепт удалён'), 'удалён: «надгробие» с новым u', JSON.stringify(S1.recipes));
+      await page.click('#toast button'); await sleep(400);
+      S1 = await state(page);
+      ok(!S1.recipes[0].del && S1.recipes[0].name === 'Сырники' && (await page.locator('#recList [data-rid]').count()) === 1, '«Вернуть» — рецепт снова есть');
+      await page.click('#recList [data-rid] >> nth=0'); await sleep(600); await page.click('#rdel'); await page.click('#rdel'); await sleep(500);
+      await page.click('#sheetClose'); await sleep(600);
+      await page.click('#addTab'); await sleep(550); await page.fill('#q', 'сырники'); await sleep(300);
+      ok(!(await text(page, '#results')).includes('Мой рецепт') && (await items(page)).length === 2, 'удалённый не ищется, дневник цел');
+      await sleep(2300);
+      const last = ctx.syncs.map(x => x.body.recipes).filter(Boolean).pop();
+      ok(last && last.some(x => x.id === R.id && x.del === true), 'удаление ушло на сервер', JSON.stringify(last));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (рецепты)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 21а. Рецепты на любом устройстве: слияние со state по u, удалённое на другом — удаляется, rstale → state заново */
+    {
+      const ing = (name, g, kcal) => ({ name, g, kcal, p: 1, f: 1, c: 1, salt: 0, est: false });
+      const seed = { goals: {}, days: {}, fullSync: true, recipes: [
+        { id: 'rA', u: 1000, name: 'Плов', servings: 4, out: 1600, ings: [ing('Рис', 400, 1400), ing('Курица', 600, 1200)] },
+        { id: 'rB', u: 5000, name: 'Омлет', servings: 1, out: 0, ings: [ing('Яйцо', 165, 257)] },
+        { id: 'rC', u: 1000, name: 'Блины', servings: 0, out: 0, ings: [ing('Мука', 200, 680)] }] };
+      const st = { days: {}, recipes: [
+        { id: 'rA', u: 2000, name: 'Плов с курицей', servings: 4, out: 1600, ings: [ing('Рис', 400, 1400), ing('Курица', 600, 1200)] },
+        { id: 'rB', u: 4000, name: 'Старый омлет', servings: 1, out: 0, ings: [ing('Яйцо', 110, 172)] },
+        { id: 'rC', u: 3000, del: true }, { id: 'rD', u: 3000, name: 'Гречка с грибами', servings: 2, out: 0, ings: [ing('Гречка', 150, 500)] },
+        { id: 'rE', u: 3000, del: true }, { id: '<x>', u: 1, name: '<img src=x onerror=alert(1)>', ings: [ing('Яд', 1, 1)] }] };
+      const { ctx, page } = await newPage(browser, { seed, state: st, init: () => localStorage.setItem('kcal.token', 'tokm'),
+        sync: r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, forma: null, stale: [], rstale: ['rB'] }) }) });
+      await sleep(900);
+      const S2 = await state(page), by = id => S2.recipes.find(x => x.id === id);
+      ok(by('rA').name === 'Плов с курицей' && by('rA').u === 2000, 'сервер новее — его версия');
+      ok(by('rB').name === 'Омлет' && by('rB').u === 5000, 'своя новее — остаётся своя');
+      ok(by('rC').del === true && by('rD').name === 'Гречка с грибами' && !by('rE'), 'удалённое на другом устройстве — удалено, нового — добавлено, чужое «надгробие» — не нужно', JSON.stringify(S2.recipes.map(x => x.id + ':' + (x.del ? 'del' : x.name))));
+      ok(by('x') && by('x').name.startsWith('<img') && S2.recipes.length === 5, 'id без спецсимволов', JSON.stringify(S2.recipes.map(x => x.id)));
+      await page.click('#addTab'); await sleep(550);
+      ok((await page.locator('#recs [data-ro]').count()) === 3 && !(await page.evaluate(() => document.querySelector('#recs img'))), 'в «Мои рецепты» — 3 из 4, текст экранирован');
+      await sleep(2000);
+      ok(ctx.states >= 2, 'rstale в ответе sync → снова state', ctx.states);
+      ok(page.errors.length === 0, 'нет ошибок в консоли (слияние рецептов)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 21б. Голос: подставной MediaRecorder (audio/mp4 как в Safari), нажать-начать/нажать-стоп, удержание, отказ, «Слушаю…» → «Считаю…» */
+    {
+      const parses = []; let mode = 'ok';
+      const { ctx, page } = await newPage(browser, { init: () => {
+        localStorage.setItem('kcal.token', 'tokv');
+        window.__mic = { calls: 0, deny: false, stopped: 0 };
+        navigator.mediaDevices.getUserMedia = async () => { __mic.calls++; if (__mic.deny) { const e = new Error('нет'); e.name = 'NotAllowedError'; throw e; }
+          return { getTracks: () => [{ stop() { __mic.stopped++; } }] }; };
+        window.MediaRecorder = class { constructor(s, o) { this.mimeType = (o && o.mimeType) || ''; this.state = 'inactive'; __mic.opts = o; }
+          static isTypeSupported(t) { return t === 'audio/mp4'; }
+          start() { this.state = 'recording'; }
+          stop() { this.state = 'inactive'; setTimeout(() => { this.ondataavailable && this.ondataavailable({ data: new Blob([new Uint8Array(3000).fill(7)], { type: 'audio/mp4' }) }); this.onstop && this.onstop(); }, 20); } };
+      } });
+      await ctx.route(API + '/api/kcal/recipe/parse', async r => {
+        parses.push(JSON.parse(r.request().postData()));
+        if (mode === 'slow') await sleep(3300);
+        if (mode === 'novoice') return r.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'Голос не распознан — напиши текстом', voice: false }) });
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(RECIPE_PARSE) });
+      });
+      await page.click('#addTab'); await sleep(550); await page.click('#recipeCta'); await sleep(650);
+      await page.click('#mic'); await sleep(1300);
+      ok((await text(page, '#recSt')).startsWith('Слушаю · 0:01') && await page.evaluate(() => document.querySelector('#mic').classList.contains('on')) && await page.isVisible('#recCancel'),
+        'нажал — идёт запись, таймер', await text(page, '#recSt'));
+      ok(await page.evaluate(() => __mic.opts && __mic.opts.mimeType === 'audio/mp4'), 'формат — audio/mp4 (как в Safari)', JSON.stringify(await page.evaluate(() => __mic.opts)));
+      await shot(page, '21-recipe-listening');
+      await page.click('#mic'); await sleep(900);
+      ok(parses.length === 1 && parses[0].audio.startsWith('data:audio/mp4;base64,') && parses[0].mime === 'audio/mp4' && !parses[0].text, 'нажал ещё раз — запись ушла на сервер', JSON.stringify(parses[0]).slice(0, 120));
+      ok(await page.evaluate(() => __mic.stopped) === 1, 'микрофон выключен после записи');
+      ok((await text(page, '#sheetTitle')) === 'Новый рецепт' && (await page.locator('#ings .ing').count()) === 4, 'голос → предпросмотр');
+      // удержание: держал ~1 с и отпустил — стоп
+      await page.click('#backBtn'); await sleep(650);
+      ok((await page.inputValue('#recText')) === RECIPE_PARSE.text, '«Назад» — расшифровка в поле, можно поправить');
+      mode = 'slow';
+      const mb = await page.locator('#mic').boundingBox();
+      await page.mouse.move(mb.x + mb.width / 2, mb.y + mb.height / 2); await page.mouse.down(); await sleep(1300); await page.mouse.up(); await sleep(500);
+      ok(parses.length === 2 && parses[1].audio, 'удержание: отпустил — запись ушла');
+      ok((await text(page, '#recSt')).startsWith('Слушаю…') && await page.evaluate(() => document.querySelector('#mic').disabled), 'пока ждём сервер — «Слушаю…»', await text(page, '#recSt'));
+      await sleep(2300);
+      ok((await text(page, '#recSt')).startsWith('Считаю…'), 'потом — «Считаю…»', await text(page, '#recSt'));
+      await sleep(1200);
+      ok((await text(page, '#sheetTitle')) === 'Новый рецепт', 'дождались — предпросмотр');
+      // голос не распознан → понятная строка, без всплывающих окон
+      mode = 'novoice';
+      await page.click('#backBtn'); await sleep(650);
+      await page.click('#mic'); await sleep(1200); await page.click('#mic'); await sleep(700);
+      ok((await text(page, '#recSt')).includes('Голос не распознан') && (await text(page, '#recSt')).includes('текстом') && (await text(page, '#sheetTitle')) === 'Мой рецепт', 'голос не распознан — «напиши текстом»', await text(page, '#recSt'));
+      // отказ в доступе к микрофону
+      await page.evaluate(() => { __mic.deny = true; });
+      await page.click('#mic'); await sleep(400);
+      ok((await text(page, '#recSt')).includes('Нет доступа к микрофону') && (await text(page, '#recSt')).includes('текстом') && !(await page.evaluate(() => document.querySelector('#mic').classList.contains('on'))), 'отказ — понятный текст, можно писать', await text(page, '#recSt'));
+      // слишком коротко; «Отменить запись»; закрыл лист во время записи — микрофон выключен
+      await page.evaluate(() => { __mic.deny = false; });
+      const n0 = parses.length;
+      await page.click('#mic'); await sleep(300); await page.click('#mic'); await sleep(400);
+      ok(parses.length === n0 && (await text(page, '#recSt')).includes('Слишком коротко'), 'меньше секунды — не отправляем', await text(page, '#recSt'));
+      await page.click('#mic'); await sleep(1200); await page.click('#recCancel'); await sleep(400);
+      ok(parses.length === n0 && (await text(page, '#recSt')).includes('Нажми и говори'), '«Отменить запись» — ничего не ушло');
+      const st0 = await page.evaluate(() => __mic.stopped);
+      await page.click('#mic'); await sleep(800); await page.keyboard.press('Escape'); await sleep(600);
+      ok(await page.evaluate(() => __mic.stopped) === st0 + 1 && parses.length === n0 && await page.isHidden('#sheet'), 'закрыл лист во время записи — микрофон выключен, ничего не ушло');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (голос)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 21в. Без MediaRecorder — только текст; внутри Формы (?embed=1) — кнопка есть, рецепт сохраняется */
+    {
+      const { ctx, page } = await newPage(browser, { init: () => { localStorage.setItem('kcal.token', 'tokn'); delete window.MediaRecorder; } });
+      await page.click('#addTab'); await sleep(550); await page.click('#recipeCta'); await sleep(650);
+      ok(!(await page.isVisible('#mic')) && (await text(page, '#recSt')).includes('Запись голоса в этом браузере не работает') && await page.isVisible('#recText'), 'нет записи в браузере — только текст');
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await newPage(browser, { url: URL + '?embed=1&theme=light', init: () => localStorage.setItem('kcal.token', 'tokemb') });
+      await ctx.route(API + '/api/kcal/recipe/parse', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(RECIPE_PARSE) }));
+      await page.click('#addTab'); await sleep(550);
+      ok(await page.isVisible('#recipeCta'), 'внутри Формы — «Мой рецепт» есть');
+      await page.click('#recipeCta'); await sleep(650); await page.fill('#recText', 'сырники'); await page.click('#recGo'); await sleep(700);
+      await shot(page, '21-recipe-embed-light');
+      await page.click('#rlog'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Порция' && (await page.inputValue('#g')) === '201', '«Сохранить и записать» → лист порции с одной порцией', await page.inputValue('#g'));
+      await page.click('#ok'); await sleep(700);
+      const S3 = await state(page);
+      ok(S3.recipes.length === 1 && (await items(page)).length === 1 && (await items(page))[0].g === 201, 'внутри Формы: рецепт сохранён и записан');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (рецепт внутри Формы)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {

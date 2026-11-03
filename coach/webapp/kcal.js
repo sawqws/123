@@ -58,7 +58,7 @@
     frame = document.createElement('iframe');
     frame.className = 'kp-frame';
     frame.title = 'Калории';
-    frame.setAttribute('allow', 'camera; clipboard-write');  // фото еды, копирование
+    frame.setAttribute('allow', 'camera; microphone; clipboard-write');  // фото еды, голос «Мой рецепт», копирование
     frame.addEventListener('load', () => {
       opening = false; ready = true;
       requestAnimationFrame(() => pane.classList.add('ready'));
