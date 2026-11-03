@@ -165,7 +165,9 @@ class Client:
             params = {"limit": 25, "start": start}
             if token:
                 params["nextToken"] = token
-            page = self.get(PATHS[kind], params) or {}
+            page = self.get(PATHS[kind], params)
+            if not isinstance(page, dict):  # 404/пусто — не «записей нет»: иначе drop_vanished сотрёт настоящие тренировки
+                raise RuntimeError(f"WHOOP: пустой ответ на {PATHS[kind]}")
             out += page.get("records") or []
             token = page.get("next_token")
             if not token:
