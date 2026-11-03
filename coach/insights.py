@@ -23,6 +23,9 @@ SPORTS = {
     "jumping-rope": "Скакалка", "spin": "Сайкл", "rowing": "Гребля", "skiing": "Лыжи",
     "snowboarding": "Сноуборд", "hockey": "Хоккей", "dance": "Танцы", "activity": "Активность",
     "wrestling": "Борьба", "jiu-jitsu": "Джиу-джитсу", "elliptical": "Эллипс", "climbing": "Скалолазание",
+    "massage-therapy": "Массаж", "meditation": "Медитация", "sauna": "Сауна", "ice-bath": "Ледяная ванна",
+    "breathwork": "Дыхание", "cleaning": "Уборка", "strength-trainer": "Силовая", "pilates": "Пилатес",
+    "box-fitness": "Бокс-фитнес", "assault-bike": "Эйр-байк", "stairmaster": "Степпер", "treadmill": "Беговая дорожка",
 }
 GOAL_NAMES = {"form": "Форма и результат", "mass": "Набор мышц", "dry": "Рельеф", "weight": "Держать вес"}
 

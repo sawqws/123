@@ -184,22 +184,21 @@
   function prompts(t) {
     const r = t.recovery, s = t.sleep, ws = t.workouts || [], e = t.eaten || {}, out = [];
     const add = (text, ic, col, sub) => { if (!out.some(x => x.text === text)) out.push({ text, ic, col, sub }); };
-    if (ws.length) add(`Разбери мою тренировку: ${ws[ws.length - 1].sport.toLowerCase()}`, I.bolt, 'var(--strain)', 'нагрузка, пульс, зоны');
-    if (r && r.zone === 'green') { add('Можно сегодня спарринг?', I.rec, 'var(--rec-green)', `восстановление ${r.score}%`); add('Как выжать максимум из зелёного дня?', I.spark, 'var(--rec-green)', 'тренировка на полную'); }
-    if (r && r.zone === 'yellow') { add('Как тренироваться при жёлтом восстановлении?', I.rec, 'var(--rec-yellow)', `восстановление ${r.score}%`); add('Что сделать, чтобы завтра было зелёное?', I.spark, 'var(--rec-yellow)', 'сон, еда, нагрузка'); }
-    if (r && r.zone === 'red') { add('Почему упало восстановление?', I.rec, 'var(--rec-red)', `восстановление ${r.score}%`); add('Что делать в день восстановления?', I.spark, 'var(--rec-red)', 'лёгкая активность'); }
+    // как тренироваться — не подсказываем (Глеб 03.11: расписание у него своё); массаж, сауна и т. п. — не тренировка
+    const real = ws.filter(w => !w.rest);
+    if (real.length) add(`Разбери тренировку: ${real[real.length - 1].sport.toLowerCase()}`, I.bolt, 'var(--strain)', 'нагрузка, пульс, зоны');
+    if (r && r.zone !== 'green') add('Как быстрее восстановиться?', I.rec, F.C[r.zone], `восстановление ${r.score}%`);
+    if (r && r.zone === 'red') add('Почему упало восстановление?', I.rec, 'var(--rec-red)', `восстановление ${r.score}%`);
     if (s && s.need && s.hours < s.need * .85) add('Как восполнить недосып?', I.moon, 'var(--sleep)', `спал ${hm(s.hours)} из ${hm(s.need)}`);
-    if (ws.length) add('Что съесть после тренировки?', I.food, 'var(--food)', 'белок, углеводы, вода');
+    if (real.length) add('Что съесть после тренировки?', I.food, 'var(--food)', 'белок, углеводы, вода');
     if (!e.count) add('Что съесть сегодня, чтобы хватило сил?', I.food, 'var(--food)', 'еды за день ещё нет');
-    if (!r) add('Как понять, готов ли я к тренировке?', I.rec, 'var(--teal)', 'без данных восстановления');
     if (t.bedtime) add('Во сколько лечь сегодня?', I.moon, 'var(--sleep)', `нужно ${hm(t.bedtime.need)} сна`);
-    add('План тренировок на неделю', I.stats, 'var(--teal)', 'по нагрузке и восстановлению');
     const sk = S0().ext && S0().ext.skin;  // тренер — по всему: кожа, учёба, настроение
     if (sk && sk.has) add('Что улучшить в уходе за кожей?', I.spark, 'var(--ink)', 'по уходу и разборам фото');
     add('Как улучшить сон?', I.moon, 'var(--sleep)', 'режим и привычки');
     add('Как не волноваться перед боем?', I.spark, 'var(--ink)', 'поддержка');
     add('Как успевать учёбу и бокс?', I.stats, 'var(--ink)', 'режим дня');
-    return out.slice(0, 6);
+    return out.slice(0, 4);
   }
   function context(t) {
     const r = t.recovery, s = t.sleep, c = t.cycle || {};
@@ -276,7 +275,23 @@
     let pad = 16;  // широкий экран: меню слева, внизу только поле
     if (bar && !F.wide() && !kb) { const r = bar.getBoundingClientRect(); pad = Math.max(16, Math.round(window.innerHeight - r.top) + 8); }
     root.style.setProperty('--co-pad', (kb ? 8 : pad) + 'px');
+    // страховка (Глеб 04.11: на iPhone поле ввода осталось под клавиатурой): поле всё равно ниже видимой части —
+    // укорачиваем страницу ровно на столько, сколько не влезло (шапка остаётся наверху)
+    const box = typing && coach && vv && document.querySelector('body.tab-coach .composer');
+    if (box) {
+      const over = Math.round(box.getBoundingClientRect().bottom - (vv.offsetTop + vv.height) + 6);
+      if (over > 2) root.style.setProperty('--vv-h', Math.max(160, Math.round(vh - over)) + 'px');
+    }
   }
+  // клавиатура iOS выезжает ~0,3–0,5 с, а события visualViewport в приложении с экрана «Домой» приходят не всегда —
+  // пока поле в фокусе, первые 1,5 с подгоняем каждый кадр
+  let follow = 0;
+  const chase = () => {
+    cancelAnimationFrame(follow);
+    const t0 = performance.now();
+    const step = () => { F.coLayout(); if (performance.now() - t0 < 1500) follow = requestAnimationFrame(step); };
+    follow = requestAnimationFrame(step);
+  };
   F.coLayout = force => {
     fit();
     const sc = coBox();
@@ -317,8 +332,8 @@
   addEventListener('orientationchange', () => setTimeout(F.safeBottom, 300));
   if (F.tg && F.tg.onEvent) ['safeAreaChanged', 'contentSafeAreaChanged'].forEach(e => { try { F.tg.onEvent(e, F.safeBottom); } catch (x) { /* старый Telegram */ } });
 
-  document.addEventListener('focusin', e => { if (e.target.id === 'q') setTimeout(() => F.coLayout(), 60); });
-  document.addEventListener('focusout', e => { if (e.target.id === 'q') setTimeout(() => F.coLayout(), 60); });
+  document.addEventListener('focusin', e => { if (e.target.id === 'q') chase(); });
+  document.addEventListener('focusout', e => { if (e.target.id === 'q') chase(); });
 
   // 30 минут тишины — при открытии вкладки чистый лист (сервер отдаёт то же: /api/history — только текущий разговор)
   F.coFresh = () => {
