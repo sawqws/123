@@ -62,3 +62,35 @@
 .co-dot .ico { width: 12px; height: 12px; }
 .co-chat .msg.them { max-width: 92%; }
 .co-note { margin: 10px 4px 0; text-align: center; font-size: 11.5px; color: var(--hint); }
+
+/* ---------- чат тренера: прокручиваются только сообщения (Глеб 03.11) ----------
+   Страница во вкладке «Тренер» не прокручивается: шапка сверху, поле ввода снизу (над меню Формы; с клавиатурой iOS —
+   прямо над ней: высота и сдвиг — из visualViewport, --vv-h/--vv-top, отступ под меню — --co-pad; считает more.js),
+   между ними — .co-scroll со своей плавной прокруткой. На ≥1024 — то же внутри колонки. */
+html:has(> body.tab-coach) { overscroll-behavior: none; }
+html:root body.tab-coach { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); overflow: hidden; overscroll-behavior: none; }
+html:root body.tab-coach.has-tabbar { padding-bottom: var(--co-pad, calc(96px + var(--bottom))) !important; }
+body.tab-coach #app, body.tab-coach #view { height: 100%; }
+body.tab-coach #view > div { height: 100%; display: flex; flex-direction: column; }
+body.tab-coach #view > div > :not(.co-scroll) { flex: none; }
+body.tab-coach .co-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  touch-action: pan-y; margin: 0 -16px; padding: 4px 16px 8px; scrollbar-width: thin; scrollbar-color: var(--fill-2, rgba(255, 255, 255, .2)) transparent; }
+body.tab-coach .composer { margin-top: 6px; }
+html:root body.tab-coach #navbar { display: none !important; }  /* шапка стоит на месте — маленький заголовок не нужен (и не закрывает ✕) */
+body.tab-coach.kb .tabbar { opacity: 0; pointer-events: none; }  /* клавиатура открыта — меню не висит между полем и клавиатурой */
+.co-scroll .co-note { margin: 18px 4px 2px; }
+/* подсказки — по кнопке 💡 одной строкой над полем, листаются вбок; сами не всплывают */
+html:root .composer .chips.co-tips { flex-wrap: nowrap !important; overflow-x: auto !important; overscroll-behavior-x: contain; margin: 0 -16px 8px !important;
+  padding: 0 16px !important; scrollbar-width: none; animation: co-tips-in .32s var(--ios, cubic-bezier(.32, .72, 0, 1)) both; }
+html:root .composer .chips.co-tips::-webkit-scrollbar { display: none; }
+html:root .composer .co-tips .chip { display: inline-flex !important; flex: none; align-items: center; max-width: 82vw; }
+@keyframes co-tips-in { from { opacity: 0; transform: translateY(6px); } }
+.send.co-tip .ico { width: 22px; height: 22px; margin: auto; }
+html:root .send.co-tip.on { background: var(--ink) !important; color: var(--on-ink, #000) !important; }
+@media (max-width: 400px) { body.tab-coach .ask .send.alt { width: 44px; height: 44px; margin-bottom: 2px; } }
+/* низкий экран (телефон боком, маленькое окно): шапка тоньше — больше места сообщениям */
+@media (max-height: 480px) {
+  html:root body.tab-coach .hero .sub { display: none; }
+  html:root body.tab-coach .hero h1 { font-size: 22px !important; }
+  html:root body.tab-coach .hero { padding-top: 0; padding-bottom: 4px; }
+}

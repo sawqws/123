@@ -578,6 +578,7 @@
     if (tab === 'plus') { tabs.set(S.tab); plusSheet(); return; }
     if (S.tab === tab && !S.screen) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     const from = S.tab;
+    if (tab === 'coach' && F.coFresh) F.coFresh();  // 30 мин тишины — новый разговор
     S.tab = tab; S.screen = null; tabs.set(tab);
     // «Питание» — живая рамка «Калорий» (kcal.js): без снимка всей страницы с рамкой, она сама проявляется (kcal.css)
     nav('tab', () => { render(true); window.scrollTo(0, 0); }, from === 'food' || tab === 'food');
@@ -639,7 +640,8 @@
     if (moving) stagger();
     animate(document, !moving);
     if (F.navSync) F.navSync();
-    if (S.tab === 'coach' && anim !== false) window.scrollTo(0, document.body.scrollHeight);
+    if (F.coLayout) F.coLayout(S.coForce);  // чат тренера: своя прокрутка сообщений (more.js), страница стоит
+    S.coForce = false;
   }
   const initial = () => { const n = ((S.data && S.data.user && S.data.user.name) || '').trim(); return n ? esc(n[0].toUpperCase()) : I.user; };
   const avatar = () => `<button class="avatar" data-a="profile" aria-label="Профиль">${initial()}</button>`;
@@ -1306,7 +1308,7 @@
   }
   async function loadHistory() {
     S.historyErr = false;
-    try { S.history = (await api('/api/history', {})).history; } catch (e) { fail(e); S.historyErr = true; }
+    try { S.history = (await api('/api/history', {})).history; if (F.coFresh) F.coFresh(); } catch (e) { S.historyErr = true; }  // без всплывающей ошибки: в чате — «Повторить»
     if (S.tab === 'coach') render();
   }
   // поле ввода очищаем сами: тихое обновление (morph) не трогает поле, в котором стоит курсор
@@ -1320,8 +1322,8 @@
     const rd = r.body.getReader(), dec = new TextDecoder();
     let buf = '', live = '', queued = false, done = null;
     const paint = () => { queued = false; const b = [...document.querySelectorAll('.msg.them')].pop(); if (!b || S.tab !== 'coach') return;
-      const stick = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
-      b.classList.add('prose'); b.innerHTML = md(live); if (stick) window.scrollTo(0, document.documentElement.scrollHeight); };
+      const sc = b.closest('.co-scroll');  // докручиваем, только если он и так внизу (S.coBottom — more.js)
+      b.classList.add('prose'); b.innerHTML = md(live); if (sc && S.coBottom !== false) sc.scrollTop = sc.scrollHeight; };
     for (;;) {
       const { value, done: end } = await rd.read();
       if (end) break;
@@ -1340,7 +1342,7 @@
   }
   async function ask(q) {
     q = (q || '').trim(); if (!q || S.asking) return;
-    S.asking = q; S.askLive = ''; S.qDraft = ''; clearQ(); haptic('tap'); render();
+    S.asking = q; S.askLive = ''; S.qDraft = ''; S.coTips = false; S.coForce = true; clearQ(); haptic('tap'); render();
     try { S.history = await askStream(q); haptic('success'); }
     catch (e) { fail(e); S.qDraft = q; }
     S.asking = false; S.askLive = '';
@@ -1369,7 +1371,7 @@
       if (!f) return;
       haptic('tap');
       const text = ($('#q') || {}).value || '';
-      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; clearQ(); render();
+      S.asking = '📷 ' + (text.trim() || 'Фото'); S.qDraft = ''; S.coForce = true; clearQ(); render();
       try { const r = await api('/api/photo', { image: await shrink(f), mode: 'ask', text: text.trim() }); S.history = r.history; haptic('success'); }
       catch (e) { fail(e); }
       S.asking = false; if (S.tab === 'coach') render();
