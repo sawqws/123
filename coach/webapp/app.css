@@ -248,6 +248,12 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent-line); bo
   color: var(--water) !important; box-shadow: none !important; text-transform: none; letter-spacing: 0; }
 .water-b b { font: 800 17px var(--num); }
 .water-b span { font-size: 11.5px; font-weight: 600; opacity: .85; }
+/* вода: много градаций — один ряд, листается вбок пальцем (страница вбок не едет); ≥768 — сетка без прокрутки */
+.btns.wq { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: none;
+  margin-left: -4px; margin-right: -4px; padding: 0 4px 2px; -webkit-overflow-scrolling: touch; }
+.btns.wq::-webkit-scrollbar { display: none; }
+.btns.wq .water-b { flex: 0 0 auto; width: auto; min-width: 72px; padding: 0 12px; scroll-snap-align: start; }
+@media (min-width: 768px) { .btns.wq { flex-wrap: wrap; overflow: visible; } .btns.wq .water-b { flex: 1 0 84px; } }
 .logs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .logs .pill { padding-right: 4px; }
 .logs .pill button { border: 0; background: none; color: var(--hint); font-size: 12px; padding: 2px 6px; cursor: pointer; }
