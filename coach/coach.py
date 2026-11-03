@@ -623,11 +623,15 @@ def first_sentence(text, limit=90):
     return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "…"
 
 
+# совет, как тренироваться (интенсивность, пропуск, техника) — в разборах дня не даём (ai.NO_TRAIN_ADVICE)
+TRAIN_ADVICE = re.compile(r"лёгк|легк|интенсив|техник|пропуст|в полную|тяжёл|разгрузоч|спарринг|ориентир нагрузки|"
+                          r"не форсируй|полсилы|тренир", re.I)
+
+
 def rule_brief(t):
-    """Разбор без Claude (3–4 строки): главный сигнал, ориентир нагрузки, еда и вода, отбой."""
-    lines = [f"• {esc(first_sentence(x['text']))}" for x in t["tips"][:1]]
-    if t["band"]:
-        lines.append(f"• Ориентир нагрузки: <b>{t['band'][0]}–{t['band'][1]}</b>")
+    """Разбор без Claude (3–4 строки): главный сигнал, еда и вода, отбой. Как тренироваться — не советуем."""
+    sig = (first_sentence(x["text"]) for x in t["tips"])
+    lines = [f"• {esc(x)}" for x in sig if not TRAIN_ADVICE.search(x)][:1]
     n = t["nutrition"]
     if n:
         lines.append(f"• {n['kcal']} ккал · белок {n['protein']} г · вода {water.liters(n['water'])}")
@@ -639,8 +643,7 @@ def rule_brief(t):
 def rule_early(t):
     """План без сегодняшнего сна (WHOOP ещё не посчитал) — по вчерашнему дню."""
     y = t.get("yesterday") or {}
-    hard = (y.get("strain") or 0) >= 14
-    lines = ["• Тренировка по самочувствию" + (": вчера было тяжело — не форсируй" if hard else ", разминка 15 мин")]
+    lines = ["• Вчера нагрузка была высокой — сегодня больше воды и сна"] if (y.get("strain") or 0) >= 14 else []
     n = t["nutrition"]
     lines.append(f"• Вода {water.liters(n['water'])}, белок {n['protein']} г" if n else "• Вода 2–2,5 л, белок в каждый приём")
     if bed_line(t):

@@ -36,7 +36,7 @@
     if (!tr) return '';
     const on = tr.on && tr.intensity !== 'rest';
     return `<div class="rg-train"><span class="rg-int ${esc(tr.intensity || (on ? 'full' : 'rest'))}" aria-hidden="true"></span>
-      <span class="rg-tm"><b>${on ? `${INT[tr.intensity] || 'Полная'} тренировка · ${tr.minutes || '—'} мин` : 'Без тренировки'}</b>
+      <span class="rg-tm"><b>${on ? `${tr.src === 'whoop' ? 'Тренировка' : `${INT[tr.intensity] || 'Полная'} тренировка`} · ${tr.minutes || '—'} мин` : 'Без тренировки'}</b>
         <span class="muted">${tr.why ? esc(tr.why) : on ? `в ${esc(tr.time || '—')}` : 'день отдыха'}</span></span></div>`;
   }
   // пункты вечера без тех, что уже есть в уходе за кожей (модуль skin: F.rgHide) — не дублируем
@@ -88,7 +88,7 @@
       h += `<div class="sec rise">${cap('Неделя')}<div class="list rg-week">${week.map(w => {
         const tr = w.train || {}, on = tr.on && tr.intensity !== 'rest', dd = F.parseDay(w.day), isT = w.day === d.day;
         return `<div class="row rg-wr ${isT ? 'on' : ''}"><span class="rg-wd"><b>${isT ? 'Сегодня' : WD[wdOf(w.day)]}</b><span class="num">${dd.getDate()} ${F.MON_S[dd.getMonth()]}</span></span>
-          <span class="rg-wt"><span class="rg-int ${esc(on ? tr.intensity || 'full' : 'rest')}" aria-hidden="true"></span>${on ? `<span class="num">${esc(tr.time || '')}</span>` : 'Отдых'}${w.massage ? `<i class="rg-m" title="Массаж">${I.hand}</i>` : ''}</span>
+          <span class="rg-wt"><span class="rg-int ${esc(on ? tr.intensity || 'full' : 'rest')}" aria-hidden="true"></span>${on ? `<span class="num">${esc(tr.time || '')}</span>` : 'Отдых'}${tr.src === 'whoop' ? '<small class="rg-src">по WHOOP</small>' : ''}${w.massage ? `<i class="rg-m" title="Массаж">${I.hand}</i>` : ''}</span>
           <span class="rg-ws num">${esc(w.bed || '—')} – ${esc(w.wake || '—')}</span></div>`;
       }).join('')}</div><p class="rg-legend"><span><i class="rg-int full"></i>полная</span><span><i class="rg-int light"></i>лёгкая</span><span><i class="rg-int rest"></i>отдых</span><span>${I.hand}массаж</span></p></div>`;
     }

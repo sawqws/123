@@ -48,6 +48,7 @@
 .rg-wd span { font-size: 12.5px; color: var(--hint); }
 .rg-wr.on .rg-wd b { font-weight: 800; }
 .rg-wt { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14.5px; white-space: nowrap; overflow: hidden; }
+.rg-src { font-size: 11px; color: var(--hint); }  /* «по WHOOP»: день подстроен по тренировке, без цвета */
 .rg-m { display: inline-grid; color: var(--hint); }
 .rg-m .ico { width: 17px; height: 17px; }
 .rg-ws { font-size: 14.5px; color: var(--hint); white-space: nowrap; }

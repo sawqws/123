@@ -676,7 +676,8 @@ class BotTest(unittest.TestCase):
         self.assertIn("бокс в полную", self.db.brief(U, "2026-10-11")["text"])
         with mock.patch.object(ai, "claude", side_effect=ai.AIError("нет")):
             coach.morning_brief(U)
-        self.assertIn("Ориентир нагрузки", self.texts()[-1])
+        self.assertIn("ккал", self.texts()[-1])  # без Claude — правила: еда, вода, отбой
+        self.assertNotIn("Ориентир нагрузки", self.texts()[-1])  # как тренироваться — не советуем (Глеб 03.11)
         # react: тренировка -> разбор один раз; утренний разбор шлёт расписание, а не react
         with mock.patch.object(coach.threading, "Thread") as th:
             rec = {"_day": "2026-10-11", "cycle_id": 1}

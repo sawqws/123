@@ -177,8 +177,42 @@ class FlowTest(unittest.TestCase):
             coach.react(U, self.fresh())
         self.assertEqual(len(self.msgs("Доброе утро")), 1)
         it = self.items()
-        self.assertIn("Ориентир нагрузки", it[0]["text"])
+        self.assertIn("ккал", it[0]["text"])
         self.assertNotIn("<b>", it[0]["text"])  # в приложение — Markdown, не HTML
+
+    def test_morning_no_training_advice(self):
+        """Глеб 03.11: «у меня чёткое расписание тренировок» — в разборах не советуем, как тренироваться."""
+        coach.route(U, "/api/regime/save", {"cfg": {"bed": "22:30", "wake": "07:00", "train_days": [3, 4, 5, 6],
+                                                    "train_time": "18:00"}})
+        rec = self.db.records(U, "recovery", DAY, DAY)[0]
+        rec["score"].update(recovery_score=21, hrv_rmssd_milli=30, resting_heart_rate=70)  # красный день, 4-й подряд
+        self.db.put(U, "recovery", rec["cycle_id"], DAY, rec.get("created_at") or "", {k: v for k, v in rec.items() if k != "_day"})
+        banned = ("лёгк", "легк", "интенсив", "техник", "пропуст", "в полную", "Ориентир нагрузки", "спарринг",
+                  "разгрузоч", "не форсируй", "полсилы")
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):  # правила без Claude
+            self.now = at(7, 40)
+            coach.react(U, self.fresh())
+            early = coach.rule_early({"yesterday": {"strain": 16}, "nutrition": None})
+        m = self.msgs("Доброе утро")
+        self.assertEqual(len(m), 1)
+        it = self.items()[0]
+        self.assertIn("Восстановление **21%**", it["text"])
+        self.assertIn("Тренировка 18:00", it["text"])  # тренировку — как факт
+        for text in (m[0]["text"], it["text"], early):
+            for w in banned:
+                self.assertNotIn(w.lower(), text.lower(), w)
+        ctx = "\n".join(coach.f_regime.context_lines(coach, U, TODAY))
+        for w in ("лёгк", "техник", "в полную"):
+            self.assertNotIn(w, ctx)
+        # промпты всех разборов дня — с явным запретом
+        for fn, args in ((ai.morning, ("x",)), (ai.morning_early, ("x",)), (ai.evening, ("x", "y")),
+                         (ai.after_workout, ("x", coach.insights.workout_of(workout("w1")))),):
+            self.prompts.clear()
+            fn(*args)
+            self.assertIn("НЕ СОВЕТУЙ, КАК ТРЕНИРОВАТЬСЯ", self.prompts[0][0], fn.__name__)
+            self.assertNotIn("ориентир нагрузки, что заменить", self.prompts[0][0])
+        with open(os.path.join(HERE, "prompt.md"), encoding="utf-8") as f:
+            self.assertIn("не советуй, как тренироваться", f.read())
 
     def test_sync_more_often_from_five(self):
         u = self.db.user(U)

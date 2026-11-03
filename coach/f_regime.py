@@ -9,6 +9,10 @@
 отметки чек-листа — meta regime:check:<uid>:<день>.
 
 День d: wake — подъём утром дня d, bed — отбой вечером дня d (перед d+1).
+Подстройка по WHOOP (Глеб 03.11: «стоит, что четверг отдых, а я тренировался — пусть сам подтягивает»): настоящая
+тренировка за день (не массаж и т. п., от 15 мин) — день тренировочный, время и минуты — фактические, нормы еды и
+воды — как в день тренировки, train.src = "whoop". Прошедший день по плану с тренировкой, а её не было — «не было».
+Настройки (cfg) при этом не меняются — это подстройка дня, а не расписания.
 Сдвиг сна (shift): от from отбой и подъём каждые every дней на step минут раньше, пока не дойдут до bed/wake;
 вечер перед первым учебным днём — уже цель (последний шаг может быть меньше). С первого учебного дня сдвиг закончен.
 """
@@ -17,6 +21,7 @@ import datetime
 import json
 import re
 
+REAL_MINUTES = 15  # тренировка по WHOOP короче — не тренировка (разминка, прогулка); как f_reviews.WORKOUT_MINUTES
 LIGHT_RECOVERY = 34  # восстановление ниже — тренировка лёгкая (красная зона WHOOP)
 STREAK_LIGHT = 3  # 3-й день тренировок подряд — лёгкая (техника)
 WD_WORDS = (("пн", "понед"), ("вт", "вторн"), ("ср", "сред"), ("чт", "четв"), ("пт", "пятн"), ("сб", "суб"), ("вс", "воскр"))
@@ -310,9 +315,10 @@ def intensity(cfg, d, recovery=None):
     return "full", "Можно в полную силу"
 
 
-def food(cfg, d, kcal_goals=None, nutrition=None, water_norm=None):
-    """(ккал, белок, вода мл): цели «Калорий» на день тренировки/отдыха, иначе наш расчёт (insights.nutrition)."""
-    kind = "train" if train_on(cfg, d) else "rest"
+def food(cfg, d, kcal_goals=None, nutrition=None, water_norm=None, on=None):
+    """(ккал, белок, вода мл): цели «Калорий» на день тренировки/отдыха, иначе наш расчёт (insights.nutrition).
+    on — тренировочный ли день на самом деле (по WHOOP); None — по расписанию."""
+    kind = "train" if (train_on(cfg, d) if on is None else on) else "rest"
     g = ((kcal_goals or {}).get("goals") or {}).get(kind) or {}
     w = ((kcal_goals or {}).get("water") or {}).get(kind)
     n = nutrition or {}
@@ -323,14 +329,36 @@ def plural_days(n):
     return "день" if n % 10 == 1 and n % 100 != 11 else "дня" if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "дней"
 
 
-def day_plan(cfg, d, recovery=None, kcal_goals=None, nutrition=None, water_norm=None, done=()):
-    """План дня d по договору (SYNC.md, п. 4). recovery — только для сегодняшнего дня."""
+def real_workouts(workouts):
+    """Настоящие тренировки дня по WHOOP (insights.workout_of): не отдых (массаж, сауна…) и от 15 мин."""
+    return [w for w in workouts or [] if not w.get("rest") and (w.get("minutes") or 0) >= REAL_MINUTES]
+
+
+def actual(train, workouts, past=False):
+    """Подстроить тренировку дня (train из day_plan) по WHOOP. Была — on, время и минуты самой длинной, src «whoop»;
+    по плану была, а прошедший день без неё — «не было». -> train (тот же словарь)."""
+    real = real_workouts(workouts)
+    if real:
+        w = max(real, key=lambda x: x.get("minutes") or 0)
+        train.update(on=True, time=w.get("start") or train.get("time"), minutes=w.get("minutes"), src="whoop",
+                     why=f"по WHOOP: {(w.get('sport') or 'тренировка').lower()} в {w.get('start') or '—'}, {w.get('minutes')} мин")
+        if train.get("intensity") == "rest":
+            train["intensity"] = "full"
+    elif past and train.get("on"):
+        train.update(on=False, time=None, minutes=0, intensity="rest", src="whoop", why="по WHOOP: тренировки не было")
+    return train
+
+
+def day_plan(cfg, d, recovery=None, kcal_goals=None, nutrition=None, water_norm=None, done=(), workouts=None, past=False):
+    """План дня d по договору (SYNC.md, п. 4). recovery — только для сегодняшнего дня. workouts — тренировки дня
+    по WHOOP (insights.workout_of; None — данных нет): по ним день подстраивается (actual), past — день прошёл."""
     bed, wake = bed_wake(cfg, d)
     mode = mode_of(cfg, d)
-    on = train_on(cfg, d)
+    real = bool(real_workouts(workouts))
+    on = train_on(cfg, d) or real
     level, why = intensity(cfg, d, recovery)
     massage = d.weekday() in _vac_or(cfg, d, "massage_days")
-    kcal, protein, water = food(cfg, d, kcal_goals, nutrition, water_norm)
+    kcal, protein, water = food(cfg, d, kcal_goals, nutrition, water_norm, on=on)
     tips = []
     if recovery is not None and recovery < LIGHT_RECOVERY:
         tips.append(f"Сегодня восстановление {recovery}% — без тяжёлой работы")
@@ -346,10 +374,13 @@ def day_plan(cfg, d, recovery=None, kcal_goals=None, nutrition=None, water_norm=
         tips.append("Сегодня массаж" + (" — после тренировки" if on else ""))
     if not tips:
         tips.append(f"Отбой в {bed} — телефон в сторону за 30 минут")
+    train = {"on": train_on(cfg, d), "time": train_time(cfg, d) if train_on(cfg, d) else None,
+             "minutes": cfg["train_minutes"] if train_on(cfg, d) else 0, "intensity": level, "why": why, "src": "plan"}
+    if workouts is not None:
+        actual(train, workouts, past)
     return {
         "day": d.isoformat(), "mode": mode, "bed": bed, "wake": wake,
-        "train": {"on": on, "time": train_time(cfg, d) if on else None,
-                  "minutes": cfg["train_minutes"] if on else 0, "intensity": level, "why": why},
+        "train": train,
         "massage": massage, "kcal": kcal, "protein": protein, "water": water,
         "checklist": [{"id": f"e{i}", "text": t, "done": f"e{i}" in done} for i, t in enumerate(cfg["evening"])],
         "tips": tips[:3],
@@ -365,17 +396,21 @@ def _inputs(app, uid, day, t=None):
 
 
 def plans(app, uid, day, days=1, t=None, cfg=None):
-    """Планы на days дней с day (у сегодняшнего — восстановление WHOOP и отметки чек-листа)."""
+    """Планы на days дней с day (у сегодняшнего — восстановление WHOOP, отметки чек-листа и подстройка по
+    тренировкам WHOOP: actual)."""
     profile, body, t = _inputs(app, uid, day, t)
     cfg = cfg or load(app.db, uid, profile)
     goals = app.db.kcal_goals(uid)
     out = []
     for i in range(days):
         d = day + datetime.timedelta(days=i)
-        mins = cfg["train_minutes"] if train_on(cfg, d) else 0
+        ws = (t.get("workouts") or []) if i == 0 else None  # дальше — будущие дни, данных WHOOP нет
+        real = real_workouts(ws)
+        mins = sum(w["minutes"] for w in real) if real else cfg["train_minutes"] if train_on(cfg, d) else 0
         nut = app.insights.nutrition(profile, body, t.get("base"), None, mins)
         rec = (t.get("recovery") or {}).get("score") if i == 0 else None
-        out.append(day_plan(cfg, d, rec, goals, nut, app.water.norm(nut, mins)[0], checks(app.db, uid, d.isoformat())))
+        out.append(day_plan(cfg, d, rec, goals, nut, app.water.norm(nut, mins)[0], checks(app.db, uid, d.isoformat()),
+                            workouts=ws))
     return cfg, out
 
 
@@ -393,11 +428,12 @@ MODE_WORD = {"vacation": "каникулы", "school": "учёба", "weekend": 
 
 
 def brief_lines(p):
-    """Строки режима для утреннего разбора в чате (HTML не нужен — экранировать нечего)."""
+    """Строки режима для утреннего разбора в чате (HTML не нужен — экранировать нечего). Тренировка — только факт:
+    как тренироваться, в разборах не советуем (Глеб 03.11: расписание тренировок у него чёткое)."""
     lines = [f"🗓 Отбой {p['bed']} · подъём {p['wake']} · {MODE_WORD[p['mode']]}"]
     tr = p["train"]
     if tr["on"]:
-        lines.append(f"🏋️ Тренировка {tr['time']} · {INT_WORD[tr['intensity']]}" + (" · массаж" if p["massage"] else ""))
+        lines.append(f"🏋️ Тренировка {tr['time']}" + (" · массаж" if p["massage"] else ""))
     elif p["massage"]:
         lines.append("💆 Сегодня массаж")
     return lines
@@ -443,7 +479,7 @@ def context_lines(app, uid, today_):
     p = today(app, uid, today_)
     tr = p["train"]
     line = (f"РЕЖИМ НА СЕГОДНЯ ({MODE_WORD[p['mode']]}, настроил сам): подъём {p['wake']}, отбой {p['bed']}; "
-            + (f"тренировка {tr['time']}, {tr['minutes']} мин — {INT_WORD[tr['intensity']]} ({tr['why']})" if tr["on"]
+            + (f"тренировка {tr['time']}, {tr['minutes']} мин (по расписанию с тренером)" if tr["on"]
                else "тренировки нет")
             + ("; массаж" if p["massage"] else "")
             + (f"; цель {p['kcal']} ккал, белок {p['protein']} г, вода {p['water']} мл" if p["kcal"] else ""))
@@ -452,4 +488,5 @@ def context_lines(app, uid, today_):
     shift = (f" Сон сдвигается постепенно (на {cfg['shift']['step']} мин раз в {cfg['shift']['every']} дн.) к отбою {cfg['bed']} — "
              "не советуй ложиться намного раньше сегодняшнего отбоя по плану: резкий сдвиг хуже засыпается; можно на 15–30 мин раньше."
              if cfg.get("shift") else "")
-    return [line, f"Завтра подъём {nxt}. Советуй с учётом режима (отбой, интенсивность тренировки).{shift}"]
+    return [line, f"Завтра подъём {nxt}. Советуй с учётом режима (отбой, еда и вода вокруг тренировки); как "
+                  f"тренироваться — сам не советуй, только если он спросит.{shift}"]
