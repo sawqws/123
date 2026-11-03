@@ -34,7 +34,8 @@ const want = c => !ONLY || ONLY.split(',').includes(c);
 // нажатия, которые уводят со страницы или закрывают приложение — нажимаем, но уход не ошибка
 const LEAVE_OK = new Set(['connect', 'open', 'tochat']);
 const t0 = Date.now();
-const late = () => Date.now() - t0 > BUDGET;
+let dead = false;  // фикстура перестала отвечать — дальше не обходим (иначе каждый экран — «не открылась»)
+const late = () => dead || Date.now() - t0 > BUDGET;
 const problems = [], notes = [], seen = new Set();
 const stats = { configs: 0, screens: 0, buttons: 0, sheets: 0, clicks: 0, skipped_time: 0 };
 
@@ -229,7 +230,12 @@ async function crawlConfig(browser, cname, dev, scheme, only) {  // only — к�
   const go = async q => {
     left = null;
     inflight = 0;
-    await page.goto(new URL(q, BASE).href, { waitUntil: 'load', timeout: 15000 }).catch(e => errs.push({ t: 'load', m: 'не открылась: ' + e.message.split('\n')[0] }));
+    await page.goto(new URL(q, BASE).href, { waitUntil: 'load', timeout: 15000 }).catch(e => {
+      if (/ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET/.test(e.message)) {
+        if (!dead) add({ kind: 'fixture', sev: 'note', config: cname, where: q, what: 'фикстура перестала отвечать — обход прерван', steps: [] });
+        dead = true;
+      } else errs.push({ t: 'load', m: 'не открылась: ' + e.message.split('\n')[0] });
+    });
     await settle();
   };
   const settle = async (ms = only ? 120 : 260) => {  // запросы закончились и заглушки загрузки ушли, потом — время на анимацию
@@ -277,6 +283,7 @@ async function crawlConfig(browser, cname, dev, scheme, only) {  // only — к�
     stats.screens++;
     const open = [`открыть ${q} (${cname})`];
     await flush(where, open);
+    if (dead) break;
     if (['sleep', 'rec', 'strain', ...mods].includes(p)) {
       const bad = await page.evaluate(backOk).catch(() => '');
       if (bad) add({ kind: 'back', sev: 'error', config: cname, where, what: bad, steps: open, shot: await shot(where) });
