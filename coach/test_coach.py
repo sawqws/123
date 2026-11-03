@@ -1574,18 +1574,18 @@ class WebhookTest(unittest.TestCase):
             self.assertEqual(hook_call({**ev, "user_id": 1, "trace_id": "t3"}).code, 204)
         su.assert_not_called()
 
-    def test_day_sync_every_two_minutes(self):
-        self.ago(150)
+    def test_day_sync_every_minute(self):
+        self.ago(65)
         day = datetime.datetime(2026, 10, 11, 14, 0)
         with mock.patch.object(coach, "user_now", return_value=day), mock.patch.object(coach, "sync_user") as su:
             coach.tick()
         self.assertTrue(su.called)
         self.assertEqual(su.call_args.kwargs["days"], 3)  # первая за полчаса — за 3 дня
-        self.ago(150)
+        self.ago(65)
         with mock.patch.object(coach, "user_now", return_value=day), mock.patch.object(coach, "sync_user") as su2:
             coach.tick()
         self.assertEqual(su2.call_args.kwargs["days"], 1)  # дальше — только за сутки
-        self.ago(150)
+        self.ago(65)
         with mock.patch.object(coach, "user_now", return_value=datetime.datetime(2026, 10, 11, 3, 0)), \
                 mock.patch.object(coach, "sync_user") as su3:
             coach.tick()
