@@ -12,6 +12,7 @@ shots.json — список снимков для shots.js ([{"name": ..., "clic
 KCAL_STUB по договору coach/SYNC.md, п. 5 (сегменты сверху, отступ под меню Формы, тема, kcal-changed).
 Ответы на POST с телом здесь не различаются: shots.js отдаёт один ответ на путь. Свои /api/… разделов (f_*.py)
 добавляются сами: для каждого пути из EXTRA_PATHS вызывается route с пустым телом.
+Пути из LIVE_PATHS (тренды) в --serve считаются на лету по телу запроса.
 """
 import datetime
 import json
@@ -30,7 +31,9 @@ import coach  # noqa: E402
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
-               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight"]
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends"]
+# пути, где ответ зависит от тела запроса: в --serve считаются на лету (тренды: показатель, период, конец периода)
+LIVE_PATHS = {"/api/trends"}
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -47,6 +50,9 @@ REGIME_CFG = {"train_days": [0, 2, 4, 5, 6], "train_time": "10:00", "train_minut
               "shift": {"from": "2026-10-09", "bed": "23:45", "wake": "08:30", "step": 30, "every": 2},
               "evening": ["Душ и умыть лицо", "Ужин: белок и углеводы", "Крем на лицо", "Телефон в сторону"],
               "remind": 45}
+
+
+NOW = datetime.datetime.combine(T.TODAY, datetime.time(13, 40))
 
 
 def regime_sample(today):
@@ -190,8 +196,34 @@ def seed_weight(today):
                                         "protein_pct": 18.4, "src": "photo"}, today)
 
 
+def seed_trends(db, back=200):
+    """Для «Трендов»: шаги в циклах (step_count) и история до полугода (те же поддельные данные, только старше)."""
+    import random
+    rnd = random.Random(7)
+    for r in db.records(T.U, "cycle"):
+        r.pop("_day", None)
+        r["step_count"] = rnd.randint(5500, 12500)
+        db.put(T.U, "cycle", T.whoop.rid("cycle", r), T.whoop.day_of("cycle", r), r.get("start") or "", r)
+    first = db.first_day(T.U)
+    data = T.fake_whoop(back, seed=3)
+    cycles = {str(c["id"]): c for c in data["cycle"]}
+    for kind in ("cycle", "sleep", "workout", "recovery"):
+        for r in data[kind]:
+            day = T.whoop.day_of(kind, r, cycles)
+            if not day or day >= first:
+                continue
+            if kind == "cycle":
+                r = dict(r, id=r["id"] + 100000, step_count=rnd.randint(5000, 12000))
+            elif kind == "recovery":
+                r = dict(r, cycle_id=r["cycle_id"] + 100000)
+            else:
+                r = dict(r, id=f"old-{r['id']}")
+            db.put(T.U, kind, T.whoop.rid(kind, r), day, r.get("start") or r.get("created_at") or "", r)
+
+
 def build(shots=None):
     db, _ = T.seeded(days=40)
+    seed_trends(db)
     coach.db = db
     today = T.TODAY
     now = datetime.datetime.combine(today, datetime.time(13, 40))
@@ -324,7 +356,16 @@ def serve(port, stub=False):
             self.wfile.write(body)
 
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            path = urllib.parse.urlparse(self.path).path
+            if path in LIVE_PATHS:
+                try:
+                    body = json.loads(raw or b"{}")
+                    with mock.patch.object(coach, "user_now", lambda u: NOW), \
+                            mock.patch.object(coach, "today_of", lambda uid: T.TODAY):
+                        return self.send(200, coach.route(T.U, path, body))
+                except (KeyError, ValueError) as e:
+                    return self.send(400, {"error": str(e)})
             self.do_GET()
 
         def do_GET(self):

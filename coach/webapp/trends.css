@@ -1,0 +1,71 @@
+/* trends — «Тренды» как Trend View WHOOP (trends.js). Ч/б: цвет — только у ▲▼ (как .ch-cmp в app.css). */
+
+/* полоса «обычно у тебя» на графиках (bars/line с o.band) */
+.chart .ch-band { fill: var(--ink); fill-opacity: .07; }
+.chart .ch-band-e { stroke: var(--hint); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.tr-bandk { display: inline-block; width: 14px; height: 9px; border-radius: 3px; background: var(--ink); opacity: .14; margin-right: 6px; vertical-align: 0; }
+.tr-partk { display: inline-block; width: 8px; height: 10px; border-radius: 2px; background: var(--hint-2); margin-right: 6px; vertical-align: 0; }
+
+/* выбор показателя, период, стрелки */
+.tr-ctl { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 14px; }
+.tr-pick { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 60px; padding: 10px 16px 10px 18px;
+  border: 0; border-radius: 22px; background: var(--card); color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+  transition: transform .18s var(--ios, ease), background-color .2s; -webkit-tap-highlight-color: transparent; }
+.tr-pick:active { transform: scale(.985); }
+.tr-pk-x { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tr-pk-x small { font: 500 13px/1.2 var(--head); color: var(--hint); }
+.tr-pk-x b { font: 700 20px/1.2 var(--head); letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-pk-i { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--fill); }
+.tr-pk-i .ico { width: 18px; height: 18px; }
+.tr-seg { margin: 0; }
+.tr-seg button { min-height: 36px; }
+.tr-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tr-nav b { font: 600 16px/1.2 var(--head); text-align: center; flex: 1; }
+.tr-arr { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--fill); color: var(--ink);
+  cursor: pointer; transition: opacity .2s, transform .15s; -webkit-tap-highlight-color: transparent; }
+.tr-arr:active:not([disabled]) { transform: scale(.92); }
+.tr-arr[disabled] { opacity: .28; cursor: default; }
+.tr-arr .ico { width: 20px; height: 20px; }
+
+/* «Среднее» */
+.tr-sum { transition: opacity .25s; }
+.tr-k { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; font: 500 14px/1.3 var(--head); color: var(--hint); }
+.tr-k span { white-space: nowrap; }
+.tr-days { font-size: 13px; }
+.tr-big { display: flex; align-items: baseline; gap: 6px; margin-top: 4px; }
+.tr-big b { font: 700 48px/1.05 var(--num); letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tr-big small { font: 600 17px/1 var(--head); color: var(--hint); }
+.tr-cmp { margin: 6px 0 0; font: 600 15px/1.35 var(--head); color: var(--ink); }
+.tr-cmp i { font-style: normal; display: inline-block; font-size: 12px; transform: scale(.85); margin-right: 4px; }
+.tr-cmp.up i { color: var(--zone-green, #30d158); }
+.tr-cmp.down i { color: var(--zone-red, #ff453a); }
+.tr-cmp.flat { color: var(--hint); font-weight: 500; }
+.tr-text { margin: 12px 0 0; font: 400 15px/1.45 var(--head); color: var(--ink); }
+.tr-note { margin: 8px 0 0; font: 400 13px/1.4 var(--head); color: var(--hint); }
+.tr-busy { opacity: .45; }
+.tr-chart { transition: opacity .25s; }
+
+/* лист выбора */
+.tr-g + .tr-g { margin-top: 18px; }
+.tr-gh { margin: 0 4px 8px; font: 600 13px/1.2 var(--head); color: var(--hint); text-transform: none; letter-spacing: 0; }
+.tr-row { min-height: 52px; }
+.tr-row.on .title { font-weight: 700; }
+.tr-ck { color: var(--ink); width: 22px; display: grid; place-items: center; }
+.tr-ck .ico { width: 20px; height: 20px; }
+.tr-miss { margin: 18px 4px 4px; font: 400 12px/1.4 var(--head); color: var(--hint); }
+.tr-all { display: block; margin: 12px auto 0; }
+
+/* широкий экран: выбор, период и стрелки — в одну строку над двумя колонками */
+@media (min-width: 1024px) {
+  html:root #view > div > .tr-ctl { column-span: all; flex-direction: row; align-items: center; gap: 16px; }
+  html:root .tr-ctl .tr-pick { width: auto; min-width: 280px; flex: 0 1 340px; }
+  html:root .tr-ctl .tr-seg { flex: 0 0 300px; }
+  html:root .tr-ctl .tr-nav { flex: 0 1 360px; margin-left: auto; }
+  .tr-pick:hover { background: var(--card-2); }
+  .tr-arr:hover:not([disabled]) { background: var(--fill-2); }
+}
+/* большой монитор: у трендов две карточки — две колонки, а не три с пустой */
+@media (min-width: 1600px) {
+  html:root body:not(.tab-coach) #view > div:has(> .tr-ctl) { columns: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .tr-pick, .tr-arr, .tr-sum, .tr-chart { transition: none; } }

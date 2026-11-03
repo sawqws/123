@@ -204,7 +204,8 @@
       return `${head(n)}<div class="sk" style="height:22px;width:60%"></div><div class="sk" style="height:34px;width:46%;margin-top:10px"></div><div class="sk" style="height:${116 + 58}px;margin-top:14px"></div></section>`;
     }
     const rows = all.slice(-n), prev = all.length >= 2 * n ? all.slice(-2 * n, -n) : null;
-    return `${head(rows.length)}${KINDS[kind].map(k => F.CHARTS[k](rows, prev, n)).join('')}</section>`;
+    const allBtn = F.screens.trends ? `<button class="link tr-all" data-a="tr-open" data-v="${{ sleep: 'sleep_hours', rec: 'recovery', strain: 'strain' }[kind]}">Все показатели</button>` : '';
+    return `${head(rows.length)}${KINDS[kind].map(k => F.CHARTS[k](rows, prev, n)).join('')}${allBtn}</section>`;
   }
   // перерисовать только карточку тренда, без всего экрана
   function redraw(kind) {

@@ -582,3 +582,8 @@ def context_lines(app, uid, today):
     out.append("  (подросток растёт и тренируется: вес меняется естественно — не советуй худеть, не называй вес лишним; "
                "нормы еды и воды уже считаются по этому весу)")
     return out
+
+
+def trend_points(app, uid, since, until):
+    """Для экрана «Тренды» (f_trends.weight_points): вес по дням [{day, kg}]."""
+    return [{"day": r["day"], "kg": r["kg"]} for r in series(app.db, uid, since, until)]
