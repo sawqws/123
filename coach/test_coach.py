@@ -603,6 +603,8 @@ class BotTest(unittest.TestCase):
         self.assertEqual((text, acts), ("Готово.", [{"type": "water", "ml": 300}]))
         self.assertEqual(ai.actions_split("Просто ответ"), ("Просто ответ", []))
         self.assertEqual(ai.actions_split("Ответ\nACTIONS: [битый"), ("Ответ", []))
+        self.assertEqual(ai.actions_split('Ответ\nACTIONS: [{"type": "water", "ml": 200}]\n\nЕщё раз ответ\nACTIONS: []'),
+                         ("Ответ", [{"type": "water", "ml": 200}]))  # модель ответила дважды — берём первое, как поток
         self.assertEqual(len(ai.actions_split("x\nACTIONS: " + json.dumps([{"type": "water", "ml": 100}] * 9))[1]), 5)
         w0 = self.db.water_total(U, TODAY.isoformat())
         evs, _ = self.stream(['Сколько выпил?\nACTIONS: [{"type": "delete_all"}, {"type": "water", "ml": 99999}, '

@@ -149,12 +149,12 @@ def actions_split(full):
     """Ответ чата приложения → (текст, действия). Действия — последняя строка «ACTIONS: [...]»: только известные типы
     (ACTION_KINDS), не больше 5; проверка полей и выполнение — в coach.run_actions."""
     full = (full or "").strip()
-    i = full.rfind("ACTIONS:")
+    i = full.find("ACTIONS:")  # первая: поток показывает текст до неё, всё после (второй ответ модели и т. п.) — нет
     if i < 0:
         return full, []
     text, tail = full[:i].strip(), full[i + 8:].strip()
     try:
-        raw = json.loads(tail[:tail.rfind("]") + 1] if "]" in tail else tail)
+        raw = json.JSONDecoder().raw_decode(tail)[0]  # только сам список — хвост после него не мешает
     except ValueError:
         raw = []
     acts = [a for a in (raw if isinstance(raw, list) else []) if isinstance(a, dict) and a.get("type") in ACTION_KINDS]
