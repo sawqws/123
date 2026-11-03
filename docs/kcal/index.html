@@ -92,8 +92,8 @@ body {
   letter-spacing: -.2px; -webkit-font-smoothing: antialiased; overscroll-behavior-y: none;
   min-height: 100vh; min-height: 100dvh; -webkit-user-select: none; user-select: none;
 }
-input { -webkit-user-select: text; user-select: text; }
-button, input { font: inherit; color: inherit; letter-spacing: inherit; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+button, input, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
 button { background: none; border: 0; padding: 0; cursor: pointer; touch-action: manipulation; }
 .num { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
@@ -370,6 +370,45 @@ button, .cell { -webkit-touch-callout: none; }
 .photo-cta svg { width: 26px; height: 26px; flex: none; }
 .photo-cta b { display: block; font-size: 17px; font-weight: 600; }
 .photo-cta span { font-size: 13px; opacity: .6; }
+/* «Мои рецепты»: вторая кнопка — мягкая; запись — большой круг микрофона, пульс только transform/opacity */
+.photo-cta.soft { margin-top: 8px; background: var(--fill); color: var(--text); }
+.fav-t .lnk { height: 36px; margin: -12px -6px -10px 0; padding: 0 6px; font-size: 13px; font-weight: 600; color: var(--text); border-radius: 12px; }
+.rec-rec { display: flex; flex-direction: column; align-items: center; margin-top: 14px; }
+.mic { position: relative; isolation: isolate; width: 104px; height: 104px; border-radius: 52px; background: var(--ink); color: var(--on-ink); display: grid; place-items: center;
+  touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; transition: transform .4s var(--spring), opacity .25s; }
+.mic svg { width: 42px; height: 42px; transition: opacity .25s; }
+.mic::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--ink); opacity: 0; }
+.mic.on { transform: scale(1.06); }
+.mic.on::before { animation: micPulse 1.6s var(--ios) infinite; }
+@keyframes micPulse { from { opacity: .3; transform: scale(1); } to { opacity: 0; transform: scale(1.7); } }
+.mic:active { transform: scale(.94); transition-duration: .12s; }
+.mic.busy { opacity: .4; }
+.mic.busy::before { animation: none; }
+@media (prefers-reduced-motion: reduce) { .mic.on::before { animation: none; opacity: .2; transform: scale(1.25); } }
+.rec-st { min-height: 46px; margin: 16px 12px 0; text-align: center; color: var(--text-2); font-size: 15px; }
+.rec-st b { display: block; margin-bottom: 2px; color: var(--text); font-size: 20px; font-weight: 600; letter-spacing: -.4px; font-variant-numeric: tabular-nums; }
+#recCancel { margin-top: 10px; }
+#recText { display: block; width: 100%; min-height: 76px; padding: 4px 0; border: 0; background: none; resize: none; font-size: 17px; line-height: 1.35; }
+#recText:focus { outline: none; }
+#recText::placeholder, .rname::placeholder { color: var(--text-3); }
+.rname { width: 100%; height: 40px; border: 0; background: none; font-size: 20px; font-weight: 600; letter-spacing: -.4px; }
+.rname:focus { outline: none; }
+.rec-said { margin: 12px 18px 0; font-size: 14px; color: var(--text-2); }
+.rec-said span { display: block; margin-bottom: 1px; font-size: 12px; color: var(--text-3); }
+.ing { gap: 8px; padding-right: 10px; }
+.ing .n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
+.est { display: inline-block; padding: 0 5px; border-radius: 6px; background: var(--fill); color: var(--text-2); font-size: 13px; }
+.ix { flex: none; width: 36px; height: 36px; border-radius: 18px; display: grid; place-items: center; color: var(--text-2); transition: transform .35s var(--spring); }
+.ix svg { width: 12px; height: 12px; }
+.ix:active { transform: scale(.88); transition-duration: .12s; }
+.mini .sv { display: inline-grid; place-items: center; }
+@media (max-width: 359px) { .ing .mini button { display: none; } .ing .mini .g { background: var(--fill); height: 36px; } } /* iPhone SE 1-го поколения: граммы — числом, имени место */
+.rtab { display: grid; grid-template-columns: minmax(78px, 1.5fr) repeat(5, 1fr); align-items: baseline; margin-top: 16px; padding: 10px 14px 12px; border-radius: 22px; background: var(--sheet-group); font-size: 15px; }
+.rtab > div { padding: 5px 0; text-align: right; }
+.rtab .rh { font-size: 12px; color: var(--text-2); }
+.rtab .rl { text-align: left; font-size: 14px; color: var(--text-2); line-height: 1.15; }
+.rtab .rl small { display: block; font-size: 12px; color: var(--text-3); }
+.btn.danger.arm { background: var(--bad); color: #fff; }
 .seg.meal { margin-top: 12px; }
 .seg.meal button { font-size: 14px; }
 
@@ -1245,6 +1284,7 @@ const DEFAULT = {
   water: { train: 3500, rest: 2600 }, waterSet: false, // мл в день (02.11, как в Форме): напитки по возрасту 2,6 л (IOM, юноши 14–18) + бокс ~1,5 ч × ~0,6 л/ч пота → +0,9 л
   // waterSet — норму поменял сам в настройках; иначе берём этот расчёт
   fullSync: false, syncU: 0, // вся история уже ушла на сервер; syncU — самая поздняя правка дня, которую сервер принял
+  recipes: [], recU: 0, // мои рецепты (удалённые — {id, u, del}); recU — самое позднее u рецепта, которое сервер принял
 };
 const I = {
   plus: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>',
@@ -1262,6 +1302,8 @@ const I = {
   search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg>',
   bolt: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M11.2 2.5L4.5 11.2h5l-1 6.3 6.9-8.8h-5.1z"/></svg>',
   pin: '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M9.6 1.2a.9.9 0 0 1 1.3 0l3.9 3.9a.9.9 0 0 1 0 1.3l-.6.6a.9.9 0 0 1-1 .2l-.5-.2-2.6 2.6.3 2.5a.9.9 0 0 1-.3.8l-.6.6a.6.6 0 0 1-.9 0L6.3 11.2 2.4 15.1H1v-1.4l3.9-3.9-2.3-2.3a.6.6 0 0 1 0-.9l.6-.6a.9.9 0 0 1 .8-.3l2.5.3 2.6-2.6-.2-.5a.9.9 0 0 1 .2-1z"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8.6" y="2.8" width="6.8" height="11.6" rx="3.4"/><path d="M5.2 11.2a6.8 6.8 0 0 0 13.6 0M12 18v3.2"/></svg>',
+  pot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h16v5.5A4.5 4.5 0 0 1 15.5 20h-7A4.5 4.5 0 0 1 4 15.5z"/><path d="M2 10h20M9 6.5c0-1 .8-1.5.8-2.5M13 6.5c0-1 .8-1.5.8-2.5"/></svg>',
   moon: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M16.5 12.4A6.8 6.8 0 0 1 7.6 3.5a6.8 6.8 0 1 0 8.9 8.9z"/></svg>',
 };
 
@@ -1302,8 +1344,33 @@ function clean(x) {
     ...(f.per100 && typeof f.per100 === 'object' ? { per100: per(f.per100), unit: unit(f.unit) } : {}) }));
   if (x.weights && typeof x.weights === 'object') for (const [k, w] of Object.entries(x.weights)) if (DAY.test(k) && num(w) > 0) out.weights[k] = r1(num(w));
   out.fullSync = !!x.fullSync; out.syncU = num(x.syncU) > 0 ? Math.round(num(x.syncU)) : 0;
+  const recs = new Map(); // мои рецепты: один на id — с большим u
+  for (const r of (Array.isArray(x.recipes) ? x.recipes : []).map(cleanRecipe)) if (r && !(recs.has(r.id) && recs.get(r.id).u >= r.u)) recs.set(r.id, r);
+  out.recipes = trimRecipes([...recs.values()]);
+  out.recU = num(x.recU) > 0 ? Math.round(num(x.recU)) : 0;
   return out;
 }
+/* «Мои рецепты» (Глеб 03.11: «готовлю по своим рецептам — сказать голосом, и чтобы осталось»): рецепт — {id, u, name, servings,
+   out (вес готового, 0 — сумма продуктов), method, text (что сказал), ings: [{name, g, kcal, p, f, c, salt, est}]} — КБЖУ и соль
+   на граммы ингредиента; est — граммы оценены по штукам и ложкам. Удалённый — {id, u, del: true}, чтобы удаление дошло до других
+   устройств. u — время правки (мс), при слиянии с сервером новее побеждает (coach/SYNC.md п. 6). */
+const REC_MAX = 200, REC_DEL = 200, REC_INGS = 40;
+function cleanRecipe(r) {
+  if (!r || typeof r !== 'object') return null;
+  const id = String(r.id ?? '').replace(/[^\w-]/g, '').slice(0, 40); if (!id) return null;
+  const u = num(r.u) > 0 ? Math.round(num(r.u)) : 0, pos = v => Math.max(0, num(v));
+  if (r.del) return { id, u, del: true };
+  const name = String(r.name || '').replace(/\s+/g, ' ').trim().slice(0, 80); if (!name) return null;
+  const ings = (Array.isArray(r.ings) ? r.ings : []).filter(i => i && typeof i === 'object' && String(i.name || '').trim() && num(i.g) > 0).slice(0, REC_INGS)
+    .map(i => ({ name: String(i.name).replace(/\s+/g, ' ').trim().slice(0, 80), g: r1(Math.min(5000, pos(i.g))), kcal: pos(i.kcal), p: pos(i.p), f: pos(i.f), c: pos(i.c), salt: pos(i.salt), est: i.est === true }));
+  return { id, u, name, servings: Math.min(50, Math.round(pos(r.servings))), out: Math.min(20000, Math.round(pos(r.out))),
+    method: String(r.method || '').slice(0, 60), text: String(r.text || '').slice(0, 1000), ings };
+}
+function trimRecipes(list) { // живые — до 200, удалённые — 200 самых свежих
+  const live = list.filter(r => !r.del).slice(0, REC_MAX), dead = list.filter(r => r.del).sort((a, b) => b.u - a.u).slice(0, REC_DEL);
+  return live.concat(dead);
+}
+
 /* правка дня → u = сейчас. Изменённые дни видно по слепку: ключ дня (еда, вода, ручной тип) сравнивается с прошлым сохранением.
    ftype (тип по Форме) — не правка: такой день не перебивает чужие записи на сервере. */
 const dayKey = d => JSON.stringify([d.items, d.water || [], d.type || '']);
@@ -1335,7 +1402,7 @@ function notifyParent() { // Форма обновляет данные дня �
 }
 const getToken = () => { try { return localStorage.getItem(TOKEN) || ''; } catch (e) { return ''; } };
 const setToken = t => {
-  if (t !== getToken()) { S.fullSync = false; S.syncU = 0; persist(); } // новая связка — вся история уйдёт заново
+  if (t !== getToken()) { S.fullSync = false; S.syncU = 0; S.recU = 0; persist(); } // новая связка — вся история и рецепты уйдут заново
   try { t ? localStorage.setItem(TOKEN, t) : localStorage.removeItem(TOKEN); } catch (e) {}
 };
 
@@ -1395,7 +1462,8 @@ function dayOut(k) {
   return { items: d.items.map(it => ({ name: it.name, meal: it.meal, g: r(it.g), kcal: r(it.kcal), p: r(it.p), f: r(it.f), c: r(it.c), salt: r(it.salt) })),
     water: d.water || [], type: dayType(k), u: d.u || 0 };
 }
-function bodyFor(keys) { const days = {}; for (const k of keys) days[k] = dayOut(k); return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water, portion: S.portion }); }
+function bodyFor(keys, recs) { const days = {}; for (const k of keys) days[k] = dayOut(k); return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water, portion: S.portion, ...(recs && recs.length ? { recipes: recs } : {}) }); }
+const recipesOut = full => S.recipes.filter(r => full || (r.u || 0) > S.recU); // полная отправка — все, обычная — поправленные после прошлой
 function syncKeys() { // обычная отправка; null — правок больше, чем влезает в запрос: нужна полная
   const t = today(), from = addDays(t, -(SYNC_DAYS - 1)), min = addDays(t, -KEEP_DAYS), keys = [];
   for (let i = SYNC_DAYS - 1; i >= 0; i--) { const k = addDays(t, -i); if (S.days[k]) keys.push(k); }
@@ -1407,20 +1475,20 @@ function fullChunks() { // вся история кусками по 31 дню (
   for (let i = 0; i < keys.length; i += CHUNK) out.push(keys.slice(i, i + CHUNK));
   return out.length ? out : [[]];
 }
-const syncBody = () => bodyFor(syncKeys() || []);
+const syncBody = () => bodyFor(syncKeys() || [], recipesOut(!S.fullSync));
 function scheduleSync(ms = 2000) { if (!getToken()) return; clearTimeout(syncT); syncT = setTimeout(() => syncNow(false), ms); }
 async function syncNow(force, keepalive) { // ошибки сети и 429 — тихо: повтор при следующем сохранении (тело сравнивается с последним доставленным)
   clearTimeout(syncT); syncT = 0;
   const tok = getToken(); if (!tok) return;
   if (syncBusy) { syncAgain = true; return; }
   const keys = S.fullSync ? syncKeys() : null, chunks = keys ? [keys] : fullChunks(), full = !keys;
-  const body = keys && bodyFor(keys);
+  const recs = recipesOut(full), body = keys && bodyFor(keys, recs); // рецепты — в первом куске
   if (!force && !full && body === syncLast) return;
   syncBusy = true;
   try {
     let maxU = 0, j = null, stale = false; // stale — дни, где на сервере версия новее
-    for (const ks of chunks) {
-      const b = body || bodyFor(ks);
+    for (const [ci, ks] of chunks.entries()) {
+      const b = body || bodyFor(ks, ci ? [] : recs);
       const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
       let r;
       try {
@@ -1432,11 +1500,12 @@ async function syncNow(force, keepalive) { // ошибки сети и 429 — �
       for (const k of ks) maxU = Math.max(maxU, S.days[k] ? S.days[k].u || 0 : 0);
       j = await r.json().catch(() => null);
       if (j && j.stale && (Array.isArray(j.stale) ? j.stale.length : Object.keys(j.stale).length)) stale = true;
+      if (j && Array.isArray(j.rstale) && j.rstale.length) stale = true; // рецепт на сервере новее
     }
     if (getToken() !== tok) return;
     syncLast = body || ''; syncAt = Date.now();
     if (full) S.fullSync = true;
-    S.syncU = Math.max(S.syncU, maxU); persist();
+    S.syncU = Math.max(S.syncU, maxU); S.recU = recs.reduce((a, r) => Math.max(a, r.u || 0), S.recU); persist();
     if (j && 'forma' in j) applyForma(j.forma);
     if (stale) pullState(); // на сервере эти дни новее — взять их
   } catch (e) { /* нет сети — повтор при следующем сохранении */ } finally {
@@ -1472,6 +1541,12 @@ function mergeState(x) { // у кого u больше — тот прав; дн
   if (num(x.salt) > 0 && S.salt === DEFAULT.salt && c.salt !== S.salt) { S.salt = c.salt; n++; }
   if (!S.waterSet && x.water && !same(c.water, DEFAULT.water)) { S.water = c.water; S.waterSet = true; n++; }
   if (num(x.portion) >= 1 && S.portion === DEFAULT.portion && c.portion !== S.portion) { S.portion = c.portion; n++; } // размер порций с другого устройства
+  for (const raw of Array.isArray(x.recipes) ? x.recipes : []) { // рецепты: у кого u больше — тот прав; удалённый на другом устройстве — удаляется и здесь
+    const r = cleanRecipe(raw); if (!r) continue;
+    const i = S.recipes.findIndex(l => l.id === r.id);
+    if (i < 0) { if (!r.del) { S.recipes.push(r); n++; } } else if (r.u > (S.recipes[i].u || 0)) { S.recipes[i] = r; n++; }
+  }
+  S.recipes = trimRecipes(S.recipes);
   if (n) { persist(); refreshView(); }
   return n;
 }
@@ -1925,6 +2000,7 @@ function renderHistory(enter, swap) { // swap — сменили Неделя/М
 
 /* ——— листы ——— */
 let onSheetClose = null;
+let sheetLeave = null; // ушли с листа записи рецепта (закрыли или открыли другой) — микрофон и запрос останавливаются
 let lockY = null;
 function lockScroll() { // iOS: body fixed — фон под листом не едет
   if (lockY != null) return;
@@ -1939,6 +2015,7 @@ function unlockScroll() {
 }
 function openSheet(title, html, after, opts = {}) {
   const sh = $('#sheet'), sc = $('#scrim'), body = $('#sheetBody');
+  if (sheetLeave) { const f = sheetLeave; sheetLeave = null; f(); } // ушли с листа записи рецепта на другой
   $('#sheetTitle').textContent = title;
   $('#sheetBack').innerHTML = opts.back ? `<button class="hbtn bk glass press" id="backBtn" aria-label="Назад">${I.back}<span>Назад</span></button>` : '';
   if (opts.back) $('#backBtn').onclick = opts.back;
@@ -1961,6 +2038,7 @@ function closeSheet() {
   unlockScroll();
   if (document.activeElement) document.activeElement.blur();
   photoReq && photoReq.abort(); photoReq = null;
+  if (sheetLeave) { const f = sheetLeave; sheetLeave = null; f(); } // запись рецепта: микрофон и запрос — стоп
   clearTimeout(shopTimer); shopReq && shopReq.abort(); shopReq = null;
   const f = onSheetClose; onSheetClose = null; f && f();
   if (formaPending) { formaPending = false; if (view === 'today') renderToday(false); } // пока был открыт лист, пришли данные Формы
@@ -2007,7 +2085,7 @@ const LIMIT = 60;
 function findFoods(s) { // все слова запроса в названии; сначала мои и наши, потом мировая база; точнее и короче — выше
   const words = s.split(/[\s,()«»"-]+/).filter(Boolean);
   if (!words.length) return [];
-  const pools = [S.custom.map(x => ({ ...x, custom: true, n: norm(x.name) })), DISH.concat(FOODS, CMF).map(x => (x.n = x.n || norm(x.name), x)), WORLD || []];
+  const pools = [S.custom.map(x => ({ ...x, custom: true, n: norm(x.name) })).concat(recLive().map(r => ({ ...recFood(r), n: norm(r.name) }))), DISH.concat(FOODS, CMF).map(x => (x.n = x.n || norm(x.name), x)), WORLD || []];
   const out = [];
   pools.forEach((pool, src) => { for (const f of pool) if (words.every(w => f.n.includes(w))) {
     const w0 = words[0], at = f.n.indexOf(w0);
@@ -2032,10 +2110,19 @@ function shopSearch(q, done) { // продукты из магазинов (Open
 }
 
 function openAdd(meal, query) {
-  let m = meal || mealNow(), q = query || '', shop = null, pool = {}, favs = [];
+  let m = meal || mealNow(), q = query || '', shop = null, pool = {}, favs = [], recRows = [];
+  const drawRecs = () => { // «Мои рецепты»: до 3 (что уже в «Часто» — там), «Все» — список и правка
+    const box = $('#recs'); if (!box) return;
+    const all = recSorted(), fk = new Set(favs.map(x => x.key));
+    recRows = all.filter(r => !fk.has(favKey(r.name))).slice(0, 3);
+    box.innerHTML = all.length ? `<div class="group-t fav-t"><span>Мои рецепты</span><button class="lnk" id="recAll">Все · ${all.length}</button></div>
+      ${recRows.length ? `<div class="list">${recRows.map((r, i) => { const g = recG(r.id), e = foodEntry(recFood(r), g);
+        return `<div class="cell fv" data-rk="${esc(r.id)}"><button class="fo" data-ro="${i}"><span class="t"><div class="n"><span>${esc(r.name)}</span></div>
+          <div class="m num">${fmtG(g)} г · ${fmt(e.kcal)} ккал</div></span></button><button class="fa" data-ra="${i}" aria-label="Добавить: ${esc(r.name)}">${I.plus}</button></div>`; }).join('')}</div>` : ''}` : '';
+  };
   const drawFav = animate => { // «Часто»: закрепы, потом частые для выбранного приёма пищи
     const box = $('#fav'); if (!box) return;
-    favs = favList(m);
+    favs = favList(m); drawRecs();
     const html = favs.length ? `<div class="group-t fav-t"><span>Часто</span>${S.pins.length ? '' : '<span class="hint">удерживай — закрепить</span>'}</div>
       <div class="list">${favs.map((x, i) => `<div class="cell fv" data-fk="${esc(x.key)}"><button class="fo" data-fo="${i}"><span class="t">
         <div class="n">${x.pin ? `<span class="pinm" aria-label="Закреплено">${I.pin}</span>` : ''}<span>${esc(x.e.name)}</span></div>
@@ -2049,7 +2136,7 @@ function openAdd(meal, query) {
     const s = norm(q.trim());
     let html = '';
     const row = (f, key, sub) => `<button class="cell" data-k="${key}"><span class="t"><div class="n">${esc(f.name)}${f.dish ? ' <span style="color:var(--text-3)">≈</span>' : ''}</div>
-      <div class="m num">${sub || (f.brand ? cmLine(f) : macroLine(f) + ' на 100 г')}</div></span>${I.chev}</button>`;
+      <div class="m num">${sub || (f.brand ? cmLine(f) : f.recipe ? recLine(f) : macroLine(f) + ' на 100 г')}</div></span>${I.chev}</button>`;
     pool = {};
     if (!s) {
       const fk = new Set(favs.map(x => x.key)), rec = S.recent.filter(f => !fk.has(favKey(f.name))).slice(0, 6); // что уже в «Часто» — не повторяем
@@ -2078,7 +2165,7 @@ function openAdd(meal, query) {
     const pl = pool;
     res.onclick = e => {
       const b = e.target.closest('[data-k]'), pool = pl;
-      if (b) { const f = pool[b.dataset.k]; if (b.dataset.k[0] === 'r' && !f.g) addItem(m, { name: f.name, g: 0, kcal: f.kcal, p: f.p, f: f.f, c: f.c, salt: f.salt || 0 }); else openPortion(f, m, null, b.dataset.k[0] === 'r' ? f.g : 0, () => openAdd(m, q)); }
+      if (b) { const f = pool[b.dataset.k]; if (b.dataset.k[0] === 'r' && !f.g) addItem(m, { name: f.name, g: 0, kcal: f.kcal, p: f.p, f: f.f, c: f.c, salt: f.salt || 0 }); else openPortion(f, m, null, b.dataset.k[0] === 'r' ? f.g : f.recipe ? recG(f.recipe) : 0, () => openAdd(m, q)); }
       else if (e.target.closest('#own')) openCustom(m);
       else if (e.target.closest('#quick')) openQuick(m);
       else if (e.target.closest('#cmOpen')) openCM(m, q);
@@ -2092,8 +2179,10 @@ function openAdd(meal, query) {
   };
   const html = `<div class="search">${I.search}<input id="q" type="search" placeholder="Любое блюдо или продукт" autocomplete="off" enterkeyhint="search" aria-label="Найти продукт"></div>
     <button class="photo-cta" id="photoCta">${I.cam}<span><b>Сфотографировать еду</b><span>Узнаю блюда и граммы по фото</span></span></button>
+    <button class="photo-cta soft" id="recipeCta">${I.mic}<span><b>Мой рецепт</b><span>Расскажи голосом, что приготовил</span></span></button>
     <div class="seg meal" id="mseg"><span class="thumb"></span>${MEALS.map(([k, n]) => `<button data-m="${k}" aria-pressed="${k === m}">${n}</button>`).join('')}</div>
     <div id="qbAdd" style="margin-top:14px">${quickRow(true)}</div>
+    <div id="recs"></div>
     <div id="fav"></div>
     <div id="results"></div>`;
   openSheet('Добавить', html, body => {
@@ -2115,15 +2204,28 @@ function openAdd(meal, query) {
       } else openPortion({ name: x.e.name, per100: x.e.per100, unit: x.e.unit }, m, null, x.e.g, () => openAdd(m, q));
     };
     longPress(fb, '[data-fk]', el => { const x = favs.find(f => f.key === el.dataset.fk); if (x && togglePin(x.e) !== null) drawFav(true); });
+    const rb = $('#recs', body);
+    rb.onclick = e => {
+      if (e.target.closest('#recAll')) return openRecipes(m);
+      const a = e.target.closest('[data-ra]'), o = e.target.closest('[data-ro]'), r = a ? recRows[+a.dataset.ra] : o ? recRows[+o.dataset.ro] : null;
+      if (!r) return;
+      const g = recG(r.id), f = recFood(r);
+      if (a) { // «+» — сразу в дневник с привычной порцией
+        onSheetClose = () => view === 'today' && renderToday(false);
+        favAdd(m, foodEntry(f, g), done => { a.classList.toggle('done', done); a.innerHTML = done ? I.check : I.plus; });
+      } else openPortion(f, m, null, g, () => openAdd(m, q));
+    };
+    longPress(rb, '[data-rk]', el => { const r = recById(el.dataset.rk); if (r && togglePin(foodEntry(recFood(r), recG(r.id))) !== null) drawFav(true); });
+    $('#recipeCta', body).onclick = () => openRecipeNew(m);
     longPress($('#results', body), '[data-k]', el => { // закрепить любое блюдо из списка или поиска
       const f = pool[el.dataset.k]; if (!f) return;
       const e = el.dataset.k[0] === 'r' && !f.g ? entryOf(f, 0) : foodEntry(f, el.dataset.k[0] === 'r' ? f.g : myG(f.unit) || 100);
       if (togglePin(e) !== null) drawFav(true);
     });
     const inp = $('#q', body);
-    inp.value = q; $('#photoCta', body).hidden = !!q.trim(); qbShow(); fb.hidden = !!q.trim(); drawFav(false);
+    inp.value = q; $('#photoCta', body).hidden = $('#recipeCta', body).hidden = rb.hidden = !!q.trim(); qbShow(); fb.hidden = !!q.trim(); drawFav(false);
     let typing = 0;
-    inp.oninput = () => { q = inp.value; $('#photoCta', body).hidden = fb.hidden = !!q.trim(); qbShow(); clearTimeout(typing); typing = setTimeout(search, 90); }; // пока печатает — не перерисовываем на каждую букву
+    inp.oninput = () => { q = inp.value; $('#photoCta', body).hidden = $('#recipeCta', body).hidden = rb.hidden = fb.hidden = !!q.trim(); qbShow(); clearTimeout(typing); typing = setTimeout(search, 90); }; // пока печатает — не перерисовываем на каждую букву
     $('#photoCta', body).onclick = () => photoFlow(m);
     if (!WORLD) loadWorld().then(() => { if ($('#q') === inp) draw(); });
     q.trim() ? search() : requestAnimationFrame(() => requestAnimationFrame(draw)); // лист уже поехал — длинный список следом
@@ -2153,6 +2255,7 @@ function openPortion(food, meal, item, grams, back) {
   const per = food.per100 || food;
   const units = [];
   if (food.unit) units.push([`${food.unit.name} · ${fmt(ug)} г`, ug]);
+  if (food.whole && food.whole !== ug) units.push([`всё блюдо · ${fmt(food.whole)} г`, food.whole]); // рецепт
   for (const x of [50, 100, 200, 300, 400, 500]) if (!food.unit || x !== ug) units.push([`${x} г`, x]);
   const html = `<div class="portion">
     <div class="title">${esc(food.name)}</div><div class="per num">${macroLine(per)}${per.salt ? ' · соль ' + dec(per.salt) : ''} на 100 г</div>
@@ -2164,6 +2267,7 @@ function openPortion(food, meal, item, grams, back) {
     <button class="btn" id="ok">${item ? 'Сохранить' : 'Добавить в «' + mealName(meal) + '»'}</button>
     ${item ? `<button class="btn danger" id="del">Удалить</button>` : ''}
     <button class="pinb" id="pinB" aria-pressed="${isPinned(food.name)}">${I.pin}<span>${isPinned(food.name) ? 'Закреплено' : 'Закрепить наверху'}</span></button>
+    ${food.recipe && recById(food.recipe) ? `<button class="pinb" id="recOpen" style="margin-left:6px">${I.pot}<span>Рецепт</span></button>` : ''}
   </div>`;
   openSheet(item ? 'Изменить' : 'Порция', html, body => {
     const inp = $('#g', body), res = $('#res', body);
@@ -2195,6 +2299,7 @@ function openPortion(food, meal, item, grams, back) {
       else addItem(meal, data);
     };
     if (item) $('#del', body).onclick = () => deleteItem(item);
+    const ro = $('#recOpen', body); if (ro) ro.onclick = () => openRecipe(food.recipe, meal);
   }, { back, slide: !!back });
 }
 
@@ -2413,6 +2518,307 @@ function openQuick(meal, item) {
     };
     if (item) $('#qdel', body).onclick = () => deleteItem(item);
   }, item ? {} : { back: () => openAdd(meal), slide: true });
+}
+
+/* ——— «Мои рецепты» (Глеб 03.11: «готовлю по своим рецептам — сказать голосом, ты расшифровал, и чтобы осталось»):
+   голос или текст → сервер Тренера (/api/kcal/recipe/parse: речь — common/voice.py, разбор — Claude) → предпросмотр (граммы
+   правятся, продукты убираются и добавляются) → рецепт навсегда (S.recipes, sync как дни). В дневник рецепт идёт как обычное
+   блюдо с КБЖУ на 100 г готового и порцией — правка рецепта записанные дни не меняет. ——— */
+const recLive = () => S.recipes.filter(r => !r.del);
+const recById = id => S.recipes.find(r => r.id === id && !r.del) || null;
+function recTot(r) { const t = { g: 0, kcal: 0, p: 0, f: 0, c: 0, salt: 0 }; for (const i of r.ings) for (const k in t) t[k] += num(i[k]); return t; }
+const recOut = r => r.out > 0 ? r.out : recTot(r).g; // вес готового: сказал — его, иначе сумма продуктов
+const recServ = r => Math.max(1, Math.round(recOut(r) / (r.servings > 0 ? r.servings : 1)));
+function recFood(r) { // рецепт → «продукт»: КБЖУ на 100 г готового, порция — одна порция (порций не сказал — всё блюдо)
+  const t = recTot(r), o = recOut(r) || 1, k = 100 / o;
+  return { name: r.name, kcal: t.kcal * k, p: t.p * k, f: t.f * k, c: t.c * k, salt: t.salt * k, recipe: r.id,
+    unit: { name: r.servings > 1 ? 'порция' : 'всё блюдо', g: recServ(r) }, whole: Math.round(o) };
+}
+function recG(id) { // привычная порция: та, что ставил чаще всего (как в «Часто»), иначе одна порция
+  const r = recById(id); if (!r) return 0;
+  const s = favStats().get(favKey(r.name)), g = s ? usualG(s) : 0;
+  return g > 0 ? g : recServ(r);
+}
+const recLine = f => `Мой рецепт · ${f.unit.name} ${fmt(f.unit.g)} г · ${fmt(f.kcal * f.unit.g / 100)} ккал`;
+function recSorted() { // чаще и недавно съеденные — выше, потом недавно сохранённые
+  const st = favStats();
+  return recLive().map(r => ({ r, w: (st.get(favKey(r.name)) || {}).w || 0 })).sort((a, b) => b.w - a.w || b.r.u - a.r.u).map(x => x.r);
+}
+const recStamp = r => { r.u = Math.max(Date.now(), (r.u || 0) + 1, S.recU + 1); }; // u растёт строго — правка новее всего, что ушло на сервер
+function saveRecipe(d) { // черновик → рецепт (новый или поверх старого); null — не сохранилось (сказали почему)
+  const i = d.id ? S.recipes.findIndex(r => r.id === d.id) : -1;
+  if (i < 0 && recLive().length >= REC_MAX) { toast(`Рецептов уже ${REC_MAX} — удали старые`); return null; }
+  const r = cleanRecipe({ ...d, id: d.id || 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), u: i >= 0 ? S.recipes[i].u : 0 });
+  if (!r) { toast('Напиши название'); return null; }
+  if (!r.ings.length) { toast('Добавь хотя бы один продукт'); return null; }
+  recStamp(r);
+  if (i >= 0) S.recipes[i] = r; else S.recipes.push(r);
+  save(); return r;
+}
+function deleteRecipe(id, after) { // «надгробие» с новым u — удаление дойдёт до других устройств; «Вернуть» — в тосте
+  const i = S.recipes.findIndex(r => r.id === id && !r.del); if (i < 0) return;
+  const old = S.recipes[i], dead = { id, u: old.u, del: true }; recStamp(dead);
+  S.recipes[i] = dead; S.recipes = trimRecipes(S.recipes); save(); buzz();
+  toast('Рецепт удалён', 'Вернуть', () => {
+    const back = { ...old }; recStamp(back);
+    const j = S.recipes.findIndex(r => r.id === id); if (j >= 0) S.recipes[j] = back; else S.recipes.push(back);
+    save(); after && after();
+  });
+}
+const sheetIs = t => !$('#sheet').hidden && $('#sheet').classList.contains('on') && $('#sheetTitle').textContent === t;
+
+function openRecipes(meal) {
+  const list = recSorted();
+  const html = `<button class="photo-cta" id="recNew">${I.mic}<span><b>Новый рецепт</b><span>Расскажи голосом или напиши</span></span></button>
+    ${list.length ? `<div class="list" id="recList" style="margin-top:18px">${list.map(r => { const f = recFood(r); return `<button class="cell" data-rid="${esc(r.id)}"><span class="t"><div class="n">${esc(r.name)}</div>
+      <div class="m num">${r.ings.length} ${plural(r.ings.length, 'продукт', 'продукта', 'продуктов')} · ${f.unit.name} ${fmt(f.unit.g)} г · ${fmt(f.kcal * f.unit.g / 100)} ккал</div></span>${I.chev}</button>`; }).join('')}</div>`
+      : `<div class="lead" style="margin-top:28px">Здесь будут твои рецепты.<br>Расскажи, что приготовил, — посчитаю и запомню.</div>`}
+    <div class="foot">Рецепты хранятся ${getToken() ? 'на всех твоих устройствах' : 'на этом устройстве'}. Правка рецепта не меняет уже записанную еду.</div>`;
+  openSheet('Мои рецепты', html, body => {
+    $('#recNew', body).onclick = () => openRecipeNew(meal);
+    const l = $('#recList', body); if (l) l.onclick = e => { const b = e.target.closest('[data-rid]'); if (b) openRecipe(b.dataset.rid, meal); };
+  }, { back: () => openAdd(meal), slide: true });
+}
+function openRecipe(id, meal) { const r = recById(id); if (!r) return openRecipes(meal); showRecipe(structuredClone(r), { meal, back: () => openRecipes(meal) }); }
+
+/* запись: нажал — говоришь — нажал (или удерживай и отпусти); до 2 минут; Safari пишет audio/mp4, Chrome — webm/opus */
+const REC_SEC = 120;
+
+function micType() {
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+  for (const t of ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg;codecs=opus']) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (e) {} }
+  return '';
+}
+function openRecipeNew(meal, text = '') {
+  if (!getToken()) return openPair(() => openRecipeNew(meal, text)); // считает Тренер на сервере
+  const canMic = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && typeof MediaRecorder !== 'undefined');
+  const html = `<div class="rec-rec">
+      <button class="mic" id="mic" aria-label="Записать голосом"${canMic ? '' : ' hidden'}>${I.mic}</button>
+      <div class="rec-st" id="recSt" role="status" aria-live="polite"></div>
+      <button class="chip" id="recCancel" hidden>Отменить запись</button></div>
+    <div class="group-t">${canMic ? 'Или напиши' : 'Напиши'}</div>
+    <div class="list"><div class="cell"><textarea id="recText" rows="3" maxlength="2000" aria-label="Рецепт текстом"
+      placeholder="Сырники: пачка творога 200 г, 2 яйца, 3 ложки муки, жарил на масле, вышло 2 порции">${esc(text)}</textarea></div></div>
+    <div style="margin-top:16px"><button class="btn" id="recGo">Посчитать</button></div>
+    <div class="foot" style="text-align:center">Скажи, из чего готовил и сколько — граммы, штуки или ложки — и сколько вышло порций.</div>`;
+  openSheet('Мой рецепт', html, body => {
+    const mic = $('#mic', body), st = $('#recSt', body), ta = $('#recText', body), go = $('#recGo', body), cancel = $('#recCancel', body);
+    let mode = 'idle', stream = null, rec = null, chunks = [], t0 = 0, timer = 0, held = false, downAt = 0, drop = false, ctl = null, slow = 0;
+    const say = (b, s) => { st.innerHTML = `<b>${esc(b)}</b>${s ? esc(s) : ''}`; };
+    const idle = (b, s) => {
+      mode = 'idle'; mic.classList.remove('on', 'busy'); mic.disabled = false; mic.setAttribute('aria-label', 'Записать голосом');
+      cancel.hidden = true; go.disabled = false; ta.disabled = false;
+      say(b || (canMic ? 'Нажми и говори' : 'Напиши, что приготовил'), s ?? (canMic ? 'Или удерживай, пока говоришь' : 'Запись голоса в этом браузере не работает'));
+    };
+    const secs = () => (performance.now() - t0) / 1000;
+    const clock = () => { const n = Math.floor(secs()); say(`Слушаю · ${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`, 'Нажми, когда закончишь'); if (n >= REC_SEC) stop(); };
+    const release = () => { clearInterval(timer); timer = 0; if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; };
+    const denied = e => {
+      const n = e && e.name, no = n === 'NotAllowedError' || n === 'SecurityError';
+      idle(no ? 'Нет доступа к микрофону' : n === 'NotFoundError' ? 'Микрофон не найден' : 'Микрофон не включился',
+        no ? 'Разреши микрофон этому сайту (Safari: «аА» → «Настройки веб-сайта») или напиши текстом ниже' : 'Напиши текстом ниже — посчитаю так же');
+    };
+    async function start() {
+      mode = 'starting'; drop = false; go.disabled = true; say('Включаю микрофон…', '');
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+      catch (e) { if (mode === 'closed') return; release(); return denied(e); }
+      if (mode !== 'starting') { release(); return; } // лист закрыли, пока спрашивали разрешение
+      const type = micType(); chunks = [];
+      try { rec = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 32000 } : {}); }
+      catch (e) { try { rec = new MediaRecorder(stream); } catch (e2) { release(); return idle('Запись не работает', 'Напиши текстом — посчитаю так же'); } }
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = done;
+      rec.start(1000); t0 = performance.now(); mode = 'rec';
+      mic.classList.add('on'); mic.setAttribute('aria-label', 'Закончить запись'); cancel.hidden = false; ta.disabled = true; buzz();
+      clock(); timer = setInterval(clock, 250);
+    }
+    function stop(cancelIt) {
+      if (mode !== 'rec') return;
+      drop = !!cancelIt; mode = 'stopping'; clearInterval(timer);
+      try { if (rec.state !== 'inactive') rec.stop(); else done(); } catch (e) { done(); }
+    }
+    async function done() {
+      if (mode === 'closed') return;
+      const s = secs(), type = (rec && rec.mimeType) || micType() || 'audio/webm', blob = new Blob(chunks, { type });
+      release(); mic.classList.remove('on');
+      if (drop) return idle();
+      if (s < 1 || blob.size < 600) return idle('Слишком коротко', 'Нажми и расскажи, из чего готовил');
+      if (blob.size > 5 * 1024 * 1024) return idle('Запись слишком большая', 'Расскажи короче или напиши текстом');
+      const audio = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(''); fr.readAsDataURL(blob); });
+      if (mode === 'closed') return;
+      if (!audio) return idle('Не получилось прочитать запись', 'Напиши текстом');
+      send({ audio, mime: type.split(';')[0] }, s);
+    }
+    async function send(b, s) {
+      mode = 'busy'; mic.classList.add('busy'); mic.disabled = true; go.disabled = true; ta.disabled = true; cancel.hidden = true;
+      const voice = !!b.audio, thinking = () => say('Считаю…', 'Перевожу в граммы и считаю КБЖУ');
+      voice ? say('Слушаю…', 'Разбираю запись') : thinking();
+      if (voice) slow = setTimeout(() => mode === 'busy' && thinking(), Math.max(2500, s * 350)); // речь на сервере — ~0,3 с на секунду записи
+      ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 180000);
+      try {
+        const r = await fetch(API + '/api/kcal/recipe/parse', { method: 'POST', signal: ctl.signal,
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() }, body: JSON.stringify(b) });
+        const j = await r.json().catch(() => ({}));
+        if (mode !== 'busy') return;
+        if (r.status === 401) { setToken(''); if (EMBED) { closeSheet(); return authLost(); } return openPair(() => openRecipeNew(meal, ta.value)); }
+        if (!r.ok) return j.voice === false ? idle('Голос не распознан', 'Напиши текстом ниже — посчитаю так же')
+          : idle(j.error || 'Не получилось посчитать', 'Попробуй ещё раз или скажи по-другому');
+        const items = (Array.isArray(j.items) ? j.items : []).filter(i => i && i.name && num(i.g) > 0);
+        if (!items.length) return idle('Не понял рецепт', 'Скажи, из чего готовил и сколько');
+        const said = String(j.text || b.text || '').slice(0, 1000);
+        showRecipe({ id: null, name: String(j.name || 'Мой рецепт').slice(0, 80), servings: Math.min(50, Math.round(num(j.servings))), out: Math.round(num(j.out)),
+          method: String(j.method || '').slice(0, 60), text: said, note: String(j.note || '').slice(0, 160),
+          ings: items.slice(0, REC_INGS).map(i => ({ name: String(i.name).slice(0, 80), g: r1(num(i.g)), kcal: Math.max(0, num(i.kcal)), p: Math.max(0, num(i.p)),
+            f: Math.max(0, num(i.f)), c: Math.max(0, num(i.c)), salt: Math.max(0, num(i.salt)), est: i.est === true })) },
+          { meal, isNew: true, back: () => openRecipeNew(meal, said) });
+      } catch (e) {
+        if (mode !== 'busy') return;
+        idle(e.name === 'AbortError' ? 'Слишком долго' : e instanceof TypeError ? 'Нет связи с сервером' : 'Не получилось посчитать', 'Попробуй ещё раз');
+      } finally { clearTimeout(tm); clearTimeout(slow); }
+    }
+    mic.addEventListener('pointerdown', e => { // нажал — запись, нажал ещё раз — стоп; удерживал дольше 0,7 с — стоп, как отпустил
+      if (e.button > 0) return;
+      if (mode === 'rec') { held = false; return stop(); }
+      if (mode !== 'idle') return;
+      try { mic.setPointerCapture(e.pointerId); } catch (err) {}
+      held = true; downAt = performance.now(); start();
+    });
+    const up = () => { if (!held) return; held = false; if (mode === 'rec' && performance.now() - downAt > 700) stop(); };
+    mic.addEventListener('pointerup', up); mic.addEventListener('pointercancel', up);
+    mic.addEventListener('contextmenu', e => e.preventDefault());
+    mic.addEventListener('click', e => { if (e.detail !== 0) return; if (mode === 'rec') stop(); else if (mode === 'idle') start(); }); // с клавиатуры
+    cancel.onclick = () => stop(true);
+    go.onclick = () => {
+      const t = ta.value.replace(/\s+/g, ' ').trim();
+      if (t.length < 3) { toast('Напиши, что приготовил'); ta.focus(); return; }
+      send({ text: t }, 0);
+    };
+    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go.click(); });
+    sheetLeave = () => { mode = 'closed'; clearInterval(timer); clearTimeout(slow); try { if (rec && rec.state === 'recording') rec.stop(); } catch (e) {} release(); ctl && ctl.abort(); };
+    idle();
+  }, { back: () => openAdd(meal), slide: true });
+}
+
+/* предпросмотр и правка рецепта: название, продукты (граммы −/+ или числом, убрать, добавить), порции и вес готового → КБЖУ
+   всего / на 100 г / на порцию; «Сохранить» и «Сохранить и записать» (приём пищи — сегментом, порция — в листе порции) */
+const fmtIn = g => String(r1(g)).replace('.', ',');
+const ingK = i => i.k || (i.k = { kcal: i.kcal / i.g, p: i.p / i.g, f: i.f / i.g, c: i.c / i.g, salt: i.salt / i.g }); // на 1 г — для правки граммов
+function setIngG(i, g) { const k = ingK(i); i.g = r1(g); for (const f of ['kcal', 'p', 'f', 'c', 'salt']) i[f] = k[f] * i.g; i.est = false; }
+function showRecipe(d, opts) {
+  let m = opts.meal || mealNow(), delArm = 0;
+  const html = `<div class="list"><div class="cell"><input id="rn" class="rname" maxlength="80" value="${esc(d.name)}" placeholder="Название" autocomplete="off" aria-label="Название рецепта"></div></div>
+    ${d.text ? `<div class="rec-said"><span>${opts.isNew ? 'Ты сказал' : 'Как рассказал'}</span>«${esc(d.text)}»</div>` : ''}
+    <div class="group-t fav-t"><span>Продукты</span>${d.ings.some(i => i.est) ? '<span class="hint">≈ — граммы на глаз, проверь</span>' : ''}</div>
+    <div class="list" id="ings"></div>
+    <div class="list" style="margin-top:8px"><button class="cell add" id="ingAdd">${I.plus}<span>Добавить продукт</span></button></div>
+    <div class="group-t">Готовое блюдо</div>
+    <div class="list"><div class="cell field"><label>Порций</label><span class="mini"><button data-sv="-1" aria-label="Меньше порций">${I.minus}</button><span class="g num sv" id="rsv"></span><button data-sv="1" aria-label="Больше порций">${I.plus}</button></span></div>
+      <div class="cell field"><label for="rout">Вес готового, г</label><input id="rout" inputmode="numeric" maxlength="5" value="${d.out > 0 ? d.out : ''}"></div></div>
+    <div class="foot">Не знаешь вес готового — считаю по сумме продуктов. При варке и жарке вес меняется, калории — нет.</div>
+    <div class="rtab num" id="rsum"></div>
+    ${d.note ? `<div class="foot">${esc(d.note)}</div>` : ''}
+    <div class="seg meal" id="mseg" style="margin-top:22px"><span class="thumb"></span>${MEALS.map(([k, n]) => `<button data-m="${k}" aria-pressed="${k === m}">${n}</button>`).join('')}</div>
+    <div style="margin-top:14px"><button class="btn" id="rsave">${d.id ? 'Сохранить' : 'Сохранить рецепт'}</button><button class="btn soft" id="rlog"></button>
+    ${d.id ? '<button class="btn danger" id="rdel">Удалить рецепт</button>' : ''}</div>`;
+  openSheet(d.id ? 'Рецепт' : 'Новый рецепт', html, body => {
+    const upd = () => {
+      d.ings.forEach((i, n) => { const el = $('#im' + n, body); if (el) el.textContent = `${fmt(i.kcal)} ккал`; }); // белки, жиры, углеводы — в итоге ниже
+      const t = recTot(d), o = recOut(d) || 1, sv = recServ(d);
+      const row = (l, k) => `<div class="rl">${l}</div><div>${fmt(t.kcal * k)}</div><div>${Math.round(t.p * k)}</div><div>${Math.round(t.f * k)}</div><div>${Math.round(t.c * k)}</div><div>${dec(t.salt * k)}</div>`;
+      $('#rsum', body).innerHTML = `<div></div><div class="rh">ккал</div><div class="rh">белки</div><div class="rh">жиры</div><div class="rh">углев.</div><div class="rh">соль</div>
+        ${row(`Всё блюдо<small>${fmt(o)} г</small>`, 1)}${row('<span>На 100 г</span>', 100 / o)}${d.servings > 1 ? row(`Порция<small>${fmt(sv)} г</small>`, sv / o) : ''}`;
+      $('#rsv', body).textContent = d.servings > 0 ? d.servings : '—';
+      $('#rout', body).placeholder = `≈ ${fmt(t.g)}`;
+      $('#rsave', body).disabled = $('#rlog', body).disabled = !d.ings.length;
+      $('#rlog', body).textContent = `${d.id ? 'Записать' : 'Сохранить и записать'} в «${mealName(m)}»`;
+    };
+    const drawIngs = () => {
+      $('#ings', body).innerHTML = d.ings.length ? d.ings.map((i, n) => `<div class="cell ing" data-i="${n}"><span class="t"><div class="n">${esc(i.name)}${i.est ? ' <span class="est" aria-label="граммы на глаз">≈</span>' : ''}</div><div class="m num" id="im${n}"></div></span>
+        <span class="mini"><button data-d="-1" aria-label="Меньше">${I.minus}</button><input class="g num" id="ig${n}" inputmode="decimal" aria-label="Граммы: ${esc(i.name)}" value="${fmtIn(i.g)}"><button data-d="1" aria-label="Больше">${I.plus}</button></span>
+        <button class="ix" data-x="${n}" aria-label="Убрать: ${esc(i.name)}">${I.x}</button></div>`).join('')
+        : '<div class="cell"><span class="t"><div class="m">Пусто — добавь продукт</div></span></div>';
+      upd();
+    };
+    drawIngs();
+    const ings = $('#ings', body);
+    ings.onclick = e => {
+      const x = e.target.closest('[data-x]'); if (x) { d.ings.splice(+x.dataset.x, 1); buzz(); drawIngs(); return; }
+      const b = e.target.closest('[data-d]'); if (!b) return;
+      const row = b.closest('[data-i]'), n = +row.dataset.i, i = d.ings[n], step = i.g >= 50 ? 10 : i.g >= 10 ? 5 : 1;
+      setIngG(i, Math.max(1, Math.min(5000, i.g + step * +b.dataset.d))); $('#ig' + n, body).value = fmtIn(i.g);
+      const est = row.querySelector('.est'); if (est) est.remove();
+      buzz(); upd();
+    };
+    ings.oninput = e => {
+      const inp = e.target.closest('input'); if (!inp) return;
+      const row = inp.closest('[data-i]'), v = num(inp.value);
+      if (v > 0 && v <= 5000) { setIngG(d.ings[+row.dataset.i], v); const est = row.querySelector('.est'); if (est) est.remove(); upd(); }
+    };
+    ings.addEventListener('focusin', e => { if (e.target.matches('input')) e.target.select(); });
+    ings.addEventListener('focusout', e => { if (e.target.matches('input')) { const i = d.ings[+e.target.closest('[data-i]').dataset.i]; if (i) e.target.value = fmtIn(i.g); } });
+    $('#rn', body).oninput = e => { d.name = e.target.value; };
+    $('#rout', body).oninput = e => { d.out = Math.min(20000, Math.round(num(e.target.value))); upd(); };
+    body.querySelectorAll('[data-sv]').forEach(b => b.onclick = () => { d.servings = Math.max(0, Math.min(50, (d.servings || 0) + +b.dataset.sv)); buzz(); upd(); });
+    $('#ingAdd', body).onclick = () => openIngPick(it => { d.ings.push(it); showRecipe(d, opts); }, () => showRecipe(d, opts));
+    const seg = $('#mseg', body);
+    requestAnimationFrame(() => placeSeg(seg));
+    seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); upd(); buzz(); };
+    $('#rsave', body).onclick = () => {
+      const isNew = !d.id, r = saveRecipe(d); if (!r) return;
+      buzz(); toast(isNew ? `«${r.name.length > 22 ? r.name.slice(0, 21) + '…' : r.name}» — в моих рецептах` : 'Рецепт сохранён');
+      isNew ? openAdd(m) : openRecipes(m);
+    };
+    $('#rlog', body).onclick = () => {
+      const r = saveRecipe(d); if (!r) return;
+      d.id = r.id; buzz();
+      openPortion(recFood(r), m, null, recG(r.id), () => openRecipe(r.id, m));
+    };
+    const del = $('#rdel', body);
+    if (del) del.onclick = () => { // два нажатия: «Удалить» → «Точно удалить?» (3 с) — без всплывающих окон
+      if (!delArm) {
+        buzz(); del.classList.add('arm'); del.textContent = 'Нажми ещё раз — удалить';
+        delArm = setTimeout(() => { delArm = 0; del.classList.remove('arm'); del.textContent = 'Удалить рецепт'; }, 3000); return;
+      }
+      clearTimeout(delArm);
+      deleteRecipe(d.id, () => { if (sheetIs('Мои рецепты')) openRecipes(m); });
+      openRecipes(m);
+    };
+  }, { back: opts.back, slide: true });
+}
+/* продукт в рецепт: поиск по базе (как в «Добавить») или своё — название, граммы и КБЖУ на 100 г */
+function openIngPick(onPick, back) {
+  let pool = [];
+  const html = `<div class="search">${I.search}<input id="iq" type="search" placeholder="Творог, мука, масло…" autocomplete="off" enterkeyhint="search" aria-label="Найти продукт"></div>
+    <div id="ires"><div class="foot" style="margin-top:12px">Начни писать — найду в базе.</div></div>
+    <div class="group-t">Нет в базе — своё</div>
+    ${formRows([['inN', 'Название', '', 'Например, сыр Ламбер', 1]])}
+    <div style="height:10px"></div>
+    ${formRows([['inG', 'Граммов', '', '100'], ['inK', 'Ккал на 100 г', '', '0'], ['inP', 'Белки на 100 г', '', '0'], ['inF', 'Жиры на 100 г', '', '0'], ['inC', 'Углеводы на 100 г', '', '0']])}
+    <div style="margin-top:16px"><button class="btn soft" id="inOk">Добавить своё</button></div>`;
+  openSheet('Продукт', html, body => {
+    const res = $('#ires', body), inp = $('#iq', body);
+    const draw = () => {
+      const s = norm(inp.value.trim());
+      if (!s) { res.innerHTML = '<div class="foot" style="margin-top:12px">Начни писать — найду в базе.</div>'; return; }
+      pool = findFoods(s).filter(f => !f.recipe).slice(0, 40);
+      res.innerHTML = pool.length ? `<div class="list" style="margin-top:14px">${pool.map((f, i) => `<button class="cell" data-p="${i}"><span class="t"><div class="n">${esc(f.name)}</div>
+        <div class="m num">${macroLine(f)} на 100 г</div></span>${I.plus}</button>`).join('')}</div>` : `<div class="foot" style="margin-top:12px">${WORLD ? 'Не нашёл — добавь своё ниже.' : 'Ищу…'}</div>`;
+    };
+    let typing = 0;
+    inp.oninput = () => { clearTimeout(typing); typing = setTimeout(draw, 90); };
+    if (!WORLD) loadWorld().then(() => { if ($('#iq') === inp) draw(); });
+    res.onclick = e => {
+      const b = e.target.closest('[data-p]'); if (!b) return;
+      const f = pool[+b.dataset.p], g = f.unit ? f.unit.g : 100, k = g / 100;
+      buzz(); onPick({ name: f.name.slice(0, 80), g, kcal: f.kcal * k, p: f.p * k, f: f.f * k, c: f.c * k, salt: (f.salt || 0) * k, est: !!f.unit });
+    };
+    $('#inOk', body).onclick = () => {
+      const name = $('#inN', body).value.replace(/\s+/g, ' ').trim(), g = num($('#inG', body).value) || 100, k = g / 100, v = id => Math.max(0, num($(id, body).value));
+      if (!name) { toast('Напиши название'); $('#inN', body).focus(); return; }
+      if (g <= 0 || g > 5000) { toast('Граммы — от 1 до 5000'); return; }
+      buzz(); onPick({ name: name.slice(0, 80), g: r1(g), kcal: v('#inK') * k, p: v('#inP') * k, f: v('#inF') * k, c: v('#inC') * k, salt: 0, est: false });
+    };
+  }, { back, slide: true });
 }
 
 /* ——— еда по фото: распознаёт Тренер на сервере ——— */

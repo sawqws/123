@@ -2242,6 +2242,22 @@ class Web(BaseHTTPRequestHandler):
             except Exception:
                 traceback.print_exc()
                 return self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
+        if path == "/api/kcal/recipe/parse":  # «Мой рецепт»: голос или текст → ингредиенты с граммами и КБЖУ
+            if not pwa.throttle("kcalrec:" + key, *RECIPE_RATE):
+                return self.reply(429, {"error": "Много разборов подряд — попробуй через час"})
+            try:
+                return self.reply(200, kcal_recipe_parse(uid, body))
+            except VoiceError as e:
+                return self.reply(422, {"error": "Голос не распознан — напиши текстом", "voice": False, "why": str(e)})
+            except NotFood:
+                return self.reply(422, {"error": "Не понял рецепт — скажи, из чего готовил и сколько"})
+            except ai.AIError as e:
+                return self.reply(503, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception:
+                traceback.print_exc()
+                return self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
         if not pwa.throttle("kcal:" + key, *KCAL_RATE):
             return self.reply(429, {"error": "Много фото подряд — попробуй через час"})
         try:
@@ -2520,6 +2536,8 @@ class Web(BaseHTTPRequestHandler):
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
             limit = (3 if path == "/api/kcal/photo" else 1) * MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
+            if path == "/api/kcal/recipe/parse":  # голос рецепта — base64
+                limit = MAX_AUDIO * 4 // 3 + 8192
             if n > limit:
                 return self.reply(413, {"error": "слишком большой файл"})
             body = json.loads(self.rfile.read(min(n, limit)) or b"{}") if n else {}
@@ -2623,11 +2641,14 @@ def day_payload(uid, day):
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
 KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat", "/api/kcal/sync", "/api/kcal/forma",
-              "/api/kcal/state")
+              "/api/kcal/state", "/api/kcal/recipe/parse")
 SYNC_RATE = (120, 3600)  # /api/kcal/sync, /forma и /state — каждому столько на токен в час (у каждого свой счётчик)
 KCAL_SITE = os.environ.get("KCAL_SITE") or "https://sawqws.github.io/123/kcal/"  # «Калории» в одно нажатие: + #pair=<токен>
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
+RECIPE_RATE = (30, 3600)  # разборов рецепта (голос или текст → Claude) на токен в час
+MAX_AUDIO = 5 * 1024 * 1024  # запись рецепта: до 5 МБ
+AUDIO_SECONDS = 120  # и до 2 минут
 
 
 # ---------- тренер-помощник: действия из чата приложения (Глеб 03.11: «как с тобой, Claude Code») ----------
@@ -3075,11 +3096,76 @@ def kcal_portion(v):
     return min(2.0, max(1.0, knum(v, 2, 2) or 1.0))
 
 
+RECIPE_MAX = 200  # своих рецептов на человека (удалённые-«надгробия» — отдельно, до RECIPE_DEL)
+RECIPE_DEL = 200
+RECIPE_INGS = 40
+RECIPE_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")
+_recipes_lock = threading.Lock()  # два sync подряд не затирают рецепты друг друга
+
+
+def kcal_recipe_clean(x):
+    """Рецепт из «Калорий» → только известные поля (coach/SYNC.md п. 6) или None. Удалённый — {id, u, del: true}.
+    Ингредиент — {name, g, kcal, p, f, c, salt, est}: КБЖУ и соль на его граммы. Плохое u — ValueError."""
+    if not isinstance(x, dict) or not RECIPE_ID.fullmatch(str(x.get("id") or "")):
+        return None
+    rid = str(x["id"])
+    u = kcal_u(x.get("u", 0), "рецепта " + rid)
+    if x.get("del"):
+        return {"id": rid, "u": u, "del": True}
+    name = kcal_name(x.get("name"))
+    if not name:
+        return None
+    ings = []
+    for it in (x.get("ings") if isinstance(x.get("ings"), list) else [])[:RECIPE_INGS]:
+        if not isinstance(it, dict) or not kcal_name(it.get("name")):
+            continue
+        ings.append({"name": kcal_name(it.get("name")), **{f: knum(it.get(f), top, 2 if f == "salt" else 1) for f, top in ITEM_MAX.items()},
+                     "est": it.get("est") is True})
+    return {"id": rid, "u": u, "name": name, "servings": int(knum(x.get("servings"), 50, 0)), "out": knum(x.get("out"), 20000, 0),
+            "method": kcal_name(x.get("method"), 60), "text": kcal_name(x.get("text"), 1000), "ings": ings}
+
+
+def kcal_recipes_in(b):
+    """Поле recipes тела sync → список очищенных рецептов (нет поля — None)."""
+    raw = b.get("recipes")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("recipes — список рецептов")
+    if len(raw) > RECIPE_MAX + RECIPE_DEL:
+        raise ValueError(f"не больше {RECIPE_MAX + RECIPE_DEL} рецептов за запрос")
+    return [r for r in (kcal_recipe_clean(x) for x in raw) if r]
+
+
+def kcal_recipes_merge(uid, incoming):
+    """Слить присланные рецепты с сохранёнными: у кого u больше — тот прав (равное — принимаем, как у дней).
+    → id рецептов, где сохранённый новее (rstale). Новый рецепт сверх RECIPE_MAX не сохраняется."""
+    with _recipes_lock:
+        cur = {r["id"]: r for r in db.kcal_recipes(uid) if RECIPE_ID.fullmatch(str(r.get("id") or ""))}
+        stale = []
+        for r in incoming:
+            old = cur.get(r["id"])
+            if old and (old.get("u") or 0) > r["u"]:
+                stale.append(r["id"])
+                continue
+            if not r.get("del") and not (old and not old.get("del")) and \
+                    sum(1 for x in cur.values() if not x.get("del")) >= RECIPE_MAX:
+                continue
+            cur[r["id"]] = r
+        live = [r for r in cur.values() if not r.get("del")]
+        dead = sorted((r for r in cur.values() if r.get("del")), key=lambda r: r.get("u") or 0)[-RECIPE_DEL:]
+        db.kcal_recipes(uid, sorted(live + dead, key=lambda r: r.get("u") or 0))
+        return stale
+
+
 def kcal_sync(uid, b):
-    """«Калории» → сервер: дни целиком (до 31 за раз, до 400 дней назад) и цели. День с u сохраняется, только если
-    его u не меньше сохранённого; такие пропущенные дни — в stale. Ответ — {ok, stale, forma: как GET /api/kcal/forma}."""
+    """«Калории» → сервер: дни целиком (до 31 за раз, до 400 дней назад), цели и рецепты. День с u сохраняется, только если
+    его u не меньше сохранённого; такие пропущенные дни — в stale (рецепты — в rstale).
+    Ответ — {ok, stale, rstale, forma: как GET /api/kcal/forma}."""
     days, goals = kcal_clean(b, today_of(uid))
+    recipes = kcal_recipes_in(b)
     stale = db.save_kcal_days(uid, days) if days else []
+    rstale = kcal_recipes_merge(uid, recipes) if recipes else []
     if goals is not None:  # присланное поверх прежнего: прислали только воду — цели еды не теряются
         old = db.kcal_goals(uid) or {}
         db.kcal_goals(uid, {"goals": {**(old.get("goals") or {}), **goals["goals"]},
@@ -3087,7 +3173,7 @@ def kcal_sync(uid, b):
                             "water": {**(old.get("water") or {}), **goals["water"]},
                             **({"portion": goals["portion"]} if goals.get("portion") else
                                {"portion": old["portion"]} if old.get("portion") else {})})
-    return {"ok": True, "stale": stale, "forma": kcal_forma(uid)}
+    return {"ok": True, "stale": stale, "rstale": rstale, "forma": kcal_forma(uid)}
 
 
 def kcal_state(uid):
@@ -3097,7 +3183,70 @@ def kcal_state(uid):
             for d, v in db.kcal_last(uid, KCAL_BACK).items()}
     g = db.kcal_goals(uid) or {}
     return {"days": days, "goals": g.get("goals") or None, "salt": g.get("salt"), "water": g.get("water") or None,
-            "portion": g.get("portion")}
+            "portion": g.get("portion"), "recipes": db.kcal_recipes(uid)}
+
+
+class VoiceError(Exception):
+    """Голос не распознан (нет модели, тишина, плохой файл) — сайт просит написать текстом."""
+
+
+AUDIO_EXT = {"mp4": ".m4a", "m4a": ".m4a", "x-m4a": ".m4a", "aac": ".aac", "webm": ".webm", "ogg": ".ogg",
+             "mpeg": ".mp3", "mp3": ".mp3", "wav": ".wav", "x-wav": ".wav"}
+
+
+def decode_audio(b):
+    """Поле audio (base64 или data:audio/…;base64,) → (байты, расширение). Плохое или пустое — ValueError."""
+    data = str(b.get("audio") or "")
+    m = re.match(r"data:([\w.+/-]*)(?:;[^,;]*)*;base64,", data)  # тип бывает пустым (data:;base64,) или чужим — тогда из mime
+    t = m.group(1) if m and m.group(1).startswith("audio/") else str(b.get("mime") or "")
+    kind = t.split("/")[-1].split(";")[0].strip().lower()
+    try:
+        raw = base64.b64decode(data[m.end():] if m else data, validate=True)
+    except ValueError:
+        raise ValueError("не получилось прочитать запись") from None
+    if len(raw) < 200:
+        raise ValueError("запись пустая — скажи ещё раз")
+    if len(raw) > MAX_AUDIO:
+        raise ValueError("запись больше 5 МБ — расскажи короче")
+    return raw, AUDIO_EXT.get(kind, ".webm")
+
+
+def recipe_voice(raw, ext):
+    """Звук → текст: common/voice.py (faster-whisper на процессоре сервера) отдельным процессом через media.transcribe."""
+    folder = os.path.join(DATA, "voice", "kcal")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{secrets.token_hex(8)}{ext}")
+    try:
+        with open(path, "wb") as f:
+            f.write(raw)
+        sec = media._seconds(path) if hasattr(media, "_seconds") else 0
+        if sec > AUDIO_SECONDS + 10:
+            raise ValueError("запись длиннее 2 минут — расскажи короче или напиши текстом")
+        try:
+            return media.transcribe(path, timeout=240)
+        except media.MediaError as e:
+            raise VoiceError(str(e)) from None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def kcal_recipe_parse(uid, b):
+    """POST /api/kcal/recipe/parse {text} | {audio, mime} → предпросмотр рецепта (ничего не сохраняет):
+    {text: что сказал, name, servings, out, method, note, items: [{name, g, est, kcal, p, f, c, salt}]}."""
+    if b.get("audio"):
+        text = recipe_voice(*decode_audio(b))
+    else:
+        text = " ".join(str(b.get("text") or "").split())
+        if len(text) < 3:
+            raise ValueError("Расскажи, что приготовил и из чего")
+    text = text[:2000]
+    out = ai.recipe(text)
+    if not out["recipe"]:
+        raise NotFood
+    return {"text": text, **{k: out[k] for k in ("name", "servings", "out", "method", "note", "items")}}
 
 
 # ---------- «Калории» внутри Формы: сайт docs/kcal по адресу /kcal/ (тот же домен — один вход, общий localStorage) ----------

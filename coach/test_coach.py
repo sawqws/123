@@ -2495,7 +2495,7 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(kcal_call("/api/kcal/state", method="GET").code, 401)
         r = kcal_call("/api/kcal/state", token=tok, method="GET")
         self.assertEqual(r.code, 200, r.json)
-        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None, "portion": None})
+        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None, "portion": None, "recipes": []})
         self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
         day = {**self.SYNC["days"][TODAY.isoformat()], "u": 1730000000123}
         self.run_today(lambda: kcal_call("/api/kcal/sync", {**self.SYNC, "days": {TODAY.isoformat(): day}}, token=tok))
@@ -2527,6 +2527,148 @@ class KcalTest(unittest.TestCase):
         codes = [kcal_call("/api/kcal/state", token=tok, method="GET").code for _ in range(n + 1)]
         self.assertEqual(codes[-2:], [200, 429])
         self.assertEqual(kcal_call("/api/kcal/forma", token=tok, method="GET").code, 200)
+
+    # ---------- «Мои рецепты» (coach/SYNC.md п. 6) ----------
+    RECIPE = ('{"recipe": true, "name": "сырники", "servings": "2", "out": 0, "method": "жарка на масле", '
+              '"items": [{"name": "Творог 5%", "g": 200, "est": false, "kcal": 242, "p": 34, "f": 10, "c": 6, "salt": 0.2}, '
+              '{"name": "Яйцо", "g": "110", "est": true, "kcal": 172, "p": 14, "f": 12, "c": 1, "salt": 0.4}, '
+              '{"name": "Масло подсолнечное", "g": 17, "est": true, "kcal": 153, "p": 0, "f": 17, "c": 0, "salt": 0}, '
+              '{"name": "", "g": 5}, {"name": "Соль", "g": 0}], "note": "2 яйца ≈ 110 г"}')
+
+    def rec(self, rid="r1", u=100, name="Сырники", **kw):
+        return {"id": rid, "u": u, "name": name, "servings": 2, "out": 0, "method": "жарка",
+                "ings": [{"name": "Творог 5%", "g": 200, "kcal": 242, "p": 34, "f": 10, "c": 6, "salt": 0.2, "est": False}], **kw}
+
+    def test_recipe_parse_text(self):
+        tok = self.pair()
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"text": "сырники"}).code, 401)
+        with mock.patch.object(ai, "claude", return_value="Вот: " + self.RECIPE) as c:
+            r = kcal_call("/api/kcal/recipe/parse", {"text": "  Сырники: пачка творога 200 г,\n два яйца, жарил на масле  "}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
+        j = r.json
+        self.assertEqual(j["text"], "Сырники: пачка творога 200 г, два яйца, жарил на масле")
+        self.assertEqual((j["name"], j["servings"], j["out"], j["method"]), ("Сырники", 2, 0, "жарка на масле"))
+        self.assertEqual([i["name"] for i in j["items"]], ["Творог 5%", "Яйцо", "Масло подсолнечное"])  # пустые и без граммов — мимо
+        self.assertEqual(j["items"][1], {"name": "Яйцо", "g": 110, "est": True, "kcal": 172, "p": 14, "f": 12, "c": 1, "salt": 0.4})
+        self.assertFalse(j["items"][0]["est"])
+        prompt = c.call_args[0][0]
+        self.assertIn("пачка творога 200 г", prompt)
+        self.assertIn("яйцо 55 г", prompt)
+        self.assertEqual(c.call_args.kwargs.get("model"), ai.CHAT_MODEL)  # быстрая модель
+        self.assertEqual(self.meals(), 0)  # ничего не записано
+        self.assertEqual(self.db.kcal_recipes(U), [])  # и не сохранено
+        # не рецепт, пусто, Claude недоступен, чужой сайт
+        with mock.patch.object(ai, "claude", return_value='{"recipe": false}'):
+            self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"text": "как дела"}, token=tok).code, 422)
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"text": " "}, token=tok).code, 400)
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):
+            self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"text": "омлет из 3 яиц"}, token=tok).code, 503)
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"text": "омлет"}, token=tok, origin="https://evil.example").code, 403)
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", method="OPTIONS").code, 204)
+
+    def test_recipe_parse_voice(self):
+        tok = self.pair()
+        audio = "data:audio/mp4;base64," + base64.b64encode(b"\x00" * 4000).decode()
+        seen = {}
+
+        def fake(path, timeout=300):
+            seen["ext"], seen["size"], seen["path"] = os.path.splitext(path)[1], os.path.getsize(path), path
+            return "омлет из трёх яиц на сливочном масле"
+        with mock.patch.object(coach.media, "transcribe", side_effect=fake), \
+                mock.patch.object(coach.media, "_seconds", return_value=8.0), \
+                mock.patch.object(ai, "claude", return_value=self.RECIPE) as c:
+            r = kcal_call("/api/kcal/recipe/parse", {"audio": audio}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.json["text"], "омлет из трёх яиц на сливочном масле")
+        self.assertIn("омлет из трёх яиц", c.call_args[0][0])
+        self.assertEqual((seen["ext"], seen["size"]), (".m4a", 4000))  # iOS Safari пишет audio/mp4
+        self.assertFalse(os.path.exists(seen["path"]))  # запись удалена сразу
+        # webm без data:-префикса, тип — в mime
+        with mock.patch.object(coach.media, "transcribe", side_effect=fake), mock.patch.object(coach.media, "_seconds", return_value=3.0), \
+                mock.patch.object(ai, "claude", return_value=self.RECIPE):
+            r = kcal_call("/api/kcal/recipe/parse", {"audio": base64.b64encode(b"\x01" * 900).decode(), "mime": "audio/webm;codecs=opus"}, token=tok)
+        self.assertEqual((r.code, seen["ext"]), (200, ".webm"))
+        # модели нет / тишина — понятная ошибка «напиши текстом»
+        with mock.patch.object(coach.media, "transcribe", side_effect=coach.media.MediaError("на сервере не установлено распознавание речи")), \
+                mock.patch.object(coach.media, "_seconds", return_value=3.0):
+            r = kcal_call("/api/kcal/recipe/parse", {"audio": audio}, token=tok)
+        self.assertEqual(r.code, 422)
+        self.assertEqual((r.json["error"], r.json["voice"]), ("Голос не распознан — напиши текстом", False))
+        # длиннее 2 минут — до распознавания; мусор вместо base64; пустая запись
+        with mock.patch.object(coach.media, "_seconds", return_value=200.0), mock.patch.object(coach.media, "transcribe") as t:
+            self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": audio}, token=tok).code, 400)
+            t.assert_not_called()
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": "data:audio/mp4;base64,@@@"}, token=tok).code, 400)
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": base64.b64encode(b"x" * 10).decode()}, token=tok).code, 400)
+
+    def test_recipe_parse_limits(self):
+        tok = self.pair()
+        big = "data:audio/webm;base64," + "A" * (coach.MAX_AUDIO * 4 // 3 + 9000)  # тело больше 5 МБ звука — 413 до чтения
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": big}, token=tok).code, 413)
+        just = base64.b64encode(b"\x00" * (coach.MAX_AUDIO + 1)).decode()  # тело влезло, а звук больше 5 МБ
+        self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": just}, token=tok).code, 400)
+        coach.pwa._hits.clear()
+        n = coach.RECIPE_RATE[0]
+        self.assertEqual(coach.RECIPE_RATE, (30, 3600))
+        with mock.patch.object(ai, "claude", return_value=self.RECIPE):
+            codes = [kcal_call("/api/kcal/recipe/parse", {"text": "омлет из 3 яиц"}, token=tok).code for _ in range(n + 1)]
+        self.assertEqual(codes, [200] * n + [429])
+        self.assertEqual(kcal_call("/api/kcal/state", token=tok, method="GET").code, 200)  # свой счётчик
+        with mock.patch.object(ai, "claude", return_value=self.RECIPE):  # другой токен — свой счётчик
+            self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"text": "омлет"}, token=self.pair()).code, 200)
+
+    def test_recipes_sync_state(self):
+        tok = self.pair()
+        sync = lambda body: self.run_today(lambda: kcal_call("/api/kcal/sync", body, token=tok))  # noqa: E731
+        self.assertEqual(kcal_call("/api/kcal/sync", {"recipes": [self.rec()]}).code, 401)
+        r = sync({"recipes": [self.rec(), self.rec("r2", 50, "Омлет<script>", servings=99, out=-5,
+                                                   ings=[{"name": "Яйцо", "g": 165, "kcal": 257, "p": 21, "f": 18, "c": 1, "salt": 0.9, "est": "да"},
+                                                         {"name": " ", "g": 10}, "x"]),
+                              {"id": "../bad", "u": 1, "name": "x"}, {"id": "r3", "u": 7, "name": ""}]})
+        self.assertEqual((r.code, r.json["rstale"]), (200, []))
+        st = kcal_call("/api/kcal/state", token=tok, method="GET").json["recipes"]
+        self.assertEqual([x["id"] for x in st], ["r2", "r1"])  # по u
+        self.assertEqual(st[0]["name"], "Омлет script")
+        self.assertEqual((st[0]["servings"], st[0]["out"]), (50, 0))
+        self.assertEqual(st[0]["ings"], [{"name": "Яйцо", "g": 165, "kcal": 257, "p": 21, "f": 18, "c": 1, "salt": 0.9, "est": False}])
+        self.assertEqual(set(st[1]), {"id", "u", "name", "servings", "out", "method", "text", "ings"})
+        # старая версия не затирает новую — rstale; равное u — принимаем; новее — заменяет
+        r = sync({"recipes": [self.rec(u=90, name="Старое")]})
+        self.assertEqual(r.json["rstale"], ["r1"])
+        self.assertEqual(self.db.kcal_recipes(U)[-1]["name"], "Сырники")
+        sync({"recipes": [self.rec(u=100, name="Сырники 2")]})
+        self.assertEqual(self.db.kcal_recipes(U)[-1]["name"], "Сырники 2")
+        sync({"recipes": [self.rec(u=300, name="Сырники с изюмом")]})
+        self.assertEqual({x["id"]: x["name"] for x in self.db.kcal_recipes(U)}, {"r1": "Сырники с изюмом", "r2": "Омлет script"})
+        # удаление — «надгробие» с u, едет на другие устройства; старая правка его не воскрешает
+        sync({"recipes": [{"id": "r2", "u": 400, "del": True, "name": "лишнее"}]})
+        r = sync({"recipes": [self.rec("r2", 60, "Омлет")]})
+        self.assertEqual(r.json["rstale"], ["r2"])
+        st = kcal_call("/api/kcal/state", token=tok, method="GET").json["recipes"]
+        self.assertEqual(st[-1], {"id": "r2", "u": 400, "del": True})
+        # без поля recipes — ничего не трогаем; не список и плохое u — 400
+        sync(self.SYNC)
+        self.assertEqual(len(self.db.kcal_recipes(U)), 2)
+        self.assertEqual(sync({"recipes": {"r1": 1}}).code, 400)
+        self.assertEqual(sync({"recipes": [self.rec(u=-1)]}).code, 400)
+        self.assertEqual(sync({"recipes": [self.rec(u="1")]}).code, 400)
+
+    def test_recipes_limit(self):
+        tok = self.pair()
+        sync = lambda body: self.run_today(lambda: kcal_call("/api/kcal/sync", body, token=tok))  # noqa: E731
+        many = [self.rec(f"a{i}", i + 1, f"Блюдо {i}") for i in range(coach.RECIPE_MAX)]
+        self.assertEqual(sync({"recipes": many}).code, 200)
+        sync({"recipes": [self.rec("extra", 9999, "Лишнее")]})  # 201-й не сохраняется
+        ids = {x["id"] for x in self.db.kcal_recipes(U)}
+        self.assertEqual(len(ids), coach.RECIPE_MAX)
+        self.assertNotIn("extra", ids)
+        sync({"recipes": [self.rec("a0", 5000, "Правка")]})  # правка существующего — можно
+        self.assertIn("Правка", [x["name"] for x in self.db.kcal_recipes(U)])
+        sync({"recipes": [{"id": "a1", "u": 6000, "del": True}]})  # удалил один — место есть
+        sync({"recipes": [self.rec("extra", 9999, "Лишнее")]})
+        self.assertIn("extra", {x["id"] for x in self.db.kcal_recipes(U)})
+        self.assertEqual(sync({"recipes": [self.rec(f"b{i}", 1) for i in range(coach.RECIPE_MAX + coach.RECIPE_DEL + 1)]}).code, 400)
 
     def test_same_origin(self):
         """Встроенные «Калории» (/kcal/ на домене Формы): Origin = свой домен — можно, без CORS-заголовков."""

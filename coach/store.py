@@ -374,6 +374,18 @@ class Store:
             return None
         return v if isinstance(v, dict) else None
 
+    def kcal_recipes(self, uid, recipes=None):
+        """Мои рецепты «Калорий» (список; удалённые — {id, u, del}) — meta kcal:recipes:<uid>. coach/SYNC.md п. 6."""
+        key = f"kcal:recipes:{uid}"
+        if recipes is not None:
+            self.meta(key, json.dumps(recipes, ensure_ascii=False))
+            return recipes
+        try:
+            v = json.loads(self.meta(key) or "[]")
+        except ValueError:
+            return []
+        return [r for r in v if isinstance(r, dict)] if isinstance(v, list) else []
+
     # ---------- тренер ----------
 
     def say(self, uid, role, text, thread=""):

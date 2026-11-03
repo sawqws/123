@@ -387,13 +387,28 @@ SKIN_DEMO = [{"t": "**Убрал скраб из вечера** — через �
               "actions": [{"kind": "skin_routine", "label": "уход (вечер): убрал «Скраб»", "ok": True, "undo": "demo3"}]}]
 
 
+# «Мои рецепты» «Калорий» (coach/SYNC.md п. 6): сохранённый рецепт и ответ разбора — нейтральные примеры
+KCAL_RECIPE = {"id": "rdemo", "u": 1, "name": "Омлет с сыром", "servings": 1, "out": 0, "method": "жарка", "text": "",
+               "ings": [{"name": "Яйцо", "g": 165, "kcal": 257, "p": 21, "f": 18, "c": 1, "salt": 0.9, "est": True},
+                        {"name": "Молоко 2,5%", "g": 50, "kcal": 26, "p": 1.5, "f": 1.3, "c": 2.4, "salt": 0.1, "est": False},
+                        {"name": "Сыр", "g": 30, "kcal": 108, "p": 7, "f": 9, "c": 0, "salt": 0.5, "est": True},
+                        {"name": "Масло сливочное", "g": 10, "kcal": 75, "p": 0, "f": 8.3, "c": 0, "salt": 0, "est": True}]}
+KCAL_RECIPE_PARSE = {"text": "сырники: пачка творога 200 г, два яйца, три ложки муки, жарил на масле, вышло две порции",
+                     "name": "Сырники", "servings": 2, "out": 0, "method": "жарка на масле", "note": "2 яйца ≈ 110 г, 3 ложки муки ≈ 75 г",
+                     "items": [{"name": "Творог 5%", "g": 200, "est": False, "kcal": 242, "p": 34, "f": 10, "c": 6, "salt": 0.2},
+                               {"name": "Яйцо", "g": 110, "est": True, "kcal": 172, "p": 14, "f": 12, "c": 1, "salt": 0.4},
+                               {"name": "Мука пшеничная", "g": 75, "est": True, "kcal": 256, "p": 7.7, "f": 0.8, "c": 53, "salt": 0},
+                               {"name": "Масло подсолнечное", "g": 17, "est": True, "kcal": 153, "p": 0, "f": 17, "c": 0, "salt": 0}]}
+
+
 def serve(port, stub=False):
     """Локальный сервер для проверки вида: приложение как сайт, /api/… — примеры, /kcal/ — «Калории» (или заглушка)."""
     import re
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import urllib.parse
     api = build()["api"]
-    api["/api/kcal/state"] = {"days": {}, "goals": None, "salt": None, "water": None}
+    api["/api/kcal/state"] = {"days": {}, "goals": None, "salt": None, "water": None, "recipes": [KCAL_RECIPE]}
+    api["/api/kcal/recipe/parse"] = KCAL_RECIPE_PARSE  # «Мой рецепт»: и голос, и текст — этот пример
     index = os.path.join(coach.KCAL_DIR, "index.html")
     stub = stub or not (os.path.isfile(index) and "embed" in open(index, encoding="utf-8").read())
 
