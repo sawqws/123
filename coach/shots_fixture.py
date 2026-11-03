@@ -12,7 +12,8 @@ shots.json — список снимков для shots.js ([{"name": ..., "clic
 KCAL_STUB по договору coach/SYNC.md, п. 5 (сегменты сверху, отступ под меню Формы, тема, kcal-changed).
 Ответы на POST с телом здесь не различаются: shots.js отдаёт один ответ на путь. Свои /api/… разделов (f_*.py)
 добавляются сами: для каждого пути из EXTRA_PATHS вызывается route с пустым телом.
-Пути из LIVE_PATHS (тренды) в --serve считаются на лету по телу запроса.
+Пути из LIVE_PATHS (тренды, ряды графиков) в --serve считаются на лету по телу запроса.
+/api/progress/stream — пример разбора прогресса потоком (PROGRESS_MD кусками).
 """
 import datetime
 import json
@@ -33,7 +34,7 @@ EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/ap
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
                "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends"]
 # пути, где ответ зависит от тела запроса: в --serve считаются на лету (тренды: показатель, период, конец периода)
-LIVE_PATHS = {"/api/trends"}
+LIVE_PATHS = {"/api/trends", "/api/series"}
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -261,7 +262,7 @@ def build(shots=None):
         api = {"/api/all": allp,
                "/api/day": coach.route(T.U, "/api/day", {"d": (today - datetime.timedelta(days=2)).isoformat()}),
                "/api/series": {"series": allp["series"]},
-               "/api/progress": {"progress": None},
+               "/api/progress": {"progress": {"day": today.isoformat(), "text": coach.ai.to_html(PROGRESS_MD)}},
                "/api/history": {"history": [
                    {"role": "user", "text": "Готов ли я к спаррингу?"},
                    {"role": "coach", "text": "Да. Восстановление **82%**, ВСР выше нормы.\n- Разминка 15 мин\n- После — белок и вода"}]},
@@ -345,6 +346,25 @@ document.querySelectorAll('.seg button').forEach(function(b){b.onclick=function(
 </script></body></html>"""
 
 
+# Разбор прогресса в новом формате (ai.PROGRESS_TASK): итог, блоки целей, «Следить» — нейтральный пример
+PROGRESS_MD = ("**Итог**\nВосстановление держится на 64%, но сна каждую ночь меньше нужного на 1 ч 20 мин — это главный тормоз. "
+               "Начни с отбоя.\n\n"
+               "**Ложиться до 23:00**\nСейчас: в среднем ложишься в 23:40, в выходные после 00:30.\n"
+               "Мешает: телефон в кровати и поздний ужин.\n"
+               "- Ложись в 22:45 в будни — через 7 дней сон дойдёт до 8 ч\n"
+               "- Телефон на зарядку в другую комнату в 22:15\n"
+               "- Ужин до 20:30 — засыпать станет легче уже через 3–4 дня\n\n"
+               "**Больше сил на тренировках**\nСейчас: после сна меньше 7 ч восстановление 41%, после 8+ ч — 78%.\n"
+               "Мешает: недосып и мало еды в дни тренировок.\n"
+               "- Перекус за 1,5 ч до тренировки: банан и йогурт\n"
+               "- После тренировки — 30 г белка в течение часа\n\n"
+               "**Еда и вода**\nСейчас: в среднем 2400 ккал и 85 г белка, воды 1,5 л при цели 2,6 л.\n"
+               "Мешает: пропускаешь завтрак в школьные дни.\n"
+               "- Завтрак 500 ккал каждый день — через 2 недели сил станет заметно больше\n"
+               "- Бутылка 0,75 л в школу — +0,8 л воды в день\n\n"
+               "**Следить**\n- Сон: каждую ночь не меньше 8 ч\n- Вода: к вечеру 2,5 л")
+PROGRESS_DEMO = [{"t": PROGRESS_MD[i:i + 70]} for i in range(0, len(PROGRESS_MD), 70)]
+
 _ASK_TEXT = ("**Записал.** Вода за день — 1,15 л из 2,4.\n- До ужина добери ещё 2 стакана\n"
              "- Макароны с курицей — хороший обед перед тренировкой\n\n"
              "✅ Записал: вода 400 мл; Макароны с курицей — 680 ккал (Б 42 · Ж 18 · У 86)")
@@ -399,6 +419,18 @@ def serve(port, stub=False):
             if path == "/api/ask/stream":  # тренер-помощник: ответ потоком + «✅ Записал …» и чип «Отменить»
                 ev = "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in ASK_DEMO)
                 return self.send(200, ev, "text/event-stream; charset=utf-8")
+            if path == "/api/progress/stream":  # разбор прогресса потоком: куски с паузой, в конце — сохранённый вид
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                import time
+                time.sleep(.6)
+                for e in PROGRESS_DEMO + [{"done": True, "text": PROGRESS_MD, "progress": api["/api/progress"]["progress"]}]:
+                    self.wfile.write(f"data: {json.dumps(e, ensure_ascii=False)}\n\n".encode())
+                    self.wfile.flush()
+                    time.sleep(.08)
+                return None
             if path == "/api/ask/undo":
                 return self.send(200, {"ok": True, "label": "вода 400 мл", "history": ASK_DEMO[-1]["history"][:-1] + [
                     {**ASK_DEMO[-1]["history"][-1], "text": ASK_DEMO[-1]["text"] + "\n↩️ Отменил: вода 400 мл"}]})

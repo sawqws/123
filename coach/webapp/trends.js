@@ -1,13 +1,14 @@
-/* trends — «Тренды» как Trend View в WHOOP: любой показатель за неделю / месяц / полгода.
-   Сверху — выбор показателя (лист со списком по группам), Неделя/Месяц/Полгода, «‹ 5 окт – 3 ноя ›» (назад в историю,
-   вперёд до сегодня), «Среднее» крупно, «▲ 8% к прошлому месяцу», фраза простыми словами и график с полосой
-   «обычно у тебя» и подсказкой по касанию (F.bars / F.line из app.js). Ч/б: цвет — только у ▲▼.
+/* trends — «Тренды» как Trend View в WHOOP: любой показатель за неделю / месяц / 6 месяцев.
+   Сверху — выбор показателя (лист со списком по группам), Неделя/Месяц/6 месяцев, «‹ 5 окт – 3 ноя ›» (назад в историю,
+   вперёд до сегодня), «Среднее» крупно, «▲ 8% к прошлому месяцу», фраза простыми словами и график с подсказкой по
+   касанию (F.bars / F.line из app.js). Нормы и полосы «обычно у тебя» нет (Глеб 03.11: «зачем норма?»); сон — риска
+   «сколько было нужно» у каждого столбика; 6 месяцев — по неделям (среднее недели). Ч/б: цвет — только у ▲▼.
    Сервер: coach/f_trends.py (POST /api/trends {} → группы; {metric, period: w|m|6m, end?} → точки и среднее).
    Входы: «Все показатели» во «Здоровье» (Тренды) и в «Как менялось» разборов, «＋», адрес ?p=trends[&m=hrv]. */
 (window.FormaModules = window.FormaModules || []).push(F => {
   const { esc, num, plural } = F;
   const NB = ' ';
-  const PER = [['w', 'Неделя'], ['m', 'Месяц'], ['6m', 'Полгода']];
+  const PER = [['w', 'Неделя'], ['m', 'Месяц'], ['6m', '6 месяцев']];
   const PER_N = { w: 7, m: 30, '6m': 180 };
   const IC = {
     trends: F.svgi('<path d="M3 17l5.5-6 4 4L21 6"/><path d="M15.5 6H21v5.5"/>'),
@@ -77,8 +78,8 @@
     if (d.unit === '%') return [num(v, dOf(d)), '%'];
     return [dOf(d) ? num(v, 1) : n0(v), d.unit];
   };
-  const PERW = { w: 'за неделю', m: 'за месяц', '6m': 'за полгода' };
-  const SAME = { w: 'так же, как на прошлой неделе', m: 'так же, как в прошлом месяце', '6m': 'так же, как в прошлом полугодии' };
+  const PERW = { w: 'за неделю', m: 'за месяц', '6m': 'за 6 месяцев' };
+  const SAME = { w: 'так же, как на прошлой неделе', m: 'так же, как в прошлом месяце', '6m': 'так же, как в прошлые 6 месяцев' };
   const GN = { load: 'Нагрузка', recovery: 'Восстановление', sleep: 'Сон', other: 'Другое' };
 
   // ▲ 8% к прошлому месяцу: цвет — только у стрелки (хорошо/плохо), без оценки — без цвета
@@ -115,25 +116,41 @@
       <div class="tr-big"><b class="num">${v}</b>${u ? `<small>${esc(u)}</small>` : ''}</div>
       ${cmp(d)}<p class="tr-text">${esc(d.text)}</p>${d.note ? `<p class="tr-note">${esc(d.title)} — ${esc(d.note)}.</p>` : ''}</section>`;
   }
+  // 6 месяцев — по неделям (Глеб 03.11: «малюсенькие тоненькие палочки сбивают»): столбик/точка = среднее недели пн–вс,
+  // незакрытый сегодняшний день в среднее не входит; подсказка — «неделя 6–12 окт»
+  function weeks(rows) {
+    if (rows.length <= 60) return rows;
+    const out = [];
+    rows.forEach(r => {
+      const dt = F.parseDay(r.day), mon = F.isoDay(new Date(dt.getTime() - ((dt.getDay() + 6) % 7) * 864e5));
+      if (!out.length || out[out.length - 1].day !== mon) out.push({ day: mon, wk: true, rows: [] });
+      out[out.length - 1].rows.push(r);
+    });
+    const mean = xs => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+    return out.map(w => {
+      const ok = w.rows.filter(r => !r.partial), a = F.parseDay(w.rows[0].day), b = F.parseDay(w.rows[w.rows.length - 1].day);
+      const v = mean(ok.map(r => r.v).filter(x => x != null)), nd = mean(ok.map(r => r.need).filter(x => x != null));
+      return { day: w.day, wk: true, v, ...(nd != null ? { need: nd } : {}), partial: !ok.length && w.rows.some(r => r.partial),
+        tipDay: `неделя ${a.getDate()}${a.getMonth() !== b.getMonth() ? ' ' + F.MON_S[a.getMonth()] : ''}–${b.getDate()} ${F.MON_S[b.getMonth()]}` };
+    });
+  }
   function chart(d, busy) {
-    const rows = d.points, band = d.typical;
+    const rows = weeks(d.points), wk = rows !== d.points;
     const has = rows.some(r => r.v != null);
-    const tipX = r => r.partial ? 'день ещё идёт — в среднее не входит' : r.need ? `нужно было ${hmin(r.need)}` : band ? `обычно ${short(d, band[0])} – ${short(d, band[1])}` : '';
+    const tipX = r => r.partial ? 'день ещё идёт — в среднее не входит' : r.need ? `нужно было ${wk ? 'в среднем ' : ''}${hmin(r.need)}` : wk ? 'в среднем за неделю' : '';
     let svg;
     if (!has) svg = `<div class="chart-empty">${d.metric === 'weight' ? 'Записей веса за этот период нет' : 'Нет данных за этот период'}</div>`;
-    else if (d.chart === 'line') svg = F.line(rows, 'v', 'var(--ink)', null, { w: chartWidth(), fmt: v => short(d, v), band, label: `${d.title} ${PERW[d.period]}`, tip: r => tipX(r) });
+    else if (d.chart === 'line') svg = F.line(rows, 'v', 'var(--ink)', null, { w: chartWidth(), fmt: v => short(d, v), label: `${d.title} ${PERW[d.period]}`, tip: r => tipX(r) });
     else {
-      const needs = rows.map(r => r.need).filter(x => x != null);
-      const nd = needs.length ? needs.reduce((a, b) => a + b, 0) / needs.length : null;
-      svg = F.bars(rows, 'v', { w: chartWidth(), max: d.top || null, color: r => r.partial ? 'var(--hint-2)' : 'var(--ink)', fmt: v => short(d, v), band,
-        norm: nd != null ? { v: nd, t: `нужно ${hshort(nd)}` } : null, label: `${d.title} ${PERW[d.period]}`,
+      svg = F.bars(rows, 'v', { w: chartWidth(), max: d.top || null, color: r => r.partial ? 'var(--hint-2)' : 'var(--ink)', fmt: v => short(d, v),
+        need: rows.some(r => r.need != null) ? 'need' : null, label: `${d.title} ${PERW[d.period]}`,
         tip: r => [full(d, r.v), tipX(r)] });
     }
     const key = [];
-    if (band) key.push(`<span><i class="tr-bandk"></i>обычно у тебя ${d.unit === 'из 21' ? `${num(band[0], 1)}–${num(band[1], 1)}` : `${full(d, band[0])} – ${full(d, band[1])}`} · 30 дней</span>`);
-    if (d.metric === 'sleep_hours') key.push('<span><i class="kline"></i>сколько нужно было спать — по WHOOP</span>');
+    if (rows.some(r => r.need != null)) key.push(`<span><i class="ktick"></i>${wk ? 'сколько было нужно в среднем за неделю' : 'сколько было нужно в эту ночь'}</span>`);
+    if (wk) key.push(`<span>${d.chart === 'line' ? 'точка' : 'столбик'} — неделя</span>`);
     if (rows.some(r => r.partial)) key.push('<span><i class="tr-partk"></i>сегодня — день ещё идёт</span>');
-    return `<section class="card chart-card tr-chart rise${busy ? ' tr-busy' : ''}"><h3 class="ch-t">${esc(d.title)} по дням</h3>
+    return `<section class="card chart-card tr-chart rise${busy ? ' tr-busy' : ''}"><h3 class="ch-t">${esc(d.title)} ${wk ? 'по неделям' : 'по дням'}</h3>
       <div class="chart-box">${svg}</div>${key.length ? `<div class="ch-key">${key.join('')}</div>` : ''}</section>`;
   }
   // от 1600 px у трендов две колонки (trends.css, :has), а общая ширина графика в app.js считает три

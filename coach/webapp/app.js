@@ -39,7 +39,9 @@
         if (matchMedia('(min-width: 1024px)').matches || (kb < 2 && lim >= innerHeight * .88)) { el.style.bottom = ''; el.style.maxHeight = ''; return; }
         el.style.bottom = `${kb}px`; el.style.maxHeight = `${Math.min(lim, Math.round(innerHeight * .88))}px`;
       };
-      vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); fit();
+      // первая проверка — после первого кадра: синхронный замер при открытии заставлял браузер пересчитать всю страницу
+      // (57 мс при CPU ×4 на «Здоровье» с графиками) — лист дёргался на старте
+      vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); requestAnimationFrame(() => requestAnimationFrame(fit));
     }
     return el;
   }
@@ -215,9 +217,11 @@
   }
 
   // ---------- графики (SVG без библиотек) ----------
-  // Понятность (Глеб 02.11: «графики очень непонятные»): даты под столбиками, значения — у последнего дня, максимума и
-  // минимума, линия «норма …» подписана прямо на графике, уровни (низкое/среднее/высокое) — словами справа, касание или
-  // наведение показывает день и значение. Столбики ≤ 24 px со скруглённым верхом, линии 2 px, сетка — тонкие сплошные.
+  // Понятность (Глеб 02.11: «графики очень непонятные»): даты под столбиками, значения — только у последнего дня и максимума
+  // и никогда не поверх столбиков (над самым высоким под подписью), уровни (низкое/среднее/высокое) — словами справа, касание
+  // или наведение показывает день и значение. Нормы на графиках нет (Глеб 03.11: «зачем норма? я могу и больше, и меньше»).
+  // Сон — риска «сколько было нужно в ту ночь» у каждого столбика. 6 месяцев — по неделям (≈26 столбиков, среднее недели).
+  // Столбики ≤ 24 px со скруглённым верхом, линии 2 px, сетка — тонкие сплошные.
   const chartW = () => {  // карточка: padding 20 + 20; на широком экране — ширина колонки
     const w = ($('#app') || view).clientWidth || 358, cols = WIDE3.matches ? 3 : WIDE.matches ? 2 : 1;
     return Math.max(200, Math.min((w - (cols - 1) * 24) / cols, 800) - 40);
@@ -226,8 +230,9 @@
   const f1 = v => Math.round(v * 10) / 10;
   const hS = h => { const m = Math.round(h * 60); return `${Math.floor(m / 60)}ч ${m % 60}м`; };  // коротко для подписей: 7ч 12м
   const dayTip = s => { const d = parseDay(s), t = S.data && S.data.today && S.data.today.day; return `${s === t ? 'Сегодня' : WD[d.getDay()]}, ${d.getDate()} ${MON[d.getMonth()]}`; };
-  // даты под графиком: неделя — день недели и число, месяц — числа (месяц — у первой и при смене), полгода — месяцы
-  function xLabels(days, PW, slot) {
+  // даты под графиком: неделя — день недели и число, месяц — числа (месяц — у первой и при смене), 6 месяцев — месяцы
+  // (weekly — столбик = неделя: месяц под первой неделей, где он начался)
+  function xLabels(days, PW, slot, weekly) {
     const n = days.length, y1 = TP + CH + 16;
     let s = '';
     const put = (i, a, b, at) => {
@@ -236,6 +241,17 @@
       s += `<text class="xl" x="${f1(x)}" y="${y1}" text-anchor="${anchor}">${a}</text>`;
       if (b) s += `<text class="xl2" x="${f1(x)}" y="${y1 + 14}" text-anchor="${anchor}">${b}</text>`;
     };
+    if (weekly) {
+      let lastM = -1, lastX = -99;
+      days.forEach((d, i) => {
+        const mid = new Date(parseDay(d).getTime() + 3 * 864e5), m = mid.getMonth(), x = (i + .5) * slot;  // четверг недели
+        if (m === lastM) return;
+        lastM = m;
+        if (x - lastX < 30) return;
+        put(i, MON_S[m]); lastX = x;
+      });
+      return s;
+    }
     if (n <= 7) {
       days.forEach((d, i) => { const dt = parseDay(d); put(i, WD_S[dt.getDay()], `${dt.getDate()}${i === 0 || dt.getDate() === 1 ? ' ' + MON_S[dt.getMonth()] : ''}`); });
       return s;
@@ -267,7 +283,14 @@
       if (anchor === 'middle' && x - w / 2 < 0) { x = 0; anchor = 'start'; }
       if (anchor === 'middle' && x + w / 2 > PW) { x = PW; anchor = 'end'; }
       if (anchor === 'end' && x - w < 0) { x = 0; anchor = 'start'; }
-      const x0 = anchor === 'end' ? x - w : anchor === 'middle' ? x - w / 2 : x, b = [x0, c.y - 11, x0 + w, c.y + 3];
+      const x0 = anchor === 'end' ? x - w : anchor === 'middle' ? x - w / 2 : x;
+      if (c.tops) {  // столбики: строка встаёт над самым высоким из тех, что под ней (+ 4 px воздуха)
+        const i0 = Math.max(0, Math.floor((x0 - 2) / c.slot)), i1 = Math.min(c.tops.length - 1, Math.floor((x0 + w + 2) / c.slot));
+        let hi = TP + CH; for (let i = i0; i <= i1; i++) hi = Math.min(hi, c.tops[i]);
+        c.y = hi - 5;
+        if (c.y - 10 < 0) return;  // выше некуда — значение есть в подсказке
+      }
+      const b = [x0, c.y - 11, x0 + w, c.y + 3];
       if (taken.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1])) return;
       taken.push(b);
       s += `<text class="${c.cls || 'vl'}" x="${f1(x)}" y="${f1(c.y)}" text-anchor="${anchor}">${esc(c.t)}</text>`;
@@ -275,8 +298,8 @@
     return s;
   }
   // tips[i] = [день, значение, пояснение, y точки, цвет точки] — для плавающей подсказки
-  const svgWrap = (W, H, s, days, PW, slot, tips, kind, label) => `<svg class="chart ${kind}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" tabindex="0"
-    aria-label="${esc(label || 'График')}. Коснись столбика или точки — покажу день и значение" data-tip="${esc(JSON.stringify(tips))}" data-slot="${f1(slot)}" data-pw="${f1(PW)}">${s}${xLabels(days, PW, slot)}</svg>`;
+  const svgWrap = (W, H, s, days, PW, slot, tips, kind, label, weekly) => `<svg class="chart ${kind}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" tabindex="0"
+    aria-label="${esc(label || 'График')}. Коснись столбика или точки — покажу день и значение" data-tip="${esc(JSON.stringify(tips))}" data-slot="${f1(slot)}" data-pw="${f1(PW)}">${s}${xLabels(days, PW, slot, weekly)}</svg>`;
   const xbOf = n => n <= 7 ? 36 : 22;
   // столбик: скруглённый верх 4 px, ровное основание
   function rbar(x, y, w, base) {
@@ -284,27 +307,20 @@
     const r = Math.min(4, w / 2, h);
     return `M${f1(x)},${base}V${f1(y + r)}Q${f1(x)},${f1(y)} ${f1(x + r)},${f1(y)}H${f1(x + w - r)}Q${f1(x + w)},${f1(y)} ${f1(x + w)},${f1(y + r)}V${base}Z`;
   }
-  // норма линией с подписью у левого края (над линией, если есть место)
-  function normLine(yn, PW, text, taken) {
-    let s = `<line class="norm" x1="0" x2="${PW}" y1="${f1(yn)}" y2="${f1(yn)}"/>`;
-    // где свободно: над линией слева, под ней слева, над ней справа, под ней справа
-    const spots = [[0, yn - 6, 'start'], [0, yn + 15, 'start'], [PW, yn - 6, 'end'], [PW, yn + 15, 'end']].filter(c => c[1] > 10);
-    for (const [x, y, anchor] of spots) { const t = labels([{ x, y, t: text, anchor, cls: 'norm-t' }], PW, taken); if (t) return s + t; }
-    return s;
-  }
   // полоса «обычно у тебя» [от, до]: заливка под данными и пунктирные края
   const bandRect = (b, y, PW) => `<rect class="ch-band" x="0" y="${f1(y(b[1]))}" width="${PW}" height="${f1(Math.max(1, y(b[0]) - y(b[1])))}"/>`;
   const bandEdges = (b, y, PW) => b.map(v => `<line class="ch-band-e" x1="0" x2="${PW}" y1="${f1(y(v))}" y2="${f1(y(v))}"/>`).join('');
-  // o: max, color (цвет или функция строки), bands [[от, до, слово]], norm {v, t}, fmt (подпись значения с единицей),
-  // tip (строка -> [значение, пояснение, цвет точки]), label (для экранного диктора), band [от, до] — полоса «обычно у тебя», w — своя ширина
+  // o: max, color (цвет или функция строки), bands [[от, до, слово]], need — ключ «сколько было нужно» (риска у каждого
+  // столбика), fmt (подпись значения с единицей), tip (строка -> [значение, пояснение, цвет точки]), label (для диктора),
+  // band [от, до] — полоса, w — своя ширина. Строка может нести tipDay (подпись дня в подсказке) и wk (столбик = неделя).
   function bars(rows, key, o = {}) {
     const W = o.w || chartW(), G = o.bands ? GUT : 0, PW = W - G, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
-    const vals = rows.map(r => r[key]).filter(v => v != null);
+    const vals = rows.map(r => r[key]).filter(v => v != null), weekly = rows.some(r => r.wk);
     if (!vals.length) return '<div class="chart-empty">Нет данных за этот период</div>';
-    const nv = o.norm && o.norm.v != null ? o.norm.v : null;
-    const top = o.max || Math.max(1, ...vals, nv || 0, o.band ? o.band[1] : 0) * 1.1, base = TP + CH;
+    const needs = o.need ? rows.map(r => r[o.need]).filter(v => v != null) : [];
+    const top = o.max || Math.max(1, ...vals, ...needs, o.band ? o.band[1] : 0) * 1.1, base = TP + CH;
     const y = v => base - Math.max(0, Math.min(v, top)) / top * CH;
-    const bw = n > 60 ? Math.max(1, slot - 1) : n > 20 ? Math.max(2, slot - 2) : Math.min(24, slot * .6);
+    const bw = weekly ? Math.max(3, Math.min(18, slot * .64)) : n > 60 ? Math.max(1, slot - 1) : n > 20 ? Math.max(2, slot - 2) : Math.min(24, slot * .6);
     const fmt = o.fmt || (v => num(v)), col = r => typeof o.color === 'function' ? o.color(r) : o.color || 'var(--ink)';
     let s = '';
     if (o.bands) o.bands.forEach(([a, b, word]) => {
@@ -315,27 +331,28 @@
     s += `<line class="axis" x1="0" x2="${PW}" y1="${base + .5}" y2="${base + .5}"/>`;
     const hw = Math.min(slot, Math.max(bw + 10, 16));
     s += `<rect class="ch-hb" x="${f1((slot - hw) / 2)}" y="${TP - 6}" width="${f1(hw)}" height="${CH + 6}" rx="${Math.min(8, hw / 2)}"/>`;
-    const tips = [];
-    let iMax = -1, iMin = -1, iLast = -1;
+    const tips = [], tops = [];  // tops[i] — верх столбика (и риски) i: подписи не лезут на него
+    let iMax = -1, iLast = -1, ticks = '';
     rows.forEach((r, i) => {
-      const v = r[key], x = i * slot + (slot - bw) / 2;
-      if (v == null) { tips.push([dayTip(r.day), 'нет данных', '', base]); return; }
+      const v = r[key], x = i * slot + (slot - bw) / 2, dn = r.tipDay || dayTip(r.day);
+      const nd = o.need && r[o.need] != null ? r[o.need] : null;
+      if (v == null) { tips.push([dn, 'нет данных', '', base]); tops.push(nd != null ? y(nd) : base); return; }
       if (iMax < 0 || v > rows[iMax][key]) iMax = i;
-      if (iMin < 0 || v < rows[iMin][key]) iMin = i;
       iLast = i;
       s += `<path class="gb" style="--i:${Math.round(i / n * 24)}" d="${rbar(x, Math.min(y(v), base - 2), bw, base)}" fill="${col(r)}"/>`;
+      // сон: риска «сколько было нужно в эту ночь» — короткая черта поперёк столбика на высоте потребности
+      // (подложка цвета карточки + тонкая черта — видно и поверх столбика, и над ним; в ч/б столбик того же цвета, что черта)
+      if (nd != null) { const yy = f1(y(nd)), a = f1(x), b = f1(x + bw); ticks += `<line class="need-bg" x1="${a}" x2="${b}" y1="${yy}" y2="${yy}"/><line class="need-tk" x1="${a}" x2="${b}" y1="${yy}" y2="${yy}"/>`; }
+      tops.push(Math.min(y(v), nd != null ? y(nd) - 1 : base));
       const tp = o.tip ? o.tip(r) : [fmt(v), ''];
-      tips.push([dayTip(r.day), tp[0], tp[1] || '', y(v), tp[2] || '']);
+      tips.push([dn, tp[0], tp[1] || '', y(v), tp[2] || '']);
     });
+    s += ticks;
     if (o.band) s += bandEdges(o.band, y, PW);  // края полосы — поверх столбиков, иначе их не видно
-    const taken = [];
-    // подписи: последний день (жирно), максимум, минимум
-    const at = (i, cls) => i < 0 ? null : { x: (i + .5) * slot, y: y(rows[i][key]) - 6, t: fmt(rows[i][key]), cls };
-    // порядок важности: последний день, подпись нормы, максимум, минимум
-    let lab = labels([at(iLast, 'vl last')], PW, taken);
-    if (nv != null) s += normLine(y(nv), PW, o.norm.t, taken);
-    lab += labels([iMax !== iLast ? at(iMax, 'vl') : null, iMin !== iLast && iMin !== iMax && n <= 45 ? at(iMin, 'vl') : null], PW, taken);
-    return svgWrap(W, H, s + lab, rows.map(r => r.day), PW, slot, tips, 'bars', o.label);
+    // подписи: последний день (жирно) и максимум — над самым высоким столбиком под подписью, без наложений
+    const taken = [], lab = labels([iLast >= 0 ? { i: iLast, cls: 'vl last' } : null, iMax >= 0 && iMax !== iLast ? { i: iMax, cls: 'vl' } : null]
+      .filter(Boolean).map(c => ({ x: (c.i + .5) * slot, t: fmt(rows[c.i][key]), cls: c.cls, tops, slot })), PW, taken);
+    return svgWrap(W, H, s + lab, rows.map(r => r.day), PW, slot, tips, 'bars', o.label, weekly);
   }
   // плавная линия без «выбросов» за точки (монотонная кривая): ни одна дуга не выше максимума и не ниже минимума
   function smooth(P) {
@@ -357,13 +374,14 @@
     }
     return d;
   }
-  // base — твоя норма (линия «норма …»); o.fmt — подпись с единицей («92 мс»), o.label — для диктора
+  // base — больше не рисуется (нормы на графиках нет, Глеб 03.11), оставлен для совместимости вызовов;
+  // o.fmt — подпись с единицей («92 мс»), o.label — для диктора
   function line(rows, key, color, base, o = {}) {
-    const W = o.w || chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n);
+    const W = o.w || chartW(), PW = W, n = rows.length, slot = PW / n, H = TP + CH + xbOf(n), weekly = rows.some(r => r.wk);
     const pts = rows.map((r, i) => [(i + .5) * slot, r[key], i]).filter(p => p[1] != null);
     if (pts.length < 2) return '<div class="chart-empty">Мало данных для графика</div>';
     const fmt = o.fmt || (v => num(v));
-    const vs = pts.map(p => p[1]).concat(base != null ? [base] : [], o.band || []);
+    const vs = pts.map(p => p[1]).concat(o.band || []);
     let lo = Math.min(...vs), hi = Math.max(...vs); const sp = (hi - lo) || 1; lo -= sp * .06; hi += sp * .06;
     const y = v => TP + 4 + (hi - v) / (hi - lo) * (CH - 24);  // снизу место под подпись минимума
     const P = pts.map(p => [p[0], y(p[1])]), d = smooth(P), bottom = TP + CH;
@@ -380,14 +398,13 @@
     let lab = labels([lastLab], PW, taken);
     // точки у последнего дня, максимума и минимума — в кольце цвета карточки
     const dot = (k, r) => `<circle class="${k === L ? 'dotin' : 'mm'}" cx="${f1(P[k][0])}" cy="${f1(P[k][1])}" r="${r}" fill="${color}"/>`;
-    if (base != null) lab += normLine(y(base), PW, `норма ${fmt(base)}`, taken);
-    const mm = labels([iMax !== L ? { ...above(iMax), cls: 'vl' } : null], PW, taken), mn = labels([iMin !== L && iMin !== iMax ? { ...below(iMin), cls: 'vl' } : null], PW, taken);
-    lab += mm + mn;
-    const dots = (mm && iMax !== L ? dot(iMax, 3) : '') + (mn && iMin !== L ? dot(iMin, 3) : '') + dot(L, 4);
+    const mm = labels([iMax !== L ? { ...above(iMax), cls: 'vl' } : null], PW, taken);  // 1–2 подписи: последний день и максимум
+    lab += mm;
+    const dots = (mm && iMax !== L ? dot(iMax, 3) : '') + dot(L, 4);
     s += `<circle class="ch-pt" cx="0" cy="0" r="5" fill="${color}"/>`;
-    const tips = rows.map(r => r[key] == null ? [dayTip(r.day), 'нет данных', '', bottom]
-      : [dayTip(r.day), fmt(r[key]), o.tip ? o.tip(r) : base != null ? `норма ${fmt(base)}` : '', y(r[key])]);
-    return svgWrap(W, H, s + dots + lab, rows.map(r => r.day), PW, slot, tips, 'lines', o.label);
+    const tips = rows.map(r => r[key] == null ? [r.tipDay || dayTip(r.day), 'нет данных', '', bottom]
+      : [r.tipDay || dayTip(r.day), fmt(r[key]), o.tip ? o.tip(r) : '', y(r[key])]);
+    return svgWrap(W, H, s + dots + lab, rows.map(r => r.day), PW, slot, tips, 'lines', o.label, weekly);
   }
 
   // плавающая подсказка: наведение мышью, касание пальцем (ведёшь — едет за пальцем), стрелки с клавиатуры;
@@ -480,17 +497,37 @@
   addEventListener('resize', () => tipHide());
 
   // ---------- карточки графиков: заголовок простыми словами и одна строка вывода с цифрой ----------
-  const PER = { 7: 'неделю', 14: '2 недели', 30: 'месяц', 180: 'полгода' };
-  const PREV = { 7: 'за прошлую неделю', 14: 'за прошлые 2 недели', 30: 'за прошлый месяц', 180: 'за прошлые полгода' };
+  const PER = { 7: 'неделю', 14: '2 недели', 30: 'месяц', 180: '6 месяцев' };
+  const PREV = { 7: 'за прошлую неделю', 14: 'за прошлые 2 недели', 30: 'за прошлый месяц', 180: 'за прошлые 6 месяцев' };
+  // 6 месяцев — по неделям (Глеб 03.11: «малюсенькие тоненькие палочки сбивают»): столбик = среднее недели (пн–вс)
+  const WK = ['recovery', 'sleep', 'need', 'perf', 'strain', 'hrv', 'rhr'];
+  function weekly(rows) {
+    if (!rows || rows.length <= 60) return rows;
+    const out = [];
+    let cur = null;
+    rows.forEach(r => {
+      const d = parseDay(r.day), mon = isoDay(new Date(d.getTime() - ((d.getDay() + 6) % 7) * 864e5));
+      if (!cur || cur.day !== mon) { cur = { day: mon, wk: true, n: [], rows: [] }; out.push(cur); }
+      cur.rows.push(r);
+    });
+    return out.map(w => {
+      const o = { day: w.day, wk: true, workouts: w.rows.reduce((a, r) => a + (r.workouts || 0), 0) };
+      WK.forEach(k => { const xs = w.rows.map(r => r[k]).filter(v => v != null); o[k] = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; });
+      o.zone = o.recovery == null ? null : o.recovery >= 67 ? 'green' : o.recovery >= 34 ? 'yellow' : 'red';
+      const a = parseDay(w.rows[0].day), b = parseDay(w.rows[w.rows.length - 1].day);
+      o.tipDay = `неделя ${a.getDate()}${a.getMonth() !== b.getMonth() ? ' ' + MON_S[a.getMonth()] : ''}–${b.getDate()} ${MON_S[b.getMonth()]}`;
+      return o;
+    });
+  }
   const filledN = (rows, k) => rows.filter(r => r[k] != null).length;
-  // «В среднем 71% — ▲ на 6% лучше, чем за прошлые 2 недели»; нет прошлого периода — сравнение с твоей нормой за 30 дней
-  function chartLead(rows, prev, key, { fmt, diff, goodUp = null, base, word = 'в среднем', eps = .5 } = {}) {
-    const a = avg(rows, key), n = rows.length;
+  // «В среднем 71% — ▲ на 6% лучше, чем за прошлые 2 недели»; нет прошлого периода — без сравнения (нормы нет, Глеб 03.11);
+  // per — длина периода в днях (для 6 месяцев строки уже по неделям)
+  function chartLead(rows, prev, key, { fmt, diff, goodUp = null, word = 'в среднем', eps = .5, per } = {}) {
+    const a = avg(rows, key), n = rows.length, P = per || n;
     if (a == null) return '<p class="ch-lead"><b>—</b> нет данных за этот период</p>';
     const half = Math.max(3, Math.round(n / 2));
     let ref = null, vsWord = '', same = 'как обычно';
-    if (prev && prev.length >= n && filledN(prev, key) >= half && filledN(rows, key) >= half) { ref = avg(prev, key); vsWord = `, чем ${PREV[n] || 'в прошлый раз'}`; same = `так же, как ${PREV[n] || 'в прошлый раз'}`; }
-    else if (base != null) { ref = base; vsWord = ' твоей нормы'; }
+    if (prev && prev.length >= n && filledN(prev, key) >= half && filledN(rows, key) >= half) { ref = avg(prev, key); vsWord = `, чем ${PREV[P] || 'в прошлый раз'}`; same = `так же, как ${PREV[P] || 'в прошлый раз'}`; }
     let cmp = '';
     if (ref != null) {
       const x = a - ref, df = diff || fmt;
@@ -515,42 +552,42 @@
   const baseNow = () => (S.data && S.data.today && S.data.today.base) || {};
   // одни и те же графики — во «Здоровье» и в разборах сна, восстановления и нагрузки
   const CHARTS = {
-    rec(rows, prev, n) {
-      const g = rows.filter(r => r.zone === 'green').length, y = rows.filter(r => r.zone === 'yellow').length, rd = rows.filter(r => r.zone === 'red').length;
+    rec(rows0, prev0, n) {
+      const rows = weekly(rows0), prev = weekly(prev0), wk = rows !== rows0;
+      const g = rows0.filter(r => r.zone === 'green').length, y = rows0.filter(r => r.zone === 'yellow').length, rd = rows0.filter(r => r.zone === 'red').length;
       const dn = k => `<b class="num">${k}</b> ${plural(k, 'день', 'дня', 'дней')}`;
       return chBlock(`Восстановление за ${PER[n]}`,
-        chartLead(rows, prev, 'recovery', { fmt: v => `${Math.round(v)}%`, goodUp: true, base: baseNow().recovery }),
-        bars(rows, 'recovery', { max: 100, color: r => C[r.zone] || 'var(--hint)', bands: REC_BANDS, fmt: v => `${Math.round(v)}%`,
-          norm: baseNow().recovery != null ? { v: baseNow().recovery, t: `норма ${Math.round(baseNow().recovery)}%` } : null, label: `Восстановление за ${PER[n]}`,
-          tip: r => [`${r.recovery}%`, `${recWord(r.zone)} восстановление`, zoneDot(r.zone)] }),
-        `<span>${kdot('green')}высокое ${dn(g)}</span><span>${kdot('yellow')}среднее ${dn(y)}</span><span>${kdot('red')}низкое ${dn(rd)}</span>`);
+        chartLead(rows, prev, 'recovery', { fmt: v => `${Math.round(v)}%`, goodUp: true, per: n }),
+        bars(rows, 'recovery', { max: 100, color: r => C[r.zone] || 'var(--hint)', bands: REC_BANDS, fmt: v => `${Math.round(v)}%`, label: `Восстановление за ${PER[n]}`,
+          tip: r => [`${Math.round(r.recovery)}%`, `${recWord(r.zone)} восстановление${wk ? ' в среднем' : ''}`, zoneDot(r.zone)] }),
+        `<span>${kdot('green')}высокое ${dn(g)}</span><span>${kdot('yellow')}среднее ${dn(y)}</span><span>${kdot('red')}низкое ${dn(rd)}</span>${wk ? '<span>столбик — неделя</span>' : ''}`);
     },
-    sleep(rows, prev, n) {
-      const nd = avg(rows, 'need'), pf = avg(rows, 'perf');
+    sleep(rows0, prev0, n) {
+      const rows = weekly(rows0), prev = weekly(prev0), wk = rows !== rows0, pf = avg(rows0, 'perf');
       return chBlock(`Сон за ${PER[n]}`,
-        chartLead(rows, prev, 'sleep', { fmt: hHuman, diff: v => `${Math.round(v * 60)} мин`, goodUp: true, base: baseNow().sleep, eps: 5 / 60 }),
-        bars(rows, 'sleep', { color: 'var(--sleep)', fmt: hS, norm: nd != null ? { v: nd, t: `нужно ${hS(nd)}` } : null, label: `Сон за ${PER[n]}`,
-          tip: r => [hHuman(r.sleep), r.need ? `нужно было ${hHuman(r.need)}` : ''] }),
-        `<span><i class="kline"></i>сколько нужно спать — WHOOP считает по нагрузке и недосыпу</span>${pf != null ? `<span>поспал от нужного в среднем <b class="num">${Math.round(pf)}%</b></span>` : ''}`);
+        chartLead(rows, prev, 'sleep', { fmt: hHuman, diff: v => `${Math.round(v * 60)} мин`, goodUp: true, eps: 5 / 60, per: n }),
+        bars(rows, 'sleep', { color: 'var(--sleep)', fmt: hS, need: 'need', label: `Сон за ${PER[n]}`,
+          tip: r => [hHuman(r.sleep), r.need ? `нужно было ${r.wk ? 'в среднем ' : ''}${hHuman(r.need)}` : ''] }),
+        `<span><i class="ktick"></i>${wk ? 'сколько было нужно в среднем за неделю' : 'сколько было нужно в эту ночь'}</span>${pf != null ? `<span>поспал от нужного в среднем <b class="num">${Math.round(pf)}%</b></span>` : ''}`);
     },
-    strain(rows, prev, n) {
-      const wk = rows.reduce((a, r) => a + (r.workouts || 0), 0);
+    strain(rows0, prev0, n) {
+      const rows = weekly(rows0), prev = weekly(prev0), wk = rows !== rows0;
+      const all = rows0.reduce((a, r) => a + (r.workouts || 0), 0);
       return chBlock(`Нагрузка за ${PER[n]}`,
-        chartLead(rows, prev, 'strain', { fmt: v => `${num(v, 1)} из 21`, diff: v => `${num(v, 1)} ${Number.isInteger(Math.round(v * 10) / 10) ? plural(Math.round(v), 'балл', 'балла', 'баллов') : 'балла'}`, base: baseNow().strain, eps: .05 }),
-        bars(rows, 'strain', { max: 21, color: 'var(--strain)', bands: STRAIN_LV, fmt: v => num(v, 1),
-          norm: baseNow().strain != null ? { v: baseNow().strain, t: `норма ${num(baseNow().strain, 1)}` } : null, label: `Нагрузка за ${PER[n]}`,
-          tip: r => [`${num(r.strain, 1)} из 21`, `${strainWord(r.strain)} нагрузка${r.workouts ? ` · ${r.workouts} ${plural(r.workouts, 'тренировка', 'тренировки', 'тренировок')}` : ''}`] }),
-        `<span><b class="num">${wk}</b> ${plural(wk, 'тренировка', 'тренировки', 'тренировок')} за ${PER[n]}</span><span>шкала нагрузки — от 0 до 21</span>`);
+        chartLead(rows, prev, 'strain', { fmt: v => `${num(v, 1)} из 21`, diff: v => `${num(v, 1)} ${Number.isInteger(Math.round(v * 10) / 10) ? plural(Math.round(v), 'балл', 'балла', 'баллов') : 'балла'}`, eps: .05, per: n }),
+        bars(rows, 'strain', { max: 21, color: 'var(--strain)', bands: STRAIN_LV, fmt: v => num(v, 1), label: `Нагрузка за ${PER[n]}`,
+          tip: r => [`${num(r.strain, 1)} из 21`, `${strainWord(r.strain)} нагрузка${wk ? ' в среднем' : ''}${r.workouts ? ` · ${r.workouts} ${plural(r.workouts, 'тренировка', 'тренировки', 'тренировок')}` : ''}`] }),
+        `<span><b class="num">${all}</b> ${plural(all, 'тренировка', 'тренировки', 'тренировок')} за ${PER[n]}</span><span>шкала нагрузки — от 0 до 21</span>${wk ? '<span>столбик — неделя</span>' : ''}`);
     },
-    hrv(rows, prev, n) {
-      const b = baseNow().hrv, fmt = v => `${Math.round(v)} мс`;
-      return chBlock(`Запас сил за ${PER[n]}`, chartLead(rows, prev, 'hrv', { fmt, goodUp: true, base: b }),
-        line(rows, 'hrv', 'var(--rec-blue)', b, { fmt, label: `Запас сил за ${PER[n]}` }), '<span>Отдых организма по пульсу во сне. Выше — лучше</span>');
+    hrv(rows0, prev0, n) {
+      const rows = weekly(rows0), prev = weekly(prev0), fmt = v => `${Math.round(v)} мс`;
+      return chBlock(`Запас сил за ${PER[n]}`, chartLead(rows, prev, 'hrv', { fmt, goodUp: true, per: n }),
+        line(rows, 'hrv', 'var(--rec-blue)', null, { fmt, label: `Запас сил за ${PER[n]}` }), `<span>Отдых организма по пульсу во сне. Выше — лучше${rows !== rows0 ? ' · точка — неделя' : ''}</span>`);
     },
-    rhr(rows, prev, n) {
-      const b = baseNow().rhr, fmt = v => `${Math.round(v)} уд/мин`;
-      return chBlock(`Пульс покоя за ${PER[n]}`, chartLead(rows, prev, 'rhr', { fmt, goodUp: false, base: b }),
-        line(rows, 'rhr', 'var(--rec-blue)', b, { fmt, label: `Пульс покоя за ${PER[n]}` }), '<span>Ниже — лучше: сердцу легче, ты отдохнул</span>');
+    rhr(rows0, prev0, n) {
+      const rows = weekly(rows0), prev = weekly(prev0), fmt = v => `${Math.round(v)} уд/мин`;
+      return chBlock(`Пульс покоя за ${PER[n]}`, chartLead(rows, prev, 'rhr', { fmt, goodUp: false, per: n }),
+        line(rows, 'rhr', 'var(--rec-blue)', null, { fmt, label: `Пульс покоя за ${PER[n]}` }), `<span>Ниже — лучше: сердцу легче, ты отдохнул${rows !== rows0 ? ' · точка — неделя' : ''}</span>`);
     },
   };
   // самый длинный загруженный ряд (все кончаются сегодняшним днём) и прошлый такой же период для сравнения
@@ -1272,19 +1309,14 @@
     }).join('');
     return `<section class="card monitor rise">${cap('Монитор здоровья', all ? `<b class="num" style="color:${ok === all ? C.green : ok >= all - 1 ? C.yellow : C.red}">${ok}/${all}</b> в норме` : '')}${rows}</section>`;
   }
-  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, 'Полгода']];
+  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, '6 месяцев']];
   function trendsView() {
     const t = S.data.today;
     let h = hero('Здоровье', `${dateWord(t.day)}, ${dateLine(t.day)}`);
     h += slot('healthTop', t);
     h += monitorCard(t);
     h += slot('healthAfterMonitor', t);
-    const pr = S.progress;
-    h += `<section class="card rise">${cap('Разбор прогресса', pr && !S.progressing ? '<button class="link" data-a="progress">Обновить</button>' : '')}
-      ${S.progressing ? skel(3) + '<p class="small muted">Разбираю 2 месяца данных — около минуты…</p>'
-        : pr ? `<p class="small muted">от ${dateLine(pr.day)}</p><div class="prose ${pr.text.length > 320 ? 'clamp' : ''}" id="prog">${tgHtml(pr.text)}</div>${pr.text.length > 320 ? '<button class="link" data-a="more">Читать целиком</button>' : ''}`
-        : `<p class="muted small">Тренды, сон, нагрузка, питание и план на 2 недели — по всем данным WHOOP.</p>
-           <button class="btn primary" data-a="progress">Разобрать прогресс</button>`}</section>`;
+    h += progCard();
     h += `<div class="sec rise">${cap('Тренды', F.screens.trends ? '<button class="link" data-a="tr-open">Все показатели</button>' : '')}<div class="seg" role="tablist">${RANGES.map(([n, l]) => `<button class="${S.range === n ? 'on' : ''}" data-a="range" data-v="${n}" role="tab">${l}</button>`).join('')}</div></div>`;
     const rows = S.series[S.range] || (S.range === 30 ? S.data.series : null);
     if (!rows && S.seriesErr === S.range) return h + retryCard('Графики не загрузились', 'series-retry');
@@ -1303,10 +1335,122 @@
     try { S.series[n] = (await api('/api/series', { n })).series; } catch (e) { if (quiet) return; fail(e); S.seriesErr = n; }
     if (S.tab === 'trends') render(false);
   }
-  async function loadProgress(make) {
-    if (make) { if (S.progressing) return; S.progressing = true; haptic('tap'); render(false); }
-    try { S.progress = (await api('/api/progress', make ? { make: 1 } : {})).progress; if (make) haptic('success'); } catch (e) { fail(e); }
-    S.progressing = false; if (S.tab === 'trends') render(false);
+  // ---------- Разбор прогресса (Глеб 03.11: «должен быть намного легче… пробаганный и неплавный») ----------
+  // Карточка во «Здоровье» — только крупный итог и кнопка; разбор — в листе постоянной высоты: «Итог» крупно, блоки целей —
+  // свёрнутыми строками. «Обновить» сразу открывает лист и пишет разбор потоком (/api/progress/stream). Карточка и лист
+  // меняются точечно (morph своего узла), вкладка с графиками не перерисовывается.
+  S.pg = { live: '', making: false, open: new Set() };
+  const pgPlain = pr => pr ? plainOf(pr.text) : '';
+  // Markdown разбора → [{title, lines}], первый — «Итог» (или текст до первого заголовка)
+  function progBlocks(text) {
+    const out = [];
+    let cur = null;
+    (text || '').split('\n').forEach(raw => {
+      const l = raw.trim();
+      const hd = l.match(/^(?:#{1,6}\s*)?\*\*([^*]{1,80})\*\*:?$/) || l.match(/^#{1,6}\s+(.{1,80})$/);
+      if (hd) { cur = { title: hd[1].replace(/:$/, '').trim(), lines: [] }; out.push(cur); return; }
+      if (!l) return;
+      if (!cur) { cur = { title: 'Итог', lines: [] }; out.push(cur); }
+      cur.lines.push(l);
+    });
+    return out;
+  }
+  const pgLead = b => b ? b.lines.map(x => x.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')).join(' ').replace(/\*\*(.+?)\*\*/g, '$1') : '';
+  const pgPeek = b => { const l = (b.lines.find(x => /^Сейчас:/i.test(x)) || b.lines[0] || '').replace(/^\s*(?:[-*•])\s+/, '').replace(/\*\*(.+?)\*\*/g, '$1'); return l; };
+  function progCard() {
+    const pr = S.progress, z = S.pg, bl = pr ? progBlocks(pgPlain(pr)) : [];
+    const sum = bl[0], rest = bl.slice(1);
+    let body;
+    if (S.progress === undefined && !z.making) body = `<div class="pg-c-sum">${skel(2)}</div><div class="pg-c-row"><span class="small muted">&nbsp;</span></div>`;
+    else if (!pr && !z.making) body = `<p class="pg-c-sum muted">Посмотрю все данные — WHOOP, сон, вес, еду и воду, привычки — и по каждой цели скажу, как быстрее к ней прийти.</p>
+      <div class="pg-c-row"><button class="btn primary" data-a="progress">Разобрать прогресс</button></div>`;
+    else {
+      const lead = z.making ? (pgLead(sum) || 'Смотрю все твои данные…') : pgLead(sum);  // пока пишется новый — прежний итог
+      body = `<p class="pg-c-sum">${esc(lead)}</p>
+        <div class="pg-c-row"><span class="small muted">${z.making ? 'Обновляю разбор…' : `${dateLine(pr.day)}${rest.length ? ` · ${rest.length} ${plural(rest.length, 'блок', 'блока', 'блоков')}` : ''}`}</span>
+        <button class="btn sm tonal" data-a="pg-open">${z.making ? 'Смотреть' : 'Открыть'}</button></div>`;
+    }
+    // «Обновить» в шапке есть всегда (прячется, а не убирается) — высота карточки не прыгает
+    const can = pr && !z.making;
+    return `<section class="card pg-card rise" id="pg-card">${cap('Разбор прогресса', `<button class="link${can ? '' : ' pg-hide'}" data-a="progress"${can ? '' : ' tabindex="-1" aria-hidden="true"'}>Обновить</button>`)}${body}</section>`;
+  }
+  const pgCardSync = () => { const c = $('#pg-card'); if (c) morph(c, progCard(), true); };
+  function progBody() {
+    const z = S.pg, text = z.making ? z.live : pgPlain(S.progress);
+    if (z.err && !z.making && !S.progress) return `<div class="empty"><span class="e">⚠️</span>${esc(z.err)}</div><button class="btn primary" data-a="progress">Попробовать ещё раз</button>`;
+    const bl = progBlocks(text);
+    if (!bl.length) return `<div class="pg-sum">${skel(3)}</div><p class="small muted pg-wait">Смотрю все твои данные — первые строки через пару секунд…</p>`;
+    const [sum, ...rest] = bl;
+    let h = `<div class="pg-sum">${md(sum.lines.join('\n'))}</div>`;
+    h += rest.map((b, i) => {
+      const writing = z.making && i === rest.length - 1;
+      const open = z.open.has(b.title) ? ' open' : '';
+      return `<details class="pg-b${writing ? ' writing' : ''}" data-k="${esc(b.title)}"${open}><summary><span class="pg-bt"><b>${esc(b.title)}</b>
+        <small>${writing ? 'пишу…' : esc(pgPeek(b))}</small></span><i class="pg-chev"></i></summary><div class="prose">${md(b.lines.join('\n'))}</div></details>`;
+    }).join('');
+    if (!z.making) h += `<div class="pg-foot"><button class="btn sm ghost" data-a="progress">Обновить разбор</button>
+      <button class="btn sm tonal" data-a="ask-go" data-v="Посмотри мой разбор прогресса: с чего начать прямо сегодня?">${I.coach}Спросить тренера</button></div>`;
+    return h;
+  }
+  let pgEl = null, pgQueued = false;
+  function pgPaint() {
+    pgQueued = false;
+    pgCardSync();
+    const b = pgEl && pgEl.isConnected && pgEl.querySelector('#pg-body');
+    if (b) morph(b, progBody());
+  }
+  const pgSoon = () => { if (!pgQueued) { pgQueued = true; requestAnimationFrame(pgPaint); } };
+  function progressSheet() {
+    if (pgEl && pgEl.isConnected) return pgEl;
+    const pr = S.progress;
+    pgEl = sheet(`<h2>Разбор прогресса</h2><p class="small muted pg-meta">${pr && !S.pg.making ? `от ${dateLine(pr.day)} · ` : ''}по всем данным и твоим целям</p><div id="pg-body">${progBody()}</div>`, () => { pgEl = null; });
+    pgEl.classList.add('pg-sheet');  // постоянная высота: пока пишется разбор, лист не растёт и не прыгает
+    pgEl.addEventListener('toggle', e => { const d = e.target; if (d.matches && d.matches('details.pg-b')) { d.open ? S.pg.open.add(d.dataset.k) : S.pg.open.delete(d.dataset.k); if (d.open) haptic('select'); } }, true);
+    pgEl.addEventListener('click', ev => { if (ev.target.closest('[data-a="ask-go"]')) pgEl.close(); });
+    return pgEl;
+  }
+  async function progStream() {
+    const headers = { 'X-Init-Data': (tg && tg.initData) || '', 'Content-Type': 'application/json' };
+    if (!headers['X-Init-Data']) headers['X-Site'] = '1';
+    const r = await fetch('/api/progress/stream', { method: 'POST', headers, body: '{}' });
+    if (!r.ok || !r.body) { let m = ''; try { m = (await r.json()).error; } catch (e) { /* не JSON */ } throw new Error(m || 'Не получилось — попробуй ещё раз'); }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '', done = null;
+    for (;;) {
+      const { value, done: end } = await rd.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i).replace(/^data: ?/, ''); buf = buf.slice(i + 2);
+        let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+        if (ev.error) throw new Error(ev.error);
+        if (ev.t) { S.pg.live += ev.t; pgSoon(); }
+        if (ev.done) done = ev.progress || { day: S.data.today.day, text: ev.text };
+      }
+    }
+    if (!done) throw new Error('Ответ оборвался — попробуй ещё раз');
+    return done;
+  }
+  async function makeProgress() {
+    const z = S.pg;
+    if (z.making) { progressSheet(); return; }
+    haptic('tap');
+    Object.assign(z, { making: true, live: '', err: null });
+    z.open.clear();
+    progressSheet();
+    pgPaint();
+    try { S.progress = await progStream(); haptic('success'); } catch (e) { z.err = e.message || String(e); if (S.progress) fail(e); }
+    z.making = false; z.live = '';
+    pgPaint();
+    const m = pgEl && pgEl.querySelector('.pg-meta'); if (m && S.progress) m.textContent = `от ${dateLine(S.progress.day)} · по всем данным и твоим целям`;
+  }
+  async function loadProgress() {
+    if (S.pg.loading) return;
+    S.pg.loading = true;
+    try { S.progress = (await api('/api/progress', {})).progress; } catch (e) { if (S.progress === undefined) S.progress = null; }
+    S.pg.loading = false;
+    if (!S.pg.making) pgCardSync();  // только своя карточка — графики вкладки не трогаем
   }
 
   // ---------- Питание — встроенные «Калории»: kcal.js (F.views.food) ----------
@@ -1479,10 +1623,6 @@
       });
     });
   }
-  function progressSheet() {
-    if (!S.progress) return;
-    sheet(`<h2>Разбор прогресса</h2><p class="small muted">от ${dateLine(S.progress.day)}</p><div class="prose">${tgHtml(S.progress.text)}</div>`);
-  }
 
   // «＋» по центру меню (как в WHOOP): быстрые действия
   function plusSheet() {
@@ -1543,8 +1683,8 @@
     else if (a === 'goto') shiftTo(v);
     else if (a === 'explain') explain(v);
     else if (a === 'summary') summarySheet(v);
-    else if (a === 'progress') loadProgress(true);
-    else if (a === 'more') progressSheet();
+    else if (a === 'progress') makeProgress();
+    else if (a === 'pg-open') { haptic('tap'); progressSheet(); }
     else if (a === 'day') shiftDay(Number(v));
     else if (a === 'range') { if (S.range === Number(v)) return; S.range = Number(v); haptic('select'); render(false); if (!S.series[S.range]) loadSeries(S.range); }
     else if (a === 'series-retry') { S.seriesErr = null; render(false); loadSeries(S.range); }

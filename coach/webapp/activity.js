@@ -172,7 +172,7 @@
   }
 
   // ---------- тренды 1Н / 1М / 6М в разборах ----------
-  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, 'Полгода']];
+  const RANGES = [[7, 'Неделя'], [30, 'Месяц'], [180, '6 месяцев']];
   F.S.actvRange = F.S.actvRange || { sleep: 7, rec: 7, strain: 7 };
   const pending = new Set(), asked = new Set(), failed = new Set();
   const longest = F.longest;

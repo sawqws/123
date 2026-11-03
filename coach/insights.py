@@ -621,8 +621,8 @@ def progress(db, uid, day, days=60):
             "week": w, "days": len(rec), "recovery": _mean(r["score"] for r in rec),
             "green": sum(r["zone"] == "green" for r in rec), "red": sum(r["zone"] == "red" for r in rec),
             "hrv": _mean(r["hrv"] for r in rec), "rhr": _mean(r["rhr"] for r in rec),
-            "sleep": _mean(s["hours"] for s in slp), "perf": _mean(s["performance"] for s in slp),
-            "bed": _mean(_bed_hour(s) for s in slp), "strain": _mean(v["cycle"]["strain"] for v in vs if v["cycle"]),
+            "sleep": _mean(s["hours"] for s in slp), "need": _mean(s["need"] for s in slp if s.get("need")),
+            "perf": _mean(s["performance"] for s in slp), "bed": _mean(_bed_hour(s) for s in slp), "strain": _mean(v["cycle"]["strain"] for v in vs if v["cycle"]),
             "workouts": len(wk), "minutes": sum(x["minutes"] or 0 for x in wk),
         })
     keys = sorted(data)
@@ -667,10 +667,12 @@ def progress_context(db, uid, day, profile, body, days=60):
     p = progress(db, uid, day, days)
     lines = ["ПРОФИЛЬ: " + profile_line(profile, body),
              f"ПЕРИОД: {p['since']} — {day.isoformat()} ({days} дн), дней без данных восстановления: {p['gaps']}",
-             "ПО НЕДЕЛЯМ (неделя с: дней / восст% / зел-красн / ВСР / пульс покоя / сон ч / сон % / отбой / нагрузка / тренировок, мин):"]
+             "ПО НЕДЕЛЯМ (неделя с: дней / восст% / зел-красн / ВСР / пульс покоя / сон ч / нужно сна ч / сон % / отбой / "
+             "нагрузка / тренировок, мин):"]
     for w in p["weeks"]:
         lines.append(f"  {w['week']}: {w['days']} / {w['recovery']} / {w['green']}-{w['red']} / {w['hrv']} / {w['rhr']} / "
-                     f"{w['sleep']} / {w['perf']} / {_clock(w['bed'])} / {w['strain']} / {w['workouts']}, {w['minutes']}")
+                     f"{w['sleep']} / {w.get('need') or '—'} / {w['perf']} / {_clock(w['bed'])} / {w['strain']} / "
+                     f"{w['workouts']}, {w['minutes']}")
     f, s = p["first"], p["second"]
     lines.append(f"ПЕРВАЯ ПОЛОВИНА → ВТОРАЯ: восст {f['recovery']} → {s['recovery']}, ВСР {f['hrv']} → {s['hrv']}, "
                  f"пульс покоя {f['rhr']} → {s['rhr']}, сон {f['sleep']} → {s['sleep']} ч, нагрузка {f['strain']} → {s['strain']}")
@@ -681,6 +683,31 @@ def progress_context(db, uid, day, profile, body, days=60):
     lines.append("СПОРТ ЗА ПЕРИОД: " + "; ".join(f"{k}: {v['count']} раз, {v['minutes']} мин, ср. нагрузка {v['strain']}"
                                                 for k, v in p["sports"].items()))
     return "\n".join(lines), p
+
+
+def food_period(db, uid, day, n=14):
+    """Еда и вода за n дней до вчера (Форма + «Калории») одной строкой для разбора прогресса: сколько дней записывал,
+    в среднем ккал и белок по дням с записями, вода в среднем по дням с записями. Нет записей — пусто."""
+    since, until = (day - datetime.timedelta(days=n)).isoformat(), (day - datetime.timedelta(days=1)).isoformat()
+    per = {}
+    for m in db.meals(uid, since, until):
+        d = per.setdefault(m["day"], {"kcal": 0, "protein": 0})
+        d["kcal"] += m.get("kcal") or 0
+        d["protein"] += m.get("protein") or 0
+    for d, data in db.kcal_days(uid, since, until).items():
+        items = [x for x in data.get("items") or [] if isinstance(x, dict)]
+        if items:
+            x = per.setdefault(d, {"kcal": 0, "protein": 0})
+            x["kcal"] += sum(i.get("kcal") or 0 for i in items)
+            x["protein"] += sum(i.get("p") or 0 for i in items)
+    water_ = {d: ml for d, ml in db.water_days(uid, since, until).items() if ml}
+    parts = []
+    if per:
+        parts.append(f"еду записывал {len(per)} из {n} дней, в эти дни в среднем {round(_mean(v['kcal'] for v in per.values()))} ккал, "
+                     f"белок {round(_mean(v['protein'] for v in per.values()))} г (записи могут быть неполными)")
+    if water_:
+        parts.append(f"воду записывал {len(water_)} из {n} дней, в среднем {round(_mean(water_.values()))} мл в день")
+    return f"ЕДА И ВОДА ЗА {n} ДНЕЙ (записывает сам): " + "; ".join(parts) if parts else ""
 
 
 # ---------- сводка за период ----------

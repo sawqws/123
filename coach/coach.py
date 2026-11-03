@@ -681,6 +681,21 @@ def short(md, lines=5, chars=600):
     return ai.to_html(text), cut
 
 
+def progress_ctx(uid, day, days=60):
+    """Всё для разбора прогресса: WHOOP по неделям за days дней + полный контекст тренера (цели, профиль, вес, еда и вода
+    «Калорий», привычки, кожа, режим и план, последние 14 дней) + еда и вода за 14 дней. → (текст, сводка progress)."""
+    ctx, p = insights.progress_context(db, uid, day, profile(uid), whoop.body(db, uid), days)
+    parts = [ctx]
+    try:
+        parts.append("СЕЙЧАС И ВСЁ ОСТАЛЬНОЕ:\n" + context(uid, day)[0])
+        food = insights.food_period(db, uid, day)
+        if food:
+            parts.append(food)
+    except Exception:  # раздел сломался — разбор всё равно по WHOOP
+        traceback.print_exc()
+    return "\n\n".join(parts), p
+
+
 def progress_report(uid, chat=None, week=False):
     """Разбор прогресса за 60 дней (или итог недели — week=True). В чат — только итог, весь разбор — в приложении."""
     chat = chat or uid
@@ -690,7 +705,7 @@ def progress_report(uid, chat=None, week=False):
     try:
         typing(chat)
         day = today_of(uid)
-        ctx, p = insights.progress_context(db, uid, day, profile(uid), whoop.body(db, uid), 28 if week else 60)
+        ctx, p = progress_ctx(uid, day, 28 if week else 60)
         if not any(w["days"] for w in p["weeks"]):
             send(chat, err("Данных WHOOP пока нет — подключи браслет: /connect"))
             return
@@ -2360,6 +2375,44 @@ class Web(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):  # закрыл лист — ответ всё равно не сохраняем наполовину
             pass
 
+    def progress_stream(self, uid, body):
+        """Разбор прогресса потоком (text/event-stream): {"t": кусок Markdown}…, в конце {"done", "text", "progress":
+        {day, text — HTML, как в briefs}} или {"error"}. Глеб 03.11: «разбор должен быть намного легче… неплавный» —
+        раньше минуту ждал пустую заглушку. Сохраняется только целиком (как POST /api/progress {make})."""
+        today = today_of(uid)
+        ctx, p = progress_ctx(uid, today)
+        if not any(w["days"] for w in p["weeks"]):
+            return self.reply(400, {"error": "Данных WHOOP пока нет — подключи браслет"})
+        prompt = ai.progress_prompt(ctx)
+        self.send_response(200)
+        for k, v in {"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no"}.items():
+            self.send_header(k, v)
+        self.end_headers()
+
+        def ev(obj):
+            self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+        full = ""
+        try:
+            try:
+                for t in ai.claude_stream(prompt, model=ai.CHAT_MODEL or None, effort=ai.CHAT_EFFORT or None, timeout=240):
+                    full += t
+                    ev({"t": t})
+            except ai.AIError:
+                if full:
+                    raise
+                full = ai.progress(ctx)  # быстрая модель недоступна — одним куском
+                ev({"t": full})
+            if not full.strip():
+                raise ai.AIError("Claude не ответил")
+            html_ = ai.to_html(full)
+            db.brief(uid, today.isoformat(), "progress", html_)
+            ev({"done": True, "text": full.strip(), "progress": {"day": today.isoformat(), "text": html_}})
+        except ai.AIError as e:
+            ev({"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):  # закрыл приложение — наполовину не сохраняем
+            pass
+
     def kcal_chat_stream(self, uid, body):
         """Ответ чата по кусочкам (text/event-stream): {"t": кусок}…, в конце {"done", "text", "items"} или {"error"}.
         Строку «ITEMS: […]» не показываем — из неё в конце собираются блюда."""
@@ -2498,6 +2551,8 @@ class Web(BaseHTTPRequestHandler):
             return self.ask_stream(uid, body)
         if path == "/api/summary/stream":  # «Итог и советы» по кусочкам — первые слова через пару секунд
             return self.summary_stream(uid, body)
+        if path == "/api/progress/stream":  # разбор прогресса по кусочкам — первые слова через пару секунд
+            return self.progress_stream(uid, body)
         try:
             self.reply(200, route(uid, path, body))
         except PermissionError as e:
@@ -3209,7 +3264,7 @@ def route(uid, path, b):
         return {"history": []}
     if path == "/api/progress":
         if b.get("make"):
-            ctx, _ = insights.progress_context(db, uid, today, profile(uid), whoop.body(db, uid), 60)
+            ctx, _ = progress_ctx(uid, today)
             db.brief(uid, today.isoformat(), "progress", ai.to_html(ai.progress(ctx)))
         last = db.q("SELECT day, text FROM briefs WHERE user=? AND kind='progress' ORDER BY day DESC LIMIT 1", (uid,))
         return {"progress": last[0] if last else None}
