@@ -2587,14 +2587,21 @@ def kcal_clean(b, today):
         if "u" in v:  # время правки дня: на сервере остаётся более свежая версия (coach/SYNC.md, п. 5)
             out[k]["u"] = kcal_u(v["u"], k)
     goals = None
-    if any(k in b for k in ("goals", "salt", "water")):
+    if any(k in b for k in ("goals", "salt", "water", "portion")):
         g = b.get("goals") if isinstance(b.get("goals"), dict) else {}
         w = b.get("water") if isinstance(b.get("water"), dict) else {}
         goals = {"goals": {kind: {f: knum(g[kind].get(f), top, 0) for f, top in GOAL_MAX.items()}
                            for kind in ("train", "rest") if isinstance(g.get(kind), dict)},
                  "salt": knum(b["salt"], 50) if b.get("salt") is not None else None,
                  "water": {kind: knum(w[kind], 10000, 0) for kind in ("train", "rest") if w.get(kind) is not None}}
+        if b.get("portion") is not None:  # размер порций (1 — обычные … 2 — очень большие)
+            goals["portion"] = kcal_portion(b["portion"])
     return out, goals
+
+
+def kcal_portion(v):
+    """Размер порций из «Калорий»: от 1 до 2 (меньше — 1, больше — 2, нечисло — 1)."""
+    return min(2.0, max(1.0, knum(v, 2, 2) or 1.0))
 
 
 def kcal_sync(uid, b):
@@ -2606,7 +2613,9 @@ def kcal_sync(uid, b):
         old = db.kcal_goals(uid) or {}
         db.kcal_goals(uid, {"goals": {**(old.get("goals") or {}), **goals["goals"]},
                             "salt": goals["salt"] if goals["salt"] is not None else old.get("salt"),
-                            "water": {**(old.get("water") or {}), **goals["water"]}})
+                            "water": {**(old.get("water") or {}), **goals["water"]},
+                            **({"portion": goals["portion"]} if goals.get("portion") else
+                               {"portion": old["portion"]} if old.get("portion") else {})})
     return {"ok": True, "stale": stale, "forma": kcal_forma(uid)}
 
 
@@ -2616,7 +2625,8 @@ def kcal_state(uid):
     days = {d: {"items": v.get("items") or [], "water": v.get("water") or [], "type": v.get("type"), "u": v.get("u") or 0}
             for d, v in db.kcal_last(uid, KCAL_BACK).items()}
     g = db.kcal_goals(uid) or {}
-    return {"days": days, "goals": g.get("goals") or None, "salt": g.get("salt"), "water": g.get("water") or None}
+    return {"days": days, "goals": g.get("goals") or None, "salt": g.get("salt"), "water": g.get("water") or None,
+            "portion": g.get("portion")}
 
 
 # ---------- «Калории» внутри Формы: сайт docs/kcal по адресу /kcal/ (тот же домен — один вход, общий localStorage) ----------
@@ -2710,7 +2720,8 @@ def kcal_photo(uid, b):
         for (raw, _), path in zip(photos, paths):
             with open(path, "wb") as f:
                 f.write(raw)
-        est = ai.plate(paths[0], str(b.get("text") or "").strip()[:300], age, images=paths[1:])
+        est = ai.plate(paths[0], str(b.get("text") or "").strip()[:300], age, images=paths[1:],
+                       portion=kcal_portion(b["portion"]) if b.get("portion") is not None else 1)
     finally:
         for path in paths:
             try:
