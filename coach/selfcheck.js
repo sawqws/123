@@ -58,7 +58,7 @@ function add(p) {
 // ---------- в странице ----------
 // видимые кнопки: [data-a] и вкладки меню; ключ — действие, значение и подпись (по нему кнопка находится после перерисовки)
 function collect(scope) {
-  const root = scope === 'sheet' ? [...document.querySelectorAll('.sheet')].pop() : document;
+  const root = scope === 'sheet' ? [...document.querySelectorAll('.sheet.open')].pop() : document;
   if (!root) return [];
   const out = [], keys = new Set();
   for (const el of root.querySelectorAll('[data-a], [data-tab]')) {
@@ -75,7 +75,7 @@ function collect(scope) {
 }
 function find(key) {  // кнопка по ключу -> помечаем data-sc для Playwright
   document.querySelectorAll('[data-sc]').forEach(x => x.removeAttribute('data-sc'));
-  const sh = [...document.querySelectorAll('.sheet')].pop();
+  const sh = [...document.querySelectorAll('.sheet.open')].pop();
   for (const el of document.querySelectorAll('[data-a], [data-tab]')) {
     if (!sh && el.closest('.sheet')) continue;
     if (sh && !sh.contains(el)) continue;
@@ -88,17 +88,19 @@ function find(key) {  // кнопка по ключу -> помечаем data-s
 function state() {
   const F = window.F || {}, S = F.S || {};
   return { url: location.pathname + location.search, screen: S.screen || null, tab: S.tab || null,
-    sheets: document.querySelectorAll('.sheet').length, day: S.dayData ? S.dayData.day : null };
+    sheets: document.querySelectorAll('.sheet.open').length, day: S.dayData ? S.dayData.day : null };
 }
 // раскладка текущего вида (лист — если открыт): прокрутка вбок, за краем, мелкие кнопки и текст, налезание кнопок
 function layout(touch) {
   const W = innerWidth, H = innerHeight, out = [];
-  const sh = [...document.querySelectorAll('.sheet')].pop();
+  const sh = [...document.querySelectorAll('.sheet.open')].pop();
   const root = sh || document.body;
   const name = el => `<${el.tagName.toLowerCase()}${el.id ? '#' + el.id : el.classList.length ? '.' + el.classList[0] : ''}>` +
     ((el.getAttribute('aria-label') || el.textContent || '').trim() ? ` «${(el.getAttribute('aria-label') || el.textContent).replace(/\s+/g, ' ').trim().slice(0, 24)}»` : '');
   if (document.documentElement.scrollWidth > W + 1) out.push(['warn', 'scroll-x', `прокрутка вбок: ширина ${document.documentElement.scrollWidth} > ${W}`]);
   const vis = el => {
+    // закрытый <details>, display:none/прозрачный предок — не видно (checkVisibility), даже если прямоугольник есть
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return null;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0 || el.closest('[hidden], [aria-hidden="true"]')) return null;
     const b = el.getBoundingClientRect();
@@ -168,6 +170,16 @@ function layout(touch) {
     }
   }
   return [...new Map(out.map(x => [x[2], x])).values()].slice(0, 15);
+}
+function markX() {  // крестик верхнего листа -> data-scx (у body бывают другие div после листа — :last-of-type ненадёжен)
+  document.querySelectorAll('[data-scx]').forEach(x => x.removeAttribute('data-scx'));
+  const s = [...document.querySelectorAll('.sheet.open')].pop(), x = s && s.querySelector('.sheet-x');
+  if (x) x.setAttribute('data-scx', '1');
+  return !!x;
+}
+function closeTo(n) {  // закрыть лишние листы сверху до n (после вложенного листа)
+  const all = [...document.querySelectorAll('.sheet.open')];
+  all.slice(n).reverse().forEach(x => x.close && x.close());
 }
 function backOk() {  // «Назад» на экране подробностей: есть, виден, внутри экрана по высоте
   const b = [...document.querySelectorAll('[data-a="back"]')].find(el => !el.closest('.sheet'));
@@ -282,7 +294,7 @@ async function crawlConfig(browser, cname, dev, scheme, only) {  // only — к�
       // вернуть экран, если прошлое нажатие его поменяло
       let now = await page.evaluate(state).catch(() => null);
       if (now && !left && now.sheets > home.sheets) {
-        await page.evaluate(() => [...document.querySelectorAll('.sheet')].reverse().forEach(x => x.close && x.close())).catch(() => {});
+        await page.evaluate(() => [...document.querySelectorAll('.sheet.open')].reverse().forEach(x => x.close && x.close())).catch(() => {});
         await page.waitForTimeout(450);
         now = await page.evaluate(state).catch(() => null);
       }
@@ -318,10 +330,11 @@ async function crawlConfig(browser, cname, dev, scheme, only) {  // only — к�
         if (cname === 'phone-dark' || cname === 'laptop-dark') await shot(sw);
         // кнопки внутри листа — один уровень, только в первом виде каждого размера (листы одинаковы во всех темах)
         if (!only && !late()) await crawlSheet(sw, steps);
-        const x = await page.$('.sheet:last-of-type .sheet-x');
-        if (x) {
-          await x.click({ timeout: 2000 }).catch(e => add({ kind: 'sheet-x', sev: 'error', config: cname, where: sw, what: 'крестик не нажимается: ' + e.message.split('\n')[0].slice(0, 120), steps }));
-          const n = await page.waitForFunction(k => document.querySelectorAll('.sheet').length < k, after.sheets, { timeout: 1500 })
+        await page.evaluate(closeTo, after.sheets).catch(() => {});  // вложенные листы из обхода листа — закрыть
+        await page.waitForTimeout(400);
+        if (await page.evaluate(markX).catch(() => false)) {
+          await page.click('[data-scx]', { timeout: 2000 }).catch(e => add({ kind: 'sheet-x', sev: 'error', config: cname, where: sw, what: 'крестик не нажимается: ' + e.message.split('\n')[0].slice(0, 120), steps }));
+          const n = await page.waitForFunction(k => document.querySelectorAll('.sheet.open').length < k, after.sheets, { timeout: 1500 })
             .then(() => 0).catch(() => after.sheets);
           if (n >= after.sheets) add({ kind: 'sheet-close', sev: 'error', config: cname, where: sw, what: 'лист не закрылся по крестику', steps: [...steps, 'нажать ✕'], shot: await shot(sw + '-notclosed') });
           await flush(sw, [...steps, 'нажать ✕']);
@@ -358,8 +371,9 @@ async function crawlConfig(browser, cname, dev, scheme, only) {  // only — к�
       const s2 = await page.evaluate(state).catch(() => null);
       if (s2 && s2.sheets > top.sheets) {  // лист из листа: проверить крестик и закрыть его
         await check(`${sw} → ${b.label || b.a}`, st);
-        await page.click('.sheet:last-of-type .sheet-x', { timeout: 1500 }).catch(() => {});
-        await page.waitForTimeout(500);
+        if (await page.evaluate(markX).catch(() => false)) await page.click('[data-scx]', { timeout: 1500 }).catch(() => {});
+        await page.waitForTimeout(400);
+        await page.evaluate(closeTo, top.sheets).catch(() => {});
       }
     }
   }
