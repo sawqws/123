@@ -160,3 +160,93 @@ html.mono .as-dc { border-color: var(--trk); border-width: 2px; }
 .as-cp { height: 12px; font-size: 10px; color: var(--hint); }
 @media (min-width: 700px) { .as-cc { width: 52px; font-size: 16px; } .as-calc { padding: 18px; } }
 .card .as-cmp .tile { background: var(--card-2); }
+
+/* ===== понятная оценка (Глеб 03.11): итог фразой, точки 1–5, строки «что было», кружки дней, советы, «Подробнее» =====
+   Ч/б: цвет — только у ▲▼ (к лучшему / к худшему). Всё мелкое — капсулы и круги. */
+:root { --as-good: var(--zone-green, #16ec06); --as-bad: var(--zone-red, #ff0026); --as-ring: var(--hint-2, rgba(255, 255, 255, .3)); }
+@keyframes as-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.as-hero, .as-what, .as-tops, .as-next, .as-weeks, .as-cal2 { animation: as-in .38s cubic-bezier(.2, .8, .2, 1) both; }
+.as-what { animation-delay: .04s; } .as-tops { animation-delay: .08s; } .as-next { animation-delay: .12s; }
+@media (prefers-reduced-motion: reduce) { .as-hero, .as-what, .as-tops, .as-next, .as-weeks, .as-cal2 { animation: none; } }
+
+/* оценка 1–5 точками (без цвета) */
+.as-g { display: inline-flex; gap: 5px; align-items: center; flex: none; }
+.as-g i { width: 11px; height: 11px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--as-ring); }
+.as-g i.on { background: var(--ink); box-shadow: none; }
+.as-g.sm { gap: 3px; } .as-g.sm i { width: 7px; height: 7px; }
+
+/* итог */
+.as-hg { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.as-hl, .card .as-hl { margin: 0; font: 700 28px/1.15 var(--head); letter-spacing: -.02em; color: var(--ink); text-transform: none; }
+.as-hs { margin: 0; font: 500 18px/1.38 var(--head); color: var(--ink); }
+.as-hg .as-g i { width: 12px; height: 12px; }
+@media (min-width: 700px) { .as-hl, .card .as-hl { font-size: 32px; } .as-hs { font-size: 20px; } }
+.as-hero .as-note { margin-top: 10px; }
+.as-hero .empty { padding: 8px 0; }
+
+/* «что было»: название, крупная цифра, подпись, сравнение словами */
+.as-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 13px 0; border-top: 1px solid var(--sep); }
+.as-row:first-of-type { border-top: 0; padding-top: 4px; }
+.as-rn { grid-column: 1; font: 600 15px/1.25 var(--head); color: var(--hint); align-self: baseline; }
+.as-rv { grid-column: 2; grid-row: 1; font: 700 22px/1.15 var(--num); color: var(--ink); text-align: right; white-space: nowrap; letter-spacing: -.01em; }
+.as-rs { grid-column: 1 / -1; font-size: 13.5px; line-height: 1.35; color: var(--hint); }
+.as-rc { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 6px; margin-top: 3px; font: 500 14px/1.35 var(--head); color: var(--ink); }
+.as-rc i { flex: none; font-style: normal; font-size: 11px; color: var(--hint); }
+.as-rc.good i { color: var(--as-good); } .as-rc.bad i { color: var(--as-bad); }
+
+/* лучший и самый тяжёлый день */
+.as-top + .as-top { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--sep); }
+.as-tk { display: block; font: 600 13px/1.25 var(--head); color: var(--hint); }
+.as-tt { display: block; margin-top: 3px; font: 700 18px/1.25 var(--head); color: var(--ink); }
+.as-tw { margin: 4px 0 0; font-size: 14.5px; line-height: 1.4; color: var(--ink); opacity: .86; }
+
+/* советы */
+.as-tl { margin: 0; padding: 0; list-style: none; counter-reset: as; }
+.as-tl li { position: relative; padding: 0 0 0 36px; margin: 0; font-size: 15px; line-height: 1.42; color: var(--ink); counter-increment: as; }
+.as-tl li + li { margin-top: 12px; }
+.as-tl li::before { content: counter(as); position: absolute; left: 0; top: -1px; display: grid; place-items: center; width: 24px; height: 24px;
+  border-radius: 50%; background: var(--fill, rgba(255, 255, 255, .12)); font: 700 13px/1 var(--num); color: var(--ink); }
+
+/* недели месяца */
+.as-wkr + .as-wkr { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--sep); }
+.as-wkh { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.as-wkh b { font: 700 16px var(--head); color: var(--ink); }
+.as-wkg { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--hint); white-space: nowrap; }
+.as-wkl { margin: 4px 0 0; font-size: 13.5px; line-height: 1.4; color: var(--hint); }
+
+/* кружки дней: заполненность снизу = сколько сил утром */
+.as-o { display: block; width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--ink); flex: none;
+  background: linear-gradient(to top, var(--ink) var(--p, 0%), transparent var(--p, 0%)); }
+.as-o.l3 { --p: 100%; } .as-o.l2 { --p: 52%; } .as-o.l1 { --p: 22%; }
+.as-o.l0 { box-shadow: none; border: 1.5px dashed var(--as-ring); }
+.as-key .as-o { width: 14px; height: 14px; box-shadow: inset 0 0 0 1.5px var(--ink); }
+.as-key .as-o.l0 { box-shadow: none; border-width: 1.2px; }
+.as-key { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 0; font-size: 13px; color: var(--hint); }
+.as-key span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.as-wrow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.as-mgrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px 4px; }
+.as-cell { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; min-height: 44px; padding: 2px 0; border: 0; border-radius: 12px;
+  background: none; color: inherit; font: inherit; cursor: pointer; transition: transform .15s ease, opacity .15s ease; }
+.as-cell:active { transform: scale(.92); opacity: .7; }
+.as-cell .as-cw { padding: 0; font: 600 12px var(--head); text-transform: none; letter-spacing: 0; }
+.as-mgrid > .as-cw { font: 600 12px var(--head); text-transform: none; letter-spacing: 0; }
+.as-cn { font-size: 12px; color: var(--hint); }
+@media (min-width: 700px) { .as-o { width: 36px; height: 36px; } }
+
+/* «Подробнее» */
+.as-more { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 4px 0 16px; }
+.as-more i { display: inline-grid; transition: transform .25s ease; transform: rotate(90deg); }
+.as-more i .ico { width: 16px; height: 16px; }
+.as-more.on i { transform: rotate(-90deg); }
+.as-more ~ :is(.card, .sec, .btn) { animation: as-in .32s cubic-bezier(.2, .8, .2, 1) both; }
+@media (prefers-reduced-motion: reduce) { .as-more ~ :is(.card, .sec, .btn) { animation: none; } .as-more i { transition: none; } }
+
+/* вход во «Здоровье»: точки оценки внизу плитки */
+.as-entry .as-g { margin-top: auto; }
+.as-entry .as-ev small { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* широкий экран: итог и «Подробнее» — на всю ширину, остальное — колонками (layout.css) */
+@media (min-width: 1024px) {
+  html:root #view > div > :is(.as-hero, .as-more) { column-span: all; }
+  html:root #view > div > .as-hero { margin-bottom: 16px; }
+}
