@@ -6,6 +6,7 @@
 Ориентиры нагрузки и питания — наши (общие спортивные рекомендации), не WHOOP.
 """
 import datetime
+import json
 import statistics
 
 import water
@@ -418,18 +419,64 @@ def today(db, uid, day, profile, body):
     }
 
 
-def wear_streak(db, uid, day):
-    """Сколько дней подряд браслет на руке (есть цикл, сон или восстановление) по всей истории, как «Streak» в WHOOP.
-    Сегодня WHOOP мог ещё не прислать — серия не рвётся. Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням)."""
-    rows = db.q("SELECT DISTINCT day FROM records WHERE user=? AND kind IN ('cycle','sleep','recovery') AND day<=?",
+STREAK_MAX = 3650  # якорь серии из приложения WHOOP: 0–3650 дней
+
+
+def wear_days(db, uid, day):
+    """Дни (ISO) до day включительно, когда браслет был на руке ночью: есть сон или восстановление. Только цикл
+    (cycle) или цикл с тренировкой не считается — цикл WHOOP заводит и в дни, когда браслет ночью не носили."""
+    rows = db.q("SELECT DISTINCT day FROM records WHERE user=? AND kind IN ('sleep','recovery') AND day<=?",
                 (uid, day.isoformat()))
-    days = {r["day"] for r in rows}
+    return {r["day"] for r in rows}
+
+
+def streak_anchor(db, uid):
+    """Якорь серии {day, n} — число «стрик» из самого приложения WHOOP (в API v2 его нет), или None."""
+    try:
+        a = json.loads(db.meta(f"streak:anchor:{uid}") or "null")
+        datetime.date.fromisoformat(a["day"])
+        n = int(a["n"])
+    except (ValueError, TypeError, KeyError):
+        return None
+    return {"day": a["day"], "n": n} if 0 <= n <= STREAK_MAX else None
+
+
+def set_streak_anchor(db, uid, day, n):
+    """Запомнить «стрик» из WHOOP на день day (n 0–3650, иначе ValueError) -> новая серия (wear_streak)."""
+    try:
+        n = None if isinstance(n, (bool, float)) else int(n)
+    except (TypeError, ValueError):
+        n = None
+    if n is None or not 0 <= n <= STREAK_MAX:
+        raise ValueError("серия — число дней от 0 до 3650")
+    db.meta(f"streak:anchor:{uid}", json.dumps({"day": day.isoformat(), "n": n}))
+    return wear_streak(db, uid, day)
+
+
+def wear_streak(db, uid, day):
+    """Сколько дней подряд браслет на руке ночью (есть сон или восстановление — wear_days) по всей истории,
+    как «Streak» в WHOOP. Сегодня WHOOP мог ещё не прислать — серия не рвётся (и не прибавляется).
+    Якорь (streak_anchor: число из приложения WHOOP на его день) — если после него разрывов не было, серия =
+    его число + засчитанные дни после него; был разрыв — считаем по правилу с конца.
+    Глеб 02.11: «стрик не актуальный» (раньше считался по 30 дням); 03.11: дни только с циклом давали ~395 дней.
+    -> {n, since, anchored}."""
+    days = wear_days(db, uid, day)
+    a = streak_anchor(db, uid)
+    if a and a["day"] <= day.isoformat():
+        ad = datetime.date.fromisoformat(a["day"])
+        after = [ad + datetime.timedelta(days=i) for i in range(1, (day - ad).days + 1)]
+        if all(d.isoformat() in days for d in after if d != day):  # без разрывов (сегодня может быть ещё пусто)
+            got = [d for d in after if d.isoformat() in days]
+            n = a["n"] + len(got)
+            last = got[-1] if got else ad
+            return {"n": n, "since": (last - datetime.timedelta(days=n - 1)).isoformat() if n else None,
+                    "anchored": True}
     d = day if day.isoformat() in days else day - datetime.timedelta(days=1)
     n = 0
     while d.isoformat() in days:
         n += 1
         d -= datetime.timedelta(days=1)
-    return {"n": n, "since": (d + datetime.timedelta(days=1)).isoformat() if n else None}
+    return {"n": n, "since": (d + datetime.timedelta(days=1)).isoformat() if n else None, "anchored": False}
 
 
 def series(db, uid, day, n):

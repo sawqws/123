@@ -2740,6 +2740,8 @@ def route(uid, path, b):
             "goals": db.goals(uid), "morning": u["profile"].get("morning") or store.MORNING_DEFAULT,
             "mode": ui_mode(uid), "ext": features_extra(uid, today),
         }
+    if path == "/api/streak":  # число «стрик» из приложения WHOOP (в API его нет) — якорь серии на сегодня
+        return {"streak": insights.set_streak_anchor(db, uid, today, b.get("n"))}
     if path == "/api/mode":  # «💬 Перейти в чат» из приложения: режим «чат» и главное меню — в чат
         m = set_mode(uid, str(b.get("mode") or ""))
         if m == "chat":

@@ -498,7 +498,40 @@ class BotTest(unittest.TestCase):
         self.assertGreater(st["n"], 30 - 1)  # по всей истории, а не по 30 дням
         self.assertEqual(call("/api/all").json["streak"], st)
         empty = store.Store(os.path.join(tempfile.mkdtemp(), "e.db"))
-        self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None})
+        self.assertEqual(insights.wear_streak(empty, U, TODAY), {"n": 0, "since": None, "anchored": False})
+
+    def drop_night(self, d):
+        """День d: браслет ночью не носили — сна и восстановления нет, цикл (и тренировка) остаются, как у WHOOP."""
+        self.db.x("DELETE FROM records WHERE user=? AND kind IN ('sleep','recovery') AND day=?", (U, d.isoformat()))
+
+    def test_wear_streak_cycle_only_day_breaks(self):
+        d3 = TODAY - datetime.timedelta(days=3)
+        self.assertTrue(self.db.records(U, "cycle", d3, d3))  # цикл за этот день есть
+        self.drop_night(d3)
+        self.assertEqual(insights.wear_streak(self.db, U, TODAY),
+                         {"n": 3, "since": (TODAY - datetime.timedelta(days=2)).isoformat(), "anchored": False})
+        self.drop_night(TODAY)  # сегодня WHOOP ещё не прислал сон — серия не рвётся
+        self.assertEqual(insights.wear_streak(self.db, U, TODAY)["n"], 2)
+
+    def test_wear_streak_anchor(self):
+        d2 = TODAY - datetime.timedelta(days=2)
+        self.db.meta(f"streak:anchor:{U}", json.dumps({"day": d2.isoformat(), "n": 100}))
+        st = insights.wear_streak(self.db, U, TODAY)  # якорь + вчера + сегодня
+        self.assertEqual(st, {"n": 102, "since": (TODAY - datetime.timedelta(days=101)).isoformat(), "anchored": True})
+        self.drop_night(TODAY)  # сегодня ещё пусто — не рвёт и не прибавляет
+        self.assertEqual(insights.wear_streak(self.db, U, TODAY)["n"], 101)
+        self.drop_night(TODAY - datetime.timedelta(days=1))  # разрыв после якоря — по правилу с конца
+        self.assertEqual(insights.wear_streak(self.db, U, TODAY), {"n": 0, "since": None, "anchored": False})
+
+    def test_streak_api(self):
+        r = call("/api/streak", {"n": 50})
+        self.assertEqual(r.code, 200)
+        self.assertEqual(r.json["streak"], {"n": 50, "since": (TODAY - datetime.timedelta(days=49)).isoformat(),
+                                            "anchored": True})
+        self.assertEqual(call("/api/all").json["streak"]["n"], 50)
+        for bad in (-1, 3651, "x", None, True):
+            self.assertEqual(call("/api/streak", {"n": bad}).code, 400, bad)
+        self.assertEqual(call("/api/all").json["streak"]["n"], 50)  # неверное не сохранилось
 
     def test_clean_photos_keeps_skin(self):
         tmp = tempfile.mkdtemp()
