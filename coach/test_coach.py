@@ -2188,6 +2188,18 @@ class KcalTest(unittest.TestCase):
         with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
             kcal_call("/api/kcal/photo", {"image": self.IMG}, token=tok)
         self.assertNotIn("без советов про диеты", c.call_args[0][0])
+        self.assertNotIn("Мои порции", c.call_args[0][0])  # размер порций не прислан — как обычно
+        # «Размер порций» из настроек «Калорий» → подсказка модели (Глеб 03.11: порции сильно больше обычных)
+        for portion, want in ((1.5, "примерно в 1,5 раза"), (2, "примерно в 2 раза"), ("9", "примерно в 2 раза")):
+            with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
+                self.assertEqual(kcal_call("/api/kcal/photo", {"image": self.IMG, "portion": portion}, token=tok).code, 200)
+            self.assertIn("Мои порции крупные — " + want, c.call_args[0][0])
+        for portion in (1, 0, "abc", None):
+            with mock.patch.object(ai, "claude", return_value=self.PLATE) as c:
+                kcal_call("/api/kcal/photo", {"image": self.IMG, "portion": portion}, token=tok)
+            self.assertNotIn("Мои порции", c.call_args[0][0])
+        self.assertIn("умножай на 1,5", ai.plate_portion(1.5))
+        self.assertEqual(ai.plate_portion("x"), "")
 
     def test_not_food_bad_image_and_errors(self):
         tok = self.pair()
@@ -2317,6 +2329,17 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(self.db.kcal_goals(U), {"goals": self.db.kcal_goals(U)["goals"], "salt": 5,
                                                  "water": {"train": 3000, "rest": 2600}})
         self.assertEqual(self.db.kcal_goals(U)["goals"]["rest"]["kcal"], 2800)
+        # размер порций: сохраняется, отдаётся в /state и не теряется, когда прислали только воду
+        self.run_today(lambda: kcal_call("/api/kcal/sync", {"portion": 1.5}, token=tok))
+        self.assertEqual(self.db.kcal_goals(U)["portion"], 1.5)
+        self.run_today(lambda: kcal_call("/api/kcal/sync", {"water": {"rest": 2700}}, token=tok))
+        self.assertEqual(self.db.kcal_goals(U)["portion"], 1.5)
+        st = self.run_today(lambda: kcal_call("/api/kcal/state", token=tok, method="GET")).json
+        self.assertEqual(st["portion"], 1.5)
+        self.run_today(lambda: kcal_call("/api/kcal/sync", {"portion": 7}, token=tok))
+        self.assertEqual(self.db.kcal_goals(U)["portion"], 2)  # больше 2 — обрезано
+        self.assertEqual(coach.kcal_portion("1,5"), 1.5)
+        self.assertEqual(coach.kcal_portion(None), 1)
 
     def test_sync_auth_cors_rate(self):
         self.assertEqual(kcal_call("/api/kcal/sync", self.SYNC).code, 401)
@@ -2472,7 +2495,7 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(kcal_call("/api/kcal/state", method="GET").code, 401)
         r = kcal_call("/api/kcal/state", token=tok, method="GET")
         self.assertEqual(r.code, 200, r.json)
-        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None})
+        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None, "portion": None})
         self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
         day = {**self.SYNC["days"][TODAY.isoformat()], "u": 1730000000123}
         self.run_today(lambda: kcal_call("/api/kcal/sync", {**self.SYNC, "days": {TODAY.isoformat(): day}}, token=tok))

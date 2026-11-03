@@ -314,6 +314,7 @@ async function addFood(page, q, grams, meal) {
       ok((await page.locator('.shots .sh img').count()) === 2, 'лишнее фото убирается');
       await page.fill('#hint', '20 пельменей'); await page.click('#go'); await sleep(900);
       ok(body && body.images.length === 1 && body.text === '20 пельменей', 'на сервер ушли 2 фото и подсказка', JSON.stringify(body && { n: body.images.length, t: body.text }));
+      ok(body && body.portion === 1.5, 'с фото уходит размер порций (1,5 — большие)', JSON.stringify(body && body.portion));
       ok((await text(page, '#found')).includes('Проверь вес · по фото 220–280 г'), 'диапазон и «проверь вес» при низкой уверенности', await text(page, '#found'));
       await page.fill('#pg0', '300'); await sleep(200);
       ok((await text(page, '#sum')).includes('750 ккал'), 'вес руками 300 г → 750 ккал', await text(page, '#sum'));
@@ -526,7 +527,7 @@ async function addFood(page, q, grams, meal) {
       const { ctx, page } = await newPage(browser);
       await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300);
       await page.click('#results [data-k="s0"]'); await sleep(500);
-      ok((await page.inputValue('#g')) === '300' && (await text(page, '#units')).includes('порция · 300 г'), 'пельмени: порция 250 г × 1,2 = 300 г', await page.inputValue('#g'));
+      ok((await page.inputValue('#g')) === '375' && (await text(page, '#units')).includes('порция · 375 г'), 'пельмени: порция 250 г × 1,5 = 375 г (большие по умолчанию)', await page.inputValue('#g'));
       await page.click('#backBtn'); await sleep(400); await page.fill('#q', 'банан'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
       ok((await page.inputValue('#g')) === '120', 'банан — 1 шт как есть (штуки не увеличиваются)');
       await page.click('#sheetClose'); await sleep(500);
@@ -535,9 +536,9 @@ async function addFood(page, q, grams, meal) {
       await page.fill('#w-rest', '100'); await page.press('#w-rest', 'Tab'); await sleep(150);
       ok((await toastText(page)).includes('От 500 до 8000'), 'норма воды 100 мл не принимается');
       await page.click('#sheetClose'); await sleep(600);
-      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500, 'настройки: порции как у всех, вода 3500 мл');
+      ok((await state(page)).portion === 1 && (await state(page)).water.train === 3500, 'настройки: порции обычные, вода 3500 мл');
       await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
-      ok((await page.inputValue('#g')) === '250', '«Как у всех» — порция 250 г');
+      ok((await page.inputValue('#g')) === '250', '«Обычные» — порция 250 г');
       await page.click('#sheetClose'); await sleep(500);
       // вода (среда — тренировка, норма 3,5 л)
       ok((await text(page, '#water')).includes('0 из 3,5 л'), 'вода: 0 из 3,5 л', await text(page, '#water'));
@@ -876,6 +877,115 @@ async function addFood(page, q, grams, meal) {
       await page.evaluate(() => { location.hash = '#pair=newtok123'; }); await sleep(1500);
       ok(ctx.syncs.length === 3 && ctx.syncs[0].auth === 'Bearer newtok123', 'новая связка — вся история заново', String(ctx.syncs.length));
       ok(page.errors.length === 0, 'нет ошибок в консоли (полная история)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 18. Быстрый завтрак, размер порций, новые блюда (Глеб 03.11) */
+    {
+      const { ctx, page } = await newPage(browser);
+      ok(await page.locator('.sec [data-qb]').count() === 4, 'в «Завтраке» — 4 быстрые кнопки');
+      const qh = await page.$$eval('.sec [data-qb]', bs => bs.map(b => b.getBoundingClientRect().height));
+      ok(qh.every(h => h >= 36), 'быстрые кнопки ≥ 36 px', JSON.stringify(qh));
+      await shot(page, '18-quick-before');
+      await page.click('.sec [data-qb="nordic"]'); await sleep(650);
+      let its = await items(page);
+      ok(its.length === 2 && its[0].name === 'Хлопья гречневые Nordic на молоке' && its[1].name === 'Авокадо' && its.every(i => i.meal === 'breakfast'),
+        'одно нажатие → хлопья Nordic + авокадо отдельной строкой', JSON.stringify(its.map(i => i.name)));
+      ok(Math.round(sum(its, 'kcal')) === 720 && its[0].g === 350 && its[1].g === 145, 'хлопья 490 ккал (350 г) + авокадо 230 ккал (145 г)', JSON.stringify(its.map(i => [i.g, i.kcal])));
+      ok(its[0].per100 && Math.round(its[0].per100.kcal) === 140 && its[1].unit && its[1].unit.g === 145, 'у позиций есть состав на 100 г и порция — граммы можно править');
+      ok((await toastText(page)).includes('Хлопья Nordic + авокадо') && (await toastText(page)).includes('Отменить'), 'тост: «Хлопья Nordic + авокадо» и «Отменить»', await toastText(page));
+      ok((await page.getAttribute('.sec [data-qb="nordic"]', 'aria-pressed')) === 'true' && (await page.getAttribute('.sec [data-qb="avo"]', 'aria-pressed')) === 'true', 'кнопки отмечены «уже добавлено»');
+      await shot(page, '18-quick-after');
+      await page.click('.sec [data-qb="nordic"]'); await sleep(450);
+      ok((await items(page)).length === 2 && (await toastText(page)).includes('уже в завтраке'), 'повтор — не дублирует молча: «уже в завтраке»', await toastText(page));
+      await page.click('#toast button'); await sleep(650);
+      its = await items(page);
+      ok(its.length === 3 && its.filter(i => i.name === 'Авокадо').length === 1, '«Ещё раз» — вторая тарелка хлопьев, авокадо не дублируется', JSON.stringify(its.map(i => i.name)));
+      await page.click('.sec [data-qb="rice"]'); await sleep(650);
+      its = await items(page);
+      ok(its.length === 4 && its[3].name === 'Каша рисовая на молоке' && its[3].g === 400 && Math.round(its[3].kcal) === 396, 'рисовая каша 400 г = 396 ккал, без второго авокадо', JSON.stringify(its[3]));
+      await page.click('#toast button'); await sleep(500);
+      ok((await items(page)).length === 3, '«Отменить» убирает добавленное');
+      await page.click('.sec [data-qb="avo"]'); await sleep(450);
+      ok((await items(page)).length === 3 && (await toastText(page)).includes('Авокадо — уже в завтраке'), 'отдельная «Авокадо» — тоже без дубля');
+      // в листе «Добавить»
+      await page.click('[data-add="breakfast"] >> nth=0', { position: { x: 30, y: 20 } }); await sleep(650);
+      ok(await page.isVisible('#qbAdd [data-qb="millet"]'), 'лист «Добавить» для завтрака — сверху быстрые кнопки');
+      await shot(page, '18-add-breakfast');
+      await page.click('#mseg [data-m="lunch"]'); await sleep(300);
+      ok(!(await page.isVisible('#qbAdd')), 'для обеда — их нет');
+      await page.click('#mseg [data-m="breakfast"]'); await sleep(300);
+      await page.fill('#q', 'каш'); await sleep(250);
+      ok(!(await page.isVisible('#qbAdd')), 'при поиске — спрятаны');
+      await page.fill('#q', ''); await sleep(250);
+      await page.click('#qbAdd [data-qb="millet"]'); await sleep(750);
+      its = await items(page);
+      ok(its.some(i => i.name === 'Каша пшённая на молоке' && Math.round(i.kcal) === 460 && i.meal === 'breakfast') && await page.isHidden('#sheet'), 'пшённая из листа — 460 ккал, лист закрылся');
+      // другой день — кнопки снова свободны
+      await page.click('#week [data-d="2026-10-20"]'); await sleep(600);
+      ok((await page.getAttribute('.sec [data-qb="nordic"]', 'aria-pressed')) === 'false', 'на другой день кнопки не отмечены');
+      await page.click('#todayBtn'); await sleep(600);
+      // разделы и новые блюда
+      await page.click('#addTab'); await sleep(900);
+      const lt = await text(page, '#results');
+      ok(['Завтраки', 'Супы', 'Вторые блюда', 'Салаты', 'Фастфуд, пицца, роллы', 'Крупы и хлеб', 'Молочное', 'Спортпит'].every(g => lt.includes(g)), 'база по разделам: завтраки, супы, вторые, салаты, фастфуд, крупы, молочное, спортпит');
+      const nd = await page.locator('#results [data-k^="d"]').count(), nb = await page.locator('#results [data-k^="b"]').count();
+      ok(nd >= 130 && nb >= 130, `встроенных блюд ${nd}, продуктов ${nb}`);
+      for (const [q, want] of [['гречка с курицей', 'Гречка с курицей'], ['поке', 'Поке с'], ['протеиновый коктейль', 'Протеиновый коктейль'], ['хлопья nordic', 'Хлопья гречневые Nordic'],
+        ['паста с лососем', 'Паста с лососем'], ['шуба', ''], ['сельдь под', 'Сельдь под шубой'], ['гейнер', 'Гейнер'], ['ряженка', 'Ряженка'], ['цезарь с кре', 'Салат Цезарь с креветками']]) {
+        await page.fill('#q', q); await sleep(300);
+        const first = await page.locator('#results [data-k="s0"]').count() ? await text(page, '#results [data-k="s0"] .n') : '';
+        if (want) ok(first.startsWith(want), `новое блюдо ищется: «${q}» → ${first}`, first);
+      }
+      await page.fill('#q', 'поке с лососем'); await sleep(350);
+      const pk = await page.$$eval('#results [data-k^="s"] .n', ns => ns.map(n => n.textContent.replace(/\s*≈$/, '').trim()));
+      ok(pk.filter(n => n === 'Поке с лососем').length === 1, 'одинаковое блюдо из мировой базы не дублируется', JSON.stringify(pk));
+      await page.fill('#q', 'плов с курицей'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '525', 'плов с курицей: порция 350 г × 1,5 = 525 г', await page.inputValue('#g'));
+      await page.click('#sheetClose'); await sleep(500);
+      // размер порций в настройках
+      await page.click('#gear'); await sleep(500);
+      ok(await page.locator('#por [data-p]').count() === 3 && (await page.getAttribute('#por [data-p="1.5"]', 'aria-pressed')) === 'true', '«Размер порций»: обычные / большие / очень большие, по умолчанию — большие');
+      ok((await text(page, '#por')).includes('Очень большие') && (await text(page, '#por')).includes('×2'), 'подписи ×1, ×1,5, ×2');
+      await shot(page, '18-settings');
+      await page.click('#por [data-p="2"]'); await sleep(150); await page.click('#sheetClose'); await sleep(500);
+      ok((await state(page)).portion === 2, 'выбрано ×2 — сохранилось');
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '500', '«Очень большие» — пельмени 500 г', await page.inputValue('#g'));
+      await page.click('#sheetClose'); await sleep(500);
+      ok(page.errors.length === 0, 'нет ошибок в консоли (быстрый завтрак, порции)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 18а. Размер порций: старые значения → ближайший из трёх; с сервера — если свой по умолчанию; уходит в sync */
+    {
+      const base = { goals: { train: { kcal: 3400, p: 130, f: 105, c: 485 }, rest: { kcal: 2800, p: 125, f: 95, c: 360 } }, trainDays: [0, 1, 2, 5], days: {}, custom: [], recent: [], weights: {} };
+      let { ctx, page } = await newPage(browser, { seed: { ...base, portion: 1.2 } });
+      await page.click('#gear'); await sleep(500);
+      ok((await page.getAttribute('#por [data-p="1.5"]', 'aria-pressed')) === 'true', 'старые «+20 %» → «Большие ×1,5»');
+      await page.click('#sheetClose'); await sleep(500);
+      await page.click('#addTab'); await sleep(500); await page.fill('#q', 'пельмени'); await sleep(300); await page.click('#results [data-k="s0"]'); await sleep(500);
+      ok((await page.inputValue('#g')) === '375', 'и порции считаются ×1,5', await page.inputValue('#g'));
+      await ctx.close();
+      ({ ctx, page } = await newPage(browser, { seed: { ...base, portion: 1 } }));
+      ok((await state(page)).portion === 1, '«Как у всех» остаётся «Обычные»');
+      await ctx.close();
+      ({ ctx, page } = await newPage(browser, { seed: { ...base, fullSync: true }, state: { days: {}, portion: 2 }, init: () => localStorage.setItem('kcal.token', 'tok') }));
+      await sleep(900);
+      ok((await state(page)).portion === 2, 'размер порций с сервера (свой был по умолчанию)');
+      ok(ctx.syncs.length && ctx.syncs[ctx.syncs.length - 1].body.portion === 2, 'размер порций уходит в sync', JSON.stringify(ctx.syncs.map(x => x.body.portion)));
+      await ctx.close();
+      ({ ctx, page } = await newPage(browser, { seed: { ...base, portion: 1, fullSync: true }, state: { days: {}, portion: 2 }, init: () => localStorage.setItem('kcal.token', 'tok') }));
+      await sleep(900);
+      ok((await state(page)).portion === 1, 'свой выбор не перебивается сервером');
+      await ctx.close();
+    }
+    /* 18б. Быстрый завтрак внутри Формы (?embed=1) */
+    {
+      const { ctx, page } = await newPage(browser, { url: URL + '?embed=1&theme=dark' });
+      ok(await page.locator('.sec [data-qb]').count() === 4, 'внутри Формы — быстрые кнопки есть');
+      await page.click('.sec [data-qb="millet"]'); await sleep(650);
+      ok((await items(page)).length === 2, 'внутри Формы — одно нажатие → каша + авокадо');
+      await shot(page, '18-embed');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (embed, быстрый завтрак)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {
