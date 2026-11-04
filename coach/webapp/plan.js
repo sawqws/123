@@ -86,14 +86,14 @@
     const sel = pl.options.find(o => o.mode === pl.mode);
     return `<div class="sec rise">${cap('Планер сна', 'сегодня')}<section class="card pl-sleep">
       <div class="pl-bed"><span class="tk">Лечь в</span><b class="num">${esc(pl.bed)}</b>
-        <span class="muted small">сон ${h2(sel.hours)} + ${pl.fall} мин заснуть · подъём ${esc(pl.wake)}</span></div>
+        <span class="muted small">чистый сон ${h2(sel.hours)}${sel.in_bed ? ` · в кровати ${h2(sel.in_bed)}` : ''} + ${pl.fall} мин заснуть · подъём ${esc(pl.wake)}</span></div>
       <div class="pl-opts" role="radiogroup" aria-label="Сколько спать">${pl.options.map(o => `<button class="pl-opt ${o.mode === pl.mode ? 'on' : ''}" role="radio" aria-checked="${o.mode === pl.mode}" data-a="plan-mode" data-v="${o.mode}">
           <span class="pl-on"></span><span class="pl-om"><b>${esc(o.name)}</b><span>${o.pct}% · ${h2(o.hours)}</span></span><b class="num">${esc(o.bed)}</b></button>`).join('')}</div>
       <label class="pl-wake"><span class="pl-wk"><b>Подъём</b><span class="muted">${pl.wake_auto ? (pl.regime ? 'по режиму' : 'как обычно по WHOOP') : 'своё время'}</span></span>
         <input id="plan-wake" type="time" value="${esc(pl.wake)}" aria-label="Время подъёма"></label>
       ${!pl.wake_auto ? `<button class="link pl-reset" data-a="plan-wake-auto">${pl.regime ? 'Подъём по режиму' : 'Вернуть обычный подъём'}${pl.usual_wake ? ` (${esc(pl.usual_wake)})` : ''}</button>` : ''}
       ${pl.regime_bed ? `<p class="small muted">По режиму отбой в <b class="num">${esc(pl.regime_bed)}</b>.</p>` : ''}
-      <p class="small muted">Нужно сна: <b class="num">${h2(pl.need)}</b> — ${esc(pl.need_from)}. «Пик» — вся потребность, «Норма» — 85%, «Минимум» — 70%.</p>
+      <p class="small muted">Нужно сна: <b class="num">${h2(pl.need)}</b> — ${esc(pl.need_from)}. «Пик» — вся потребность, «Норма» — 85%, «Минимум» — 70%.${pl.eff ? ` Это чистый сон: ночью ты спишь ${Math.round(pl.eff * 100)}% времени в кровати (по WHOOP), поэтому лечь нужно раньше.` : ''}</p>
     </section></div>`;
   }
 
@@ -123,7 +123,7 @@
     F.haptic('select');
     // сразу показываем выбор, сервер пересчитает и запомнит
     const o = p.planner.options.find(x => x.mode === v);
-    Object.assign(p.planner, { mode: v, bed: o.bed, hours: o.hours });
+    Object.assign(p.planner, { mode: v, bed: o.bed, hours: o.hours, in_bed: o.in_bed });
     F.render(false);
     saveP({ sleep_mode: v }, true).then(ok => { if (!ok) load(); });  // не сохранилось — вернуть как на сервере
   };

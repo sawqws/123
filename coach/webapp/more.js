@@ -270,8 +270,14 @@
     const typing = document.activeElement && document.activeElement.id === 'q';
     const kb = coach && typing && vh < maxH - 120;
     document.body.classList.toggle('kb', kb);
-    root.style.setProperty('--vv-h', Math.round(vh) + 'px');
-    root.style.setProperty('--vv-top', Math.round(top) + 'px');
+    // Глеб 04.11: «строка ввода опять улетает вверх» — на iOS (с экрана «Домой») visualViewport после закрытия
+    // клавиатуры остаётся укороченным/сдвинутым. Поэтому без набора текста страница чата — просто весь экран
+    // (top: 0; bottom: 0), а visualViewport берём, только пока поле в фокусе
+    if (!(coach && typing)) { root.style.removeProperty('--vv-h'); root.style.removeProperty('--vv-top'); }
+    else {
+      root.style.setProperty('--vv-h', Math.round(vh) + 'px');
+      root.style.setProperty('--vv-top', Math.round(top) + 'px');
+    }
     const bar = document.querySelector('.tabbar');
     let pad = 16;  // широкий экран: меню слева, внизу только поле
     if (bar && !F.wide() && !kb) { const r = bar.getBoundingClientRect(); pad = Math.max(16, Math.round(window.innerHeight - r.top) + 8); }
@@ -285,18 +291,20 @@
     }
   }
   // замер для проверки (раз за фокус, через 1 с): размеры окна, клавиатуры и где поле — на сервер, без личных данных
-  let probed = 0;
-  const probe = () => {
-    if (!IPHONE || Date.now() - probed < 20000) return;
-    probed = Date.now();
+  const probed = {};
+  const probe = when => {
+    if (!IPHONE || Date.now() - (probed[when] || 0) < 20000) return;
+    probed[when] = Date.now();
     setTimeout(() => {
-      const box = document.querySelector('body.tab-coach .composer');
-      if (!box || !vv || document.activeElement?.id !== 'q') return;
-      const r = box.getBoundingClientRect();
-      F.api('/api/kb', { iw: innerWidth, ih: innerHeight, vh: Math.round(vv.height), vt: Math.round(vv.offsetTop),
-        sh: screen.height, top: Math.round(r.top), bottom: Math.round(r.bottom), kb: document.body.classList.contains('kb'),
+      const box = document.querySelector('body.tab-coach .composer'), bar = document.querySelector('.tabbar');
+      if (!box || !vv) return;
+      const r = box.getBoundingClientRect(), b = document.body.getBoundingClientRect();
+      F.api('/api/kb', { when, iw: innerWidth, ih: innerHeight, vh: Math.round(vv.height), vt: Math.round(vv.offsetTop),
+        sh: screen.height, top: Math.round(r.top), bottom: Math.round(r.bottom), btop: Math.round(b.top), bh: Math.round(b.height),
+        bar: bar ? Math.round(bar.getBoundingClientRect().top) : -1, sy: Math.round(scrollY),
+        focus: document.activeElement?.id === 'q', kb: document.body.classList.contains('kb'),
         app: standalone, tg: !!(F.tg && F.tg.initData), ua: navigator.userAgent.slice(0, 160) }).catch(() => {});
-    }, 1000);
+    }, 1200);
   };
   // клавиатура iOS выезжает ~0,3–0,5 с, а события visualViewport в приложении с экрана «Домой» приходят не всегда —
   // пока поле в фокусе, первые 1,5 с подгоняем каждый кадр
@@ -347,8 +355,8 @@
   addEventListener('orientationchange', () => setTimeout(F.safeBottom, 300));
   if (F.tg && F.tg.onEvent) ['safeAreaChanged', 'contentSafeAreaChanged'].forEach(e => { try { F.tg.onEvent(e, F.safeBottom); } catch (x) { /* старый Telegram */ } });
 
-  document.addEventListener('focusin', e => { if (e.target.id === 'q') { chase(); probe(); } });
-  document.addEventListener('focusout', e => { if (e.target.id === 'q') chase(); });
+  document.addEventListener('focusin', e => { if (e.target.id === 'q') { chase(); probe('focus'); } });
+  document.addEventListener('focusout', e => { if (e.target.id === 'q') { chase(); probe('blur'); } });
 
   // 30 минут тишины — при открытии вкладки чистый лист (сервер отдаёт то же: /api/history — только текущий разговор)
   F.coFresh = () => {

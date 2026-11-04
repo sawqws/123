@@ -104,11 +104,13 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None, web
 # Чат приложения по умолчанию — 2–5 коротких строк; длинно — только если он сам просит «подробно».
 LONG_RX = re.compile(r"подробн|развернут|распиши|расскажи\s+вс[её]|полностью|пошагов|по\s+шагам|на\s+неделю|план\s+(трениров|питан|на\s)|"
                      r"составь|список\s+(всех|продукт)|объясни\s+подробн", re.I)
-BRIEF = ("КРАТКО (главное правило этого чата): 2–5 коротких строк. Без вступлений, без пересказа вопроса, без «отличный вопрос», "
-         "без воды и общих слов. Первая строка — сразу ответ. Список — не больше 4 пунктов по одной строке. "
-         "Без заключений и «если что — пиши». ")
+BRIEF = ("КРАТКО И ПО ПУНКТАМ (главное правило этого чата; Глеб 04.11: «всё в строчку — непонятно, надо по пунктикам, чётко, "
+         "мало текста»). Формат строго: первая строка — **ответ одной короткой фразой** (до 60 знаков, жирным); дальше "
+         "2–4 пункта «- …», каждый — одна мысль с цифрой, до 70 знаков. Никаких абзацев и сплошного текста. "
+         "Разбор показателя — пункты: «- Сейчас: …», «- Обычно у тебя: …», «- Почему: …», «- Что сделать: …». "
+         "Без вступлений, пересказа вопроса, «отличный вопрос», воды, общих слов и заключений («если что — пиши»). ")
 LONG = ("Он сам попросил подробно — можно полнее (до ~15 строк), но так же без воды: пункты «- …», **жирным** главное. ")
-SHORT_LIMIT = (6, 650)  # строк, знаков — мягкий предел ответа чата приложения (trim_answer); «подробно» — LONG_LIMIT
+SHORT_LIMIT = (6, 520)  # строк, знаков — мягкий предел ответа чата приложения (trim_answer); «подробно» — LONG_LIMIT
 LONG_LIMIT = (18, 2600)
 TOPICS = {"skin": ("ТЕМА РАЗГОВОРА: КОЖА (это чат в разделе «Кожа»). Отвечай про кожу и уход, опираясь на его уход, "
                    "заметки и разборы фото лба из ДАННЫХ. Просит поменять уход («убери…», «добавь…», «замени…», "
@@ -127,7 +129,7 @@ def chat_prompt(context, history, question, full=False, assist=False, topic=None
     talk = "\n".join(("Я: " if m["role"] == "user" else "Форма: ") + m["text"][:1200] for m in history)
     how = BRIEF + (LONG if full and wants_long(question) else "")
     if not full:
-        how += "Ответ для чата: 2–5 коротких строк, до ~500 знаков (чат бота). "
+        how += "Ответ для чата: вывод и 2–4 пункта, до ~500 знаков (чат бота). "
     return (f"ДАННЫЕ:\n{context}\n\n" + (f"{TOPICS[topic]}\n\n" if topic in TOPICS else "")
             + (f"НЕДАВНИЙ РАЗГОВОР:\n{talk}\n\n" if talk else "")
             + f"ВОПРОС: {question}\n\nОтветь как личный помощник по правилам из системного промпта. {how}"
@@ -135,11 +137,42 @@ def chat_prompt(context, history, question, full=False, assist=False, topic=None
             "если вопрос о другом." + ("\n\n" + ASSIST if assist else ""))
 
 
+_SENT = re.compile(r"(?<=[.!?…])\s+(?=[А-ЯЁA-Z0-9«\"(*])")
+_ITEM = re.compile(r"^\s*(?:[-*•–]\s|\d+[.)]\s)")
+
+
+def bulletize(md):
+    """Ответ чата — по пунктам (Глеб 04.11: «всё в строчку пишет — надо по пунктикам, чётко, понятно»): первая строка —
+    короткий вывод **жирным**, остальное — пункты «- …» по одному предложению. Списки и «Источники» не трогаем."""
+    rows, out, first = (md or "").strip().splitlines(), [], True
+    if len(rows) == 1 and len(rows[0]) <= 90 and len(_SENT.split(rows[0].strip())) == 1:
+        return rows[0].strip()  # короткий ответ одной фразой — как есть
+    for r in rows:
+        t = r.strip()
+        if not t or _ITEM.match(t) or t.lower().startswith(("источники", "**источники", "✅", "⚠️", "↩️")):
+            if t or (out and out[-1]):
+                out.append(r.rstrip() if t else "")
+            first = first and not t
+            continue
+        if first:
+            first = False
+            m = re.match(r"^(\*\*[^*]+\*\*[.!:]?)\s+(.+)$", t)
+            head, rest = (m.group(1), m.group(2)) if m else (_SENT.split(t, 1) + [""])[:2]
+            if not m and not rest and len(t) <= 90:
+                out.append(t if t.startswith("**") else f"**{t.rstrip('.')}**")
+                continue
+            out.append(head if head.startswith("**") else f"**{head.rstrip('.')}**")
+            out += [f"- {x.strip()}" for x in _SENT.split(rest) if x.strip()]
+            continue
+        out += [f"- {x.strip()}" for x in _SENT.split(t) if x.strip()]
+    return "\n".join(out).strip()
+
+
 def trim_answer(md, long=False):
     """Мягкий предел длины ответа чата приложения: целые строки, лишнее — по концу предложения, не на полуслове.
     Строка «Источники: …» (после поиска) остаётся. (текст, обрезано ли)."""
     lines_max, chars = LONG_LIMIT if long else SHORT_LIMIT
-    rows = [x.rstrip() for x in words.fix(md or "").strip().splitlines()]
+    rows = [x.rstrip() for x in bulletize(words.fix(md or "")).strip().splitlines()]
     src = ""
     for i in range(len(rows) - 1, -1, -1):
         if rows[i].strip().lower().startswith(("источники:", "**источники")):

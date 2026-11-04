@@ -309,7 +309,7 @@ class ApiTest(unittest.TestCase):
             r = self.call("/api/ask", {"text": "Что делать с кожей?"})
         p = c.call_args[0][0]
         for want in ("ПРОФИЛЬ", "ЦЕЛИ", "восстановление", "РЕЖИМ НА СЕГОДНЯ", "ПРИВЫЧКИ И ЦЕЛИ", "УХОД ЗА КОЖЕЙ",
-                     "СЕЙЧАС: 21:10, среда", "ВОПРОС: Что делать с кожей?", "КРАТКО", "2–5 коротких строк"):
+                     "СЕЙЧАС: 21:10, среда", "ВОПРОС: Что делать с кожей?", "КРАТКО", "КРАТКО И ПО ПУНКТАМ"):
             self.assertIn(want, p)
         self.assertEqual(r["answer"], "Ок")
         with mock.patch.object(ai, "claude", return_value="Ок") as c:
@@ -323,7 +323,7 @@ class ApiTest(unittest.TestCase):
             coach.answer(T.U, T.U, "Как не волноваться перед контрольной?")
         p = c.call_args[0][0]
         self.assertIn("УХОД ЗА КОЖЕЙ", p)
-        self.assertIn("Ответ для чата: 2–5 коротких строк", p)
+        self.assertIn("Ответ для чата: вывод и 2–4 пункта", p)
 
     def test_persona_covers_everything_safely(self):
         p = ai.persona()
@@ -653,12 +653,12 @@ class BriefTest(unittest.TestCase):
 
     def test_prompt_has_brevity_rule(self):
         p = ai.chat_prompt("ДАННЫЕ", [], "Как улучшить сон?", full=True, assist=True)
-        for want in ("КРАТКО", "2–5 коротких строк", "Без вступлений", "не больше 4 пунктов"):
+        for want in ("КРАТКО", "КРАТКО И ПО ПУНКТАМ", "Без вступлений", "2–4 пункта"):
             self.assertIn(want, p)
         self.assertNotIn("до ~15 строк", p)
         self.assertIn("до ~15 строк", ai.chat_prompt("", [], "Распиши подробно план на неделю", full=True))
         persona = ai.persona()
-        for want in ("личный помощник по всему", "психолог", "врач-консультант", "учёбе", "КРАТКО", "2–5 коротких строк",
+        for want in ("личный помощник по всему", "психолог", "врач-консультант", "учёбе", "КРАТКО", "КРАТКО И ПО ПУНКТАМ",
                      "рецептурных", "8-800-2000-122", "дерматолог"):
             self.assertIn(want, persona)
 
