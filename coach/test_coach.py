@@ -1865,6 +1865,24 @@ class WebhookTest(unittest.TestCase):
         su.assert_called_once()
         self.assertEqual(su.call_args[0][0], U)
 
+    def test_sync_saves_whoop_id(self):
+        """04.11: whoop_id не записывался — вебхук не находил пользователя. sync берёт его из профиля."""
+        import whoop
+        self.db.x("UPDATE tokens SET whoop_id=NULL WHERE user=?", (U,))
+
+        class Cl:
+            def __init__(self, *a):
+                pass
+
+            def collection(self, kind, start):
+                return []
+
+            def get(self, path):
+                return {"user_id": 4242, "first_name": "Г"} if "profile" in path else {}
+        with mock.patch.object(whoop, "Client", Cl):
+            whoop.sync(self.db, U, "id", "sec", days=2)
+        self.assertEqual(self.db.token(U)["whoop_id"], "4242")
+
     def test_bad_signature_and_unknown_user(self):
         ev = {"user_id": 777, "id": "abc", "type": "sleep.updated", "trace_id": "t2"}
         with mock.patch.object(coach, "sync_user") as su:
