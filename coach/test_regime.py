@@ -38,7 +38,7 @@ class CalcTest(unittest.TestCase):
         c = cfg()
         want = {1: ("23:45", "08:30"), 2: ("23:45", "08:30"), 3: ("23:15", "08:00"), 4: ("23:15", "08:00"),
                 5: ("22:45", "07:30"), 6: ("22:45", "07:30"), 7: ("22:15", "07:00"),
-                8: ("22:00", "06:45")}  # вечер перед первым учебным днём — уже цель (шаг меньше)
+                8: ("22:00", "07:00")}  # вечер перед учёбой — отбой уже цель; подъём этого утра — ещё по сдвигу
         for day, bw in want.items():
             self.assertEqual(R.bed_wake(c, D(2026, 11, day)), bw, day)
         self.assertEqual(R.bed_wake(c, D(2026, 11, 9)), ("22:00", "06:45"))  # учёба: сдвиг закончен
@@ -50,6 +50,14 @@ class CalcTest(unittest.TestCase):
         self.assertEqual(R.bed_wake(c, D(2026, 11, 15)), ("22:00", "06:45"))  # держим до учёбы
         self.assertEqual(R.bed_wake(c, D(2026, 11, 23)), ("22:00", "06:45"))
         self.assertEqual(R.bed_wake(c, D(2026, 11, 27))[0], "23:15")  # пт: завтра выходной — позже на 75 мин
+
+    def test_vacation_wake_9_until_school(self):
+        # Глеб 04.11: на каникулах подъём в 9 — выспаться; в воскресенье утром тоже 9, вечером — отбой к учёбе
+        c = cfg(shift={"from": "2026-11-04", "bed": "22:45", "wake": "09:00", "step": 5, "every": 14})
+        for day in (4, 5, 6, 7):
+            self.assertEqual(R.bed_wake(c, D(2026, 11, day)), ("22:45", "09:00"), day)
+        self.assertEqual(R.bed_wake(c, D(2026, 11, 8)), ("22:00", "09:00"))
+        self.assertEqual(R.bed_wake(c, D(2026, 11, 9)), ("22:00", "06:45"))
 
     def test_shift_over_midnight(self):
         c = cfg(shift={"from": "2026-11-01", "bed": "00:30", "wake": "09:00", "step": 60, "every": 1})

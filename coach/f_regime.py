@@ -260,11 +260,12 @@ def _shifted(cfg, d):
     if first and d >= first:
         return None  # с первого учебного дня — обычный режим
     tb, tw = _mins(cfg["bed"]), _mins(cfg["wake"])
-    if first and d + datetime.timedelta(days=1) == first:
-        return cfg["bed"], cfg["wake"]  # вечер перед учёбой — уже цель
     k = (d - start).days // sh["every"]
     gb, gw = max(0, _diff(_mins(sh["bed"]), tb)), max(0, _diff(_mins(sh["wake"]), tw))
-    return _hhmm(tb + max(0, gb - k * sh["step"])), _hhmm(tw + max(0, gw - k * sh["step"]))
+    bed, wake = _hhmm(tb + max(0, gb - k * sh["step"])), _hhmm(tw + max(0, gw - k * sh["step"]))
+    if first and d + datetime.timedelta(days=1) == first:
+        bed = cfg["bed"]  # вечер перед учёбой — отбой уже как в учёбу; подъём этого утра — ещё по сдвигу (Глеб 04.11)
+    return bed, wake
 
 
 def bed_wake(cfg, d):
