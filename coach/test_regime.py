@@ -240,6 +240,12 @@ class ApiTest(unittest.TestCase):
             now = datetime.datetime.combine(self.TODAY, datetime.time(20, 0), tzinfo=ZoneInfo("Europe/Moscow"))
             with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: self.TODAY):
                 self.assertTrue(coach.kcal_forma(T.U)["train_today"])  # «Калории» — тот же тренировочный день
+            # Глеб 04.11: WHOOP записал тренировку по ошибке, он удалил её — день снова без тренировки (вебхук workout.deleted)
+            self.assertTrue(coach.whoop.drop_deleted(self.db, T.U, "workout.deleted", "wbox"))
+            tr = self.call("/api/regime")["today"]["train"]
+            self.assertEqual((tr["on"], tr["src"], tr["minutes"]), (False, "plan", 0))  # массаж — не тренировка
+            with mock.patch.object(coach, "user_now", lambda u: now), mock.patch.object(coach, "today_of", lambda uid: self.TODAY):
+                self.assertFalse(coach.kcal_forma(T.U)["train_today"])
         finally:
             for wid, _, _ in recs:
                 self.db.drop_record(T.U, "workout", wid)
