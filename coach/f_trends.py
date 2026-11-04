@@ -51,7 +51,7 @@ METRICS = dict([
     # восстановление (recovery; дыхание — из сна)
     _m("recovery", "recovery", "Восстановление", "%", ("recovery",), "восстановление", good=True, top=100),
     _m("hrv", "recovery", "Гибкость пульса", "мс", ("recovery",), "гибкость пульса", chart="line", good=True,
-       note="вариабельность пульса во сне"),
+       note="насколько отдохнул организм — по пульсу во сне"),
     _m("rhr", "recovery", "Пульс покоя", "уд/мин", ("recovery",), "пульс покоя", chart="line", good=False),
     _m("resp", "recovery", "Частота дыхания", "вдохов/мин", ("sleep",), "частота дыхания во сне", dec=1, chart="line",
        note="во сне"),
