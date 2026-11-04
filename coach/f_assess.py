@@ -389,7 +389,7 @@ def _tips(period, cur, state_key, hard, rows, water):
         out.append(f"После тяжёлых дней (как {_when(hard['day'], period)}) — плотный ужин: каша и мясо или рыба, "
                    "2–3 стакана воды и без телефона за час до сна.")
     elif tired >= 2:
-        out.append(f"Дней с малым запасом сил — {tired}. В такие дни ложись пораньше и убирай телефон за час до сна.")
+        out.append(f"Дней с красным восстановлением — {tired}. В такие дни ложись пораньше и убирай телефон за час до сна.")
     w = water.get("avg") if water.get("days", 0) >= 3 else None
     if w is not None and w < WATER_LOW:
         out.append(f"Пей больше воды: в среднем {_liters(w)} в день, а нужно хотя бы 2{NB}л. Бутылку — с собой в школу.")

@@ -10,6 +10,8 @@ import os
 import sqlite3
 import threading
 
+import words
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY, name TEXT DEFAULT '', tz TEXT DEFAULT 'Europe/Moscow',
@@ -394,6 +396,7 @@ class Store:
 
     def say(self, uid, role, text, thread=""):
         """thread — нить разговора: '' — общий чат (бот и вкладка «Чат»), 'skin' — «Спросить» в разделе «Кожа»."""
+        text = text if role == "user" else words.fix(text)  # ответы — без старых названий HRV (words.py)
         self.x("INSERT INTO messages (user, role, text, created, thread) VALUES (?,?,?,?,?)",
                (uid, role, text[:8000], now_iso(), thread or ""))
         # храним последние 200 сообщений каждой нити
@@ -416,6 +419,7 @@ class Store:
         if text is None:
             r = self.q("SELECT text, created FROM briefs WHERE user=? AND day=? AND kind=?", (uid, str(day), kind))
             return r[0] if r else None
+        text = words.fix(text)
         self.x("INSERT OR REPLACE INTO briefs VALUES (?,?,?,?,?)", (uid, str(day), kind, text, now_iso()))
         return {"text": text}
 

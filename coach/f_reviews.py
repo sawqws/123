@@ -23,6 +23,8 @@ import html
 import json
 import re
 
+import words
+
 import f_regime
 
 KINDS = ("morning", "workout", "evening")
@@ -142,8 +144,8 @@ def add(db, uid, day, kind, title, text, at, ref="", src=None):
     (workout_src / morning_src). -> id."""
     if kind not in KINDS:
         raise ValueError("нет такого разбора")
-    title = " ".join(str(title or "").split())[:TITLE_MAX]
-    text = str(text or "").strip()[:TEXT_MAX]
+    title = words.fix(" ".join(str(title or "").split()))[:TITLE_MAX]
+    text = words.fix(str(text or "").strip())[:TEXT_MAX]
     src = json.dumps(src, ensure_ascii=False) if src else None
     db.x("INSERT INTO reviews (user, day, kind, ref, at, title, text, seen, created, src) VALUES (?,?,?,?,?,?,?,0,?,?) "
          "ON CONFLICT (user, day, kind, ref) DO UPDATE SET at=excluded.at, title=excluded.title, text=excluded.text, "
