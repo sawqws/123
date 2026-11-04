@@ -201,14 +201,17 @@ def week(app, uid, today, cfg=None, t=None):
     dates = [mon + datetime.timedelta(days=i) for i in range(7)]
     days = ins.by_day(app.db, uid, (mon - datetime.timedelta(days=45)).isoformat(), today.isoformat())
     t = t or ins.today(app.db, uid, today, profile, body)
-    plan = planner(t, cfg, profile)
-    import f_regime  # режим настроен сам — «Сон сегодня» не спорит с ним: отбой и подъём из режима
-    if not cfg.get("wake") and f_regime.configured(app.db, uid):
+    import f_regime  # режим настроен — подъём из режима (Пик / Норма / Минимум считаются от него), отбой режима — подсказкой
+    if f_regime.configured(app.db, uid):
         rc = f_regime.load(app.db, uid, profile)
-        bed, _ = f_regime.bed_wake(rc, today)
-        _, wake = f_regime.bed_wake(rc, today + datetime.timedelta(days=1))
-        plan.update(bed=bed, wake=wake, wake_auto=False, regime=True,
-                    hours=round(_diff(_mins(bed), _mins(wake)) / 60, 2))
+        r_bed, _ = f_regime.bed_wake(rc, today)
+        _, r_wake = f_regime.bed_wake(rc, today + datetime.timedelta(days=1))
+        # Глеб 04.11: «планер сна не работает» — раньше отбой режима затирал выбор режима сна (кнопки ничего не меняли),
+        # а длина сна выходила отрицательной. Теперь выбор и своё время подъёма работают и при настроенном режиме.
+        plan = planner(t, cfg if cfg.get("wake") else dict(cfg, wake=r_wake), profile)
+        plan.update(wake_auto=not cfg.get("wake"), regime=True, regime_bed=r_bed, usual_wake=r_wake)
+    else:
+        plan = planner(t, cfg, profile)
     water = app.db.water_days(uid, mon.isoformat(), sun.isoformat())
     meals = {}
     for m in app.db.meals(uid, mon.isoformat(), sun.isoformat()):
