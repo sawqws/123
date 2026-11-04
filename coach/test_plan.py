@@ -159,7 +159,10 @@ class PlanTest(unittest.TestCase):
         p = r["planner"]
         self.assertEqual((p["wake"], p["mode"], p["wake_auto"]), ("07:00", "norm", False))
         for o in p["options"]:
-            bed = 7 * 60 - round(p["need"] * o["pct"] / 100 * 60) - f_plan.FALL_ASLEEP
+            # чистый сон / эффективность сна (Глеб 04.11: время в кровати ≠ чистый сон) + 15 мин на засыпание
+            self.assertTrue(0.8 <= p["eff"] <= 0.98)
+            self.assertGreater(o["in_bed"], o["hours"])
+            bed = 7 * 60 - round(p["need"] * o["pct"] / 100 * 60 / p["eff"]) - f_plan.FALL_ASLEEP
             bed -= bed % 5
             self.assertEqual(o["bed"], f_plan._hhmm(bed), o["mode"])
         peak, norm, low = (next(o for o in p["options"] if o["mode"] == m) for m in ("peak", "norm", "min"))

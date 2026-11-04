@@ -370,6 +370,20 @@ def _hhmm(mins):
     return f"{mins // 60:02d}:{mins % 60:02d}"
 
 
+def sleep_eff(days, day):
+    """Доля чистого сна от времени в кровати (Глеб 04.11: «время в кровати — не то же самое, что чистый сон»):
+    медиана эффективности сна WHOOP за 14 ночей, 0,80–0,98; данных нет — 0,9."""
+    lo = (day - datetime.timedelta(days=13)).isoformat()
+    xs = [v["sleep"]["efficiency"] for d, v in days.items()
+          if lo <= d <= day.isoformat() and v.get("sleep") and v["sleep"].get("efficiency")]
+    return round(min(0.98, max(0.80, statistics.median(xs) / 100)), 3) if xs else 0.9
+
+
+def in_bed_min(net_hours, eff):
+    """Сколько минут лежать в кровати, чтобы чистого сна было net_hours: сон / эффективность (без засыпания)."""
+    return round(net_hours * 60 / (eff or 0.9))
+
+
 def bedtime(days, day, profile):
     """Во сколько лечь сегодня: обычный подъём (медиана за 14 дней; будни и выходные отдельно) минус нужный сон
     и 20 минут на засыпание. Нужный сон — из WHOOP за прошлую ночь, но не меньше 8,5 ч до 18 лет и 7,5 ч взрослым."""
@@ -387,9 +401,10 @@ def bedtime(days, day, profile):
     floor = 8.5 if age and age < 18 else 7.5
     last = (days.get(day.isoformat()) or {}).get("sleep") or {}
     need = max(last.get("need") or 0, floor)
-    bed = wake - round(need * 60) - 20
+    eff = sleep_eff(days, day)
+    bed = wake - in_bed_min(need, eff) - 20  # нужен ЧИСТЫЙ сон: в кровати дольше на просыпания
     bed -= bed % 10  # округляем вниз до 10 минут
-    return {"bed": _hhmm(bed), "wake": _hhmm(wake), "need": round(need, 2), "weekend": tomorrow.weekday() >= 5}
+    return {"bed": _hhmm(bed), "wake": _hhmm(wake), "need": round(need, 2), "weekend": tomorrow.weekday() >= 5, "eff": eff}
 
 
 # ---------- всё про день ----------
@@ -419,7 +434,7 @@ def today(db, uid, day, profile, body):
         "tips": tips(d, base, ratio, profile, recent), "nutrition": nut, "eaten": eaten(food, kc), "meals": food,
         "kcal": kc,
         "yesterday": {"strain": (y.get("cycle") or {}).get("strain"), "workouts": y.get("workouts") or []},
-        "bedtime": bedtime(days, day, profile), "has_data": bool(days),
+        "bedtime": bedtime(days, day, profile), "sleep_eff": sleep_eff(days, day), "has_data": bool(days),
         "water": {"drank": sum(w["ml"] for w in log), "target": target, "why": why, "log": log,
                   "trained": bool(train_min), "yesterday": db.water_total(uid, yday), "y_target": y_target},
     }

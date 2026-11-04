@@ -242,14 +242,16 @@ class InsightsTest(unittest.TestCase):
         self.assertEqual(bt["need"], 9.1)  # нужный сон WHOOP 8,5 + 0,4 + 0,2 больше подросткового минимума
         wake = int(bt["wake"][:2]) * 60 + int(bt["wake"][3:])
         bed = int(bt["bed"][:2]) * 60 + int(bt["bed"][3:])
-        self.assertTrue(0 <= (wake - 546 - 20) - bed + (1440 if bed > wake else 0) < 10)
+        need_min = insights.in_bed_min(9.1, bt["eff"])  # чистый сон 9,1 ч → в кровати дольше на просыпания
+        self.assertGreater(need_min, 546)
+        self.assertTrue(0 <= (wake - need_min - 20) - bed + (1440 if bed > wake else 0) < 10)
         self.assertEqual(bt["weekend"], False)  # 12.10.2026 — понедельник
         self.assertIsNotNone(t["yesterday"]["strain"])
         text, _ = insights.text_context(self.db, U, TODAY, {"age": 14}, {})
         self.assertIn(f"лечь до {bt['bed']}", text)
         self.assertNotIn("ЦЕЛИ", text)
         days = {"2026-10-11": {"sleep": {"end": "07:00", "need": 7.0}}, "2026-10-10": {"sleep": {"end": "07:20"}}}
-        self.assertEqual(insights.bedtime(days, TODAY, {"age": 30})["bed"], "23:20")  # 07:10 − 7,5 ч − 20 мин
+        self.assertEqual(insights.bedtime(days, TODAY, {"age": 30})["bed"], "22:30")  # 07:10 − 7,5 ч / 0,9 (500 мин) − 20 мин
         self.assertIsNone(insights.bedtime({}, TODAY, {}))
 
     def test_progress(self):
@@ -501,7 +503,7 @@ class BotTest(unittest.TestCase):
         for i in range(7):
             self.assertEqual(call("/api/kb", {"ih": 852, "vh": 500 + i, "kb": True, "ua": "x" * 400, "bad": [1]}).code, 200)
         rows = json.loads(self.db.meta(f"kb:{U}"))
-        self.assertEqual((len(rows), rows[0]["vh"], len(rows[0]["ua"]), "bad" in rows[0]), (5, 506, 160, False))
+        self.assertEqual((len(rows), rows[0]["vh"], len(rows[0]["ua"]), "bad" in rows[0]), (7, 506, 160, False))
 
     def fake_tg(self, method, **kw):
         self.sent.append((method, kw))

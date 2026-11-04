@@ -146,16 +146,21 @@ def planner(t, cfg, profile):
     need_from = "WHOOP за прошлую ночь" if (slp.get("need") or 0) >= floor else "возраст: не меньше 8,5 ч" if floor > 8 else "минимум 7,5 ч"
     wake = cfg.get("wake") or bt.get("wake") or "07:00"
     w = _mins(wake)
+    # Глеб 04.11: «время в кровати — не то же самое, что чистый сон»: потребность — это ЧИСТЫЙ сон, в кровати дольше
+    # на просыпания (эффективность сна WHOOP за 14 ночей) и ещё 15 минут на засыпание
+    eff = t.get("sleep_eff") or bt.get("eff") or 0.9
     opts = []
     for key, (k, name) in MODES.items():
         hours = need * k
-        bed = w - round(hours * 60) - FALL_ASLEEP
+        bed_min = round(hours * 60 / eff)
+        bed = w - bed_min - FALL_ASLEEP
         bed -= bed % 5  # вниз до 5 минут
-        opts.append({"mode": key, "name": name, "pct": round(k * 100), "hours": round(hours, 2), "bed": _hhmm(bed)})
+        opts.append({"mode": key, "name": name, "pct": round(k * 100), "hours": round(hours, 2), "bed": _hhmm(bed),
+                     "in_bed": round(bed_min / 60, 2)})
     sel = next(o for o in opts if o["mode"] == cfg["sleep_mode"])
     return {"need": round(need, 2), "need_from": need_from, "wake": wake, "wake_auto": not cfg.get("wake"),
             "usual_wake": bt.get("wake"), "mode": cfg["sleep_mode"], "options": opts, "bed": sel["bed"],
-            "hours": sel["hours"], "fall": FALL_ASLEEP}
+            "hours": sel["hours"], "in_bed": sel["in_bed"], "eff": eff, "fall": FALL_ASLEEP}
 
 
 # ---------- прогресс недели ----------
