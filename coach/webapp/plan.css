@@ -4,7 +4,7 @@
 .pl-dots { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); align-items: center; justify-items: center; gap: 2px; }
 .pl-d { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
 .pl-d i { display: block; width: 14px; height: 14px; border-radius: 50%; box-sizing: border-box; }
-.pl-d em { font: 700 10.5px/1 var(--head); font-style: normal; text-transform: uppercase; letter-spacing: .06em; color: var(--hint); }
+.pl-d em { font: 700 11px/1 var(--head); font-style: normal; text-transform: uppercase; letter-spacing: .06em; color: var(--hint); }
 .pl-d em.on { color: var(--ink); }
 .pl-done { background: var(--c); box-shadow: 0 0 10px -2px color-mix(in srgb, var(--c) 70%, transparent); }
 .pl-miss { background: rgba(255, 255, 255, .06); border: 1.5px solid rgba(255, 255, 255, .22); }

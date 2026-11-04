@@ -3718,5 +3718,13 @@ def main():
                         print("oops:", e2)
 
 
+def run():
+    """pm2 stop/restart шлёт SIGINT: выйти тихо, без Traceback в логе ошибок (его читает самопроверка)."""
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"{NAME} остановлен")
+
+
 if __name__ == "__main__":
-    main()
+    run()

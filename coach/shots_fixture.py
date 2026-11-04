@@ -266,7 +266,9 @@ def build(shots=None):
                "/api/history": {"history": [
                    {"role": "user", "text": "Готов ли я к спаррингу?"},
                    {"role": "coach", "text": "Да. Восстановление **82%**, ВСР выше нормы.\n- Разминка 15 мин\n- После — белок и вода"}]},
-               "/api/summary": {"summary": coach.insights.summary(db, T.U, today, "week"), "text": None}}
+               "/api/summary": {"summary": coach.insights.summary(db, T.U, today, "week"), "text": None},
+               # вода: сервер отвечает днём целиком ({"day": …}) — без примера приложение теряло «сегодня» (ошибки в «Чате»)
+               "/api/water": {"day": allp["today"]}, "/api/water/delete": {"day": allp["today"]}}
         for p in EXTRA_PATHS:
             try:
                 api[p] = coach.route(T.U, p, {})
