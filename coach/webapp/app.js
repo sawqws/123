@@ -1831,12 +1831,28 @@
     if (p === 'profile') profileSheet();
     if (p === 'summary') summarySheet('week');
     if (tg && tg.onEvent) tg.onEvent('themeChanged', () => { theme(); render(false); });
-    // данные обновляются сами, пока приложение открыто
-    setInterval(async () => {
-      if (document.hidden || document.querySelector('.sheet') || S.asking || S.briefing || S.photo || S.dayData) return;
+    // данные обновляются сами, пока приложение открыто (Глеб 04.11: «в WHOOP уже есть, а Форма не подтянула» — сервер
+    // получил их по вебхуку сразу, а экран ждал до 2 мин и не обновлялся при возврате в приложение):
+    // каждые 30 с и сразу при возврате на экран; перерисовка — только если данные правда поменялись
+    let lastPull = Date.now(), pulling = false, lastSig = JSON.stringify(S.data);
+    const pull = async () => {
+      if (pulling || document.hidden || document.querySelector('.sheet') || S.asking || S.briefing || S.photo || S.dayData) return;
       if (document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName)) return;
-      try { S.data = await api('/api/all'); F.onData.forEach(fn => { try { fn(S.data); } catch (e) { console.error(e); } }); if (S.tab !== 'coach' && !S.screen) render(false); } catch (e) { /* тихо */ }
-    }, 120000);
+      pulling = true; lastPull = Date.now();
+      try {
+        const d = await api('/api/all'), sig = JSON.stringify(d);
+        if (sig === lastSig) return;
+        lastSig = sig; S.data = d;
+        F.onData.forEach(fn => { try { fn(S.data); } catch (e) { console.error(e); } });
+        if (S.tab !== 'coach' && !S.screen) render(false);
+      } catch (e) { /* тихо */ } finally { pulling = false; }
+    };
+    F.pull = pull;
+    setInterval(pull, 30000);
+    const back = () => { if (!document.hidden && Date.now() - lastPull > 10000) pull(); };
+    document.addEventListener('visibilitychange', back);
+    addEventListener('pageshow', back);
+    addEventListener('focus', back);
   }
   // всё, чем пользуются модули
   Object.assign(F, { morph, S, I, C, ZONE, WD, WD_S, MON, MON_S, tg, esc, api, toast, haptic, sheet, busy, $, num, big, hm, hHuman, liters, pct, plural, fail, clock,
