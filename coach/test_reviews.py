@@ -483,11 +483,35 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(T.call("/api/reviews", {}).json["items"], [])
 
     def test_coach_sees_reviews(self):
-        RV.add(self.db, U, DAY, "morning", "Восстановление 82%", "**Зелёный день — можно в полную.**\n- вода", "07:40")
+        RV.add(self.db, U, DAY, "morning", "Восстановление 82%", "- Вода 3 л, белок 110 г\n- Лечь в 22:30", "07:40")
         with mock.patch.object(coach, "today_of", lambda uid: TODAY):
             text, _ = coach.context(U, TODAY)
         self.assertIn("РАЗБОРЫ СЕГОДНЯ", text)
-        self.assertIn("утро 07:40: Зелёный день — можно в полную.", text)
+        self.assertIn("утро 07:40: Вода 3 л, белок 110 г", text)
+
+    def test_no_day_verdict(self):
+        # Глеб 04.11: «убери оценку дня — день не лучший / день хороший — просто разбор давай»
+        text = ("Восстановление **37%** · сон **8:25** из 9:45\n\n**День не лучший: гибкость пульса ниже нормы.**\n"
+                "- День хороший, можно гулять\n- Сегодня день рабочий\n- Тренировка была тяжёлой для восстановления\n"
+                "- Вода 3 л, белок 110 г\n- Ложись в 22:30 — нужно 9 ч 45 мин сна")
+        for kind in RV.KINDS:
+            rid = RV.add(self.db, U, DAY, kind, "x", text, "08:00", ref=kind)
+            got = [x["text"] for x in RV.items(self.db, U, DAY) if x["id"] == rid][0]
+            self.assertEqual(got, "Восстановление **37%** · сон **8:25** из 9:45\n\n- Вода 3 л, белок 110 г\n"
+                                  "- Ложись в 22:30 — нужно 9 ч 45 мин сна")
+        for line in ("- Днём выпей ещё 1 л воды", "- Тренировку записал WHOOP: бокс 72 мин", "- Белок 110 г"):
+            self.assertEqual(RV.no_verdict(line), line)
+
+    def test_prompts_without_verdict(self):
+        import ai
+        with mock.patch.object(ai, "fast", lambda p: p):
+            prompts = (ai.morning("Д"), ai.evening("Д", "ф"),
+                       ai.after_workout("Д", {"sport": "Бокс", "minutes": 50, "strain": 10, "avg_hr": 130,
+                                              "max_hr": 180, "zones": [0] * 6}))
+        for p in prompts:
+            self.assertIn(ai.NO_VERDICT, p)
+            self.assertNotIn("**вывод**", p)
+            self.assertNotIn("**итог**", p)
 
 
 if __name__ == "__main__":

@@ -1016,9 +1016,9 @@ def workout_review(uid, w, at=None):
         md = ai.after_workout(text, w)
         body, _ = short(md, 2, 260)
     except ai.AIError:
-        md = ("**Хорошая работа — теперь восстановление.**\n- Вода 500–700 мл за час\n"
+        md = ("- Вода 500–700 мл за час\n"
               "- Белок 25–35 г и углеводы в ближайшие 1–2 часа\n- Вечером без экранов за 30 мин до сна")
-        body = ai.to_html("\n".join(md.splitlines()[1:3]))
+        body = ai.to_html("\n".join(md.splitlines()[:2]))
     db.brief(uid, t["day"], f"workout:{w['id']}", ai.to_html(md))
     zones = w.get("zones") or []
     hard = sum(zones[4:]) if len(zones) >= 6 else 0
@@ -1174,7 +1174,7 @@ def day_facts(uid, t, day):
 
 def rule_evening(t, facts):
     """Вечерний итог без Claude: что добрать и во сколько лечь."""
-    lines = ["**День позади — теперь сон.**"]
+    lines = []
     n, e = t.get("nutrition") or {}, t.get("eaten") or {}
     if n and e.get("count"):
         lack_p, lack_k = n["protein"] - e["protein"], n["kcal"] - e["kcal"]
