@@ -3397,7 +3397,7 @@ def route(uid, path, b):
             "user": {"name": u["name"], "tz": u["tz"]}, "profile": u["profile"], "body": whoop.body(db, uid),
             "connected": bool(tok), "synced": (tok or {}).get("synced"), "keys": bool(cid and sec),
             "today": day_payload(uid, today), "series": insights.series(db, uid, today, 30), "streak": insights.wear_streak(db, uid, today),
-            "redirect": redirect_url(), "thinking": uid in busy,
+            "redirect": redirect_url(), "thinking": uid in busy, "v": VERSION,
             "goals": db.goals(uid), "morning": u["profile"].get("morning") or store.MORNING_DEFAULT,
             "mode": ui_mode(uid), "ext": features_extra(uid, today), "admin": is_admin(uid),
         }
