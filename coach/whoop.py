@@ -279,12 +279,16 @@ def sync(db, uid, client_id, secret, days=3):
             if r.get("score_state") == "SCORED" and old[kind].get(key) != "SCORED":
                 fresh.append((kind, dict(r, _day=day)))
     drop_vanished(db, uid, start, got)
-    if days > 7 or not db.meta(f"body:{uid}") or time.time() - float(db.meta(f"body_at:{uid}") or 0) > 86400:
+    # whoop_id нужен вебхуку: по нему он находит, чьё событие (04.11: не записывался — вебхук молча ничего не делал)
+    no_id = not ((db.token(uid) or {}).get("whoop_id"))
+    if no_id or days > 7 or not db.meta(f"body:{uid}") or time.time() - float(db.meta(f"body_at:{uid}") or 0) > 86400:
         try:
             body = cl.get("/v2/user/measurement/body") or {}
             prof = cl.get("/v2/user/profile/basic") or {}
             db.meta(f"body:{uid}", json.dumps({**body, "first_name": prof.get("first_name")}, ensure_ascii=False))
             db.meta(f"body_at:{uid}", time.time())
+            if prof.get("user_id"):
+                db.x("UPDATE tokens SET whoop_id=? WHERE user=?", (str(prof["user_id"]), uid))
         except RuntimeError as e:
             print("whoop body:", e)
     db.mark_synced(uid)

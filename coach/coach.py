@@ -2287,11 +2287,15 @@ class Web(BaseHTTPRequestHandler):
         X-WHOOP-Signature-Timestamp + тело)). Отвечаем сразу 204, синхронизацию запускаем в фоне."""
         _, sec = creds()
         ts, sig = self.headers.get("X-WHOOP-Signature-Timestamp") or "", self.headers.get("X-WHOOP-Signature") or ""
+        def bad(why):  # отказ видно в базе (meta wh-bad:last) и в логе — запросы сервер не пишет
+            print("whoop webhook:", why, flush=True)
+            db.meta("wh-bad:last", json.dumps({"t": int(time.time()), "why": why}, ensure_ascii=False))
+            return self.reply(401, {"error": why})
         if not (sec and ts and sig):
-            return self.reply(401, {"error": "нет подписи"})
+            return bad("нет подписи")
         good = base64.b64encode(hmac.new(sec.encode(), ts.encode() + raw, hashlib.sha256).digest()).decode()
         if not hmac.compare_digest(good, sig):
-            return self.reply(401, {"error": "неверная подпись"})
+            return bad("неверная подпись")
         try:
             ev = json.loads(raw or b"{}")
             wid, trace = str(ev.get("user_id") or ""), str(ev.get("trace_id") or "")
@@ -2303,6 +2307,8 @@ class Web(BaseHTTPRequestHandler):
         if trace:
             db.meta(f"wh:{trace}", int(time.time()))
         uid = next((r["user"] for r in db.q("SELECT user FROM tokens WHERE whoop_id=?", (wid,))), None)
+        if not uid:
+            print("whoop webhook: не знаю пользователя WHOOP", wid, flush=True)
         if uid and allowed(uid):
             # удалили в WHOOP — убрать запись и разбор по ней сразу (загрузка ниже могла бы и не пройти)
             if whoop.drop_deleted(db, uid, ev.get("type"), ev.get("id")):
