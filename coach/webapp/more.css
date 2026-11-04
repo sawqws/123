@@ -68,7 +68,7 @@
    прямо над ней: высота и сдвиг — из visualViewport, --vv-h/--vv-top, отступ под меню — --co-pad; считает more.js),
    между ними — .co-scroll со своей плавной прокруткой. На ≥1024 — то же внутри колонки. */
 html:has(> body.tab-coach) { overscroll-behavior: none; }
-html:root body.tab-coach { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); overflow: hidden; overscroll-behavior: none; }
+html:root body.tab-coach { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); min-height: 0; overflow: hidden; overscroll-behavior: none; }
 html:root body.tab-coach.has-tabbar { padding-bottom: var(--co-pad, calc(96px + var(--bottom))) !important; }
 body.tab-coach #app, body.tab-coach #view { height: 100%; }
 body.tab-coach #view > div { height: 100%; display: flex; flex-direction: column; }
