@@ -13,6 +13,8 @@ import threading
 import tempfile
 import uuid
 
+import words  # старые названия HRV → «гибкость пульса» в каждом ответе (words.py)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(tempfile.gettempdir(), "coach-ai")
 # Read нужен только чтобы открыть присланное фото из WORK. Текст на картинке мог бы попросить прочитать чужое
@@ -95,7 +97,7 @@ def _run(prompt, pics, copies, timeout, model=None, effort=None, label=None, web
         if any(w in low for w in ("rate limit", "usage limit", "limit reached", "429", "overloaded")):
             raise AIError("у Claude закончился лимит, попробуй позже")
         raise AIError("Claude не ответил")
-    return res["result"].strip()
+    return words.fix(res["result"].strip())
 
 
 # Глеб 03.11: «в этом чате нужно покороче писать — слишком много пишет. Кратко, понятно, чётко».
@@ -137,7 +139,7 @@ def trim_answer(md, long=False):
     """Мягкий предел длины ответа чата приложения: целые строки, лишнее — по концу предложения, не на полуслове.
     Строка «Источники: …» (после поиска) остаётся. (текст, обрезано ли)."""
     lines_max, chars = LONG_LIMIT if long else SHORT_LIMIT
-    rows = [x.rstrip() for x in (md or "").strip().splitlines()]
+    rows = [x.rstrip() for x in words.fix(md or "").strip().splitlines()]
     src = ""
     for i in range(len(rows) - 1, -1, -1):
         if rows[i].strip().lower().startswith(("источники:", "**источники")):
@@ -719,7 +721,7 @@ def claude_stream(prompt, model=None, timeout=120, effort=None, web=False, on_to
                     if gap:
                         t, gap = "\n\n" + t, False
                     got = True
-                    yield t
+                    yield words.fix(t)
             elif d.get("type") == "result" and d.get("is_error"):
                 raise AIError("Claude не ответил")
         p.wait()
