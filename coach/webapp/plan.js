@@ -89,9 +89,10 @@
         <span class="muted small">сон ${h2(sel.hours)} + ${pl.fall} мин заснуть · подъём ${esc(pl.wake)}</span></div>
       <div class="pl-opts" role="radiogroup" aria-label="Сколько спать">${pl.options.map(o => `<button class="pl-opt ${o.mode === pl.mode ? 'on' : ''}" role="radio" aria-checked="${o.mode === pl.mode}" data-a="plan-mode" data-v="${o.mode}">
           <span class="pl-on"></span><span class="pl-om"><b>${esc(o.name)}</b><span>${o.pct}% · ${h2(o.hours)}</span></span><b class="num">${esc(o.bed)}</b></button>`).join('')}</div>
-      <label class="pl-wake"><span class="pl-wk"><b>Подъём</b><span class="muted">${pl.wake_auto ? 'как обычно по WHOOP' : 'своё время'}</span></span>
+      <label class="pl-wake"><span class="pl-wk"><b>Подъём</b><span class="muted">${pl.wake_auto ? (pl.regime ? 'по режиму' : 'как обычно по WHOOP') : 'своё время'}</span></span>
         <input id="plan-wake" type="time" value="${esc(pl.wake)}" aria-label="Время подъёма"></label>
-      ${!pl.wake_auto ? `<button class="link pl-reset" data-a="plan-wake-auto">Вернуть обычный подъём${pl.usual_wake ? ` (${esc(pl.usual_wake)})` : ''}</button>` : ''}
+      ${!pl.wake_auto ? `<button class="link pl-reset" data-a="plan-wake-auto">${pl.regime ? 'Подъём по режиму' : 'Вернуть обычный подъём'}${pl.usual_wake ? ` (${esc(pl.usual_wake)})` : ''}</button>` : ''}
+      ${pl.regime_bed ? `<p class="small muted">По режиму отбой в <b class="num">${esc(pl.regime_bed)}</b>.</p>` : ''}
       <p class="small muted">Нужно сна: <b class="num">${h2(pl.need)}</b> — ${esc(pl.need_from)}. «Пик» — вся потребность, «Норма» — 85%, «Минимум» — 70%.</p>
     </section></div>`;
   }

@@ -53,8 +53,25 @@ class PlanTest(unittest.TestCase):
             p = self.call("/api/plan")["planner"]
             self.assertTrue(p["regime"])
             cfg = f_regime.load(self.db, T.U)
-            self.assertEqual(p["bed"], f_regime.bed_wake(cfg, T.TODAY)[0])
-            self.assertEqual(p["wake"], f_regime.bed_wake(cfg, T.TODAY + datetime.timedelta(days=1))[1])
+            r_bed = f_regime.bed_wake(cfg, T.TODAY)[0]
+            r_wake = f_regime.bed_wake(cfg, T.TODAY + datetime.timedelta(days=1))[1]
+            self.assertEqual((p["wake"], p["regime_bed"], p["usual_wake"], p["wake_auto"]), (r_wake, r_bed, r_wake, True))
+            # Глеб 04.11: «планер сна не работает» — выбор Пик / Норма / Минимум меняет отбой и при режиме
+            beds = {}
+            for mode in ("peak", "norm", "min"):
+                q = self.call("/api/plan/save", {"sleep_mode": mode})["planner"]
+                sel = next(o for o in q["options"] if o["mode"] == mode)
+                self.assertEqual((q["mode"], q["bed"], q["hours"]), (mode, sel["bed"], sel["hours"]))
+                self.assertGreater(q["hours"], 5)
+                self.assertEqual(q["wake"], r_wake)
+                beds[mode] = q["bed"]
+            self.assertEqual(len(set(beds.values())), 3)
+            # своё время подъёма — отбой считается от него; «по режиму» — обратно
+            q = self.call("/api/plan/save", {"wake": "09:00"})["planner"]
+            self.assertEqual((q["wake"], q["wake_auto"], q["usual_wake"]), ("09:00", False, r_wake))
+            self.assertNotEqual(q["bed"], beds["min"])
+            q = self.call("/api/plan/save", {"wake": None})["planner"]
+            self.assertEqual((q["wake"], q["wake_auto"], q["bed"]), (r_wake, True, beds["min"]))
         finally:
             self.db.meta(f"regime:{T.U}", "")
 
