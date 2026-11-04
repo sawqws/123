@@ -148,6 +148,9 @@ function layout(touch) {
     if (w <= 0 || h <= 0) continue;
     const fx = el => { for (let p = el; p; p = p.parentElement) { const s = getComputedStyle(p).position; if (s === 'fixed' || s === 'sticky') return true; } return false; };
     if (fx(e1) !== fx(e2)) continue;  // плавающее меню над прокручиваемым — не «налезание раскладки»
+    // прилипший крестик (sticky) над прокрученным листом — так задумано: строки уезжают под него
+    const stuck = el => getComputedStyle(el).position === 'sticky' && el.closest('.sheet') && el.closest('.sheet').scrollTop > 0;
+    if (stuck(e1) || stuck(e2)) continue;
     if (w * h <= 0.3 * Math.min(a.width * a.height, c.width * c.height)) continue;
     // видно ли налезание: в середине общей части сверху одна из двух кнопок (не обрезано свёрнутым блоком и не за экраном)
     const cx = (Math.max(a.left, c.left) + Math.min(a.right, c.right)) / 2, cy = (Math.max(a.top, c.top) + Math.min(a.bottom, c.bottom)) / 2;
@@ -243,6 +246,10 @@ async function crawlConfig(browser, cname, dev, scheme, only) {  // only — к�
     await page.waitForTimeout(120);
     while (inflight > 0 && Date.now() < end) await page.waitForTimeout(60);
     await page.waitForFunction(() => !document.querySelector('[aria-busy="true"]'), null, { timeout: Math.max(100, end - Date.now()) }).catch(() => {});
+    // переход экрана (View Transition, html[data-nav]) и появление листа закончились — иначе под нагрузкой проверка
+    // попадала в середину: «Назад» ещё не отрисован (экран чёрный), лист-окно ещё прозрачный, крестик сжат анимацией
+    await page.waitForFunction(() => !document.documentElement.dataset.nav && !document.getAnimations().some(a => a.playState === 'running'
+      && Number.isFinite(a.effect && a.effect.getComputedTiming().endTime)), null, { timeout: Math.max(100, end - Date.now()) }).catch(() => {});
     await page.waitForTimeout(ms);
   };
   const shot = async (tag) => {

@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -165,6 +166,81 @@ class LockTest(unittest.TestCase):
         with open(sc.LOCK, "a") as f:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # не занят
             fcntl.flock(f, fcntl.LOCK_UN)
+
+
+class Found0411Test(unittest.TestCase):
+    """Находки самопроверки 04.11: ложное «не плавно», вода в фикстуре, мелкие подписи и кнопки, налезание на ✕."""
+    def test_perf_alone(self):
+        """Замер плавности идёт один: тесты стартуют только после него (иначе процессор занят и замер врёт)."""
+        order = []
+
+        class Fx:
+            url = "http://127.0.0.1:1/"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        def fake_sh(cmd, timeout, **k):
+            order.append(os.path.basename(cmd[1]))
+            return 0, "Плавно"
+
+        def fake_tests(deadline):
+            order.append("tests")
+            return [], {}
+        with mock.patch.object(sc, "Fixture", Fx), mock.patch.object(sc, "sh", fake_sh), \
+                mock.patch.object(sc, "run_tests", side_effect=fake_tests):
+            sc.run(os.path.join(TMP, "perf"), server=False)
+        self.assertEqual(order[0], "perfcheck.js")
+        self.assertIn("tests", order)
+
+    def test_tests_run_without_fixture(self):
+        class Bad:
+            def __enter__(self):
+                raise RuntimeError("фикстура не поднялась")
+
+            def __exit__(self, *a):
+                pass
+        with mock.patch.object(sc, "Fixture", Bad), mock.patch.object(sc, "run_tests", return_value=([], {"test_coach.py": 0})) as rt:
+            sc.run(os.path.join(TMP, "nofx"), server=False)
+        rt.assert_called_once()
+
+    def test_css_sizes(self):
+        """Подписи ≥ 11 px, сегменты и ✕ в виде WHOOP ≥ 36 px, заголовок листа не ниже ✕."""
+        css = {f: open(os.path.join(HERE, "webapp", f), encoding="utf-8").read() for f in ("plan.css", "assess.css", "whoop.css", "layout.css")}
+
+        def rule(f, sel):
+            m = re.search(r"^" + re.escape(sel) + r" \{([^}]*)\}", css[f], re.M)
+            self.assertTrue(m, sel)
+            return m.group(1)
+
+        def px(body):
+            return [float(x) for x in re.findall(r"(?<![\w.-])(\d+(?:\.\d+)?)px", body)]
+        self.assertGreaterEqual(px(rule("plan.css", ".pl-d em"))[0], 11)
+        self.assertGreaterEqual(px(rule("assess.css", ".as-cw"))[0], 11)
+        self.assertGreaterEqual(min(px(rule("assess.css", ".as-cp"))), 11)
+        seg = rule("whoop.css", "html.wh .seg button")
+        self.assertGreaterEqual(px(seg)[0], 11)
+        self.assertIn("min-height: 36px", seg)
+        self.assertIn("width: 36px; height: 36px", rule("whoop.css", "html.wh .sheet-x"))
+        self.assertIn("min-height: 42px", rule("layout.css", "html:root :is(.sheet-x + h2, .sheet-x + * > h2:first-child)"))
+
+    def test_crawler_waits_for_transitions(self):
+        js = open(os.path.join(HERE, "selfcheck.js"), encoding="utf-8").read()
+        self.assertIn("document.documentElement.dataset.nav", js)  # переход экрана
+        self.assertIn("document.getAnimations()", js)  # появление листа
+        self.assertIn("scrollTop > 0", js)  # прилипший ✕ над прокрученным листом — не налезание
+
+
+class FixtureWaterTest(unittest.TestCase):
+    def test_water(self):
+        """В фикстуре есть вода: приложение кладёт ответ в «сегодня» — без примера ломались «Чат» и главная."""
+        import shots_fixture
+        api = shots_fixture.build()["api"]
+        for p in ("/api/water", "/api/water/delete"):
+            self.assertEqual(api[p]["day"]["day"], api["/api/all"]["today"]["day"], p)
 
 
 class ParseTest(unittest.TestCase):
@@ -355,7 +431,7 @@ class FixtureTest(unittest.TestCase):
             self.assertTrue(fx.url.startswith("http://127.0.0.1:"))
             r = sc.LOCAL.open(fx.url + "api/all", timeout=10)
             self.assertTrue(json.loads(r.read())["admin"])
-            req = sc.urllib.request.Request(fx.url + "api/water", data=b"{}", method="POST")
+            req = sc.urllib.request.Request(fx.url + "api/no-such-example", data=b"{}", method="POST")
             self.assertEqual(sc.LOCAL.open(req, timeout=10).headers.get("X-Fixture"), "none")  # примера нет — помечено
             tmp = fx.tmp
         self.assertFalse(os.path.exists(tmp))

@@ -263,13 +263,16 @@ def run(out=None, crawl=CRAWL, limit=LIMIT, server=True):
     try:
         state = load_state()
         th, box = [], {}
-        # тесты — сразу, параллельно со всем (свои временные базы)
-        th.append(threading.Thread(target=lambda: box.__setitem__("tests", run_tests(min(deadline, time.time() + TESTS))), daemon=True))
-        th[-1].start()
+        def tests():  # тесты — параллельно с обходчиком (свои временные базы), но не с замером плавности
+            if "tests" not in box:
+                box["tests"] = None
+                th.append(threading.Thread(target=lambda: box.__setitem__("tests", run_tests(min(deadline, time.time() + TESTS))), daemon=True))
+                th[-1].start()
         try:
             with Fixture() as fx:
-                # плавность — первой и одна (замер процессора, обходчик рядом исказил бы его)
+                # плавность — первой и одна (замер процессора: тесты или обходчик рядом исказили бы его — 04.11 ложное «не плавно»)
                 code, perf = sh(["node", "common/perfcheck.js", fx.url], min(150, deadline - time.time()))
+                tests()
                 rep["stats"]["perf"] = perf.strip()[-600:]
                 if code == 1:
                     rep["problems"].append({"kind": "perf", "sev": "warn", "where": "Главная · iPhone 14, CPU ×4",
@@ -288,7 +291,8 @@ def run(out=None, crawl=CRAWL, limit=LIMIT, server=True):
         except RuntimeError as e:
             rep["problems"].append({"kind": "fixture", "sev": "error", "where": "фикстура", "what": str(e)[:400],
                                     "steps": ["python3 coach/shots_fixture.py --serve 8790"], "configs": [], "also": [], "shot": ""})
-        for t in th:  # фикстура не поднялась — тесты всё равно дождаться
+        tests()  # фикстура не поднялась — тесты всё равно прогнать и дождаться
+        for t in th:
             t.join(max(1, deadline - time.time()))
         # обходчик
         code, txt = box.get("crawl", (None, ""))
@@ -305,7 +309,7 @@ def run(out=None, crawl=CRAWL, limit=LIMIT, server=True):
             if k in box:
                 parse_devcheck(box[k][1], k.split("-")[1], dev)
         rep["problems"] += dev
-        found, codes = box.get("tests", ([], {}))
+        found, codes = box.get("tests") or ([], {})
         rep["problems"] += found
         rep["stats"]["tests"] = codes
         if server:

@@ -4,6 +4,7 @@ usage: python3 bot/test_bot.py
 import json
 import shutil
 import os
+import subprocess
 import pathlib
 import sys
 import tempfile
@@ -189,15 +190,32 @@ class BotTest(unittest.TestCase):
         with mock.patch.object(bot, "SEND_DELAY", "5-5"):
             bot.on_callback({"id": "1", "data": f"send:{TASK}", "message": {"chat": {"id": CHAT}, "message_id": 5}})
         self.assertEqual(self.nodes, [])  # сразу не отправил
-        self.assertIn("Отправлю в", self.last()[0])
-        self.assertIn(f"now:{TASK}", self.last()[1])
         at = bot.draft(TASK)["send_at"]
         self.assertAlmostEqual(at - __import__("time").time(), 300, delta=5)
+        when = bot.datetime.datetime.fromtimestamp(at, bot.MSK)
+        self.assertRegex(self.last()[0], rf"Отправлю (завтра )?в {when:%H:%M}")  # 23:56 + 5 мин — «завтра в 00:01»
+        self.assertIn(f"now:{TASK}", self.last()[1])
         bot.due_sends(at - 1)  # ещё рано
         self.assertEqual(self.nodes, [])
         bot.due_sends(at + 1)  # время пришло — отправил сам
         self.assertEqual(self.nodes[-1][0], "horo/answer.js")
         self.assertIsNone(bot.draft())
+
+    def test_send_card_day_after_midnight(self):
+        """Страж 02.11: тест ждал «Отправлю в», а в 23:56 карточка честно писала «Отправлю завтра в 00:01»."""
+        msk = bot.MSK
+        late = bot.datetime.datetime(2026, 11, 2, 23, 56, tzinfo=msk).timestamp()
+        noon = bot.datetime.datetime(2026, 11, 2, 12, 0, tzinfo=msk).timestamp()
+        self.say(URL)
+        with mock.patch.object(bot.time, "time", return_value=late):
+            bot.schedule_send(CHAT, TASK, secs=300)
+        self.assertIn("Отправлю завтра в 00:01", self.last()[0])
+        with mock.patch.object(bot.time, "time", return_value=noon):
+            bot.schedule_send(CHAT, TASK, secs=300)
+        self.assertIn("Отправлю в 12:05", self.last()[0])
+        at = lambda d, h: bot.datetime.datetime(2026, 11, d, h, 0, tzinfo=msk)
+        self.assertEqual([bot.day_word(at(d, 9), late) for d in (2, 3, 4, 6)], ["", "завтра", "послезавтра", "06.11"])
+        self.assertEqual(bot.site_when(late + 300, late)["when"], "завтра в 00:01")
 
     def test_partial_answer_replaced_right_away(self):
         """22.10 «21. Lectura»: платформа прикрепила 1 картинку из 2 — ответ ушёл неполным; бот сразу заменяет его полным."""
@@ -1491,6 +1509,22 @@ class SiteTest(BotTest):
             self.assertNotIn("500 GET", sitecheck.fix_text(got))  # ошибка платформы — не наша
             st = bot.app_site_check({})
             self.assertEqual((st["errors"], st["running"]), (1, False))
+
+    @unittest.skipUnless(shutil.which("node"), "нет node")
+    def test_sitecheck_compares_fairly(self):
+        """🧪 Проверка сайта: у принятого письменного задания кнопок бота не ждём, платформа — в теме зеркала."""
+        js = ("const s = require('./bot/sitecheck.js');"
+              "const st = x => ({ progress: { status: { type: x } } });"
+              "const out = [s.barExpected(null), s.barExpected({ type: 'detailedAnswer', ...st('approved') }),"
+              " s.barExpected({ type: 'test', ...st('approved') }), s.barExpected({ type: 'detailedAnswer', ...st('reworking') })];"
+              "const store = {}; global.localStorage = { setItem: (k, v) => { store[k] = v; } };"
+              "eval(s.themeScript('{\"state\":{\"darkThemeEnabled\":true},\"version\":0}'));"
+              "console.log(JSON.stringify([out, store]));")
+        r = subprocess.run(["node", "-e", js], cwd=os.path.dirname(HERE), capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out, store = json.loads(r.stdout)
+        self.assertEqual(out, [True, False, True, True])
+        self.assertTrue(json.loads(store["hdp-theme-storage"])["state"]["darkThemeEnabled"])
 
     def test_wishes_default_short_and_own(self):
         """💬 Пожелания: по умолчанию «максимально кратко», своё — с сайта или словами рядом со ссылкой."""

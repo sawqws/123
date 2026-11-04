@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,14 @@ class Upstream(BaseHTTPRequestHandler):
         if self.path == "/student/assets/Topic-XyZ98765.js":
             Upstream.chunk = getattr(Upstream, "chunk", 0) + 1
             return self.answer(200, b"export default 1", "application/javascript")
+        if self.path == "/student/assets/editor-CfOs1Rfs.js":  # как у платформы: адрес MathJax без /student/ и хэша
+            return self.answer(200, b'const o="mathjax/tex-mml-chtml.js",t=n=>`${location.origin}/student/${n}`;',
+                               "application/javascript")
+        if self.path == "/student/mathjax/tex-mml-chtml.js":
+            Upstream.mathjax = getattr(Upstream, "mathjax", 0) + 1
+            time.sleep(0.3)  # платформа отдаёт его не сразу (0,5–2,3 с)
+            return self.answer(200, gzip.compress(b"window.MathJax={version:'3.2.2'}"), "application/javascript",
+                               [("Content-Encoding", "gzip")])
         if self.path == "/api/schools/v1/current/settings":
             Upstream.settings = getattr(Upstream, "settings", 0) + 1
             return self.answer(200, json.dumps({"n": Upstream.settings}).encode(), "application/json")
@@ -76,16 +85,41 @@ class Upstream(BaseHTTPRequestHandler):
         if self.path == "/api/education/v1/files":
             return self.answer(200, b'{"img": "https://horodigital.ru/store/t/' + b"a" * 32 + b'"}', "application/json")
         edu = "/api/education/v1/students/current"
+        wrap = lambda d: json.dumps({"success": True, "meta": {"correlationId": "C1"}, "data": d}).encode()  # noqa: E731 как у платформы
         if self.path == edu + "/topics/T1/tasks?taskUuid=X1":
-            return self.answer(200, b'{"group": {"uuid": "G1"}, "tasks": [{"uuid": "X1", "type": "test"}]}', "application/json")
-        if self.path in (edu + "/topics/T1/tasks/X1", "/api/profile/v1/users/preferences"):
+            return self.answer(200, wrap({"group": {"uuid": "G1"}, "tasks": [{"uuid": "X1", "type": "test"}]}), "application/json")
+        if self.path == edu + "/topics/T1/tasks?taskUuid=X2":
+            return self.answer(200, wrap({"group": {"uuid": "G1"}, "tasks": [{"uuid": "X2", "type": "detailedAnswer"}]}),
+                               "application/json")
+        if self.path in (edu + "/topics/T1/tasks/X1", edu + "/topics/T1/tasks/X2", "/api/profile/v1/users/preferences"):
             return self.answer(200, b'{"ok": 1}', "application/json")
         if self.path.startswith(edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts?"):
-            return self.answer(200, b'[{"uuid": "A1"}]', "application/json")
+            return self.answer(200, wrap([{"uuid": "A1"}]), "application/json")
         if self.path == edu + "/study-groups/G1/topics/T1/tasks/X1/test-attempts/A1":
             return self.answer(200, b'{"uuid": "A1", "answers": []}', "application/json")
         if self.path == "/go":
             return self.answer(302, b"", "text/plain", [("Location", "https://horodigital.ru/login")])
+        # живые обновления: токен продлевает только /api, /realtime на старый — 401; negotiate и websocket — на один
+        # сервер (signalr-hub), иначе 404
+        cookie = self.headers.get("Cookie") or ""
+        if self.path == mirror.FRESH:
+            return self.answer(200, b"{}", "application/json", [("Set-Cookie", "hdp-portal-session=FRESH; path=/")])
+        if self.path.startswith("/realtime/negotiate") and self.command == "POST":
+            if "hdp-portal-session=FRESH" not in cookie:
+                return self.answer(401, b"{}", "application/json")
+            return self.answer(200, b'{"connectionToken": "C1"}', "application/json",
+                               [("Set-Cookie", "signalr-hub=POD1; Path=/realtime; HttpOnly")])
+        if self.path == "/realtime?id=C1" and (self.headers.get("Upgrade") or "").lower() == "websocket":
+            if "hdp-portal-session=FRESH" not in cookie:
+                return self.answer(401, b"{}", "application/json")
+            if "signalr-hub=POD1" not in cookie:
+                return self.answer(404, b"", "text/plain")
+            self.wfile.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+            self.wfile.flush()
+            self.wfile.write(self.rfile.readline())  # эхо — как кадры websocket
+            self.wfile.flush()
+            self.close_connection = True
+            return
         self.answer(404, b"{}", "application/json")
 
     do_GET = do_POST = do_PUT = do_DELETE = handle_any
@@ -197,6 +231,29 @@ class MirrorTest(unittest.TestCase):
         self.assertTrue(mirror._store.get("/student/assets/Topic-XyZ98765.js"))  # найден в скрипте и уже скачан
         self.assertEqual(self.req("GET", "/student/assets/Topic-XyZ98765.js")[2], b"export default 1")
         self.assertEqual(Upstream.chunk, 1)
+
+    def test_mathjax_cached_and_warmed(self):
+        """02.11, 🪞 Дозор: «Typesetting failed: … 'nextSibling'» ×20 на задании. MathJax шёл с платформы, когда всё
+        остальное — уже из памяти зеркала: задание успевало перерисоваться, и формулы вёрстывались в снятых элементах.
+        Теперь MathJax — как файлы сайта: скачан заранее по ссылке из скрипта сайта, отдаётся сразу, с кэшем на год."""
+        Upstream.mathjax = 0
+        path = "/student/mathjax/tex-mml-chtml.js"
+        self.assertTrue(mirror.ASSET.fullmatch(path))
+        self.assertTrue(mirror.ASSET.fullmatch("/student/mathjax/output/chtml/fonts/woff-v2/MathJax_Zero.woff"))
+        self.req("GET", "/student/assets/editor-CfOs1Rfs.js")
+        for _ in range(50):
+            if mirror._store.get(path):
+                break
+            time.sleep(0.05)
+        self.assertTrue(mirror._store.get(path))  # найден в скрипте сайта и скачан до запроса браузера
+        for _ in range(2):
+            t = time.time()
+            code, h, body = self.req("GET", path)
+            self.assertLess(time.time() - t, 0.25)  # из кэша, без 0,3 с платформы
+            self.assertEqual((code, gzip.decompress(body)), (200, b"window.MathJax={version:'3.2.2'}"))
+            self.assertEqual(h["Content-Encoding"], "gzip")
+            self.assertIn("immutable", h["Cache-Control"])
+        self.assertEqual(Upstream.mathjax, 1)
 
     def test_settings_from_memory_then_refreshed(self):
         """Редкие ответы (настройки школы): второй раз — сразу из памяти, свежие берутся в фоне."""
@@ -368,6 +425,41 @@ class MirrorTest(unittest.TestCase):
         self.assertIn("hdp-portal-session=NEW", j.header())
         self.assertTrue(j.has_session())
 
+    def test_realtime_reconnects_after_token_expired(self):
+        """29.10, 🪞 Дозор: живые обновления (/realtime) раз в 30 с «WebSocket failed to connect». Токен в cookie
+        живёт 15 мин и продлевается только через /api — зеркало продлевает его само; привязку к серверу
+        (signalr-hub) запись state.json другими скриптами не подменяет, иначе websocket уходил на другой сервер."""
+        code, _, body = self.req("POST", "/realtime/negotiate?negotiateVersion=1", body=b"",
+                                 headers={"Origin": "https://hdp.1-2-3-4.sslip.io"})
+        self.assertEqual((code, json.loads(body)), (200, {"connectionToken": "C1"}))
+        self.assertEqual([p for _, p, _, _ in Upstream.seen],
+                         ["/realtime/negotiate?negotiateVersion=1", mirror.FRESH, "/realtime/negotiate?negotiateVersion=1"])
+        mirror.relogin.assert_not_called()
+        # пока браузер открывает websocket, horo/*.js пишут state.json: своя привязка и токен, уже устаревший
+        with open(mirror._jar.path, "w") as f:
+            json.dump({"cookies": [{"name": "hdp-portal-session", "value": "OLD", "domain": "horodigital.ru", "expires": -1},
+                                   {"name": "signalr-hub", "value": "POD2", "domain": "horodigital.ru", "expires": -1}]}, f)
+        os.utime(mirror._jar.path, (time.time() + 5, time.time() + 5))
+        Upstream.seen.clear()
+        port = self.up.server_port
+        with mock.patch.object(mirror, "_raw_socket", lambda: socket.create_connection(("127.0.0.1", port), timeout=10)):
+            s = socket.create_connection(("127.0.0.1", self.srv.server_port), timeout=10)
+            s.sendall(f"GET /realtime?id=C1 HTTP/1.1\r\nHost: hdp.1-2-3-4.sslip.io\r\nCookie: hdp_site={self.token}\r\n"
+                      "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n".encode())
+            f = s.makefile("rb")
+            self.assertEqual(f.readline(), b"HTTP/1.1 101 Switching Protocols\r\n")
+            while f.readline() != b"\r\n":
+                pass
+            s.sendall(b'{"protocol":"json","version":1}\n')
+            self.assertEqual(f.readline(), b'{"protocol":"json","version":1}\n')  # туннель живой в обе стороны
+            s.close()
+        ws = [hd for _, p, hd, _ in Upstream.seen if p == "/realtime?id=C1"]
+        self.assertEqual(len(ws), 2)                                  # 401 на OLD → продлили → повтор
+        self.assertIn("hdp-portal-session=OLD", ws[0]["Cookie"])
+        self.assertIn("hdp-portal-session=FRESH", ws[1]["Cookie"])
+        self.assertTrue(all("signalr-hub=POD1" in hd["Cookie"] for hd in ws))  # свой сервер, не POD2 из файла
+
     @unittest.skipUnless(shutil.which("node"), "нужен node")
     def test_guard_keeps_hdp_brand(self):
         """На адресе зеркала платформа включала бренд «Perlem»: её проверка /horodigital.ru$/ должна быть «да»."""
@@ -442,6 +534,14 @@ class MirrorTest(unittest.TestCase):
         with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
             out = mirror._ahead.bundle("T1", "X1", first_too=True)  # касание карточки — и первое звено
         self.assertIn(edu + "/topics/T1/tasks?taskUuid=X1", out)
+        # письменное задание: цепочка короче (без попыток) — bundle не ждёт до упора (23.10: ответ платформы в обёртке
+        # {"data": …} не разбирался, и каждое задание ждало 4 с — страница была пустой 19 с)
+        with mock.patch.object(mirror, "_ahead", mirror.Ahead()):
+            t = time.time()
+            out = mirror._ahead.bundle("T1", "X2")
+            self.assertLess(time.time() - t, 2)
+            self.assertEqual((mirror._ahead.group.get("T1"), mirror._ahead.kind.get("X2")), ("G1", "detailedAnswer"))
+        self.assertEqual(set(out), {edu + "/topics/T1/tasks/X2", "/api/profile/v1/users/preferences"})
         code, h, body = self.req("GET", "/_hdp/sw.js", cookie=False)
         self.assertEqual((code, h.get("Service-Worker-Allowed"), h.get("Cache-Control")), (200, "/", "no-cache"))
         self.assertIn(b"/_hdp/bundle", body)

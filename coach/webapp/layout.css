@@ -16,6 +16,8 @@ html:root .wbar > :last-child { justify-self: end; grid-column: 3; }
    нижний отступ — не занимает места в потоке, заголовок встаёт рядом. Клавиатура iPhone — sheet() в app.js. */
 html:root .sheet-x { position: sticky !important; top: 12px !important; right: auto !important; left: auto !important; float: none !important;
   display: grid !important; place-items: center; margin: 4px -2px -44px auto !important; }
+/* заголовок рядом с крестиком — не ниже его: иначе первая строка листа («Вставить текстом», сегменты) уходит под ✕ */
+html:root :is(.sheet-x + h2, .sheet-x + * > h2:first-child) { min-height: 42px; }
 
 /* iPad стоя: крупнее, но не растянуто */
 @media (min-width: 700px) and (max-width: 1023px) {

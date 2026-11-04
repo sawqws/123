@@ -12,7 +12,6 @@ const path = require('path');
 const crypto = require('crypto');
 
 const PW = fs.existsSync('/opt/node-tools/node_modules/playwright') ? '/opt/node-tools/node_modules/playwright' : 'playwright';
-const { chromium } = require(PW);
 
 const args = process.argv.slice(2);
 const BASE = (args[0] || '').replace(/\/$/, '');
@@ -68,6 +67,32 @@ function watch(page, sink) {
 }
 const short = u => u.replace(/^https?:\/\/[^/]+/, '').slice(0, 140);
 
+// Кнопки бота внизу задания: у принятого письменного задания их нет нарочно (делать нечего — barHtml в overlay.js),
+// у теста всегда есть «👁 Ответы». t — задание из ответа платформы (topics/<uuid>/tasks); не нашлось — ждём кнопки.
+// 23.10: первым заданием обхода оказалась принятая итоговая — «нет кнопок бота» было ложной тревогой
+function barExpected(t) {
+  if (!t) return true;
+  const status = t.progress && t.progress.status ? t.progress.status.type : t.status;
+  return !(status === 'approved' && t.type !== 'test');
+}
+
+// Тема для сверки — та же, что у зеркала: guard.js включает тёмную (Dark Reader платформы), а новая сессия платформы
+// светлая. 23.10: Dark Reader платформы не может взять файлы usedesk с другого сайта — ошибка в консоли есть и на самой
+// платформе, но только в тёмной теме, поэтому при сверке в светлой Страж считал её нашей
+function themeScript(theme) {
+  return `try { localStorage.setItem('hdp-theme-storage', ${JSON.stringify(String(theme))}); } catch (e) {}`;
+}
+
+async function taskOf(page, p) {
+  const m = /\/topic\/([\w-]+)\/task\/([\w-]+)/.exec(p);
+  if (!m) return null;
+  return page.evaluate(async ([topic, task]) => {
+    const r = await fetch(`/api/education/v1/students/current/topics/${topic}/tasks`, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!r.ok) return null;
+    return (((await r.json()).data || {}).tasks || []).find(t => t.uuid === task) || null;
+  }, [m[1], m[2]]).catch(() => null);
+}
+
 async function visit(page, url, sink) {
   const t0 = Date.now();
   let status = 0;
@@ -117,8 +142,9 @@ async function panel(page, sink) {
   await page.click('.hdpx-drawer [data-a="close"]').catch(() => {});
 }
 
-(async () => {
-  const exe = fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined;
+async function main() {
+  const { chromium } = require(PW);
+  const exe =fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined;
   const browser = await chromium.launch({ headless: true, executablePath: exe, args: proxyArgs(),
     proxy: process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY } : undefined });
   const host = new URL(BASE).hostname;
@@ -133,7 +159,7 @@ async function panel(page, sink) {
   const pages = [], t0 = Date.now();
   const { page } = await mk('desktop');
   const queue = ['/student'], seen = new Set(), perSchema = {};
-  let sink = [];
+  let sink = [], barDone = false, theme = null;
   watch(page, { push: x => sink.push(x) });
   while (queue.length && pages.length < MAX) {
     const p = queue.shift().split('#')[0].split('?')[0].replace(/\/$/, '') || '/student';
@@ -144,11 +170,15 @@ async function panel(page, sink) {
     seen.add(p);
     sink = [];
     const info = await visit(page, BASE + p, sink);
-    if (pages.length === 0) await panel(page, sink);  // панель бота — один раз на главной
-    if (kindOf(p) === 'task' && !pages.some(x => x.kind === 'task')) {
-      if (!(await page.$('.hdpx-actionbar'))) sink.push({ kind: 'bot', text: 'на странице задания нет кнопок бота внизу' });
-      await panel(page, sink);
+    if (pages.length === 0) {
+      await panel(page, sink);  // панель бота — один раз на главной
+      theme = await page.evaluate(() => localStorage.getItem('hdp-theme-storage')).catch(() => null);
     }
+    if (kindOf(p) === 'task' && !barDone && barExpected(await taskOf(page, p))) {  // первое задание, где кнопки нужны
+      barDone = true;
+      if (!(await page.$('.hdpx-actionbar'))) sink.push({ kind: 'bot', text: 'на странице задания нет кнопок бота внизу' });
+    }
+    if (kindOf(p) === 'task' && !pages.some(x => x.kind === 'task')) await panel(page, sink);
     pages.push({ path: p, kind: kindOf(p), ms: info.ms, title: info.title, issues: sink });
     for (const h of info.hrefs) if (!seen.has(h.split('?')[0])) queue.push(h);
   }
@@ -172,6 +202,7 @@ async function panel(page, sink) {
     const views = [...new Set(pages.flatMap(x => x.issues.map(viewOf)))].filter(v => VIEWS[v]);
     for (const view of views) {
       const ctx = await browser.newContext({ viewport: VIEWS[view], storageState: STATE, locale: 'ru-RU' });
+      if (theme) await ctx.addInitScript(themeScript(theme));
       const po = await ctx.newPage();
       await readOnly(po);
       for (const pg of pages.filter(x => x.issues.some(i => viewOf(i) === view))) {
@@ -204,4 +235,7 @@ async function panel(page, sink) {
   const ours = issues.filter(i => !i.platform && i.kind !== 'slow');
   console.log(`СТРАНИЦ: ${pages.length} · ОШИБОК: ${ours.length} (+${issues.length - ours.length} не наших/медленных) · ${report.secs} с`);
   process.exit(0);  // отчёт записан — не ждём, пока Chromium на сервере закроется (там он иногда падает при выходе)
-})().catch(e => { console.error('sitecheck:', e.message); process.exit(1); });
+}
+
+if (require.main === module) main().catch(e => { console.error('sitecheck:', e.message); process.exit(1); });
+module.exports = { barExpected, themeScript };

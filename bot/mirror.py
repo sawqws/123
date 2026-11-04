@@ -50,6 +50,12 @@ ABS = re.compile(r"https?:(?:\\?/){2}horodigital\.ru(?=[/\"'\\?#]|$)")
 
 # ---------- сессия платформы ----------
 
+# Привязка к серверу живых обновлений (/realtime, Path=/realtime): negotiate и websocket обязаны прийти на один и тот
+# же сервер платформы, иначе 404 «connection could not be found». У horo/*.js своя привязка (их браузеры тоже
+# открывают /realtime), и каждая их запись state.json подменяла зеркалу его — из файла берём, только пока своей нет.
+OWN = {"signalr-hub"}
+
+
 class Jar:
     """Cookie платформы: из state.json (его пишут horo/*.js после входа) + что платформа прислала через зеркало."""
 
@@ -72,6 +78,8 @@ class Jar:
         now = time.time()
         for c in data.get("cookies", []):
             if c.get("domain", "").lstrip(".") == UP and (c.get("expires", -1) in (-1, None) or c["expires"] > now):
+                if c["name"] in OWN and c["name"] in self.c:
+                    continue
                 self.c[c["name"]] = c["value"]
 
     def header(self):
@@ -174,9 +182,15 @@ STORE = re.compile(r"/store/[tp]/[0-9a-f]{32}")
 # Файлы самого сайта платформы: имя с хэшем (index-DJ0UYpRl.js) не меняется — держим у себя и отдаём с кэшем на год.
 # Платформа их отдаёт без Cache-Control, а сам сайт — ~70–80 файлов на страницу (Глеб 19.10: «чтобы сайт работал
 # сильно быстрее»). Найденные внутри скриптов имена других файлов качаются заранее — весь сайт оседает на сервере.
-ASSET = re.compile(r"/student/(?:(?:assets/[\w.-]+|tinymce/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|webp|jpe?g|gif)|"
+# MathJax (формулы, своя копия платформы 3.2.2) — тоже здесь: 02.11 🪞 Дозор, «Typesetting failed: Cannot read
+# properties of null (reading 'nextSibling')» ×20 на задании. Страница из памяти зеркала рисовалась за ~2 с, а MathJax
+# шёл с платформы ещё 0,5–2,3 с; платформа тем временем перерисовывает задание, и формулы, ждавшие MathJax, вёрстывались
+# в уже снятых элементах (better-react-mathjax: typesetPromise([null])). На платформе MathJax успевает раньше.
+ASSET = re.compile(r"/student/(?:(?:assets/[\w.-]+|(?:tinymce|mathjax)/[\w./-]+)\.(?:js|css|png|svg|woff2?|ttf|otf|webp|jpe?g|gif)|"
                    r"i18n/[\w-]+/[\w-]+\.json\?v=[\w@.-]+)")  # i18n: тексты страниц, версия сайта — в адресе
 CHUNK = re.compile(r"(?<![\w.-])([A-Za-z_][\w.]*(?:-[\w]+)*-[A-Za-z0-9_-]{8}\.(?:js|css|png|svg|woff2?|webp))(?![\w])")
+# MathJax скрипты сайта зовут без /student/ и хэша («mathjax/tex-mml-chtml.js» в editor-….js) — качаем его заранее
+VENDOR = re.compile(r"[\"'`](mathjax/[\w./-]+\.js)[\"'`]")
 IMMUTABLE = "public, max-age=31536000, immutable"
 CACHE = os.path.join(REPO, "horo", "tmp", "mirror_cache")
 CACHE_MAX = 1024 * 2**20
@@ -291,6 +305,7 @@ class Store:
         paths = set(STORE.findall(text)) | set(ASSET.findall(text))
         if base:
             paths |= {base + n for n in CHUNK.findall(text) if ASSET.fullmatch(base + n)}
+            paths |= {"/student/" + n for n in VENDOR.findall(text) if ASSET.fullmatch("/student/" + n)}
         for path in paths:
             with self.lock:
                 if path in self.busy:
@@ -471,6 +486,27 @@ def get_json(path):
         return json.loads(decode(data, resp.headers.get("Content-Encoding")))
     except (http.client.HTTPException, OSError, ValueError, zlib.error):
         return None
+
+
+FRESH = "/api/education/v1/students/current/study-class"
+
+
+def fresh():
+    """Продлить сессию платформы. Токен в cookie живёт 15 мин; новый присылает только /api (Set-Cookie), а /realtime
+    на старый отвечает 401 — на странице, простоявшей без запросов, живые обновления не переподключались
+    (29.10, 🪞 Дозор: «WebSocket failed to connect…» раз в 30 с). → True, если сессия жива."""
+    headers = {"Host": UP, "User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*"}
+    ck = _jar.header()
+    if ck:
+        headers["Cookie"] = ck
+    try:
+        conn, resp = request("GET", FRESH, headers, None)
+        resp.read()
+        _pool.put(conn)
+    except (http.client.HTTPException, OSError):
+        return False
+    _jar.update(resp.headers.get_all("Set-Cookie") or [])
+    return resp.status == 200
 
 
 # ---------- «сразу из памяти, обновить в фоне» ----------
@@ -666,16 +702,24 @@ class Ahead:
         base = f"{EDU}/study-groups/{group}/topics/{topic}/tasks/{task}/test-attempts"
         return [base + "?status=completed", base + "?status=started&status=created&view=full"]
 
+    @staticmethod
+    def _data(text):
+        """Тело ответа API: платформа заворачивает его в {"success", "meta", "data"} (23.10 — разбор искал group и
+        попытки сверху, не находил, и bundle() на каждом задании ждал все 4 с: страница пустая 19 с, 🛡 Страж)."""
+        d = json.loads(text)
+        return d["data"] if isinstance(d, dict) and "data" in d and "success" in d else d
+
     def seen(self, path, text):
         """Ответ платформы (браузеру или наперёд) — из него следующие звенья цепочки."""
         m = TASKS_OF.fullmatch(path)
         if m:
             topic, task = m.groups()
             try:
-                d = json.loads(text)
+                d = self._data(text)
                 group = d["group"]["uuid"]
                 kind = next((t.get("type") for t in d.get("tasks") or [] if t.get("uuid") == task), None)
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, AttributeError):
+                self.kind[task] = None  # первое звено пришло, но не разобралось — bundle() его больше не ждёт
                 return
             self.group[topic], self.kind[task] = group, kind
             if kind == "test":
@@ -684,7 +728,7 @@ class Ahead:
         base = path.split("?")[0]
         if ATTEMPTS.fullmatch(base) and "?" in path:
             try:
-                items = json.loads(text)
+                items = self._data(text)
                 uuids = [a["uuid"] for a in items[:2]] if isinstance(items, list) else []
             except (ValueError, KeyError, TypeError):
                 return
@@ -720,16 +764,17 @@ def proxy(h, version="0"):
             if ctype.startswith("text/html"):
                 text = inject(text, version, plain(h))
             return send(h, status, "OK", out, text.encode("utf-8"))
+    realtime = path.startswith("/realtime")
     for attempt in range(2):
         headers = up_headers(h, UP)
         try:
             conn, resp = request(method, path, headers, body)
         except (http.client.HTTPException, OSError) as e:
             return h.reply(502, {"error": f"Платформа не отвечает: {e}"})
-        if resp.status == 401 and attempt == 0 and path.startswith("/api/") and method in ("GET", "HEAD"):
+        if resp.status == 401 and attempt == 0 and (realtime or path.startswith("/api/") and method in ("GET", "HEAD")):
             resp.read()
             _pool.put(conn)
-            if relogin():
+            if (realtime and fresh()) or relogin():  # /realtime сам токен не продлевает — см. fresh()
                 continue
         break
     _jar.update(resp.headers.get_all("Set-Cookie") or [])
@@ -837,24 +882,47 @@ def _raw_socket():
     return ctx.wrap_socket(s, server_hostname=UP)
 
 
+def _head(s):
+    """Начало ответа платформы на рукопожатие: заголовки (и что пришло следом — уже кадры websocket)."""
+    buf = b""
+    while b"\r\n\r\n" not in buf and len(buf) < 65536:
+        part = s.recv(4096)
+        if not part:
+            break
+        buf += part
+    return buf
+
+
 def websocket(h):
-    """Прозрачный туннель websocket: заголовки — как у обычного запроса, дальше байты в обе стороны."""
-    headers = up_headers(h, UP)
-    headers.pop("Accept-Encoding", None)
-    for k, v in h.headers.items():
-        if k.lower().startswith("sec-websocket"):
-            headers[k] = v
-    headers["Upgrade"] = "websocket"
-    headers["Connection"] = "Upgrade"
-    try:
-        up = _raw_socket()
-        req = f"GET {h.path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items()) + "\r\n"
-        up.sendall(req.encode())
-    except OSError as e:
-        return h.reply(502, {"error": f"Платформа не отвечает: {e}"})
+    """Туннель websocket: заголовки — как у обычного запроса, дальше байты в обе стороны. Платформа ответила 401
+    (токен в cookie устарел, а сам /realtime его не продлевает) — продлеваем сессию и повторяем один раз."""
+    for attempt in range(2):
+        headers = up_headers(h, UP)
+        headers.pop("Accept-Encoding", None)
+        for k, v in h.headers.items():
+            if k.lower().startswith("sec-websocket"):
+                headers[k] = v
+        headers["Upgrade"] = "websocket"
+        headers["Connection"] = "Upgrade"
+        try:
+            up = _raw_socket()
+            req = f"GET {h.path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items()) + "\r\n"
+            up.sendall(req.encode())
+            head = _head(up)
+        except OSError as e:
+            return h.reply(502, {"error": f"Платформа не отвечает: {e}"})
+        if attempt == 0 and head.split(b"\r\n", 1)[0].split(b" ")[1:2] == [b"401"] and (fresh() or relogin()):
+            up.close()
+            continue
+        break
     h.close_connection = True
     client = h.connection
     h.wfile.flush()
+    try:
+        client.sendall(head)
+    except OSError:
+        up.close()
+        return
     pipe(client, up)
 
 

@@ -125,7 +125,8 @@ html.wh .btn { border-radius: 8px !important; font: 700 11px/1 var(--head) !impo
 html.wh .btn:not(.primary) { background: #3a4247 !important; color: #fff !important; }
 html.wh .btn.primary { background: #fff !important; color: #111 !important; }
 html.wh .seg { background: #23292d !important; border-radius: 8px !important; }
-html.wh .seg button { font: 700 10.5px var(--head) !important; border-radius: 6px !important; }
+html.wh .seg button { font: 700 11px var(--head) !important; border-radius: 6px !important; min-height: 36px !important; }
+html.wh .sheet-x { width: 36px; height: 36px; }  /* под палец: на сенсорном не меньше 36 px */
 html.wh .seg button.on { background: #3e464c !important; color: #fff !important; }
 
 /* меню снизу: плашка «Главная · Здоровье · Питание · Добавить» и отдельный круг чата со знаком «Ф» */

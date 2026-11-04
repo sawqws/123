@@ -2,6 +2,7 @@
 вход в WHOOP, утренний разбор по расписанию, цели и разбор тренировки (Claude подменён).
 usage: python3 coach/test_coach.py
 """
+import contextlib
 import datetime
 import hashlib
 import hmac
@@ -1907,6 +1908,17 @@ class WebhookTest(unittest.TestCase):
                 mock.patch.object(coach, "sync_user") as su3:
             coach.tick()
         su3.assert_not_called()  # ночью — раз в 15 мин
+
+
+class RunTest(unittest.TestCase):
+    def test_sigint_quiet(self):
+        """pm2 stop/restart (SIGINT) — тихий выход без Traceback в логе ошибок (самопроверка 04.11: KeyboardInterrupt ×52)."""
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(coach, "main", side_effect=KeyboardInterrupt), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            coach.run()
+        self.assertIn("остановлен", out.getvalue())
+        self.assertEqual(err.getvalue(), "")
 
 
 class SiteTest(unittest.TestCase):
