@@ -491,6 +491,11 @@ class BotTest(unittest.TestCase):
             p.stop()
         self.db.db.close()
 
+    def test_all_has_version(self):
+        # версия файлов в /api/all — приложение со старым кодом перезагружается (Глеб 04.11: на телефоне осталось старое название)
+        self.assertEqual(call("/api/all", {}).json["v"], coach.VERSION)
+        self.assertEqual(len(coach.VERSION), 10)
+
     def test_kb_probe(self):
         # замер клавиатуры iPhone из чата: хранятся последние 5, только простые значения
         for i in range(7):

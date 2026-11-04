@@ -247,6 +247,7 @@ def build(shots=None):
         seed_weight(today)
         seed_water(db, today)
         allp = coach.route(T.U, "/api/all", {})
+        allp.pop("v", None)  # версия файлов: в фикстуре страница с v=1 — без этого приложение перезагружалось бы при обходе
         allp["today"]["brief"] = "<b>Зелёный день — 82%.</b>\n• ВСР выше нормы, можно спарринг.\n• Ложись до 23:00."
         t = allp["today"]
         if not t.get("kcal"):  # сервер ещё без «Калорий» — пример по договору

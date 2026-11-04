@@ -1835,12 +1835,25 @@
     // получил их по вебхуку сразу, а экран ждал до 2 мин и не обновлялся при возврате в приложение):
     // каждые 30 с и сразу при возврате на экран; перерисовка — только если данные правда поменялись
     let lastPull = Date.now(), pulling = false, lastSig = JSON.stringify(S.data);
-    const pull = async () => {
+    // новая выкатка, а приложение открыто со старым кодом (Глеб 04.11: iPhone держит приложение с экрана «Домой» в памяти
+    // часами — после переименования всё ещё было старое название): сервер шлёт версию файлов, другая — перезагрузка при
+    // возврате в приложение (или сразу, если ничего не открыто и не набирается)
+    const myV = ((document.querySelector('script[src*="app.js?v="]') || {}).src || '').split('v=')[1] || '';
+    let stale = false;
+    const reload = () => { try { sessionStorage.setItem('forma-reload', String(Date.now())); } catch (e) { /* приватный режим */ } location.reload(); };
+    const recent = () => { try { return Date.now() - Number(sessionStorage.getItem('forma-reload') || 0) < 60000; } catch (e) { return false; } };
+    const pull = async (resume) => {
+      if (stale && resume === true && !recent()) return reload();
       if (pulling || document.hidden || document.querySelector('.sheet') || S.asking || S.briefing || S.photo || S.dayData) return;
       if (document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName)) return;
       pulling = true; lastPull = Date.now();
       try {
-        const d = await api('/api/all'), sig = JSON.stringify(d);
+        const d = await api('/api/all');
+        if (d && d.v && myV && d.v !== myV && !recent()) {
+          stale = true;
+          if (resume === true || (!S.screen && S.tab !== 'coach')) return reload();
+        }
+        const sig = JSON.stringify(d);
         if (sig === lastSig) return;
         lastSig = sig; S.data = d;
         F.onData.forEach(fn => { try { fn(S.data); } catch (e) { console.error(e); } });
@@ -1848,8 +1861,8 @@
       } catch (e) { /* тихо */ } finally { pulling = false; }
     };
     F.pull = pull;
-    setInterval(pull, 30000);
-    const back = () => { if (!document.hidden && Date.now() - lastPull > 10000) pull(); };
+    setInterval(() => pull(false), 30000);
+    const back = () => { if (!document.hidden && (stale || Date.now() - lastPull > 10000)) pull(true); };
     document.addEventListener('visibilitychange', back);
     addEventListener('pageshow', back);
     addEventListener('focus', back);
