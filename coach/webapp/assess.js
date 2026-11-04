@@ -148,7 +148,7 @@
     const w = (v, u = '') => has && v != null ? `${v}${u}` : null;
     return `<div class="sec rise">${F.cap('Было → стало')}<div class="tiles as-cmp">
       ${tile('Восстановление', num(c.recovery), '%', chg(c.recovery, p.recovery, { unit: '%', good: true }), w(num(p.recovery), '%'))}
-      ${tile('Запас сил', num(c.hrv), 'мс', chg(c.hrv, p.hrv, { unit: `${NB}мс`, good: true }), w(num(p.hrv), `${NB}мс`), 'отдых организма по пульсу во сне')}
+      ${tile('Гибкость пульса', num(c.hrv), 'мс', chg(c.hrv, p.hrv, { unit: `${NB}мс`, good: true }), w(num(p.hrv), `${NB}мс`), 'отдых организма по пульсу во сне')}
       ${tile('Пульс покоя', num(c.rhr), 'уд/мин', chg(c.rhr, p.rhr, { good: false }), w(num(p.rhr)))}
       ${tile('Сон за ночь', durS(c.sleep), '', chg(c.sleep != null ? Math.round(c.sleep * 60) : null, p.sleep != null ? Math.round(p.sleep * 60) : null, { unit: `${NB}мин`, good: true, eps: 3 }), w(durS(p.sleep)))}
       ${tile('Нагрузка в день', num(c.strain, 1), 'из 21', chg(c.strain, p.strain, { d: 1 }), w(num(p.strain, 1)))}
@@ -283,7 +283,7 @@
         h += compareCard(a) + sleepCard(a.sleep) + daysCard(a) + weekdayCard(a) + zonesCard(a) + tips;
       } else {
         h += compareCard(a) + recCard(a) + sleepCard(a.sleep) + weeksSleepCard(a) + zonesCard(a) + weekdayCard(a)
-        + trendCard(a, 'hrv', 'Запас сил', 'мс', true, 'Насколько отдохнул организм — по пульсу во сне. Чем выше, тем лучше.')
+        + trendCard(a, 'hrv', 'Гибкость пульса', 'мс', true, 'Насколько отдохнул организм — по пульсу во сне. Чем выше, тем лучше.')
         + trendCard(a, 'rhr', 'Пульс покоя', 'уд/мин', false, 'Чем ниже, тем легче сердцу.')
         + tips;
       }

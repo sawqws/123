@@ -615,7 +615,7 @@ def headline(t):
     if r:
         line = f"{ZONE_ICON[r['zone']]} Восстановление <b>{r['score']}%</b>"
         if r.get("hrv"):
-            line += f" · запас сил {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else "")
+            line += f" · гибкость пульса {round(r['hrv'])}" + (f" (норма {round(b['hrv'])})" if b.get("hrv") else "")
         if r.get("rhr"):
             line += f" · пульс покоя {r['rhr']}"
         lines.append(line)
@@ -785,7 +785,7 @@ def morning_title(t):
 
 
 def facts_md(t):
-    """Цифры утра одной строкой для приложения (Markdown): восстановление, сон, запас сил против нормы."""
+    """Цифры утра одной строкой для приложения (Markdown): восстановление, сон, гибкость пульса против нормы."""
     r, s, b = t.get("recovery"), t.get("sleep"), t.get("base") or {}
     out = []
     if r and r.get("score") is not None:
@@ -793,7 +793,7 @@ def facts_md(t):
     if s:
         out.append(f"сон **{hm(s['hours'])}**" + (f" из {hm(s['need'])}" if s.get("need") else ""))
     if r and r.get("hrv"):
-        out.append(f"запас сил {round(r['hrv'])}" + (f" (обычно {round(b['hrv'])})" if b.get("hrv") else ""))
+        out.append(f"гибкость пульса {round(r['hrv'])}" + (f" (обычно {round(b['hrv'])})" if b.get("hrv") else ""))
     if r and r.get("rhr"):
         out.append(f"пульс в покое {r['rhr']}")
     return " · ".join(out)

@@ -397,7 +397,7 @@ def _tips(period, cur, state_key, hard, rows, water):
         out.append("Записывай воду и еду — тогда подскажу и по питанию.")
     if len(out) < 2 and s and lack < 1 / 3:
         out.append(f"Сохраняй режим: {dur(s)} сна" + (f" и отбой около {_clock(round(bed * 4) / 4)}" if bed is not None else "")
-                   + " — на этом держится запас сил.")
+                   + " — на этом держится гибкость пульса.")
     if len(out) < 2:
         out.append("Ешь в одно и то же время, а после тренировки в течение часа — белок и вода.")
     return out[:3]

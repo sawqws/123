@@ -37,7 +37,7 @@
     try { M.list = await F.api('/api/trends', {}); } catch (e) { M.listErr = e.message || String(e); }
     M.listLoading = false;
     // список нужен только листу выбора (подпись группы есть и в ответе тренда) — экран заново не рисуем;
-    // открытый адрес с неизвестным показателем (?m=…) — на запас сил
+    // открытый адрес с неизвестным показателем (?m=…) — на гибкость пульса
     if (M.list && !meta(M.metric)) { M.metric = 'hrv'; if (F.S.screen === 'trends') F.render(false); }
   }
   async function load(k = key()) {

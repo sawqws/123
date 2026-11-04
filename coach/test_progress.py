@@ -76,7 +76,7 @@ class ProgressTest(unittest.TestCase):
         self.assertIn("через сколько дней", pr)  # быстрые действия с цифрами и сроком
         self.assertIn("без диет", pr)
         self.assertIn("лекарств", pr)
-        self.assertIn("запас сил", pr)  # без терминов
+        self.assertIn("гибкость пульса", pr)  # без терминов
         self.assertNotIn("сколько тренировок и какой интенсивности", pr)  # старый «план» с тренировками
         wk = ai.progress_prompt(ctx, week=True)
         self.assertIn(ai.NO_TRAIN_ADVICE, wk)

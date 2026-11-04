@@ -311,10 +311,10 @@ def tips(day, base, ratio, profile, recent):
     if rec and base.get("hrv") and rec.get("hrv"):
         d = (rec["hrv"] - base["hrv"]) / base["hrv"] * 100
         if d <= -15:
-            out.append({"tone": "bad", "text": f"Запас сил на {abs(round(d))}% ниже твоей нормы — нервная система не восстановилась. "
+            out.append({"tone": "bad", "text": f"Гибкость пульса на {abs(round(d))}% ниже твоей нормы — нервная система не восстановилась. "
                                                "Сегодня техника и лёгкая работа, без спаррингов на максимум."})
         elif d >= 10:
-            out.append({"tone": "good", "text": f"Запас сил на {round(d)}% выше нормы — хороший день для тяжёлой работы."})
+            out.append({"tone": "good", "text": f"Гибкость пульса на {round(d)}% выше нормы — хороший день для тяжёлой работы."})
     if rec and base.get("rhr") and rec.get("rhr") and rec["rhr"] - base["rhr"] >= 5:
         out.append({"tone": "bad", "text": f"Пульс покоя {rec['rhr']} — на {round(rec['rhr'] - base['rhr'])} выше обычного. "
                                            "Так бывает при начале болезни, недосыпе, обезвоживании или перегрузке."})

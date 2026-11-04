@@ -57,7 +57,7 @@ class ListTest(unittest.TestCase):
             self.assertIn(k, keys)
         self.assertIn("VO₂ max", out["missing"])
         hrv = next(i for g in out["groups"] for i in g["items"] if i["key"] == "hrv")
-        self.assertEqual((hrv["title"], hrv["unit"]), ("Запас сил", "мс"))
+        self.assertEqual((hrv["title"], hrv["unit"]), ("Гибкость пульса", "мс"))
 
     def test_unknown_metric_and_period(self):
         with self.assertRaises(ValueError):
@@ -94,7 +94,7 @@ class CalcTest(unittest.TestCase):
         self.assertIsNotNone(out["prev_avg"])
         pct = round((out["avg"] - out["prev_avg"]) / out["prev_avg"] * 100)
         self.assertLessEqual(abs(out["change_pct"] - pct), 1)
-        self.assertTrue(out["text"].startswith("В среднем за неделю запас сил — "))
+        self.assertTrue(out["text"].startswith("В среднем за неделю гибкость пульса — "))
         self.assertIn("за прошлые 7 дней", out["text"])
         lo, hi = out["typical"]
         self.assertLess(lo, hi)
@@ -108,7 +108,7 @@ class CalcTest(unittest.TestCase):
         self.assertEqual(TR.change(5, 0)[1], None)
         m = TR.METRICS["hrv"]
         t = TR.phrase(m, "m", 115, 106, 9, 8.5)
-        self.assertEqual(t, "В среднем за месяц запас сил — 115 мс: это выше, чем за прошлые 30 дней (106 мс).")
+        self.assertEqual(t, "В среднем за месяц гибкость пульса — 115 мс: это выше, чем за прошлые 30 дней (106 мс).")
         self.assertIn("примерно так же", TR.phrase(m, "m", 106.3, 106, .3, .28))
         self.assertIn("больше", TR.phrase(TR.METRICS["steps"], "w", 9000, 8000, 1000, 12.5))
         self.assertIn("сравнить не с чем", TR.phrase(m, "w", 100, None, None, None))
