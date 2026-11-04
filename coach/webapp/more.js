@@ -261,6 +261,7 @@
   let seen = null;
   // поле ввода — над меню Формы, а с клавиатурой iOS — прямо над ней (visualViewport): страница целиком не едет
   let maxH = 0, maxW = 0;
+  const IPHONE = /iPhone/.test(navigator.userAgent);
   function fit() {
     const coach = document.body.classList.contains('tab-coach');
     const w = window.innerWidth, vh = vv ? vv.height : window.innerHeight, top = vv ? Math.max(0, vv.offsetTop) : 0;
@@ -283,6 +284,20 @@
       if (over > 2) root.style.setProperty('--vv-h', Math.max(160, Math.round(vh - over)) + 'px');
     }
   }
+  // замер для проверки (раз за фокус, через 1 с): размеры окна, клавиатуры и где поле — на сервер, без личных данных
+  let probed = 0;
+  const probe = () => {
+    if (!IPHONE || Date.now() - probed < 20000) return;
+    probed = Date.now();
+    setTimeout(() => {
+      const box = document.querySelector('body.tab-coach .composer');
+      if (!box || !vv || document.activeElement?.id !== 'q') return;
+      const r = box.getBoundingClientRect();
+      F.api('/api/kb', { iw: innerWidth, ih: innerHeight, vh: Math.round(vv.height), vt: Math.round(vv.offsetTop),
+        sh: screen.height, top: Math.round(r.top), bottom: Math.round(r.bottom), kb: document.body.classList.contains('kb'),
+        app: standalone, tg: !!(F.tg && F.tg.initData), ua: navigator.userAgent.slice(0, 160) }).catch(() => {});
+    }, 1000);
+  };
   // клавиатура iOS выезжает ~0,3–0,5 с, а события visualViewport в приложении с экрана «Домой» приходят не всегда —
   // пока поле в фокусе, первые 1,5 с подгоняем каждый кадр
   let follow = 0;
@@ -332,7 +347,7 @@
   addEventListener('orientationchange', () => setTimeout(F.safeBottom, 300));
   if (F.tg && F.tg.onEvent) ['safeAreaChanged', 'contentSafeAreaChanged'].forEach(e => { try { F.tg.onEvent(e, F.safeBottom); } catch (x) { /* старый Telegram */ } });
 
-  document.addEventListener('focusin', e => { if (e.target.id === 'q') chase(); });
+  document.addEventListener('focusin', e => { if (e.target.id === 'q') { chase(); probe(); } });
   document.addEventListener('focusout', e => { if (e.target.id === 'q') chase(); });
 
   // 30 минут тишины — при открытии вкладки чистый лист (сервер отдаёт то же: /api/history — только текущий разговор)

@@ -491,6 +491,13 @@ class BotTest(unittest.TestCase):
             p.stop()
         self.db.db.close()
 
+    def test_kb_probe(self):
+        # замер клавиатуры iPhone из чата: хранятся последние 5, только простые значения
+        for i in range(7):
+            self.assertEqual(call("/api/kb", {"ih": 852, "vh": 500 + i, "kb": True, "ua": "x" * 400, "bad": [1]}).code, 200)
+        rows = json.loads(self.db.meta(f"kb:{U}"))
+        self.assertEqual((len(rows), rows[0]["vh"], len(rows[0]["ua"]), "bad" in rows[0]), (5, 506, 160, False))
+
     def fake_tg(self, method, **kw):
         self.sent.append((method, kw))
         return {"ok": True, "result": {}}
