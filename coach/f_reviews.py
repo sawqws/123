@@ -139,13 +139,28 @@ def html_md(h):
     return html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
 
 
+# Глеб 04.11: «убери оценку дня — день не лучший / день хороший — просто разбор давай». Страховка к ai.NO_VERDICT:
+# строка целиком жирным (прежний «вывод») и строки, которые оценивают день или тренировку, — вон.
+_BOLD_LINE = re.compile(r"^\*\*[^*\n]+\*\*[.!]?$")
+_VERDICT = re.compile(
+    r"^(?:[-*•]\s*)?(?:\*\*)?(?:(?:сегодня|в целом|итог)[:,]?\s+)?(?:день|тренировка)\s+(?:был[аи]?\s+|сегодня\s+)?"
+    r"(?:не\s+)?(?:лучш|хорош|плох|отличн|неплох|тяжёл|тяжел|лёгк|легк|средн|плотн|рабоч|удачн|слаб|норм|так\s+себе|"
+    r"нейтральн|спокойн|насыщенн|сложн|непрост)", re.I)
+
+
+def no_verdict(text):
+    """Разбор без оценки: убрать строку-вывод жирным и фразы «день хороший / не лучший», «тренировка была тяжёлой»."""
+    out = [ln for ln in str(text or "").splitlines() if not (_BOLD_LINE.match(ln.strip()) or _VERDICT.match(ln.strip()))]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
 def add(db, uid, day, kind, title, text, at, ref="", src=None):
     """Сохранить разбор (тот же день, вид и ref — заменить и снова сделать «новым»). src — по каким данным
     (workout_src / morning_src). -> id."""
     if kind not in KINDS:
         raise ValueError("нет такого разбора")
     title = words.fix(" ".join(str(title or "").split()))[:TITLE_MAX]
-    text = words.fix(str(text or "").strip())[:TEXT_MAX]
+    text = words.fix(no_verdict(text))[:TEXT_MAX]
     src = json.dumps(src, ensure_ascii=False) if src else None
     db.x("INSERT INTO reviews (user, day, kind, ref, at, title, text, seen, created, src) VALUES (?,?,?,?,?,?,?,0,?,?) "
          "ON CONFLICT (user, day, kind, ref) DO UPDATE SET at=excluded.at, title=excluded.title, text=excluded.text, "
