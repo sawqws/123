@@ -318,5 +318,44 @@ class CoachTest(Base):
         self.assertIn("давление верхнее 118 мм рт. ст. (01.11) · давление нижнее 75 мм рт. ст. (02.11)", line)
 
 
+class BotPhotoTest(Base):
+    """Скрин WHOOP прямо в чат бота (Глеб 05.11: «сам находи — зачем мне присылать в приложение»): сохраняется сразу."""
+    def run_photo(self, reply, meal=None):
+        sent, asked = [], []
+        img = os.path.join(self.root, "shot.jpg")
+        open(img, "wb").write(b"jpg")
+        with mock.patch.object(coach, "today_of", lambda uid: TODAY), \
+                mock.patch.object(coach, "send", lambda chat, text, *a, **kw: sent.append(text)), \
+                mock.patch.object(coach, "typing", lambda chat: None), \
+                mock.patch.object(coach, "answer", lambda chat, uid, q, photo=None: asked.append(q)), \
+                mock.patch.object(ai, "meal", lambda ctx, text, image=None: meal or {"food": False, "comment": "скрин"}), \
+                mock.patch.object(ai, "claude", lambda prompt, image=None, **kw: reply):
+            coach.log_meal(1, T.U, "", img)
+        return sent, asked
+
+    def test_whoop_screen_saved_from_chat(self):
+        sent, asked = self.run_photo('{"whoop": true, "day": null, "time": null, "metrics": ['
+                                     '{"key": "vo2max", "label": "VO2 max", "value": 51.3, "unit": "мл/кг/мин"},'
+                                     '{"key": "journal", "label": "Пил кофеин", "text": "Нет"}]}')
+        self.assertEqual(asked, [])  # не ушло тренеру вопросом
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Записал из WHOOP · сегодня", sent[0])
+        self.assertIn("VO₂ max — 51,3 мл/кг/мин", sent[0])
+        self.assertIn("Пил кофеин — Нет", sent[0])
+        p = X.payload(coach.db, T.U, TODAY)
+        self.assertEqual((p["count"], p["latest"][0]["value"], p["items"][0]["src"]), (2, 51.3, "photo"))
+
+    def test_other_screen_goes_to_coach(self):
+        sent, asked = self.run_photo('{"whoop": false, "metrics": []}')
+        self.assertEqual((sent, len(asked)), ([], 1))  # не WHOOP — как раньше, вопрос тренеру с картинкой
+        self.assertEqual(X.payload(coach.db, T.U, TODAY)["count"], 0)
+
+    def test_claude_down_goes_to_coach(self):
+        sent, asked = [], []
+        with mock.patch.object(coach, "today_of", lambda uid: TODAY), \
+                mock.patch.object(ai, "claude", side_effect=ai.AIError("занят")):
+            self.assertFalse(coach.wx_from_photo(1, T.U, os.path.join(self.root, "nope.jpg")))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

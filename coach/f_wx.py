@@ -381,6 +381,12 @@ def from_ai(out, today):
     return day, tm, metrics[:MAX_METRICS], bad
 
 
+def read_path(app, path, today):
+    """Картинка уже на диске (фото из чата бота) → предпросмотр, как у /photo; ничего не нашлось — ValueError."""
+    prompt = PHOTO_ASK.replace("{year}", str(today.year)).replace("{prev}", str(today.year - 1))
+    return _preview(app, app.ai.claude(prompt, image=path, timeout=150), today)
+
+
 def photo_preview(app, uid, b, today):
     raw, ext = app.decode_photo(b)
     folder = os.path.join(app.DATA, "photos", "wx")
@@ -396,6 +402,10 @@ def photo_preview(app, uid, b, today):
             os.remove(path)  # скрин нужен только на время ответа
         except OSError:
             pass
+    return _preview(app, text, today)
+
+
+def _preview(app, text, today):
     try:
         out = app.ai.parse_json(text)
     except app.ai.AIError:  # ответ без JSON — значит, цифр не нашёл
@@ -405,6 +415,17 @@ def photo_preview(app, uid, b, today):
         tail = f". Пропустил: {'; '.join(bad[:3])}" if bad else ""
         raise ValueError("На скрине не нашёл показателей WHOOP — пришли экран с цифрами" + tail)
     return {"day": day, "time": tm, "metrics": metrics, "skipped": bad, "how": "claude", "src": "photo"}
+
+
+def metric_text(m, known=None):
+    """«VO₂ max — 51,3 мл/кг/мин» / «Пил кофеин — Нет» — строка для чата бота."""
+    k = KNOWN.get(m.get("key"))
+    label = k[0] if k else (m.get("label") or "")
+    if m.get("value") is not None:
+        v = _fmt(float(m["value"]), k[4] if k else 2) if isinstance(m["value"], (int, float)) else str(m["value"])
+        unit = (k[1] if k else m.get("unit")) or ""
+        return f"{label} — {v}{(' ' + unit) if unit else ''}"
+    return f"{label} — {m.get('text') or ''}"
 
 
 # ---------- подключение ----------

@@ -1274,11 +1274,14 @@ class BotTest(unittest.TestCase):
         self.assertIn("голосовое, фото или видео", self.texts()[-1])
 
     def test_photo_not_food_goes_to_coach(self):
+        # не еда → сначала проверка «скрин WHOOP с цифрами не из API?» (f_wx, нет — дальше), потом вопрос тренеру с картинкой
         with mock.patch.object(ai, "claude", side_effect=['{"food": false, "comment": "это скрин WHOOP"}',
+                                                          '{"whoop": true, "metrics": []}',
                                                           "**Восстановление 82%** — можно бокс в полную."]) as c:
             coach.log_meal(U, U, "", "/tmp/whoop.jpg")
-        self.assertEqual(c.call_args_list[1].kwargs["image"], "/tmp/whoop.jpg")
-        self.assertIn(coach.PHOTO_ASK, c.call_args_list[1][0][0])
+        self.assertIn("WHOOP", c.call_args_list[1][0][0])
+        self.assertEqual(c.call_args_list[2].kwargs["image"], "/tmp/whoop.jpg")
+        self.assertIn(coach.PHOTO_ASK, c.call_args_list[2][0][0])
         self.assertIn("<b>Восстановление 82%</b>", self.texts()[-1])
         self.assertEqual(self.db.meals(U, "2026-10-11"), [])
         self.assertNotIn(U, coach.busy)
