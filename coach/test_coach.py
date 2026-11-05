@@ -499,11 +499,14 @@ class BotTest(unittest.TestCase):
         self.assertEqual(len(coach.VERSION), 10)
 
     def test_kb_probe(self):
-        # замер клавиатуры iPhone из чата: хранятся последние 5, только простые значения
-        for i in range(7):
-            self.assertEqual(call("/api/kb", {"ih": 852, "vh": 500 + i, "kb": True, "ua": "x" * 400, "bad": [1]}).code, 200)
+        # замер окна iPhone: хранятся последние 20, только простые значения, строки ≤ 160
+        for i in range(23):
+            self.assertEqual(call("/api/kb", {"ih": 852, "vh": 500 + i, "kb": True, "ua": "x" * 400, "bad": [1],
+                                              "when": "tab:coach", "tab": "coach", "lvh": 956, "full": 956, "barb": 914,
+                                              "heal": "окно: 894→956 (слой)" + "y" * 300}).code, 200)
         rows = json.loads(self.db.meta(f"kb:{U}"))
-        self.assertEqual((len(rows), rows[0]["vh"], len(rows[0]["ua"]), "bad" in rows[0]), (7, 506, 160, False))
+        self.assertEqual((len(rows), rows[0]["vh"], len(rows[0]["ua"]), "bad" in rows[0]), (20, 522, 160, False))
+        self.assertEqual((rows[0]["tab"], rows[0]["lvh"], rows[0]["full"], rows[0]["barb"], len(rows[0]["heal"])), ("coach", 956, 956, 914, 160))
 
     def fake_tg(self, method, **kw):
         self.sent.append((method, kw))
