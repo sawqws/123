@@ -1173,3 +1173,15 @@ html .toast.show { transform: translate(-50%, 0); opacity: 1; visibility: visibl
 html .sheet:not(.open) { opacity: 0; transition: transform .24s cubic-bezier(.3, 0, .8, .4), opacity .2s ease-in .04s !important; }
 html .sheet.open { opacity: 1; }
 html .sheet-backdrop:not(.open) { transition: opacity .26s ease !important; }
+
+/* «На сегодня» на главной (Глеб 05.11): три строки — лечь, вода, еда; значок, крупная цифра, подпись; «+250» — вода в одно касание */
+.card.tplan .tp-list { margin: 6px -16px 0; background: none; border-radius: 0; }
+.card.tplan .tp-row { min-height: 58px; padding: 10px 16px; background: none; }
+.card.tplan .tp-row .ic { color: var(--hc, var(--ink)); background: color-mix(in srgb, var(--hc, var(--ink)) 14%, transparent); }
+.card.tplan .tp-row .title { font-size: 16px; font-weight: 600; }
+.card.tplan .tp-row .title b { font-weight: 700; }
+.card.tplan .tp-row .meta { font-size: 13px; color: var(--hint); white-space: normal; }
+.card.tplan .tp-add { min-width: 56px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 999px; font: 600 14px/1 var(--head);
+  color: var(--ink); background: var(--fill-2, rgba(255, 255, 255, .12)); cursor: pointer; }
+.card.tplan .tp-add:active { transform: scale(.94); }
+.card.tplan .olinks { margin-top: 8px; }
