@@ -421,7 +421,8 @@ def today(app, uid, day, t=None):
 
 def payload(app, uid, day, cfg=None):
     cfg, week = plans(app, uid, day, 7, cfg=cfg)
-    return {"cfg": cfg, "today": week[0], "week": week}
+    # saved — режим сохранён самим пользователем (главная «На сегодня» берёт отбой из режима только тогда)
+    return {"cfg": cfg, "today": week[0], "week": week, "saved": configured(app.db, uid)}
 
 
 INT_WORD = {"full": "в полную силу", "light": "лёгкая", "rest": "отдых"}

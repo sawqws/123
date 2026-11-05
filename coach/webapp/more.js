@@ -381,6 +381,8 @@
     noteFull();
     const before = innerHeight, now = Date.now();
     if (full.h - before <= 4 || typingNow() || before === stuckH) return false;
+    // листает — не мигаем посреди прокрутки (сбило бы инерцию): попробуем, когда остановится
+    if (F.idle && F.idle() < 700) { clearTimeout(F.heal.t); F.heal.t = setTimeout(() => F.heal(why), 800); return false; }
     healLog = healLog.filter(t => now - t < 60000);
     if (now - healAt < 500 || healLog.length >= 6) return false;
     healAt = now; healLog.push(now);

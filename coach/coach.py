@@ -1529,7 +1529,7 @@ def water_text(uid, added=0, title=None):
         + ([f"«Калории» {water.liters(from_kcal)}"] if from_kcal else []))
     note = None if added or wt["log"] else "Пиши «500 мл», «стакан воды» или жми кнопки."
     text = water.card(added, wt["drank"], wt["target"], wt["why"], now.hour + now.minute / 60, wt["trained"],
-                      title=title, extra=log, note=note)
+                      title=title, extra=log, note=note, win=water_window(uid, now.date()))
     return text, (own[-1]["id"] if own else None)
 
 
@@ -2643,6 +2643,18 @@ class Web(BaseHTTPRequestHandler):
         self.reply(404, {"error": "not found"})
 
 
+def water_window(uid, day):
+    """Окно «пьём» на день: с подъёма до часа до отбоя по режиму дня (если режим сохранён сам), иначе None — 08:00–21:00."""
+    try:
+        if not f_regime.configured(db, uid):
+            return None
+        bed, wake = f_regime.bed_wake(f_regime.load(db, uid, profile(uid)), day)
+        return water.window(wake, bed)
+    except Exception:  # режим не должен ронять воду
+        traceback.print_exc()
+        return None
+
+
 def day_payload(uid, day):
     t = insights.today(db, uid, day, profile(uid), whoop.body(db, uid))
     b = db.brief(uid, day.isoformat(), "morning")
@@ -2650,7 +2662,9 @@ def day_payload(uid, day):
     now = user_now(db.user(uid))
     if day == now.date():
         wt = t["water"]
-        wt["mark"], wt["note"] = water.assess(wt["drank"], wt["target"], now.hour + now.minute / 60, wt["trained"])
+        win, hour = water_window(uid, day), now.hour + now.minute / 60
+        wt["mark"], wt["note"] = water.assess(wt["drank"], wt["target"], hour, wt["trained"], win)
+        wt["short"] = water.short(wt["drank"], wt["target"], hour, wt["trained"], win)[1]  # строка «На сегодня» на главной
     return t
 
 

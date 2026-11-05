@@ -217,7 +217,8 @@ class ApiTest(unittest.TestCase):
 
     def test_defaults_from_profile(self):
         r = self.call("/api/regime")
-        self.assertEqual(set(r), {"cfg", "today", "week"})
+        self.assertEqual(set(r), {"cfg", "today", "week", "saved"})
+        self.assertFalse(r["saved"])  # не сохранял сам — главная «На сегодня» не берёт отбой из режима
         self.assertEqual(r["cfg"]["train_days"], [0, 2, 4])  # из расписания в профиле
         self.assertEqual((r["cfg"]["bed"], r["cfg"]["wake"]), ("22:00", "07:00"))
         self.assertIsNone(r["cfg"]["vacation"])
@@ -261,6 +262,7 @@ class ApiTest(unittest.TestCase):
     def test_save_check_and_context(self):
         r = self.call("/api/regime/save", {"cfg": CFG})
         self.assertTrue(R.configured(self.db, T.U))
+        self.assertTrue(r["saved"])  # сохранил сам — главная берёт отбой из режима
         self.assertEqual(r["cfg"]["train_days"], [0, 1, 2, 5])
         self.assertEqual((r["today"]["bed"], r["today"]["wake"], r["today"]["mode"]), ("23:15", "08:00", "vacation"))
         self.assertEqual(r["today"]["train"]["time"], "10:00")

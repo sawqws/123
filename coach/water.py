@@ -1,7 +1,8 @@
 """Вода: разбор «выпил 500 мл», «2 стакана воды», «+300», норма на день и оценка «идёшь ли по графику».
 
 Норма — из питания (35 мл на кг веса + 10 мл на минуту тренировки, insights.nutrition); без веса — 2 л + тренировки.
-График: пить равномерно с 08:00 до 21:00 — к каждому часу должна быть выпита своя доля нормы.
+График: пить равномерно с подъёма до часа до отбоя (по режиму дня; без режима — с 08:00 до 21:00) — к каждому часу
+должна быть выпита своя доля нормы (Глеб 05.11: «пишет до 21:00 — не то время», у него отбой 22:45).
 Только стандартная библиотека, без сети: это считается мгновенно, Claude не нужен.
 """
 import re
@@ -83,9 +84,39 @@ def liters(ml):
     return f"{ml / 1000:.1f}".rstrip("0").rstrip(".").replace(".", ",") + " л" if ml >= 1000 else f"{int(ml)} мл"
 
 
-def expected_share(hour):
+def _h(hhmm):
+    """«22:45» → 22.75; плохое — None."""
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(hhmm or "").strip())
+    if not m or int(m[1]) > 23 or int(m[2]) > 59:
+        return None
+    return int(m[1]) + int(m[2]) / 60
+
+
+def window(wake=None, bed=None):
+    """Окно «пьём»: (начало, конец) в часах — с подъёма до часа до отбоя (режим дня); чего нет — 08:00 / 21:00.
+    Отбой после полуночи — конец не позже 23:00; окно короче 6 ч — по умолчанию."""
+    start, end = _h(wake), _h(bed)
+    start = DAY_START if start is None else start
+    if end is None:
+        end = DAY_END
+    else:
+        end = (end + 24 if end < 12 else end) - 1  # «00:30» — это уже ночь
+        end = min(end, 23.0)
+    if end - start < 6:
+        return float(DAY_START), float(DAY_END)
+    return float(start), float(end)
+
+
+def clock(h):
+    """21.75 → «21:45»."""
+    m = round(h * 60)
+    return f"{m // 60 % 24:02d}:{m % 60:02d}"
+
+
+def expected_share(hour, win=None):
     """Какая доля нормы должна быть выпита к этому часу (дробному)."""
-    return max(0.0, min(1.0, (hour - DAY_START) / (DAY_END - DAY_START)))
+    a, b = win or (DAY_START, DAY_END)
+    return max(0.0, min(1.0, (hour - a) / (b - a)))
 
 
 def bar(share, n=10):
@@ -93,32 +124,34 @@ def bar(share, n=10):
     return "▰" * k + "▱" * (n - k)
 
 
-def assess(drank, target, hour, trained=False):
-    """Оценка: (эмодзи, текст). hour — текущий час с минутами (13.5 = 13:30)."""
+def assess(drank, target, hour, trained=False, win=None):
+    """Оценка: (эмодзи, текст). hour — текущий час с минутами (13.5 = 13:30); win — окно (начало, конец), см. window()."""
     share = drank / target if target else 0
     left = max(0, target - drank)
-    exp = expected_share(hour)
+    start, end = win or (DAY_START, DAY_END)
+    exp = expected_share(hour, (start, end))
+    until = f"до {clock(end)}" + (" (за час до отбоя)" if win else "")
     if share >= 1.5:
         return "🟡", "Уже больше полутора норм — дальше пей по жажде: перебор воды тоже вредит (вымывает соли)."
     if share >= 1:
         return "✅", "Норма на сегодня выполнена" + (" — с учётом тренировки." if trained else ".")
-    if hour >= DAY_END:
+    if hour >= end:
         return "🌙", (f"До нормы не хватило {liters(left)}. Перед сном много не пей — сон будет прерываться; "
                      "завтра начни со стакана сразу после подъёма.")
-    hours_left = max(1, DAY_END - hour)
+    hours_left = max(1, end - hour)
     pace = left / hours_left
     if share + 0.1 >= exp:
         return "👍", (f"Идёшь по графику. Осталось {liters(left)} — примерно {liters(max(50, round(pace / 50) * 50))} "
-                     f"в час до {DAY_END}:00.")
+                     f"в час {until}.")
     need_now = max(0, round((exp * target - drank) / 50) * 50)
     return "⚠️", (f"Отстаёшь: к этому времени стоило выпить ещё {liters(need_now)}. Выпей стакан сейчас, "
-                 f"дальше по {liters(max(50, round(pace / 50) * 50))} в час до {DAY_END}:00."
+                 f"дальше по {liters(max(50, round(pace / 50) * 50))} в час {until}."
                  + (" После тренировки вода особенно важна." if trained else ""))
 
 
-def short(drank, target, hour, trained=False):
+def short(drank, target, hour, trained=False, win=None):
     """Оценка одной строкой для чата: (эмодзи, «по графику, осталось 1,3 л»)."""
-    mark, _ = assess(drank, target, hour, trained)
+    mark, _ = assess(drank, target, hour, trained, win)
     left = max(0, target - drank)
     if mark == "🟡":
         return mark, "больше 1,5 нормы — дальше по жажде"
@@ -128,14 +161,14 @@ def short(drank, target, hour, trained=False):
         return mark, f"не хватило {liters(left)} — завтра начни со стакана"
     if mark == "👍":
         return mark, f"по графику, осталось {liters(left)}"
-    need_now = max(50, round((expected_share(hour) * target - drank) / 50) * 50)
+    need_now = max(50, round((expected_share(hour, win) * target - drank) / 50) * 50)
     return mark, f"отстаёшь на {liters(need_now)} — выпей стакан"
 
 
-def card(added, drank, target, why, hour, trained=False, title=None, extra="", note=None):
+def card(added, drank, target, why, hour, trained=False, title=None, extra="", note=None, win=None):
     """Сообщение о воде в общем стиле бота: заголовок, цитата (выпито, полоска, оценка), примечание курсивом.
     Коротко: подробная оценка — в приложении."""
-    mark, text = short(drank, target, hour, trained)
+    mark, text = short(drank, target, hour, trained, win)
     pct = round(drank / target * 100) if target else 0
     head = title or (f"💧 <b>+{liters(added)} воды</b>" if added else "💧 <b>Вода сегодня</b>")
     body = (f"За день <b>{liters(drank)}</b> из {liters(target)} · {pct}%\n{bar(drank / target if target else 0)}\n"

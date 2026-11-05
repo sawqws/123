@@ -462,6 +462,22 @@ class WaterTest(unittest.TestCase):
         self.assertEqual(water.liters(1500), "1,5 л")
         self.assertEqual(water.liters(2000), "2 л")
         self.assertIn("▰", water.card(250, 1000, 2500, "35 мл на кг веса", 12))
+        # окно по режиму (Глеб 05.11: «пишет до 21:00 — не то время», отбой у него 22:45)
+        win = water.window("09:00", "22:45")
+        self.assertEqual(win, (9.0, 21.75))
+        self.assertIn("до 21:45 (за час до отбоя)", water.assess(800, 2600, 14.2, False, win)[1])
+        self.assertNotIn("21:00", water.assess(800, 2600, 14.2, False, win)[1])
+        self.assertEqual(water.assess(800, 2600, 21.5, False, win)[0], "⚠️")   # 21:30 — ещё не поздно, по режиму пьём до 21:45
+        self.assertEqual(water.assess(800, 2600, 21.5)[0], "🌙")               # без режима — после 21:00
+        self.assertEqual(water.window("09:00", "00:30"), (9.0, 23.0))          # отбой после полуночи
+        self.assertEqual(water.window(None, None), (8.0, 21.0))
+        self.assertEqual(water.window("10:00", "14:00"), (8.0, 21.0))          # окно короче 6 ч — по умолчанию
+
+    def test_water_window_from_regime(self):
+        day = datetime.date(2026, 11, 9)  # понедельник, учебный
+        self.assertIsNone(coach.water_window(U, day))  # режим не сохранён сам — 08:00–21:00
+        coach.f_regime.save(coach.db, U, {"wake": "07:00", "bed": "22:30", "weekend_wake": "09:00"})
+        self.assertEqual(coach.water_window(U, day), (7.0, 21.5))  # с подъёма до часа до отбоя
 
     def test_store(self):
         db = store.Store(os.path.join(tempfile.mkdtemp(), "c.db"))

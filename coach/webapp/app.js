@@ -183,20 +183,12 @@
       });
     }));
   }
-  // карточки появляются по мере прокрутки: всё, что ниже экрана, ждёт своей очереди
-  // в автоснимках (shots.js, navigator.webdriver) страница снимается целиком — показываем всё сразу; #motion — проверка анимаций
-  const revealer = 'IntersectionObserver' in window && !(navigator.webdriver && !location.hash.includes('motion')) ? new IntersectionObserver(es => es.forEach(e => {
-    if (!e.isIntersecting) return;
-    revealer.unobserve(e.target);
-    e.target.classList.remove('later'); e.target.classList.add('shown');
-    animate(e.target);
-  }), { rootMargin: '0px 0px -6% 0px' }) : null;
+  // Глеб 05.11: «быстро листаешь — приложение как будто перезапускается, всё дёргается, улетает-залетает»: раньше карточки
+  // ниже экрана были спрятаны и въезжали по одной, когда до них долистаешь. Теперь всё на месте сразу; появление с задержкой —
+  // только у первых карточек при открытии экрана (ниже экрана оно проходит незаметно, пока туда не долистал)
   function stagger() {
     let i = 0;
-    view.querySelectorAll('.rise').forEach(el => {
-      if (revealer && !REDUCED.matches && el.getBoundingClientRect().top > innerHeight + 10) { el.classList.add('later'); revealer.observe(el); }
-      else el.style.setProperty('--i', Math.min(i++, 10));
-    });
+    view.querySelectorAll('.rise').forEach(el => el.style.setProperty('--i', Math.min(i++, 10)));
   }
   // переходы между экранами как в iOS: View Transitions (iOS 18+, Chrome), иначе — въезд нового экрана
   function nav(kind, fn, plain) {
@@ -686,7 +678,6 @@
     tipHide();  // подсказка графика не висит над новым экраном
     const rz =(S.dayData || S.data.today || {}).recovery;  // цвет восстановления — в живой фон
     document.documentElement.style.setProperty('--zc', rz ? C[rz.zone] : 'var(--rec-blue)');
-    if (revealer) revealer.disconnect();
     // «назад» возвращает прежний экран как был — без повторного набегания цифр и колец
     const moving = (anim || S.navKind || S.inVT) && !S.popping;
     const cls = [S.inVT ? 'enter vt' : S.navKind ? `enter nav-${S.navKind}` : anim ? 'enter' : '', moving ? '' : 'calm'].join(' ').trim();
@@ -713,6 +704,38 @@
   }
   const dateLine = s => { const d = parseDay(s); return `${d.getDate()} ${MON[d.getMonth()]}`; };
   const head = (title, right = '') => `<div class="head"><h2>${title}</h2>${right ? `<div class="head-r">${right}</div>` : ''}</div>`;
+
+  // ---------- «На сегодня»: сон · вода · еда ----------
+  function todayPlan(t) {
+    const d = S.data, rg = d.ext && d.ext.regime, rt = rg && rg.saved && rg.today, bt = t.bedtime || {};
+    const rows = [];
+    const row = (ic, hc, title, meta, attrs, end = '<span class="chev"></span>') => `<${attrs ? 'button' : 'div'} class="row${attrs ? ' tap' : ''} tp-row" ${attrs || ''}>
+        <span class="ic" style="--hc:${hc}">${ic}</span><span class="main"><div class="title">${title}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</span>
+        <span class="end">${end}</span></${attrs ? 'button' : 'div'}>`;
+    const bed = rt ? rt.bed : bt.bed, wake = rt ? rt.wake : bt.wake;
+    if (bed) rows.push(row(I.moon, 'var(--sleep)', `Лечь в <b class="num">${esc(bed)}</b>`,
+      [wake ? `подъём ${esc(wake)}` : '', bt.need ? `сон ${hm(bt.need)}` : ''].filter(Boolean).join(' · '),
+      rt ? 'data-a="rg-open"' : 'data-a="detail" data-v="sleep"'));
+    const w = t.water;
+    if (w && w.target) {
+      const left = Math.max(0, w.target - w.drank);
+      rows.push(left > 0
+        ? row(I.drop, 'var(--water)', `Выпить ещё <b class="num">${liters(left)}</b>`, esc(w.short || `выпито ${liters(w.drank)} из ${liters(w.target)}`), '',
+          '<button class="pill tp-add num" data-a="water" data-v="250" aria-label="Вода +250 мл">+250</button>')
+        : row(I.drop, 'var(--water)', 'Вода — норма есть', `выпито ${liters(w.drank)}`, ''));
+    }
+    const g = foodGoals(t), e = t.eaten || {};
+    if (g && g.kcal) {
+      const kl = Math.round(g.kcal - (e.kcal || 0)), pl = Math.round((g.protein || 0) - (e.protein || 0));
+      rows.push(kl > 50
+        ? row(I.food, 'var(--food)', `Съесть ещё <b class="num">${big(kl)}</b> ккал`, g.protein ? (pl > 0 ? `белок — ещё ${pl} г` : 'белок — норма есть') : '', 'data-a="tab" data-v="food"')
+        : row(I.food, 'var(--food)', 'Еда — норма есть', g.protein && pl > 0 ? `белок — ещё ${pl} г` : `съедено ${big(e.kcal)} ккал`, 'data-a="tab" data-v="food"'));
+    }
+    const links = `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
+        <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Спросить в чате</button></div>`;
+    return `<section class="card outlook tplan rise"><h3 class="ot">На сегодня</h3>
+      ${rows.length ? `<div class="list plain tp-list">${rows.join('')}</div>` : '<p class="muted">Данных на сегодня пока нет — они придут с WHOOP.</p>'}${links}</section>`;
+  }
 
   // ---------- Сегодня ----------
   function connectCard() {
@@ -890,13 +913,14 @@
       </section>`;
     h += slot('homeAfterDials', t, isToday);
 
-    // «Daily Outlook»: совет на день + «Узнать у тренера»
-    const adv = advice(t);
-    h += `<section class="card outlook rise"><h3 class="ot">${r ? `<i class="zdot" style="background:var(--zone-${z}, ${recC})"></i>${ZONE[z]}` : isToday ? 'Прогноз на день' : 'Разбор дня'}</h3>
-      ${S.briefing ? skel(2) : adv ? `<div class="prose advice">${adv}</div>`
-        : `<p class="muted">${!isToday ? 'Разбора за этот день нет.' : d.morning === 'off' ? 'Утренний разбор выключен — время в профиле.' : `Разбор придёт утром, с ${esc(d.morning || '07:00')}, как только WHOOP посчитает сон.`}</p>`}
-      ${isToday ? `<div class="olinks">${t.brief || (t.tips || []).length ? '<button class="link" data-a="detail" data-v="rec">Весь разбор</button>' : ''}${!t.brief && !S.briefing ? '<button class="link" data-a="brief">Разобрать сейчас</button>' : ''}
-        <button class="coach-link" data-a="tab" data-v="coach">${I.coach}Спросить в чате</button></div>` : ''}</section>`;
+    // «На сегодня» (Глеб 05.11: прежняя карточка с разбором — «максимально непонятная, много текста, зачем мне эти данные»):
+    // три дела дня с цифрами — когда лечь, сколько ещё воды, сколько ещё еды; строка ведёт к своему экрану. Без оценки дня
+    // и советов по тренировке, цифры колец не повторяет. Прошлые дни — как было: начало разбора дня
+    if (isToday) h += todayPlan(t);
+    else {
+      const adv = advice(t);
+      h += `<section class="card outlook rise"><h3 class="ot">Разбор дня</h3>${adv ? `<div class="prose advice">${adv}</div>` : '<p class="muted">Разбора за этот день нет.</p>'}</section>`;
+    }
 
     S.outlookHtml = h.slice(h.lastIndexOf('<section class="card outlook'));  // вид WHOOP: совет дня — листом из строки «Прогноз на день»
     const ms = monStat(t), msOk = ms.all && ms.ok === ms.all, sv = c && c.strain != null ? c.strain : null;
@@ -1834,7 +1858,13 @@
     // данные обновляются сами, пока приложение открыто (Глеб 04.11: «в WHOOP уже есть, а Форма не подтянула» — сервер
     // получил их по вебхуку сразу, а экран ждал до 2 мин и не обновлялся при возврате в приложение):
     // каждые 30 с и сразу при возврате на экран; перерисовка — только если данные правда поменялись
-    let lastPull = Date.now(), pulling = false, lastSig = JSON.stringify(S.data);
+    let lastPull = Date.now(), pulling = false, lastSig = JSON.stringify(S.data), later = 0;
+    // пока листает или держит палец — ничего не перерисовываем и не перезагружаем (Глеб 05.11: «быстро листаешь — дёргается»)
+    let lastActive = 0;
+    const active = () => { lastActive = Date.now(); };
+    ['touchstart', 'touchmove', 'wheel', 'pointerdown'].forEach(e => addEventListener(e, active, { passive: true, capture: true }));
+    addEventListener('scroll', active, { passive: true, capture: true });
+    F.idle = () => Date.now() - lastActive;
     // новая выкатка, а приложение открыто со старым кодом (Глеб 04.11: iPhone держит приложение с экрана «Домой» в памяти
     // часами — после переименования всё ещё было старое название): сервер шлёт версию файлов, другая — перезагрузка при
     // возврате в приложение (или сразу, если ничего не открыто и не набирается)
@@ -1845,13 +1875,15 @@
     const pull = async (resume) => {
       if (stale && resume === true && !recent()) return reload();
       if (pulling || document.hidden || document.querySelector('.sheet') || S.asking || S.briefing || S.photo || S.dayData) return;
+      if (resume !== true && F.idle() < 2500) { clearTimeout(later); later = setTimeout(() => pull(false), 2600); return; }
       if (document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName)) return;
       pulling = true; lastPull = Date.now();
       try {
         const d = await api('/api/all');
         if (d && d.v && myV && d.v !== myV && !recent()) {
           stale = true;
-          if (resume === true || (!S.screen && S.tab !== 'coach')) return reload();
+          // новая версия: при возврате в приложение — сразу; иначе — только если минуту ничего не трогал (не посреди чтения)
+          if (resume === true || (!S.screen && S.tab !== 'coach' && F.idle() > 60000)) return reload();
         }
         const sig = JSON.stringify(d);
         if (sig === lastSig) return;
