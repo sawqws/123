@@ -176,7 +176,7 @@
   // ---------- экран «Ещё из WHOOP» ----------
   F.screens.wx = () => {
     const d = F.S.wx;
-    const title = F.dHead('Ещё из WHOOP', 'VO₂ max, Healthspan, стресс, давление', 'var(--ink)');
+    const title = F.dHead('Ещё из WHOOP', 'VO₂ max, Healthspan, стресс', 'var(--ink)').replace('<header class="dhead"', '<header class="dhead wx-head"');
     if (!d) {
       if (F.S.wxErr) return title + '<section class="card wx-empty"><p>Не загрузилось.</p><button class="btn primary" data-a="wx-retry">Повторить</button></section>';
       load(true);

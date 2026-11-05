@@ -92,3 +92,6 @@
 .wx-save { width: 100%; margin-top: 14px; min-height: 50px; }
 .wx-save:disabled { opacity: .5; }
 .link[data-a="wx-open"] { min-width: 44px; min-height: 36px; display: inline-flex; align-items: center; justify-content: flex-end; }
+
+/* «Ещё из WHOOP» длиннее других заголовков: на телефонах 360–400 — в одну строку рядом с «Назад» (на 320 переносится) */
+@media (max-width: 400px) { #app .wx-head h1 { font-size: 26px !important; } }
