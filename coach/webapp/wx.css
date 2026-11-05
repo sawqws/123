@@ -1,0 +1,94 @@
+/* wx — «Ещё из WHOOP»: карточка во «Здоровье» (строки показателей + «Скрин из WHOOP»), экран (графики, плитки,
+   дневник по дням, все записи с ✕), лист «Читаю цифры…» и предпросмотр с переключателями. Только токены темы
+   (ч/б: --ink, --hint, --fill, --card, --sep…), движение — transform/opacity, шрифт ≥ 12 px, кнопки ≥ 36 px. */
+.wx-card { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+.wx-empty p { margin: 0; font-size: 15px; line-height: 1.4; color: var(--hint); }
+.wx-empty p b { display: block; margin-bottom: 4px; font: 650 18px/1.25 var(--head); color: var(--ink); }
+.wx-ei { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; background: var(--fill); color: var(--ink); flex: none; }
+.wx-ei .ico { width: 26px; height: 26px; }
+.wx-ei.pulse { animation: wx-pulse 1.4s ease-in-out infinite; }
+@keyframes wx-pulse { 50% { transform: scale(.9); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .wx-ei.pulse { animation: none; } }
+.wx-shot { width: 100%; margin: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; white-space: nowrap; }
+.wx-shot .ico { width: 19px; height: 19px; flex: none; }
+.wx-btns { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.wx-btns .btn { flex: 1 1 0; min-width: 0; margin: 0; min-height: 44px; white-space: nowrap; }
+
+/* ---------- строки карточки: подпись и дата слева, значение справа ---------- */
+.wx-rows { display: flex; flex-direction: column; margin-top: -6px; }
+.wx-r { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; padding: 8px 0; border: 0; background: none;
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: opacity .15s, transform .35s var(--spring-bounce, ease); }
+.wx-r + .wx-r { box-shadow: inset 0 1px 0 var(--sep); }
+.wx-r:active { opacity: .6; transform: scale(.985); transition-duration: .1s; }
+.wx-l { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.wx-l b { font: 600 15px/1.25 var(--head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-l small { font-size: 13px; line-height: 1.2; color: var(--hint); }
+.wx-v { flex: 0 1 auto; max-width: 58%; font: 700 20px/1.15 var(--num); letter-spacing: -.01em; text-align: right;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-v small { margin-left: 4px; font: 600 13px/1 var(--head); color: var(--hint); letter-spacing: 0; }
+.wx-v .wx-n { font: 600 15px/1.2 var(--head); color: var(--ink); letter-spacing: 0; }
+.wx-v.txt { flex: 0 0 auto; max-width: 50%; font: 600 15px/1.25 var(--head); letter-spacing: 0; white-space: normal; overflow-wrap: break-word; hyphens: auto;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* ---------- экран ---------- */
+.wx-hero { gap: 12px; }
+.wx-lead { margin: 0; font-size: 15px; line-height: 1.35; color: var(--hint); }
+.wx-lead b { font: 700 24px/1 var(--num); color: var(--ink); margin-right: 2px; }
+.wx-hint { margin: 0; font-size: 13px; line-height: 1.35; color: var(--hint); }
+.wx-big { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+.wx-big b { font: 700 44px/1 var(--num); letter-spacing: -.03em; color: var(--ink); }
+.wx-big span { font: 600 17px/1.1 var(--head); color: var(--hint); }
+.wx-when { margin-top: 6px; font-size: 14px; line-height: 1.3; color: var(--hint); }
+.wx-when .num { color: var(--ink); font-weight: 650; }
+.wx-sub { margin-top: 16px; }
+.wx-about { margin: 12px 0 0; font-size: 13px; line-height: 1.4; color: var(--hint); }
+
+.wx-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.wx-tile { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 14px 16px; border-radius: 24px; background: var(--card); }
+.wx-tk { font: 600 13px/1.25 var(--head); color: var(--hint); overflow-wrap: anywhere; }
+.wx-tile b { font: 700 24px/1.1 var(--num); letter-spacing: -.01em; overflow-wrap: anywhere; }
+.wx-tile b.txt { font: 650 17px/1.25 var(--head); letter-spacing: 0; }
+.wx-tile b small { margin-left: 3px; font: 600 13px/1 var(--head); color: var(--hint); letter-spacing: 0; }
+.wx-td { font-size: 12px; line-height: 1.3; color: var(--hint); overflow-wrap: anywhere; }
+
+.wx-jr { display: flex; flex-direction: column; gap: 16px; }
+.wx-jd h4 { margin: 0 0 4px; font: 600 13px/1.3 var(--head); color: var(--hint); }
+.wx-qa { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: 15px; line-height: 1.3; }
+.wx-qa + .wx-qa { box-shadow: inset 0 1px 0 var(--sep); }
+.wx-qa span { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.wx-qa b { flex: none; max-width: 45%; font-weight: 650; text-align: right; overflow-wrap: anywhere; }
+
+.wx-all .row { padding-right: 8px; }
+.wx-all .row .title { font-weight: 600; }
+.wx-x { flex: none; display: inline-grid; place-items: center; min-width: 40px; height: 40px; padding: 0; border: 0; border-radius: 999px;
+  background: var(--fill); color: var(--hint); font: 600 14px/1 var(--head); cursor: pointer;
+  transition: background .2s, color .2s, min-width .25s var(--ios, ease), transform .2s; }
+.wx-x .ico { width: 17px; height: 17px; }
+.wx-x:active { transform: scale(.92); }
+.wx-x.sure { min-width: 96px; padding: 0 14px; background: var(--err, #ff453a); color: #fff; }
+.wx-more { width: 100%; margin-top: 8px; }
+.wx-jr .wx-more { margin-top: 0; }
+
+/* ---------- лист: «Читаю цифры…», предпросмотр ---------- */
+.wx-form h2 { margin-bottom: 8px; }
+.wx-read { display: flex; align-items: center; gap: 14px; margin: 8px 0 16px; }
+.wx-read p { margin: 0; font-size: 14px; line-height: 1.4; color: var(--hint); }
+.wx-read p b { display: block; font: 650 17px/1.25 var(--head); color: var(--ink); }
+.wx-day { margin: 12px 0 !important; }
+.wx-day input { width: 100%; min-width: 0; min-height: 46px; }
+.wx-pick { display: flex; flex-direction: column; border-radius: 18px; background: var(--fill); overflow: hidden; }
+.wx-m { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px 8px 16px; border: 0; background: none;
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background .15s; }
+.wx-m + .wx-m { box-shadow: inset 0 1px 0 var(--sep); }
+.wx-m:active { background: var(--fill-2); }
+.wx-ml { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; transition: opacity .2s; }
+.wx-ml b { font: 600 15px/1.25 var(--head); overflow-wrap: anywhere; }
+.wx-ml small { font-size: 14px; line-height: 1.25; color: var(--hint); overflow-wrap: anywhere; }
+.wx-ml small .num { color: var(--ink); font-weight: 650; }
+.wx-m:not(.on) .wx-ml { opacity: .45; }
+.wx-m .switch { display: block; pointer-events: none; }
+.wx-skip { margin: 10px 0 0; font-size: 12.5px; line-height: 1.35; color: var(--hint); }
+.wx-save { width: 100%; margin-top: 14px; min-height: 50px; }
+.wx-save:disabled { opacity: .5; }
+.link[data-a="wx-open"] { min-width: 44px; min-height: 36px; display: inline-flex; align-items: center; justify-content: flex-end; }
