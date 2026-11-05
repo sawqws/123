@@ -87,13 +87,18 @@ class PaceTest(unittest.TestCase):
 class InstallTest(unittest.TestCase):
     def test_merge_idempotent_and_keeps_others(self):
         other = {"hooks": [{"type": "command", "command": "~/.claude/stop-hook-git-check.sh"}]}
-        cfg = {"model": "x", "hooks": {"Stop": [other]}}
+        cfg = {"theme": "x", "hooks": {"Stop": [other]}}
         a = install.merge(json.loads(json.dumps(cfg)))
         b = install.merge(json.loads(json.dumps(a)))
         self.assertEqual(a, b)
         self.assertIn(other, a["hooks"]["Stop"])
         self.assertEqual(len(a["hooks"]["Stop"]), 2)
         self.assertEqual(install.merge(a, add=False), cfg)
+
+    def test_forces_opus_xhigh(self):
+        a = install.merge({"model": "sonnet", "effortLevel": "high"})
+        self.assertEqual((a["model"], a["effortLevel"]), ("claude-opus-5-5", "xhigh"))
+        self.assertEqual(a["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "xhigh")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,10 @@
       }
     ]
   },
-  "model": "opus",
-  "effortLevel": "high",
-  "autoCompactWindow": 483000
+  "model": "claude-opus-5-5",
+  "effortLevel": "xhigh",
+  "autoCompactWindow": 483000,
+  "env": {
+    "CLAUDE_CODE_EFFORT_LEVEL": "xhigh"
+  }
 }

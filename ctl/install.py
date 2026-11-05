@@ -44,13 +44,26 @@ def ours(group):
 
 # Автосжатие чата на 450k токенов (Глеб, 03.11): окно 483k минус буфер 33k = 450k.
 COMPACT_WINDOW = 483000
+# Модель и уровень для всех чатов (Глеб, 05.11): Opus 5.5, «Extra high». Не менять без его просьбы.
+FIXED = {"model": "claude-opus-5-5", "effortLevel": "xhigh"}
 
 
 def merge(cfg, add=True):
     if add:
         cfg["autoCompactWindow"] = COMPACT_WINDOW
-    elif cfg.get("autoCompactWindow") == COMPACT_WINDOW:
-        del cfg["autoCompactWindow"]
+        cfg.update(FIXED)
+        cfg.setdefault("env", {})["CLAUDE_CODE_EFFORT_LEVEL"] = FIXED["effortLevel"]
+    else:
+        if cfg.get("autoCompactWindow") == COMPACT_WINDOW:
+            del cfg["autoCompactWindow"]
+        for k, v in FIXED.items():
+            if cfg.get(k) == v:
+                del cfg[k]
+        env = cfg.get("env", {})
+        if env.get("CLAUDE_CODE_EFFORT_LEVEL") == FIXED["effortLevel"]:
+            del env["CLAUDE_CODE_EFFORT_LEVEL"]
+        if "env" in cfg and not env:
+            del cfg["env"]
     hk = cfg.setdefault("hooks", {})
     for ev in list(hk):
         hk[ev] = [g for g in hk[ev] if not ours(g)]
