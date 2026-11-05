@@ -12,7 +12,8 @@ shots.json — список снимков для shots.js ([{"name": ..., "clic
 KCAL_STUB по договору coach/SYNC.md, п. 5 (сегменты сверху, отступ под меню Формы, тема, kcal-changed).
 Ответы на POST с телом здесь не различаются: shots.js отдаёт один ответ на путь. Свои /api/… разделов (f_*.py)
 добавляются сами: для каждого пути из EXTRA_PATHS вызывается route с пустым телом.
-Пути из LIVE_PATHS (тренды, ряды графиков) в --serve считаются на лету по телу запроса.
+Пути из LIVE_PATHS (тренды, ряды графиков, «Ещё из WHOOP») в --serve считаются на лету по телу запроса
+(/api/wx/save и /delete меняют данные по-настоящему, ext.wx в /api/all — следом); /api/wx/photo — пример без Claude.
 /api/progress/stream — пример разбора прогресса потоком (PROGRESS_MD кусками).
 """
 import datetime
@@ -32,9 +33,10 @@ import coach  # noqa: E402
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
-               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends"]
-# пути, где ответ зависит от тела запроса: в --serve считаются на лету (тренды: показатель, период, конец периода)
-LIVE_PATHS = {"/api/trends", "/api/series"}
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends", "/api/wx"]
+# пути, где ответ зависит от тела запроса: в --serve считаются на лету (тренды: показатель, период, конец периода;
+# «Ещё из WHOOP»: список, сохранение, удаление — настоящие)
+LIVE_PATHS = {"/api/trends", "/api/series", "/api/wx", "/api/wx/save", "/api/wx/delete"}
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -197,6 +199,28 @@ def seed_weight(today):
                                         "protein_pct": 18.4, "src": "photo"}, today)
 
 
+# «Ещё из WHOOP» (скрины приложения WHOOP): нейтральный пример — (дней назад, показатели)
+WX = [(40, [{"key": "vo2max", "value": 49.6}]),
+      (8, [{"key": "bp_sys", "value": 116}, {"key": "bp_dia", "value": 74}]),
+      (5, [{"key": "whoop_age", "value": 13.6}, {"key": "pace", "value": 0.8},
+           {"key": "other", "label": "Силовые за неделю", "value": 1.5, "unit": "ч"}]),
+      (2, [{"key": "vo2max", "value": 50.4}]),
+      (1, [{"key": "journal", "label": "Пил кофеин", "text": "Нет"}, {"key": "journal", "label": "Растяжка перед сном", "text": "Да"}]),
+      (0, [{"key": "stress", "value": 1.1}])]
+WX_PHOTO = {"day": None, "time": "21:40", "how": "claude", "src": "photo",
+            "metrics": [{"key": "vo2max", "label": "VO₂ max", "value": 50.4, "text": None, "unit": "мл/кг/мин"},
+                        {"key": "whoop_age", "label": "Возраст WHOOP", "value": 13.6, "text": None, "unit": "лет"},
+                        {"key": "pace", "label": "Темп старения", "value": 0.8, "text": None, "unit": "×"},
+                        {"key": "journal", "label": "Пил кофеин", "value": None, "text": "Нет", "unit": ""}],
+            "skipped": ["Восстановление: это Форма уже берёт из WHOOP — сохранять не нужно"]}
+
+
+def seed_wx(today):
+    for back, metrics in WX:
+        coach.f_wx.save(coach.db, T.U, {"day": (today - datetime.timedelta(days=back)).isoformat(), "metrics": metrics,
+                                        "src": "photo"}, today)
+
+
 def seed_trends(db, back=200):
     """Для «Трендов»: шаги в циклах (step_count) и история до полугода (те же поддельные данные, только старше)."""
     import random
@@ -245,6 +269,7 @@ def build(shots=None):
         seed_skin(today)
         seed_reviews(today)
         seed_weight(today)
+        seed_wx(today)
         seed_water(db, today)
         allp = coach.route(T.U, "/api/all", {})
         allp.pop("v", None)  # версия файлов: в фикстуре страница с v=1 — без этого приложение перезагружалось бы при обходе
@@ -297,6 +322,10 @@ def build(shots=None):
         api["/api/weight/text"] = {"item": {**item, "day": today.isoformat(), "src": "text"}, "found": list(item), "skipped": [], "how": "parser"}
         api["/api/weight/save"] = {**api["/api/weight"], "saved": api["/api/weight"]["last"]}
         api["/api/weight/delete"] = api["/api/weight"]
+        # ещё из WHOOP: предпросмотр скрина — пример (без Claude); для shots.js сохранение и удаление — тот же список
+        api["/api/wx/photo"] = {**WX_PHOTO, "day": today.isoformat()}
+        api["/api/wx/save"] = {**api["/api/wx"], "saved": []}
+        api["/api/wx/delete"] = api["/api/wx"]
         api["/api/assess?period=month"] = coach.route(T.U, "/api/assess", {"period": "month"})  # --serve: оценка месяца
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
         allp["admin"] = True  # «Ещё» → «Проверить приложение» видна (как у владельца); здесь ничего не запускает
@@ -448,7 +477,9 @@ def serve(port, stub=False):
                             mock.patch.object(coach, "today_of", lambda uid: T.TODAY):
                         return self.send(200, coach.route(T.U, path, body))
                 except (KeyError, ValueError) as e:
-                    return self.send(400, {"error": str(e)})
+                    return self.send(400, {"error": str(e).strip("'")})
+            if path == "/api/all":  # «Ещё из WHOOP» на главной — после сохранений через --serve
+                api["/api/all"].setdefault("ext", {})["wx"] = coach.f_wx.extra(coach, T.U, T.TODAY)
             self.do_GET()
 
         def do_GET(self):
