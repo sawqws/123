@@ -1550,6 +1550,49 @@ QUESTION = re.compile(r"^(почему|зачем|что|как|какой|ка�
                       r"оцени|посмотри|глянь|проверь|помоги)\b", re.I)
 
 
+EAT_WORDS = re.compile(r"\b(съел\w*|поел\w*|ел[аи]?|съем|ем|скушал\w*|покушал\w*|перекусил\w*|завтракал\w*|обедал\w*|"
+                       r"ужинал\w*|на завтрак|на обед|на ужин|грамм\w*|г\b)", re.I)
+
+
+def log_spoken(chat, uid, text):
+    """Надиктованное (или «съел … и выпил … воды»): Claude делит на позиции с граммами и чистую воду (ai.spoken_meal;
+    «минус 20%» — вычет доли) → одна запись еды (позиции — в названии) + вода. Ни еды, ни воды — вопрос тренеру."""
+    if not take(uid):
+        send(chat, BUSY)
+        return
+    try:
+        typing(chat)
+        try:
+            est = ai.spoken_meal(text)
+        except ai.AIError as e:
+            send(chat, err(f"Не смог разобрать: {esc(e)}. Добавь вручную в приложении."), kb([food_button(uid)]))
+            return
+        items, ml = est["items"], est["water_ml"]
+        if not items and not ml:
+            busy.discard(uid)
+            answer(chat, uid, text)
+            return
+        if not items:
+            log_water(chat, uid, ml)
+            return
+        now = user_now(db.user(uid))
+        day, hm = now.date().isoformat(), now.strftime("%H:%M")
+        title = ", ".join(f"{i['name']} {round(i['g'])} г" for i in items)
+        tot = {k: round(sum(float(i[src]) for i in items), 1) for k, src in
+               (("kcal", "kcal"), ("protein", "p"), ("fat", "f"), ("carbs", "c"), ("salt", "salt"))}
+        m = db.save_meal(uid, {"title": title[:120], **tot, "day": day, "time": hm})
+        if ml:
+            db.add_water(uid, day, hm, min(ml, 5000))
+        _, t = context(uid)
+        n, e, wt = t["nutrition"], t["eaten"], t["water"]
+        total = f"За день {e['kcal']}" + (f" из {n['kcal']} ккал" if n else " ккал")
+        if ml:
+            total += f"\n💧 +{ml} мл · {water.day_line(wt['drank'], wt['target'])}"
+        send(chat, meal_card(m, est.get("comment", ""), total), kb([btn("🗑 Удалить", f"m|del|{m['id']}"), food_button(uid)]))
+    finally:
+        busy.discard(uid)
+
+
 def save_meal_and_reply(chat, uid, est):
     now = user_now(db.user(uid))
     m = db.save_meal(uid, {**est, "day": now.date().isoformat(), "time": now.strftime("%H:%M")})
@@ -1814,8 +1857,11 @@ def on_text(chat, uid, text, wait=None):
         edit_profile(chat, uid, text)
         return
     ml = water.parse(text)
-    if ml:
+    if ml and not EAT_WORDS.search(text):
         log_water(chat, uid, ml)
+        return
+    if ml:  # «съел банан и выпил 500 мл воды» — и еда, и вода
+        bg(log_spoken, chat, uid, text, chat=chat)
         return
     m = FOOD_WORDS.match(text)
     if m and len(text) > len(m.group(0)) + 1:
@@ -1843,7 +1889,10 @@ def on_voice(chat, uid, msg, wait=None):
         media_failed(chat, uid, "Голосовое", e, wait)
         return
     send(chat, f"🎙 «{esc(text)}»")
-    on_text(chat, uid, text, wait)
+    if wait or not text or "?" in text or QUESTION.match(text) or (water.parse(text) and not EAT_WORDS.search(text)):
+        on_text(chat, uid, text, wait)  # цель/профиль, вопрос тренеру, только вода — как написанное
+    else:  # Глеб 05.11: надиктовал, что поел («каша 300 г минус 20%, банан»), — без «съел» тоже еда; не еда — тренеру
+        log_spoken(chat, uid, text)
 
 
 def on_photo(chat, uid, msg, text=""):
@@ -2276,6 +2325,22 @@ class Web(BaseHTTPRequestHandler):
             except Exception:
                 traceback.print_exc()
                 return self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
+        if path == "/api/kcal/voice":  # «Надиктовать»: голос или текст «что съел и выпил» → позиции с граммами + вода
+            if not pwa.throttle("kcalvoice:" + key, *VOICE_RATE):
+                return self.reply(429, {"error": "Много разборов подряд — попробуй через час"})
+            try:
+                return self.reply(200, kcal_voice(uid, body))
+            except VoiceError as e:
+                return self.reply(422, {"error": "Голос не распознан — скажи ещё раз или напиши текстом", "voice": False, "why": str(e)})
+            except NotFood:
+                return self.reply(422, {"error": "Не услышал еды — скажи, что съел и сколько"})
+            except ai.AIError as e:
+                return self.reply(503, {"error": str(e)})
+            except ValueError as e:
+                return self.reply(400, {"error": str(e)})
+            except Exception:
+                traceback.print_exc()
+                return self.reply(500, {"error": "Что-то сломалось на сервере — попробуй ещё раз"})
         if path == "/api/kcal/recipe/parse":  # «Мой рецепт»: голос или текст → ингредиенты с граммами и КБЖУ
             if not pwa.throttle("kcalrec:" + key, *RECIPE_RATE):
                 return self.reply(429, {"error": "Много разборов подряд — попробуй через час"})
@@ -2576,7 +2641,7 @@ class Web(BaseHTTPRequestHandler):
         try:
             n = max(0, int(self.headers.get("Content-Length") or 0))  # отрицательная длина — read() до конца потока
             limit = (3 if path == "/api/kcal/photo" else 1) * MAX_PHOTO * 4 // 3 + 4096 if path in ("/api/photo", "/api/kcal/photo") else 1_000_000  # фото — base64
-            if path == "/api/kcal/recipe/parse":  # голос рецепта — base64
+            if path in ("/api/kcal/recipe/parse", "/api/kcal/voice"):  # голос рецепта или еды — base64
                 limit = MAX_AUDIO * 4 // 3 + 8192
             if n > limit:
                 return self.reply(413, {"error": "слишком большой файл"})
@@ -2695,12 +2760,13 @@ def day_payload(uid, day):
 MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
 KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat", "/api/kcal/sync", "/api/kcal/forma",
-              "/api/kcal/state", "/api/kcal/recipe/parse")
+              "/api/kcal/state", "/api/kcal/recipe/parse", "/api/kcal/voice")
 SYNC_RATE = (120, 3600)  # /api/kcal/sync, /forma и /state — каждому столько на токен в час (у каждого свой счётчик)
 KCAL_SITE = os.environ.get("KCAL_SITE") or "https://sawqws.github.io/123/kcal/"  # «Калории» в одно нажатие: + #pair=<токен>
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
 RECIPE_RATE = (30, 3600)  # разборов рецепта (голос или текст → Claude) на токен в час
+VOICE_RATE = (40, 3600)  # «Надиктовать еду» (голос или текст → Claude) на токен в час
 MAX_AUDIO = 5 * 1024 * 1024  # запись рецепта: до 5 МБ
 AUDIO_SECONDS = 120  # и до 2 минут
 
@@ -3286,6 +3352,24 @@ def recipe_voice(raw, ext):
             os.remove(path)
         except OSError:
             pass
+
+
+def kcal_voice(uid, b):
+    """POST /api/kcal/voice {audio, mime} | {text} → предпросмотр (ничего не сохраняет; Глеб 05.11: «надиктовать, что поел,
+    как голосовое в Телеграме: каша столько-то, минус столько-то процентов»): {text: что сказал, items: [{name, g, lo, hi,
+    sure, kcal, p, f, c, salt}] — как у /api/kcal/photo, water_ml: чистая вода в мл (0 — не было), comment}.
+    Ни еды, ни воды — NotFood (422)."""
+    if b.get("audio"):
+        text = recipe_voice(*decode_audio(b))
+    else:
+        text = " ".join(str(b.get("text") or "").split())
+        if len(text) < 2:
+            raise ValueError("Скажи или напиши, что съел")
+    text = text[:2000]
+    out = ai.spoken_meal(text)
+    if not out["items"] and not out["water_ml"]:
+        raise NotFood
+    return {"text": text, "items": out["items"], "water_ml": out["water_ml"], "comment": out["comment"]}
 
 
 def kcal_recipe_parse(uid, b):

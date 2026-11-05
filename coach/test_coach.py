@@ -1152,16 +1152,77 @@ class BotTest(unittest.TestCase):
             coach.on_message(msg)
         self.assertEqual(th.call_args.kwargs["target"].__name__, "on_voice")  # не в главном цикле
         with mock.patch.object(coach.media, "voice_text", return_value="Съел гречку с курицей.") as vt, \
-                mock.patch.object(coach.threading, "Thread") as th:
+                mock.patch.object(coach.threading, "Thread") as th, mock.patch.object(coach, "log_spoken") as ls:
             coach.on_voice(U, U, msg)
             vt.return_value = "почему <низкое> восстановление"
             coach.on_voice(U, U, msg)
         self.assertEqual(vt.call_args[0], (coach.TOKEN, msg))
-        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["log_meal", "answer"])
-        self.assertEqual(th.call_args_list[1].kwargs["args"][2], "почему <низкое> восстановление")
+        ls.assert_called_once_with(U, U, "Съел гречку с курицей.")  # надиктованная еда — позиции и вода (ai.spoken_meal)
+        self.assertEqual([c.kwargs["target"].__name__ for c in th.call_args_list], ["answer"])
+        self.assertEqual(th.call_args_list[0].kwargs["args"][2], "почему <низкое> восстановление")
         self.assertIn("🎙 «Съел гречку с курицей.»", self.texts())
         self.assertIn("🎙 «почему &lt;низкое&gt; восстановление»", self.texts())
         self.assertIn(("sendChatAction", {"chat_id": U, "action": "typing"}), self.sent)
+
+    SPOKEN = ('{"food": true, "items": [{"name": "Блины тонкие", "g": 200, "lo": 170, "hi": 240, "sure": "mid", "kcal": 460, '
+              '"p": 12, "f": 18, "c": 62, "salt": 0.8}, {"name": "Йогурт греческий Teos 2%", "g": "100", "sure": "high", "kcal": 67, '
+              '"p": 8, "f": 2, "c": 4.2, "salt": 0.1}, {"name": "Банан", "g": 90, "kcal": 86, "p": 1.1, "f": 0.3, "c": 20, "salt": 0}, '
+              '{"name": "", "g": 5}, {"name": "Чай", "g": 0}], "water_ml": 550, "comment": "Норм перекус, добавь белка."}')
+
+    def test_voice_meal_and_water(self):
+        # Глеб 05.11: надиктовал без «съел» — позиции с граммами («минус 25%» считает Claude) + вода, одной записью
+        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1"}}
+        said = "Пять тонких блинов, сто грамм греческого йогурта Теос, банан минус четверть и пол-литра воды с бутылки"
+        with mock.patch.object(coach.media, "voice_text", return_value=said), \
+                mock.patch.object(ai, "claude", return_value="Вот: " + self.SPOKEN) as c:
+            coach.on_voice(U, U, msg)
+        prompt = c.call_args[0][0]
+        self.assertIn(said, prompt)
+        self.assertIn("минус 20%", prompt)  # вычет доли
+        self.assertIn("жирность, не вычет", prompt)
+        self.assertEqual(c.call_args.kwargs.get("model"), ai.CHAT_MODEL)  # быстрая модель
+        m = self.db.q("SELECT * FROM meals WHERE user=? ORDER BY id DESC LIMIT 1", (U,))[0]
+        self.assertEqual(m["title"], "Блины тонкие 200 г, Йогурт греческий Teos 2% 100 г, Банан 90 г")
+        self.assertEqual((m["kcal"], m["protein"], m["fat"], m["carbs"], m["salt"], m["time"]), (613, 21.1, 20.3, 86.2, 0.9, "08:00"))
+        self.assertEqual([w["ml"] for w in self.db.water(U, "2026-10-11")][-1], 550)
+        card = self.texts()[-1]
+        self.assertIn("613 ккал", card)
+        self.assertIn("💧 +550 мл", card)
+        self.assertIn(f"m|del|{m['id']}", json.dumps(self.sent[-1][1].get("reply_markup"), ensure_ascii=False))
+
+    def test_voice_not_food_or_water_only(self):
+        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1"}}
+        n0 = self.db.q("SELECT COUNT(*) AS n FROM meals")[0]["n"]
+        # не еда и не вода (разговор без «?») — тренеру тем же текстом
+        with mock.patch.object(coach.media, "voice_text", return_value="Сегодня тренер сказал отдыхать"), \
+                mock.patch.object(ai, "claude", return_value='{"food": false, "items": [], "water_ml": 0}'), \
+                mock.patch.object(coach, "answer") as a:
+            coach.on_voice(U, U, msg)
+        a.assert_called_once_with(U, U, "Сегодня тренер сказал отдыхать")
+        # только вода, которую не взял разбор фразы, — обычная карточка воды
+        with mock.patch.object(coach.media, "voice_text", return_value="Допил бутылку из-под колы"), \
+                mock.patch.object(ai, "claude", return_value='{"food": false, "items": [], "water_ml": 500}'):
+            coach.on_voice(U, U, msg)
+        self.assertEqual([w["ml"] for w in self.db.water(U, "2026-10-11")][-1], 500)
+        self.assertEqual(self.db.q("SELECT COUNT(*) AS n FROM meals")[0]["n"], n0)
+        # Claude недоступен — понятная ошибка, ничего не записано
+        with mock.patch.object(coach.media, "voice_text", return_value="Гречка с котлетой"), \
+                mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):
+            coach.on_voice(U, U, msg)
+        self.assertIn("Не смог разобрать", self.texts()[-1])
+        self.assertEqual(self.db.q("SELECT COUNT(*) AS n FROM meals")[0]["n"], n0)
+        self.assertFalse(coach.busy)
+
+    def test_text_food_and_water(self):
+        # «съел … и выпил 500 мл воды» — раньше записывалась только вода; «выпил 500 мл воды» — по-прежнему сразу вода
+        with mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_text(U, U, "Съел банан и выпил 500 мл воды")
+        self.assertEqual(th.call_args.kwargs["target"].__name__, "log_spoken")
+        before = len(self.db.water(U, "2026-10-11"))
+        with mock.patch.object(coach.threading, "Thread") as th:
+            coach.on_text(U, U, "выпил 500 мл воды")
+        th.assert_not_called()
+        self.assertEqual(len(self.db.water(U, "2026-10-11")), before + 1)
 
     def test_voice_goal_and_errors(self):
         msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1"}}
@@ -2681,6 +2742,56 @@ class KcalTest(unittest.TestCase):
             t.assert_not_called()
         self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": "data:audio/mp4;base64,@@@"}, token=tok).code, 400)
         self.assertEqual(kcal_call("/api/kcal/recipe/parse", {"audio": base64.b64encode(b"x" * 10).decode()}, token=tok).code, 400)
+
+    def test_voice_meal_api(self):
+        # «Надиктовать» в «Калориях»: голос или текст → позиции (как у фото) + вода; ничего не пишет
+        tok = self.pair()
+        self.assertEqual(kcal_call("/api/kcal/voice", {"text": "банан"}).code, 401)
+        with mock.patch.object(ai, "claude", return_value=BotTest.SPOKEN) as c:
+            r = kcal_call("/api/kcal/voice", {"text": "  пять блинов,\n йогурт Teos 100 г и пол-литра воды "}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        j = r.json
+        self.assertEqual((j["text"], j["water_ml"], j["comment"]), ("пять блинов, йогурт Teos 100 г и пол-литра воды", 550,
+                                                                    "Норм перекус, добавь белка."))
+        self.assertEqual([i["name"] for i in j["items"]], ["Блины тонкие", "Йогурт греческий Teos 2%", "Банан"])  # без имени и граммов — мимо
+        self.assertEqual(j["items"][1], {"name": "Йогурт греческий Teos 2%", "g": 100, "lo": 85, "hi": 115, "sure": "high",
+                                         "kcal": 67, "p": 8, "f": 2, "c": 4.2, "salt": 0.1})
+        self.assertIn("Teos", c.call_args[0][0])
+        self.assertEqual(self.meals(), 0)
+        # голос: распознаём (whisper), запись удаляем
+        audio = "data:audio/mp4;base64," + base64.b64encode(b"\x00" * 4000).decode()
+        seen = {}
+
+        def fake(path, timeout=300):
+            seen["path"] = path
+            return "гречка 200 грамм минус четверть"
+        with mock.patch.object(coach.media, "transcribe", side_effect=fake), mock.patch.object(coach.media, "_seconds", return_value=6.0), \
+                mock.patch.object(ai, "claude", return_value=BotTest.SPOKEN) as c:
+            r = kcal_call("/api/kcal/voice", {"audio": audio}, token=tok)
+        self.assertEqual((r.code, r.json["text"]), (200, "гречка 200 грамм минус четверть"))
+        self.assertIn("гречка 200 грамм минус четверть", c.call_args[0][0])
+        self.assertFalse(os.path.exists(seen["path"]))
+        # только вода — 200 без позиций; ни еды, ни воды — 422; голос не распознан — 422 voice:false; пусто — 400; Claude — 503
+        with mock.patch.object(ai, "claude", return_value='{"food": false, "items": [], "water_ml": "300"}'):
+            r = kcal_call("/api/kcal/voice", {"text": "выпил стакан воды"}, token=tok)
+        self.assertEqual((r.code, r.json["items"], r.json["water_ml"]), (200, [], 300))
+        with mock.patch.object(ai, "claude", return_value='{"food": false, "items": [], "water_ml": 5}'):
+            self.assertEqual(kcal_call("/api/kcal/voice", {"text": "как дела"}, token=tok).code, 422)
+        with mock.patch.object(coach.media, "transcribe", side_effect=coach.media.MediaError("тишина")), \
+                mock.patch.object(coach.media, "_seconds", return_value=3.0):
+            r = kcal_call("/api/kcal/voice", {"audio": audio}, token=tok)
+        self.assertEqual((r.code, r.json["voice"]), (422, False))
+        self.assertEqual(kcal_call("/api/kcal/voice", {"text": " "}, token=tok).code, 400)
+        with mock.patch.object(ai, "claude", side_effect=ai.AIError("лимит")):
+            self.assertEqual(kcal_call("/api/kcal/voice", {"text": "омлет"}, token=tok).code, 503)
+        self.assertEqual(kcal_call("/api/kcal/voice", {"text": "омлет"}, token=tok, origin="https://evil.example").code, 403)
+        big = "data:audio/webm;base64," + "A" * (coach.MAX_AUDIO * 4 // 3 + 9000)
+        self.assertEqual(kcal_call("/api/kcal/voice", {"audio": big}, token=tok).code, 413)
+        coach.pwa._hits.clear()
+        with mock.patch.object(ai, "claude", return_value=BotTest.SPOKEN):
+            codes = [kcal_call("/api/kcal/voice", {"text": "банан"}, token=tok).code for _ in range(coach.VOICE_RATE[0] + 1)]
+        self.assertEqual((codes[0], codes[-1]), (200, 429))
+        self.assertEqual(self.meals(), 0)
 
     def test_recipe_parse_limits(self):
         tok = self.pair()
