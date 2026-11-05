@@ -519,24 +519,32 @@ def plate(image, text="", age=None, images=None, portion=1):
         if not PLATE_MODEL:
             raise
         out = parse_json(claude(q + PLATE_ASK, images=pics))
-    items, raw = [], out.get("items") if out.get("food") is not False else None
+    items = _plate_items(out.get("items") if out.get("food") is not False else None)
+    if not items:
+        return {"food": False, "items": [], "comment": ""}
+    return {"food": True, "items": items, "comment": str(out.get("comment") or "").strip()[:200]}
+
+
+def _plate_items(raw):
+    """Позиции от Claude → [{name, g, lo, hi, sure, kcal, p, f, c, salt}] (не больше 30; без имени и граммов — мимо)."""
+    items = []
     for it in raw if isinstance(raw, list) else []:
         if not isinstance(it, dict) or not str(it.get("name") or "").strip():
             continue
         g = _num(it.get("g"), 0, 5000)
+        if g <= 0:
+            continue
         lo, hi = _num(it.get("lo"), 0, 5000), _num(it.get("hi"), 0, 5000)
         if not 0 < lo <= g:
             lo = round(g * 0.85)
         if not hi >= g:
             hi = round(g * 1.15)
         sure = it.get("sure") if it.get("sure") in ("high", "mid", "low") else "mid"
-        items.append({"name": str(it["name"]).strip()[:80], "g": g, "lo": lo, "hi": hi, "sure": sure,
+        items.append({"name": " ".join(str(it["name"]).split())[:80], "g": g, "lo": lo, "hi": hi, "sure": sure,
                       "kcal": _num(it.get("kcal"), 0, 10000), "p": _num(it.get("p"), 1, 1000),
                       "f": _num(it.get("f"), 1, 1000), "c": _num(it.get("c"), 1, 1000),
                       "salt": _num(it.get("salt"), 1, 100)})
-    if not items:
-        return {"food": False, "items": [], "comment": ""}
-    return {"food": True, "items": items[:30], "comment": str(out.get("comment") or "").strip()[:200]}
+    return items[:30]
 
 
 RECIPE_ASK = (
@@ -591,6 +599,42 @@ def recipe(text):
     return {"recipe": True, "name": name[0].upper() + name[1:], "servings": int(_num(out.get("servings"), 0, 50)),
             "out": _num(out.get("out"), 0, 20000), "method": " ".join(str(out.get("method") or "").split())[:60],
             "note": " ".join(str(out.get("note") or "").split())[:160], "items": items[:RECIPE_ITEMS]}
+
+
+SPOKEN_ASK = (
+    "Ты нутрициолог. Выше — как подросток надиктовал голосом (расшифровка, бывают ошибки распознавания: «гречи» — гречка, "
+    "«тэос» — Teos) или написал, что съел и выпил. Разбери это и верни ТОЛЬКО JSON без пояснений вокруг:\n"
+    '{"food": true, "items": [{"name": "Овсянка на молоке", "g": 188, "lo": 170, "hi": 210, "sure": "high", '
+    '"kcal": 190, "p": 6.8, "f": 5.1, "c": 29, "salt": 0.3}], "water_ml": 550, "comment": "одна короткая фраза по-русски"}\n'
+    "Правила:\n"
+    "- Каждая позиция отдельно. name — коротко по-русски, с маркой, жирностью и способом готовки, если сказал "
+    "(Йогурт греческий Teos 2%, Блины тонкие).\n"
+    "- g — сколько СЪЕДЕНО граммов. Сказал граммы, миллилитры или вес с упаковки — ставь их, sure: high. "
+    "Штуки, ложки, тарелки — по типичным весам, sure: mid: блин тонкий 40 г, блин толстый и оладья 50, сырник 55, "
+    "яйцо 55, банан 120 без кожуры, яблоко 150, ломтик хлеба 30, ломтик сыра 20, сосиска 50, котлета 90, "
+    "тарелка каши 250, тарелка супа 300, порция гарнира 200, стакан 250 мл, кружка 300 мл, столовая ложка 15–25, "
+    "чайная 5–8, горсть орехов 30. Размер не сказал — обычная порция, sure: low. lo и hi — честный диапазон.\n"
+    "- «минус 20%», «минус четверть», «не доел треть», «половину оставил» — вычти эту долю из граммов той позиции, "
+    "к которой это сказано (непонятно к какой — из позиции прямо перед этими словами); «минус 50 грамм» — вычти граммы. "
+    "Процент рядом с продуктом без «минус» и «не доел» (йогурт 2%, творог 5%, молоко 3,2%) — это жирность, не вычет.\n"
+    "- Назвал марку (Teos, Danone, «Простоквашино») — состав по её типичной этикетке; назвал КБЖУ на 100 г — считай по ним.\n"
+    "- kcal, p (белки), f (жиры), c (углеводы) — на эти граммы; salt — граммы соли (натрий × 2,5).\n"
+    "- Чистая вода (вода, минералка, газированная вода без сахара) — НЕ позиция, а water_ml: сумма в мл "
+    "(стакан 250, кружка 300, бутылка 500, «пол-литра» 500). Чай, кофе, сок, молоко, газировка, протеин — позиции, не вода.\n"
+    "- Чего не говорил — не добавляй (масло и соус — только если сказал).\n"
+    "- comment — одна фраза до 100 символов: что хорошо или чего не хватает. Без советов про диеты, дефицит и похудение.\n"
+    'Если ни еды, ни воды нет (вопрос, разговор, жалоба) — {"food": false, "items": [], "water_ml": 0}.')
+
+
+def spoken_meal(text):
+    """Надиктованное или написанное «что съел и выпил» → {"food": bool, "items": [{name, g, lo, hi, sure, kcal, p, f, c,
+    salt}], "water_ml": int, "comment"}: позиции с граммами (штуки → граммы, «минус 20%» — вычет доли), чистая вода — отдельно.
+    Ничего не сохраняет. Ни еды, ни воды — food: false."""
+    out = parse_json(fast(f"СКАЗАЛ: «{text[:2000]}»\n\n" + SPOKEN_ASK, timeout=150))
+    items = _plate_items(out.get("items") if out.get("food") is not False else None)
+    ml = int(_num(out.get("water_ml"), 0, 5000))
+    ml = ml if ml >= 10 else 0
+    return {"food": bool(items), "items": items, "water_ml": ml, "comment": " ".join(str(out.get("comment") or "").split())[:200]}
 
 
 SKIN_ASK = (
