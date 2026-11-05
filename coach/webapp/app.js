@@ -251,6 +251,7 @@
     if (n <= 45) {
       const k = Math.max(1, Math.ceil(40 / slot)), idx = [];
       for (let i = n - 1; i >= 0; i -= k) idx.unshift(i);
+      if (idx.length > 1 && (idx[0] + .5) * slot < 16 && (idx[1] + .5) * slot < 60) idx.shift();  // крайняя левая прижата к краю и налезает на соседнюю («30 авг5 сен»)
       let lastM = -1;
       idx.forEach(i => { const dt = parseDay(days[i]), m = dt.getMonth(); put(i, `${dt.getDate()}${m !== lastM ? ' ' + MON_S[m] : ''}`); lastM = m; });
       return s;

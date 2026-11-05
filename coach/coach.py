@@ -64,10 +64,11 @@ import f_skin  # noqa: E402  кожа: мой уход утро/вечер, пр
 import f_reviews  # noqa: E402  разборы за день: утро (как WHOOP посчитал сон), после тренировки, вечерний итог
 import f_trends  # noqa: E402  тренды: любой показатель WHOOP за неделю / месяц / полгода (как Trend View)
 import f_weight  # noqa: E402  вес и состав тела: замеры с умных весов (вручную, скрином, текстом), тренд
+import f_wx  # noqa: E402  ещё из WHOOP: VO₂ max, Healthspan, стресс, давление, дневник — по скрину приложения
 import pwa  # noqa: E402  Форма на экране «Домой» без Telegram: /site/, вход по коду
 import selfcheck  # noqa: E402  самопроверка приложения: ночью, /selfcheck, «Проверить приложение» → ремонт поддержкой
 FEATURES = {"assess": f_assess, "journal": f_journal, "plan": f_plan, "regime": f_regime, "habits": f_habits,
-            "skin": f_skin, "reviews": f_reviews, "weight": f_weight, "trends": f_trends}
+            "skin": f_skin, "reviews": f_reviews, "weight": f_weight, "trends": f_trends, "wx": f_wx}
 
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "common"))
 import media  # noqa: E402  голосовые -> текст (общий помощник)
@@ -1574,7 +1575,9 @@ def log_meal(chat, uid, text="", photo=None):
                  kb([food_button(uid)]))
             return
         if est.get("food") is False:
-            if photo:  # скрин WHOOP, тренировки, план — это вопрос тренеру с картинкой
+            if photo:  # скрин WHOOP с цифрами, которых нет в API, — сохраняем; иначе (тренировка, план) — вопрос тренеру
+                if not text and wx_from_photo(chat, uid, photo):
+                    return
                 busy.discard(uid)
                 answer(chat, uid, text or PHOTO_ASK, photo)
             else:
@@ -1584,6 +1587,27 @@ def log_meal(chat, uid, text="", photo=None):
         save_meal_and_reply(chat, uid, est)
     finally:
         busy.discard(uid)
+
+
+def wx_from_photo(chat, uid, photo):
+    """Глеб 05.11: «сам находи в приложении» — WHOOP эти цифры не отдаёт по API, поэтому скрин экрана WHOOP можно просто
+    кинуть боту: VO₂ max, Healthspan, стресс, давление, дневник — читаем (f_wx) и сохраняем сразу. Ничего такого нет — False."""
+    try:
+        today = today_of(uid)
+        prev = f_wx.read_path(sys.modules[__name__], photo, today)
+        out = f_wx.save(db, uid, {"day": prev["day"], "time": prev["time"], "metrics": prev["metrics"], "src": "photo"}, today)
+    except (ValueError, ai.AIError):
+        return False
+    except Exception:
+        traceback.print_exc()
+        return False
+    saved = (out if isinstance(out, list) else None) or prev["metrics"]  # f_wx.save → сохранённые записи
+    d = prev["day"]
+    when = "сегодня" if d == today.isoformat() else f"{d[8:10]}.{d[5:7]}"
+    lines = [esc(f_wx.metric_text(m)) for m in saved[:8]] + ([f"<i>и ещё {len(saved) - 8}</i>"] if len(saved) > 8 else [])
+    send(chat, box("📲", f"Записал из WHOOP · {when}", "\n".join(lines), note="Видно во «Здоровье» → «Ещё из WHOOP»"),
+         kb([app_button(uid, "📱 Открыть", "wx")]))
+    return True
 
 
 def answer(chat, uid, question, photo=None):
