@@ -290,21 +290,29 @@
       if (over > 2) root.style.setProperty('--vv-h', Math.max(160, Math.round(vh - over)) + 'px');
     }
   }
-  // замер для проверки (раз за фокус, через 1 с): размеры окна, клавиатуры и где поле — на сервер, без личных данных
+  // замер для проверки (каждый повод — не чаще раза в 20 с, через 1,2 с): размеры окна, клавиатуры, где поле и меню —
+  // на сервер (meta kb:<uid>), без личных данных. Поводы: фокус/уход из поля чата, смена вкладки, запуск, «лечение» окна
   const probed = {};
-  const probe = when => {
+  const cssPx = h => {  // сколько пикселей в 100lvh/100svh/100dvh/env(...) (нет поддержки — 0)
+    const p = document.createElement('div');
+    p.style.cssText = `position:absolute;left:0;top:0;width:0;visibility:hidden;pointer-events:none;height:${h}`;
+    document.body.append(p); const v = p.offsetHeight; p.remove(); return v;
+  };
+  const probe = (when, wait = 1200) => {
     if (!IPHONE || Date.now() - (probed[when] || 0) < 20000) return;
     probed[when] = Date.now();
     setTimeout(() => {
       const box = document.querySelector('body.tab-coach .composer'), bar = document.querySelector('.tabbar');
-      if (!box || !vv) return;
-      const r = box.getBoundingClientRect(), b = document.body.getBoundingClientRect();
-      F.api('/api/kb', { when, iw: innerWidth, ih: innerHeight, vh: Math.round(vv.height), vt: Math.round(vv.offsetTop),
-        sh: screen.height, top: Math.round(r.top), bottom: Math.round(r.bottom), btop: Math.round(b.top), bh: Math.round(b.height),
-        bar: bar ? Math.round(bar.getBoundingClientRect().top) : -1, sy: Math.round(scrollY),
+      const r = box ? box.getBoundingClientRect() : null, b = document.body.getBoundingClientRect(), br = bar ? bar.getBoundingClientRect() : null;
+      F.api('/api/kb', { when, tab: String(S.tab || ''), iw: innerWidth, ih: innerHeight, cl: root.clientHeight,
+        vh: vv ? Math.round(vv.height) : -1, vt: vv ? Math.round(vv.offsetTop) : -1, sh: screen.height,
+        lvh: cssPx('100lvh'), svh: cssPx('100svh'), dvh: cssPx('100dvh'), et: cssPx('env(safe-area-inset-top,0px)'), eb: cssPx('env(safe-area-inset-bottom,0px)'),
+        b: root.dataset.bottom || '', full: full.h, heal: lastHeal,
+        top: r ? Math.round(r.top) : -1, bottom: r ? Math.round(r.bottom) : -1, btop: Math.round(b.top), bh: Math.round(b.height),
+        bar: br ? Math.round(br.top) : -1, barb: br ? Math.round(br.bottom) : -1, sy: Math.round(scrollY),
         focus: document.activeElement?.id === 'q', kb: document.body.classList.contains('kb'),
         app: standalone, tg: !!(F.tg && F.tg.initData), ua: navigator.userAgent.slice(0, 160) }).catch(() => {});
-    }, 1200);
+    }, wait);
   };
   // клавиатура iOS выезжает ~0,3–0,5 с, а события visualViewport в приложении с экрана «Домой» приходят не всегда —
   // пока поле в фокусе, первые 1,5 с подгоняем каждый кадр
@@ -354,6 +362,67 @@
   addEventListener('resize', () => F.safeBottom());
   addEventListener('orientationchange', () => setTimeout(F.safeBottom, 300));
   if (F.tg && F.tg.onEvent) ['safeAreaChanged', 'contentSafeAreaChanged'].forEach(e => { try { F.tg.onEvent(e, F.safeBottom); } catch (x) { /* старый Telegram */ } });
+
+  // ---------- iOS 26, приложение с экрана «Домой»: окно «садится» и не возвращается (Глеб 05.11: «нижняя полоска подлетает вверх») ----------
+  // Замер с его iPhone 04.11: после клавиатуры окно 956 → 894 px (ровно на строку состояния) — innerHeight, visualViewport и
+  // 100dvh вместе; меню и поле чата висят на 62 px выше, снизу — мёртвая полоса (известный баг WebKit в standalone).
+  // Лечение (известный обход): помним самую большую высоту окна; когда поле не в фокусе, а окно ниже неё, — на мгновение
+  // убираем и возвращаем элемент во весь экран (display), WebKit пересчитывает окно. Сначала пустой служебный слой
+  // (ничего не трогает), не помогло — #app целиком (прокрутка возвращается, анимации сразу в конец — без повторного «выезда»).
+  // Только iPhone + экран «Домой», не в Telegram; не чаще раза в 0,5 с и 6 раз в минуту; два раза подряд не помогло — ждём,
+  // пока высота окна сама сменится. Итог — в замер (heal).
+  const full = { w: 0, h: 0 };
+  const noteFull = () => { if (innerWidth !== full.w) { full.w = innerWidth; full.h = 0; } full.h = Math.max(full.h, innerHeight); };
+  const typingNow = () => { const a = document.activeElement; return !!a && a !== document.body && a.matches('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range]), textarea, select, [contenteditable]:not([contenteditable="false"])'); };
+  let lastHeal = '', healAt = 0, healLog = [], healFails = 0, stuckH = 0;
+  const flip = el => { el.style.display = 'none'; void el.offsetHeight; el.style.display = ''; void el.offsetHeight; };
+  F.heal = why => {
+    if (!IPHONE || !standalone || (F.tg && F.tg.initData)) return false;
+    noteFull();
+    const before = innerHeight, now = Date.now();
+    if (full.h - before <= 4 || typingNow() || before === stuckH) return false;
+    healLog = healLog.filter(t => now - t < 60000);
+    if (now - healAt < 500 || healLog.length >= 6) return false;
+    healAt = now; healLog.push(now);
+    const layer = document.createElement('div');
+    layer.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100lvh;visibility:hidden;pointer-events:none;z-index:-1';
+    document.body.append(layer); void layer.offsetHeight; flip(layer); layer.remove();
+    const done = how => {
+      const ok = full.h - innerHeight <= 4;
+      healFails = ok ? 0 : healFails + 1;
+      if (healFails >= 2) { stuckH = innerHeight; healFails = 0; }
+      lastHeal = `${why}: ${before}→${innerHeight} (${how}${ok ? '' : ', не помогло'})`;
+      if (ok) { F.safeBottom(); F.coLayout(); }
+      probe('heal', 300);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (full.h - innerHeight <= 4) return done('слой');
+      const app = document.getElementById('app'), sc = coBox(), st = sc ? sc.scrollTop : 0, y = scrollY;
+      if (!app) return done('нет #app');
+      flip(app);
+      try {  // анимации появления (последние сообщения чата и т. п.) — сразу в конец, без повторного «выезда»
+        document.getAnimations().forEach(a => { const t = a.effect && a.effect.target; if (t && app.contains(t) && a.currentTime < 80) try { a.finish(); } catch (x) { /* бесконечная */ } });
+      } catch (x) { /* старый WebKit без getAnimations */ }
+      if (sc) sc.scrollTop = st;
+      if (y) scrollTo(0, y);
+      requestAnimationFrame(() => requestAnimationFrame(() => done('#app')));
+    }));
+    return true;
+  };
+  const healSoon = (why, ...waits) => waits.forEach(ms => setTimeout(() => F.heal(why), ms));
+  noteFull();
+  addEventListener('resize', () => { noteFull(); if (innerHeight !== stuckH) stuckH = 0; if (!typingNow()) healSoon('окно', 300); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) healSoon('возврат', 300); });
+  document.addEventListener('focusout', e => { if (e.target && e.target.matches && e.target.matches('input, textarea, [contenteditable]')) healSoon('клавиатура', 350, 900); });
+  // смена вкладки: класс body меняет app.js — смотрим, сменилась ли S.tab (вход в чат: окно проверяем и меряем)
+  let lastTab = S.tab;
+  new MutationObserver(() => {
+    if (S.tab === lastTab) return;
+    lastTab = S.tab;
+    healSoon('вкладка', 60, 450);
+    probe('tab:' + lastTab);
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  probe('load', 1500);
 
   document.addEventListener('focusin', e => { if (e.target.id === 'q') { chase(); probe('focus'); } });
   document.addEventListener('focusout', e => { if (e.target.id === 'q') { chase(); probe('blur'); } });

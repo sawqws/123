@@ -3377,16 +3377,17 @@ def route(uid, path, b):
         return SUP.web(uid, b)
     if path == "/api/selfcheck":  # «Ещё» → «Проверить приложение»: только владелец, не чаще раза в 30 мин
         return selfcheck.manual(sys.modules[__name__], uid)
-    if path == "/api/kb":  # замер клавиатуры iPhone из чата (more.js probe): последние 5 — в meta для проверки
-        keys = ("when", "iw", "ih", "vh", "vt", "sh", "top", "bottom", "btop", "bh", "bar", "sy", "focus", "kb", "app", "tg", "ua")
-        row = {k: (str(b[k])[:160] if k == "ua" else b[k]) for k in keys
+    if path == "/api/kb":  # замер окна iPhone (more.js probe: чат, смена вкладки, запуск, «лечение» окна) — последние 20 в meta
+        keys = ("when", "tab", "iw", "ih", "cl", "vh", "vt", "sh", "lvh", "svh", "dvh", "et", "eb", "b", "full", "heal",
+                "top", "bottom", "btop", "bh", "bar", "barb", "sy", "focus", "kb", "app", "tg", "ua")
+        row = {k: (str(b[k])[:160] if isinstance(b[k], str) else b[k]) for k in keys
                if k in b and isinstance(b[k], (int, float, bool, str))}
         row["at"] = datetime.datetime.now().isoformat(timespec="seconds")
         try:
             old = json.loads(db.meta(f"kb:{uid}") or "[]")
         except ValueError:
             old = []
-        db.meta(f"kb:{uid}", json.dumps(([row] + old)[:10], ensure_ascii=False))
+        db.meta(f"kb:{uid}", json.dumps(([row] + old)[:20], ensure_ascii=False))
         return {"ok": True}
     u = db.user(uid)
     today = user_now(u).date()
