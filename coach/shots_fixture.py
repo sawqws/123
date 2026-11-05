@@ -33,10 +33,12 @@ import coach  # noqa: E402
 EXTRA_PATHS = ["/api/assess", "/api/journal", "/api/plan", "/api/calendar", "/api/plan/save",
                "/api/regime", "/api/regime/save", "/api/regime/check",
                "/api/habits", "/api/habits/save", "/api/habits/mark", "/api/habits/goal",
-               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends", "/api/wx"]
+               "/api/skin", "/api/skin/save", "/api/skin/mark", "/api/reviews", "/api/weight", "/api/trends", "/api/wx",
+               "/api/labs"]
 # пути, где ответ зависит от тела запроса: в --serve считаются на лету (тренды: показатель, период, конец периода;
 # «Ещё из WHOOP»: список, сохранение, удаление — настоящие)
-LIVE_PATHS = {"/api/trends", "/api/series", "/api/wx", "/api/wx/save", "/api/wx/delete"}
+LIVE_PATHS = {"/api/trends", "/api/series", "/api/wx", "/api/wx/save", "/api/wx/delete",
+              "/api/labs", "/api/labs/save", "/api/labs/delete"}  # анализы — тоже настоящие
 
 # Пример «Калорий» и «Режима» по договору coach/SYNC.md — пока сервер их не отдаёт (или для ровных скриншотов)
 KCAL = {"items": [
@@ -221,6 +223,19 @@ def seed_wx(today):
                                         "src": "photo"}, today)
 
 
+# анализы крови — условный нейтральный пример (не чьи-то анализы): две сдачи, пара значений вне нормы
+LABS = [(220, {"hemoglobin": 138, "iron": 12.4, "ferritin": 17, "protein": 71, "glucose": 4.9, "vitd": 22, "b12": 410,
+               "cholesterol": 3.9, "crp": 0.8}),
+        (40, {"hemoglobin": 144, "iron": 18.2, "ferritin": 34, "tsat": 27, "protein": 73, "albumin": 46, "glucose": 5.1,
+              "vitd": 31, "b12": 450, "folate": 7.4, "cholesterol": 4.1, "ldl": 2.3, "hdl": 1.4, "magnesium": 0.84,
+              "tsh": 2.1, "crp": 6.2})]
+
+
+def seed_labs(today):
+    for back, values in LABS:
+        coach.f_labs.save(coach.db, T.U, {"day": (today - datetime.timedelta(days=back)).isoformat(), "values": values}, today)
+
+
 def seed_trends(db, back=200):
     """Для «Трендов»: шаги в циклах (step_count) и история до полугода (те же поддельные данные, только старше)."""
     import random
@@ -270,6 +285,7 @@ def build(shots=None):
         seed_reviews(today)
         seed_weight(today)
         seed_wx(today)
+        seed_labs(today)
         seed_water(db, today)
         allp = coach.route(T.U, "/api/all", {})
         allp.pop("v", None)  # версия файлов: в фикстуре страница с v=1 — без этого приложение перезагружалось бы при обходе
@@ -326,6 +342,8 @@ def build(shots=None):
         api["/api/wx/photo"] = {**WX_PHOTO, "day": today.isoformat()}
         api["/api/wx/save"] = {**api["/api/wx"], "saved": []}
         api["/api/wx/delete"] = api["/api/wx"]
+        api["/api/labs/save"] = {**api["/api/labs"], "saved": {"day": today.isoformat(), "keys": []}}
+        api["/api/labs/delete"] = api["/api/labs"]
         api["/api/assess?period=month"] = coach.route(T.U, "/api/assess", {"period": "month"})  # --serve: оценка месяца
         api["/api/kcal/link"] = {"token": "demo", "url": "https://sawqws.github.io/123/kcal/#pair=demo"}
         allp["admin"] = True  # «Ещё» → «Проверить приложение» видна (как у владельца); здесь ничего не запускает
@@ -480,6 +498,7 @@ def serve(port, stub=False):
                     return self.send(400, {"error": str(e).strip("'")})
             if path == "/api/all":  # «Ещё из WHOOP» на главной — после сохранений через --serve
                 api["/api/all"].setdefault("ext", {})["wx"] = coach.f_wx.extra(coach, T.U, T.TODAY)
+                api["/api/all"]["ext"]["labs"] = coach.f_labs.extra(coach, T.U, T.TODAY)
             self.do_GET()
 
         def do_GET(self):
