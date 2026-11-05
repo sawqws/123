@@ -57,6 +57,10 @@ const RECIPE_PARSE = { text: 'Сырники: пачка творога 200 г, 
     { name: 'Мука пшеничная', g: 75, est: true, kcal: 256, p: 7.7, f: 0.8, c: 53, salt: 0 }, { name: 'Масло подсолнечное', g: 17, est: true, kcal: 153, p: 0, f: 17, c: 0, salt: 0 }] };
 const rsum = page => page.$$eval('#rsum > div', els => { const c = els.map(e => e.textContent.trim()), out = []; for (let i = 6; i < c.length; i += 6) out.push(c.slice(i, i + 6)); return out; }); // итог рецепта по строкам
 const digits = v => +String(v).replace(/\D/g, '');
+const VOICE = { text: 'Съел тарелку гречки с котлетой, кусок хлеба и выпил стакан воды', comment: 'Гречка — обычная тарелка, около 250 г', water_ml: 250, items: [ // ответ /api/kcal/voice (сервер подменён)
+  { name: 'Гречка отварная', g: 250, lo: 200, hi: 300, sure: 'mid', kcal: 275, p: 10, f: 3, c: 52, salt: 0.5 },
+  { name: 'Котлета', g: 100, lo: 85, hi: 115, sure: 'high', kcal: 230, p: 15, f: 16, c: 7, salt: 1.1 },
+  { name: 'Хлеб', g: 30, lo: 20, hi: 60, sure: 'low', kcal: 75, p: 2.4, f: 0.9, c: 15, salt: 0.4 }] };
 
 async function addFood(page, q, grams, meal) {
   if (meal) await page.click(`[data-add="${meal}"] >> nth=0`, { position: { x: 30, y: 20 } }); else await page.click('#addTab');
@@ -1309,6 +1313,166 @@ async function addFood(page, q, grams, meal) {
       const S3 = await state(page);
       ok(S3.recipes.length === 1 && (await items(page)).length === 1 && (await items(page))[0].g === 201, 'внутри Формы: рецепт сохранён и записан');
       ok(page.errors.length === 0, 'нет ошибок в консоли (рецепт внутри Формы)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 22. «Надиктовать» (Глеб 05.11): голос (подставной MediaRecorder) или текст → /api/kcal/voice (сервер подменён) → предпросмотр
+       как у фото + вода → правка граммов, ×, снятие воды, приём пищи → «Записать» (еда и вода), «Отменить»; только вода; 422, сеть, 401 */
+    {
+      const voices = []; let mode = 'ok';
+      const { ctx, page } = await newPage(browser, { init: () => {
+        localStorage.setItem('kcal.token', 'tokvc');
+        window.__mic = { calls: 0, stopped: 0 };
+        navigator.mediaDevices.getUserMedia = async () => { __mic.calls++; return { getTracks: () => [{ stop() { __mic.stopped++; } }] }; };
+        window.MediaRecorder = class { constructor(s, o) { this.mimeType = (o && o.mimeType) || ''; this.state = 'inactive'; }
+          static isTypeSupported(t) { return t === 'audio/mp4'; }
+          start() { this.state = 'recording'; }
+          stop() { this.state = 'inactive'; setTimeout(() => { this.ondataavailable && this.ondataavailable({ data: new Blob([new Uint8Array(3000).fill(7)], { type: 'audio/mp4' }) }); this.onstop && this.onstop(); }, 20); } };
+      } });
+      await ctx.route(API + '/api/kcal/voice', async r => {
+        voices.push({ body: JSON.parse(r.request().postData()), auth: r.request().headers().authorization });
+        if (mode === 'slow') await sleep(3300);
+        if (mode === 'novoice') return r.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'Голос не распознан — скажи ещё раз или напиши текстом', voice: false }) });
+        if (mode === 'nofood') return r.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'Не услышал еды — скажи, что съел и сколько' }) });
+        if (mode === 'net') return r.abort('failed');
+        if (mode === '401') return r.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"нужен вход"}' });
+        if (mode === 'water') return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: 'Выпил пол-литра воды', items: [], water_ml: 500, comment: '' }) });
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(VOICE) });
+      });
+      await page.click('#addTab'); await sleep(550);
+      const vb = await page.locator('#voiceCta').boundingBox();
+      ok(await page.isVisible('#voiceCta') && (await text(page, '#voiceCta b')) === 'Надиктовать' && vb.height >= 36 && vb.width >= 100, 'в «Добавить» — кнопка «Надиктовать» (≥ 36 px)', JSON.stringify(vb));
+      ok(await page.isVisible('#recipeCta') && Math.abs((await page.locator('#recipeCta').boundingBox()).y - vb.y) < 1, '«Мой рецепт» — рядом, в одном ряду');
+      await shot(page, '22-voice-add');
+      await page.fill('#q', 'сыр'); await sleep(150);
+      ok(!(await page.isVisible('#voiceCta')), 'при поиске «Надиктовать» прячется');
+      await page.fill('#q', ''); await sleep(150);
+      await page.click('#voiceCta'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Надиктовать' && await page.isVisible('#mic') && await page.isVisible('#recText') && await page.isVisible('#backBtn'), 'лист «Надиктовать»: микрофон, поле текста, «Назад»');
+      ok((await text(page, '#recSt')).includes('Нажми и говори'), 'подсказка у микрофона', await text(page, '#recSt'));
+      await shot(page, '22-voice-new');
+      await page.click('#recGo'); await sleep(200);
+      ok(voices.length === 0 && (await toastText(page)).includes('Напиши'), 'пустой текст — подсказка, на сервер не уходит');
+      // голос: нажал — запись — нажал → «Слушаю…» → «Считаю…» → предпросмотр
+      await page.click('#mic'); await sleep(1300);
+      ok((await text(page, '#recSt')).startsWith('Слушаю · 0:01') && await page.evaluate(() => document.querySelector('#mic').classList.contains('on')) && await page.isVisible('#recCancel'), 'нажал — идёт запись, таймер', await text(page, '#recSt'));
+      await shot(page, '22-voice-listening');
+      mode = 'slow';
+      await page.click('#mic'); await sleep(350);
+      ok((await text(page, '#recSt')).startsWith('Слушаю…') && await page.evaluate(() => __mic.stopped) === 1, 'отпустил — «Слушаю…», микрофон выключен', await text(page, '#recSt'));
+      await sleep(2500);
+      ok((await text(page, '#recSt')).startsWith('Считаю…'), 'потом — «Считаю…»', await text(page, '#recSt'));
+      await sleep(1100);
+      ok(voices.length === 1 && voices[0].body.audio.startsWith('data:audio/mp4;base64,') && voices[0].body.mime === 'audio/mp4' && voices[0].auth === 'Bearer tokvc' && !voices[0].body.text,
+        'запись ушла на /api/kcal/voice с токеном', JSON.stringify(voices[0]).slice(0, 140));
+      ok((await text(page, '#sheetTitle')) === 'Еда голосом' && (await page.locator('#found .vi').count()) === 3, 'предпросмотр: 3 позиции', await text(page, '#sheetTitle'));
+      ok((await text(page, '.rec-said')).includes('тарелку гречки') && (await text(page, '.vnote')).includes('обычная тарелка'), '«Ты сказал» и комментарий', await text(page, '.rec-said'));
+      ok((await page.inputValue('#pg0')) === '250' && (await text(page, '#pm0')).includes('275 ккал') && (await text(page, '#found [data-i="0"] .range')) === '≈ 200–300 г'
+        && (await page.locator('#found [data-i="0"] .est').count()) === 1 && (await page.locator('#found [data-i="1"] .est').count()) === 0, 'граммы, ккал, «≈» и диапазон — как у фото', await text(page, '#found [data-i="0"]'));
+      ok((await text(page, '#found [data-i="2"] .range')).includes('Проверь вес'), 'неуверенно — «Проверь вес»', await text(page, '#found [data-i="2"]'));
+      ok((await text(page, '#vsum')).includes('Всего') && (await text(page, '#vsum')).includes('580'), 'итог: 580 ккал', await text(page, '#vsum'));
+      ok((await text(page, '#vw')).includes('Вода +250 мл') && (await page.getAttribute('#vwt', 'aria-checked')) === 'true' && (await text(page, '#vwm')).includes('станет 0,3 из 3,5 л'), 'вода +250 мл — включена', await text(page, '#vw'));
+      ok((await text(page, '#vlog')) === 'Записать в «Обед» и воду' && (await page.getAttribute('#mseg [data-m="lunch"]', 'aria-pressed')) === 'true', 'приём пищи — текущий (обед)', await text(page, '#vlog'));
+      ok((await items(page)).length === 0 && !((await state(page)).days['2026-10-21'] || {}).water, 'предпросмотр ничего не записывает');
+      const small = await page.$$eval('#sheetBody button, #sheetBody input', els => els.filter(e => e.offsetParent && (e.getBoundingClientRect().width < 36 || e.getBoundingClientRect().height < 36)).map(e => e.id || e.getAttribute('aria-label')));
+      ok(small.length === 0, 'кнопки предпросмотра ≥ 36 px', JSON.stringify(small));
+      await shot(page, '22-voice-preview');
+      // правка граммов: −/+ и числом; ×; вода — снять
+      await page.click('#found [data-i="0"] [data-d="10"]'); await sleep(120);
+      ok((await page.inputValue('#pg0')) === '260' && (await text(page, '#pm0')).includes('286 ккал') && (await page.locator('#found [data-i="0"] .est, #found [data-i="0"] .range').count()) === 0, '+10 г кнопкой → 260 г, 286 ккал, «≈» снят', await text(page, '#pm0'));
+      await page.fill('#pg1', '150'); await sleep(120);
+      ok((await text(page, '#pm1')).includes('345 ккал') && (await text(page, '#vsum')).includes('706'), 'котлета числом 150 г → 345 ккал, итог 706', await text(page, '#vsum'));
+      await page.click('#found [data-x="2"]'); await sleep(450);
+      ok((await page.locator('#found .vi').count()) === 2 && (await text(page, '#vsum')).includes('631'), '× — хлеб убран, итог 631', await text(page, '#vsum'));
+      await page.click('#vwt'); await sleep(150);
+      ok((await page.getAttribute('#vwt', 'aria-checked')) === 'false' && (await text(page, '#vlog')) === 'Записать в «Обед»' && (await text(page, '#vwm')) === 'не записывать', 'переключатель — вода снята');
+      await page.click('#vw .t'); await sleep(100);
+      ok((await page.getAttribute('#vwt', 'aria-checked')) === 'true', 'нажатие по строке — вода снова включена');
+      await page.click('#vwt'); await sleep(100);
+      await page.click('#mseg [data-m="dinner"]'); await sleep(200);
+      ok((await text(page, '#vlog')) === 'Записать в «Ужин»', 'выбран «Ужин»');
+      await page.click('#vlog'); await sleep(700);
+      let its = await items(page), S1 = await state(page);
+      ok(its.length === 2 && its.every(i => i.meal === 'dinner') && its[0].name === 'Гречка отварная' && its[0].g === 260 && Math.round(its[0].kcal) === 286 && its[1].g === 150 && Math.round(its[1].kcal) === 345
+        && Math.abs(its[0].per100.kcal - 110) < 1e-9, '«Записать» — еда в «Ужин» обычными записями (с составом на 100 г)', JSON.stringify(its));
+      ok(!(S1.days['2026-10-21'].water || []).length, 'снятая вода не записана', JSON.stringify(S1.days['2026-10-21'].water));
+      ok((await toastText(page)).includes('2 блюда · 631 ккал') && (await text(page, '#toast button')) === 'Отменить', 'тост «2 блюда · 631 ккал» с «Отменить»', await toastText(page));
+      await page.click('#toast button'); await sleep(400);
+      ok((await items(page)).length === 0, '«Отменить» — записи убраны');
+      // текстом: Enter — отправить; еда и вода записываются вместе
+      mode = 'ok';
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      await page.fill('#recText', 'гречка с котлетой, хлеб и стакан воды'); await page.press('#recText', 'Enter'); await sleep(700);
+      ok(voices.length === 2 && voices[1].body.text === 'гречка с котлетой, хлеб и стакан воды' && !voices[1].body.audio && (await text(page, '#sheetTitle')) === 'Еда голосом', 'текст + Enter → /api/kcal/voice {text} → предпросмотр', JSON.stringify(voices[1] && voices[1].body));
+      await page.click('#backBtn'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Надиктовать' && (await page.inputValue('#recText')) === VOICE.text, '«Назад» — сказанное в поле, можно поправить', await page.inputValue('#recText'));
+      await page.click('#recGo'); await sleep(700);
+      await page.click('#vlog'); await sleep(700);
+      its = await items(page); S1 = await state(page);
+      ok(its.length === 3 && its.every(i => i.meal === 'lunch') && JSON.stringify(S1.days['2026-10-21'].water) === '[250]', '«Записать» — 3 позиции в «Обед» и вода 250 мл', JSON.stringify({ n: its.length, w: S1.days['2026-10-21'].water }));
+      ok((await toastText(page)) === '3 блюда · 580 ккал · +250 млОтменить', 'тост «3 блюда · 580 ккал · +250 мл» — еда и вода', await toastText(page));
+      ok((await text(page, '#water')).includes('0,3 из 3,5 л'), 'вода на «Сегодня» обновилась', await text(page, '#water'));
+      // только вода
+      mode = 'water';
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      await page.fill('#recText', 'выпил пол-литра воды'); await page.click('#recGo'); await sleep(700);
+      ok(await page.isHidden('#vfood') && await page.isHidden('#mseg') && (await text(page, '#vlog')) === 'Записать воду · 500 мл', 'только вода — без еды и приёма пищи', await text(page, '#vlog'));
+      await shot(page, '22-voice-water');
+      await page.click('#vlog'); await sleep(700);
+      ok(JSON.stringify((await state(page)).days['2026-10-21'].water) === '[250,500]' && (await items(page)).length === 3 && (await toastText(page)).startsWith('Вода +500 мл'), 'записана только вода', JSON.stringify((await state(page)).days['2026-10-21'].water));
+      // ошибки — строкой в листе
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      mode = 'novoice';
+      await page.click('#mic'); await sleep(1200); await page.click('#mic'); await sleep(700);
+      ok((await text(page, '#recSt')).includes('Не расслышал') && (await text(page, '#recSt')).includes('текстом') && (await text(page, '#sheetTitle')) === 'Надиктовать', '422 voice:false — «Не расслышал — напиши текстом»', await text(page, '#recSt'));
+      mode = 'nofood';
+      await page.fill('#recText', 'привет'); await page.press('#recText', 'Enter'); await sleep(600);
+      ok((await text(page, '#recSt')).includes('Не услышал еды') && !(await page.evaluate(() => document.querySelector('#recText').disabled)), '422 без еды — понятная строка, можно поправить', await text(page, '#recSt'));
+      mode = 'net';
+      await page.click('#recGo'); await sleep(600);
+      ok((await text(page, '#recSt')).includes('Нет связи с сервером') && !(await page.evaluate(() => document.querySelector('#mic').disabled)), 'нет сети — «Нет связи с сервером»', await text(page, '#recSt'));
+      const st0 = await page.evaluate(() => __mic.stopped), n0 = voices.length;
+      await page.click('#mic'); await sleep(800); await page.keyboard.press('Escape'); await sleep(600);
+      ok(await page.evaluate(() => __mic.stopped) === st0 + 1 && voices.length === n0 && await page.isHidden('#sheet'), 'Esc во время записи — лист закрыт, микрофон выключен, ничего не ушло');
+      mode = '401';
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      await page.fill('#recText', 'банан'); await page.click('#recGo'); await sleep(700);
+      ok(await page.evaluate(() => localStorage.getItem('kcal.token')) === null && await page.isVisible('#code') && (await text(page, '.portion .title')) === 'Еда голосом'
+        && (await toastText(page)).includes('Связь с Формой потеряна'), '401 — «Связь с Формой потеряна» и экран кода', await toastText(page));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (надиктовать)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 22а. Без связи с Формой — «Надиктовать» просит связать; узкий iPhone SE — всё влезает; внутри Формы (?embed=1) — записывает */
+    {
+      const { ctx, page } = await newPage(browser);
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      ok(await page.isVisible('#code') && (await text(page, '.portion .title')) === 'Еда голосом' && (await text(page, '.lead')).includes('Голос разбирает'), 'без связи — экран кода «Еда голосом»');
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await newPage(browser, { device: 'iPhone SE', init: () => localStorage.setItem('kcal.token', 'tokse') });
+      await ctx.route(API + '/api/kcal/voice', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(VOICE) }));
+      const wide = () => page.evaluate(() => { const b = document.querySelector('#sheetBody'); return document.documentElement.scrollWidth <= innerWidth + 1 && b.scrollWidth <= b.clientWidth + 1; });
+      await page.click('#addTab'); await sleep(550);
+      ok(await wide() && (await page.$eval('#voiceCta b', b => b.scrollWidth <= b.clientWidth + 1)), 'iPhone SE: «Надиктовать» влезает целиком, без прокрутки вбок');
+      await shot(page, '22-voice-add-se');
+      await page.click('#voiceCta'); await sleep(650); await page.fill('#recText', 'гречка'); await page.click('#recGo'); await sleep(700);
+      ok(await wide() && (await page.locator('#found .vi').count()) === 3, 'iPhone SE: предпросмотр без прокрутки вбок');
+      await shot(page, '22-voice-preview-se');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (надиктовать, SE)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await newPage(browser, { url: URL + '?embed=1&theme=light', init: () => localStorage.setItem('kcal.token', 'tokemb') });
+      await ctx.route(API + '/api/kcal/voice', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(VOICE) }));
+      await page.click('#addTab'); await sleep(550);
+      ok(await page.isVisible('#voiceCta'), 'внутри Формы — «Надиктовать» есть');
+      await page.click('#voiceCta'); await sleep(650);
+      await shot(page, '22-voice-new-embed-light');
+      await page.fill('#recText', 'гречка с котлетой'); await page.click('#recGo'); await sleep(700);
+      await shot(page, '22-voice-preview-embed-light');
+      await page.click('#vlog'); await sleep(700);
+      ok((await items(page)).length === 3 && JSON.stringify((await state(page)).days['2026-10-21'].water) === '[250]', 'внутри Формы: еда и вода записаны');
+      ok(page.errors.length === 0, 'нет ошибок в консоли (надиктовать внутри Формы)', page.errors.join(' | '));
       await ctx.close();
     }
   } catch (e) {
