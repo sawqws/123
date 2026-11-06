@@ -405,7 +405,17 @@ button, .cell { -webkit-touch-callout: none; }
 @media (max-width: 374px) { .cta2 .photo-cta.soft { padding: 10px 12px; } .cta2 .photo-cta svg { display: none; } } /* узкий телефон: подпись важнее значка */
 /* предпросмотр «Надиктовать»: строки как у фото, кнопки для пальца ≥ 36 px; вода — переключатель */
 .vsaid { margin-top: 6px; }
+.vsaid .vmore { margin-top: 6px; }
 .vnote { margin-top: 8px; }
+/* «Понял так» — что разбор понял не дословно (оговорка, «греча» — гречка, 2 кг → 200 г), и «Поправить» (Глеб 06.11) */
+.vfix { margin: 10px 18px 0; padding: 10px 14px; border-radius: 16px; background: var(--fill); font-size: 14px; line-height: 1.35; }
+.vfix-t { display: block; margin-bottom: 3px; font-size: 12px; color: var(--text-3); }
+.vfix-i { position: relative; padding-left: 13px; color: var(--text); }
+.vfix-i + .vfix-i { margin-top: 2px; }
+.vfix-i::before { content: ""; position: absolute; left: 1px; top: .58em; width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); }
+.vact { margin: 10px 18px 2px; }
+.vfixb { display: inline-flex; align-items: center; gap: 6px; padding: 0 14px 0 12px; }
+.vfixb svg { width: 17px; height: 17px; flex: none; }
 .range .nw { white-space: nowrap; }
 .vi .mini button { width: 36px; height: 36px; border-radius: 18px; }
 .vi .mini .g { height: 36px; width: 50px; }
@@ -580,7 +590,8 @@ button, .cell { -webkit-touch-callout: none; }
 .embed .tabbar { bottom: calc(var(--emb) + 12px); }
 .embed .tabbar .in { justify-content: flex-end; }
 @media (max-width: 767px) { /* листы — над меню Формы, целиком видны */
-  .embed .sheet { bottom: var(--emb); height: calc(100dvh - 10px - var(--safe-t) - var(--emb)); border-radius: 38px; transform: translateY(calc(100% + var(--emb) + 20px)); }
+  .embed .sheet { bottom: var(--emb); height: calc(100dvh - 10px - var(--safe-t) - var(--emb)); border-radius: 38px; transform: translateY(calc(100% + var(--emb) + 20px));
+    overflow: hidden; } /* лист скруглён и снизу — длинный список не вылезает углами за край */
   .embed .sheet .body { padding-bottom: 24px; }
   .embed .sheet.short { bottom: calc(max(var(--emb), var(--kb, 0px)) + 8px); height: auto; max-height: calc(100dvh - 24px - var(--safe-t) - var(--emb)); transform: translateY(calc(100% + var(--emb) + 40px)); }
   .embed .sheet.on { transform: none; }
@@ -2612,7 +2623,8 @@ function openRecipe(id, meal) { const r = recById(id); if (!r) return openRecipe
 /* запись голоса — общий лист для «Мой рецепт» и «Надиктовать»: нажал — говоришь — нажал (или удерживай и отпусти); до 2 минут;
    Safari пишет audio/mp4, Chrome — webm/opus; запасное поле текста. o: title, url (сервер Тренера), text, ph, aria, go, foot,
    write (без микрофона), short (слишком коротко), empty (пустой текст), min, enter (Enter — отправить), deaf/none ([жирное, строка]
-   на 422 «голос не распознан» / «не то»), again, reopen(text) — после новой связки, back, ok(ответ, тело) → [жирное, строка], если не подошло */
+   на 422 «голос не распознан» / «не то»), again, reopen(text) — после новой связки, back, ok(ответ, тело) → [жирное, строка], если не подошло,
+   extra — что ещё отправить вместе с голосом или текстом (prev у «Поправить»), think — [жирное, строка] третьей стадией ожидания */
 const REC_SEC = 120;
 
 function micType() {
@@ -2633,7 +2645,7 @@ function micSheet(o) {
     <div class="foot" style="text-align:center">${esc(o.foot)}</div>`;
   openSheet(o.title, html, body => {
     const mic = $('#mic', body), st = $('#recSt', body), ta = $('#recText', body), go = $('#recGo', body), cancel = $('#recCancel', body);
-    let mode = 'idle', stream = null, rec = null, chunks = [], t0 = 0, timer = 0, held = false, downAt = 0, drop = false, ctl = null, slow = 0;
+    let mode = 'idle', stream = null, rec = null, chunks = [], t0 = 0, timer = 0, held = false, downAt = 0, drop = false, ctl = null, slow = 0, slow2 = 0;
     const say = (b, s) => { st.innerHTML = `<b>${esc(b)}</b>${s ? esc(s) : ''}`; };
     const idle = (b, s) => {
       mode = 'idle'; mic.classList.remove('on', 'busy'); mic.disabled = false; mic.setAttribute('aria-label', 'Записать голосом');
@@ -2680,10 +2692,12 @@ function micSheet(o) {
       send({ audio, mime: type.split(';')[0] }, s);
     }
     async function send(b, s) {
+      if (o.extra) b = Object.assign({}, o.extra, b);
       mode = 'busy'; mic.classList.add('busy'); mic.disabled = true; go.disabled = true; ta.disabled = true; cancel.hidden = true;
       const voice = !!b.audio, thinking = () => say('Считаю…', 'Перевожу в граммы и считаю КБЖУ');
       voice ? say('Слушаю…', 'Разбираю запись') : thinking();
       if (voice) slow = setTimeout(() => mode === 'busy' && thinking(), Math.max(2500, s * 350)); // речь на сервере — ~0,3 с на секунду записи
+      if (o.think) slow2 = setTimeout(() => mode === 'busy' && say(...o.think), Math.max(2500, voice ? s * 350 : 0) + 7000); // умный разбор думает 10–20 с
       ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 180000);
       try {
         const r = await fetch(API + o.url, { method: 'POST', signal: ctl.signal,
@@ -2698,7 +2712,7 @@ function micSheet(o) {
       } catch (e) {
         if (mode !== 'busy') return;
         idle(e.name === 'AbortError' ? 'Слишком долго' : e instanceof TypeError ? 'Нет связи с сервером' : 'Не получилось посчитать', 'Попробуй ещё раз');
-      } finally { clearTimeout(tm); clearTimeout(slow); }
+      } finally { clearTimeout(tm); clearTimeout(slow); clearTimeout(slow2); }
     }
     mic.addEventListener('pointerdown', e => { // нажал — запись, нажал ещё раз — стоп; удерживал дольше 0,7 с — стоп, как отпустил
       if (e.button > 0) return;
@@ -2720,7 +2734,7 @@ function micSheet(o) {
     ta.addEventListener('keydown', e => { // Ctrl/⌘ + Enter — отправить; в «Надиктовать» — просто Enter (Shift + Enter — новая строка)
       if (e.key === 'Enter' && !e.isComposing && (e.metaKey || e.ctrlKey || (o.enter && !e.shiftKey))) { e.preventDefault(); go.click(); }
     });
-    sheetLeave = () => { mode = 'closed'; clearInterval(timer); clearTimeout(slow); try { if (rec && rec.state === 'recording') rec.stop(); } catch (e) {} release(); ctl && ctl.abort(); };
+    sheetLeave = () => { mode = 'closed'; clearInterval(timer); clearTimeout(slow); clearTimeout(slow2); try { if (rec && rec.state === 'recording') rec.stop(); } catch (e) {} release(); ctl && ctl.abort(); };
     idle();
   }, { back: o.back, slide: true });
 }
@@ -2750,9 +2764,9 @@ function openRecipeNew(meal, text = '') {
    в тосте — «Отменить». Только вода — тоже записывается. ——— */
 function openVoice(meal, text = '') {
   if (!getToken()) return openPair(() => openVoice(meal, text), 'voice'); // разбирает Тренер на сервере
-  micSheet({ title: 'Надиктовать', url: '/api/kcal/voice', text, min: 2, enter: true, aria: 'Что съел и выпил — текстом', go: 'Посчитать',
+  micSheet({ title: 'Надиктовать', url: '/api/kcal/voice', text, min: 2, enter: true, aria: 'Что съел и выпил — текстом', go: 'Посчитать', think: VOICE_THINK,
     ph: 'Тарелка гречки с котлетой, кофе с молоком и стакан воды',
-    foot: 'Скажи, что съел и выпил и сколько — граммы, штуки, ложки или «полтарелки». Можно сразу всё за приём пищи.',
+    foot: 'Говори как удобно: граммы, штуки, «примерно», «ой, не 300, а 200» — разберусь. Можно сразу всё за приём пищи.',
     write: 'Напиши, что съел', short: 'Нажми и скажи, что съел и выпил', empty: 'Напиши, что съел или выпил',
     deaf: ['Не расслышал', 'Напиши текстом ниже — посчитаю так же'], none: ['Не услышал еды', 'Скажи, что съел или выпил и сколько'],
     again: 'Попробуй ещё раз', pair: 'voice', reopen: t => openVoice(meal, t), back: () => openAdd(meal),
@@ -2761,20 +2775,47 @@ function openVoice(meal, text = '') {
       const ml = Math.round(Math.min(5000, Math.max(0, num(j.water_ml))));
       if (!items.length && ml < 10) return ['Не услышал еды', 'Скажи, что съел или выпил и сколько'];
       const said = String(j.text || b.text || '').slice(0, 1000);
-      showSpoken({ text: said, items, water: ml >= 10 ? ml : 0, comment: String(j.comment || '').slice(0, 200) }, meal, () => openVoice(meal, said));
+      showSpoken({ text: said, items, water: ml >= 10 ? ml : 0, fixes: voiceFixes(j), comment: String(j.comment || '').slice(0, 200) }, meal, () => openVoice(meal, said));
+    } });
+}
+const VOICE_THINK = ['Проверяю…', 'Сверяю оговорки и граммы'];
+const voiceFixes = j => (Array.isArray(j.fixes) ? j.fixes : []).map(f => String(f || '').trim().slice(0, 90)).filter(Boolean).slice(0, 4);
+/* «Поправить» (Глеб 06.11: «диктовка умная, как ты»): к готовому разбору сказать или написать, что не так («гречки было 150»,
+   «хлеба не было», «добавь чай с сахаром») → /api/kcal/voice {…, prev: разбор как сейчас на экране} → весь список заново.
+   d — снимок предпросмотра (showSpoken: snap), back — куда «Назад» из предпросмотра (к первой диктовке) */
+function openVoiceFix(d, meal, back, text = '') {
+  if (!getToken()) return openPair(() => openVoiceFix(d, meal, back, text), 'voice');
+  const prev = { text: [d.text, ...(d.more || [])].filter(Boolean).join(' · ').slice(0, 1000), water_ml: d.wOff ? 0 : d.water,
+    items: d.items.map(i => ({ name: i.name, g: i.g, lo: i.lo, hi: i.hi, sure: i.sure, kcal: r1(i.kcal), p: r1(i.p), f: r1(i.f), c: r1(i.c), salt: r1(i.salt) })) };
+  micSheet({ title: 'Поправить', url: '/api/kcal/voice', text, min: 2, enter: true, aria: 'Что поправить — текстом', go: 'Пересчитать', extra: { prev }, think: VOICE_THINK,
+    ph: 'Гречки было 150, хлеба не было, добавь чай с сахаром',
+    foot: 'Скажи, что не так, — пересчитаю весь список. Остальное останется как было.',
+    write: 'Напиши, что поправить', short: 'Нажми и скажи, что поправить', empty: 'Напиши, что поправить',
+    deaf: ['Не расслышал', 'Напиши текстом ниже'], none: ['Не понял поправку', 'Скажи, что убрать, добавить или сколько было'],
+    again: 'Попробуй ещё раз', pair: 'voice', reopen: t => openVoiceFix(d, meal, back, t), back: () => showSpoken(d, meal, back),
+    ok: (j, b) => {
+      const items = (Array.isArray(j.items) ? j.items : []).filter(i => i && i.name && num(i.g) > 0).slice(0, 30);
+      const ml = Math.round(Math.min(5000, Math.max(0, num(j.water_ml))));
+      if (!items.length && ml < 10) return ['Тогда список пустой', 'Скажи, что оставить, или вернись «Назад»'];
+      const said = String(j.text || b.text || '').slice(0, 300);
+      showSpoken({ text: d.text, more: [...(d.more || []), said].slice(-3), items, water: ml >= 10 ? ml : 0, fixes: voiceFixes(j),
+        comment: String(j.comment || d.comment || '').slice(0, 200) }, d.meal || meal, back);
     } });
 }
 function showSpoken(d, meal, back) {
-  let m = meal || mealNow(), wOn = d.water > 0;
+  let m = d.meal || meal || mealNow(), wOn = d.water > 0 && !d.wOff;
   const rows = d.items.map(i => { // как у фото: состав на 100 г, граммы правятся; «≈» — сказал примерно (не «200 г»)
     const g0 = Math.max(1, num(i.g)), k = 100 / g0, sure = ['high', 'mid', 'low'].includes(i.sure) ? i.sure : 'mid';
     const lo = num(i.lo) > 0 && num(i.lo) <= g0 ? Math.round(num(i.lo)) : 0, hi = num(i.hi) >= g0 ? Math.round(num(i.hi)) : 0;
-    return { name: String(i.name).slice(0, 60), g: Math.max(1, Math.round(g0)), lo, hi, sure, est: sure !== 'high', off: false,
+    return { name: String(i.name).slice(0, 60), g: Math.max(1, Math.round(g0)), lo, hi, sure, est: sure !== 'high' && i.est !== false, off: false,
       per: { kcal: Math.max(0, num(i.kcal)) * k, p: Math.max(0, num(i.p)) * k, f: Math.max(0, num(i.f)) * k, c: Math.max(0, num(i.c)) * k, salt: Math.max(0, num(i.salt)) * k } };
   });
   const range = r => r.est ? `<div class="m num range${r.sure === 'low' ? ' low' : ''}">${r.sure === 'low' ? 'Проверь вес · ' : ''}<span class="nw"><span class="est" aria-label="на глаз">≈</span> ${r.lo && r.hi && r.lo < r.hi ? `${r.lo}–${r.hi}` : r.g}&nbsp;г</span></div>` : '';
-  const html = `${d.text ? `<div class="rec-said vsaid"><span>Ты сказал</span>«${esc(d.text)}»</div>` : ''}
+  const fixes = d.fixes || [], more = d.more || [];
+  const html = `${d.text ? `<div class="rec-said vsaid"><span>Ты сказал</span>«${esc(d.text)}»${more.map(t => `<span class="vmore">Поправил</span>«${esc(t)}»`).join('')}</div>` : ''}
+    ${fixes.length ? `<div class="vfix" role="note"><span class="vfix-t">Понял так</span>${fixes.map(f => `<div class="vfix-i">${esc(f)}</div>`).join('')}</div>` : ''}
     ${d.comment ? `<div class="rec-said vnote">${esc(d.comment)}</div>` : ''}
+    <div class="vact"><button class="chip vfixb press" id="vfixb">${I.mic}<span>Поправить</span></button></div>
     <div id="vfood"${rows.length ? '' : ' hidden'}>
       <div class="group-t fav-t"><span>Еда — поправь граммы</span>${rows.some(r => r.est) ? '<span class="hint">≈ — на глаз</span>' : ''}</div>
       <div class="list" id="found">${rows.map((r, i) => `<div class="cell ing vi" data-i="${i}"><span class="t"><div class="n">${esc(r.name)}</div>
@@ -2843,6 +2884,11 @@ function showSpoken(d, meal, back) {
     found.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('input')) e.target.blur(); });
     const vw = $('#vw', body);
     if (vw) vw.onclick = () => { wOn = !wOn; buzz(); upd(); }; // вся строка — переключатель
+    // снимок как сейчас на экране (граммы поправлены, лишнее убрано, вода снята) — для «Поправить» и возврата из него
+    const snap = () => ({ ...d, meal: m, wOff: !wOn, items: live().map(r => { const k = r.g / 100;
+      return { name: r.name, g: r.g, lo: r.est ? r.lo : 0, hi: r.est ? r.hi : 0, sure: r.est ? r.sure : 'high', est: r.est,
+        kcal: r.per.kcal * k, p: r.per.p * k, f: r.per.f * k, c: r.per.c * k, salt: r.per.salt * k }; }) });
+    $('#vfixb', body).onclick = () => { buzz(); openVoiceFix(snap(), m, back); };
     const seg = $('#mseg', body);
     requestAnimationFrame(() => placeSeg(seg));
     seg.onclick = e => { const b = e.target.closest('[data-m]'); if (!b) return; m = b.dataset.m; seg.querySelectorAll('[data-m]').forEach(c => c.setAttribute('aria-pressed', c === b)); placeSeg(seg, true); upd(); buzz(); };

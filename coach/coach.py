@@ -1489,9 +1489,11 @@ def edit_profile(chat, uid, text):
     send(chat, *profile_view(uid, "Профиль обновлён"))
 
 
-def meal_card(m, comment="", total=""):
+def meal_card(m, comment="", total="", fixes=None):
+    """fixes — что разбор диктовки понял не дословно (Глеб 06.11): строкой «Понял так: …» вместо совета, целиком."""
     body = f"<b>{round(m['kcal'])} ккал</b> · Б {round(m['protein'])} · Ж {round(m['fat'])} · У {round(m['carbs'])}"
-    return box("🍽", esc(m["title"]), body + (f"\n{total}" if total else ""), note=esc(first_sentence(comment, 100)))
+    note = ("Понял так: " + "; ".join(fixes[:2]))[:180] if fixes else first_sentence(comment, 100)
+    return box("🍽", esc(m["title"]), body + (f"\n{total}" if total else ""), note=esc(note))
 
 
 def food_text(uid):
@@ -1565,7 +1567,7 @@ def log_spoken(chat, uid, text):
     try:
         typing(chat)
         try:
-            est = ai.spoken_meal(text)
+            est = ai.spoken_meal(text, known=spoken_known(uid))
         except ai.AIError as e:
             send(chat, err(f"Не смог разобрать: {esc(e)}. Добавь вручную в приложении."), kb([food_button(uid)]))
             return
@@ -1590,7 +1592,7 @@ def log_spoken(chat, uid, text):
         total = f"За день {e['kcal']}" + (f" из {n['kcal']} ккал" if n else " ккал")
         if ml:
             total += f"\n💧 +{ml} мл · {water.day_line(wt['drank'], wt['target'])}"
-        send(chat, meal_card(m, est.get("comment", ""), total), kb([btn("🗑 Удалить", f"m|del|{m['id']}"), food_button(uid)]))
+        send(chat, meal_card(m, est.get("comment", ""), total, est.get("fixes")), kb([btn("🗑 Удалить", f"m|del|{m['id']}"), food_button(uid)]))
     finally:
         busy.discard(uid)
 
@@ -3368,10 +3370,63 @@ def kcal_voice(uid, b):
         if len(text) < 2:
             raise ValueError("Скажи или напиши, что съел")
     text = text[:2000]
-    out = ai.spoken_meal(text)
+    prev = spoken_prev(b.get("prev"))
+    out = ai.spoken_meal(text, known=spoken_known(uid), prev=prev)
     if not out["items"] and not out["water_ml"]:
         raise NotFood
-    return {"text": text, "items": out["items"], "water_ml": out["water_ml"], "comment": out["comment"]}
+    return {"text": text, "items": out["items"], "water_ml": out["water_ml"], "fixes": out["fixes"], "comment": out["comment"]}
+
+
+def spoken_prev(raw):
+    """Поле prev «Поправить» (Глеб 06.11: «нет, гречки было 150») → {text, items, water_ml} прежнего разбора — как он сейчас
+    на экране (граммы он мог поправить руками); плохое или пустое — None (обычный разбор)."""
+    if not isinstance(raw, dict):
+        return None
+    items = ai._plate_items(raw.get("items"))
+    ml = int(ai._num(raw.get("water_ml"), 0, 5000))
+    if not items and ml < 10:
+        return None
+    return {"text": " ".join(str(raw.get("text") or "").split())[:1000], "items": items, "water_ml": ml if ml >= 10 else 0}
+
+
+def spoken_known(uid, days=21):
+    """Его частые продукты для разбора диктовки (Глеб 06.11: «умная, как ты»): дневник «Калорий» за 3 недели и бота
+    за неделю + «Мои рецепты» → строки «Каша Nordic — обычно 110 г, 360 ккал/100 г» (самые частые и свежие, ≤ 40)."""
+    seen = {}  # имя в нижнем регистре → [имя, граммы…, ккал/100, последний день]
+    try:
+        for d, v in db.kcal_last(uid, days).items():
+            for it in v.get("items") or []:
+                name = " ".join(str(it.get("name") or "").split())[:60]
+                g = ai._num(it.get("g"), 0, 5000)
+                if not name or g <= 0:
+                    continue
+                r = seen.setdefault(name.lower(), {"name": name, "g": [], "k": 0, "day": ""})
+                r["g"].append(g)
+                r["k"] = round(ai._num(it.get("kcal"), 0, 10000) * 100 / g) if g else r["k"]
+                r["day"] = max(r["day"], d)
+        lines = []
+        for r in sorted(seen.values(), key=lambda r: (len(r["g"]), r["day"]), reverse=True)[:30]:
+            gs = sorted(r["g"])
+            lines.append(f"{r['name']} — обычно {round(gs[len(gs) // 2])} г, {r['k']} ккал/100 г")
+        for rc in db.kcal_recipes(uid):
+            if not isinstance(rc, dict) or rc.get("del") or not str(rc.get("name") or "").strip():
+                continue
+            ings = [i for i in rc.get("ings") or [] if isinstance(i, dict)]
+            tot = sum(ai._num(i.get("g"), 0, 5000) for i in ings)
+            out = ai._num(rc.get("out"), 0, 20000) or tot
+            kc = sum(ai._num(i.get("kcal"), 0, 10000) for i in ings)
+            n = int(ai._num(rc.get("servings"), 0, 50))
+            if out > 0:
+                lines.append(f"{' '.join(str(rc['name']).split())[:60]} (мой рецепт) — {round(kc * 100 / out)} ккал/100 г"
+                             + (f", порция {round(out / n)} г" if n else ""))
+        today = user_now(db.user(uid)).date()
+        for m in db.meals(uid, (today - datetime.timedelta(days=7)).isoformat(), today.isoformat())[-10:]:
+            if str(m["title"] or "").strip():
+                lines.append(f"{' '.join(str(m['title']).split())[:100]} (из бота) — {round(m['kcal'] or 0)} ккал")
+        return lines[:ai.VOICE_KNOWN]
+    except Exception:  # подсказка, не главное: сломалась — разбираем без неё
+        traceback.print_exc()
+        return []
 
 
 def kcal_recipe_parse(uid, b):
