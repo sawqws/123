@@ -1180,7 +1180,9 @@ class BotTest(unittest.TestCase):
         self.assertIn(said, prompt)
         self.assertIn("минус 20%", prompt)  # вычет доли
         self.assertIn("жирность, не вычет", prompt)
-        self.assertEqual(c.call_args.kwargs.get("model"), ai.CHAT_MODEL)  # быстрая модель
+        self.assertEqual(c.call_args.kwargs.get("model"), ai.VOICE_MODEL)  # Глеб 06.11: «умная, как ты» — сильная модель
+        self.assertIn("ПОСЛЕДНИЙ вариант", prompt)  # оговорки и поправки по ходу
+        self.assertIn("здравый смысл", prompt)
         m = self.db.q("SELECT * FROM meals WHERE user=? ORDER BY id DESC LIMIT 1", (U,))[0]
         self.assertEqual(m["title"], "Блины тонкие 200 г, Йогурт греческий Teos 2% 100 г, Банан 90 г")
         self.assertEqual((m["kcal"], m["protein"], m["fat"], m["carbs"], m["salt"], m["time"]), (613, 21.1, 20.3, 86.2, 0.9, "08:00"))
@@ -1189,6 +1191,18 @@ class BotTest(unittest.TestCase):
         self.assertIn("613 ккал", card)
         self.assertIn("💧 +550 мл", card)
         self.assertIn(f"m|del|{m['id']}", json.dumps(self.sent[-1][1].get("reply_markup"), ensure_ascii=False))
+
+    def test_voice_fixes_in_card(self):
+        # Глеб 06.11: «умная, как ты» — что понял не дословно, видно в карточке вместо совета
+        msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1"}}
+        smart = json.loads(self.SPOKEN)
+        smart["fixes"] = ["2 кг блинов — наверно 200 г", "«тэос» — Teos", "третья"]
+        with mock.patch.object(coach.media, "voice_text", return_value="блины две тыщи грамм и тэос"), \
+                mock.patch.object(ai, "claude", return_value=json.dumps(smart, ensure_ascii=False)) as c:
+            coach.on_voice(U, U, msg)
+        self.assertIn("ЕГО ЧАСТЫЕ ПРОДУКТЫ", c.call_args[0][0])  # в базе уже есть еда из бота
+        self.assertIn("Понял так: 2 кг блинов — наверно 200 г", self.texts()[-1])
+        self.assertNotIn("Норм перекус", self.texts()[-1])
 
     def test_voice_not_food_or_water_only(self):
         msg = {"chat": {"id": U, "type": "private"}, "from": {"id": U}, "voice": {"file_id": "v1"}}
@@ -2791,6 +2805,62 @@ class KcalTest(unittest.TestCase):
         with mock.patch.object(ai, "claude", return_value=BotTest.SPOKEN):
             codes = [kcal_call("/api/kcal/voice", {"text": "банан"}, token=tok).code for _ in range(coach.VOICE_RATE[0] + 1)]
         self.assertEqual((codes[0], codes[-1]), (200, 429))
+        self.assertEqual(self.meals(), 0)
+
+    def test_voice_smart(self):
+        # Глеб 06.11: «диктовка умная, как ты» — частые продукты из дневника и рецептов, «Поправить» (prev), fixes,
+        # сильная модель не ответила — быстрая
+        tok = self.pair()
+        self.db.save_kcal_days(U, {"2026-10-10": {"items": [
+            {"name": "Каша Nordic", "meal": "breakfast", "g": 110, "kcal": 396, "p": 13, "f": 7, "c": 68, "salt": 0},
+            {"name": "Банан", "meal": "snack", "g": 120, "kcal": 107, "p": 1, "f": 0, "c": 25, "salt": 0}]},
+            "2026-10-11": {"items": [{"name": "Каша Nordic", "meal": "breakfast", "g": 120, "kcal": 432, "p": 14, "f": 8, "c": 74, "salt": 0},
+                                     {"name": "", "g": 10}, {"name": "Вода?", "g": 0}]}})
+        self.db.kcal_recipes(U, [{"id": "r1", "u": 1, "name": "Сырники", "servings": 2, "out": 300,
+                                  "ings": [{"name": "Творог", "g": 200, "kcal": 242}, {"name": "Яйцо", "g": 110, "kcal": 172}]},
+                                 {"id": "r2", "u": 2, "del": True}])
+        known = coach.spoken_known(U)
+        self.assertEqual(known[0], "Каша Nordic — обычно 120 г, 360 ккал/100 г")  # чаще всех; граммы — медиана
+        self.assertIn("Банан — обычно 120 г, 89 ккал/100 г", known)
+        self.assertIn("Сырники (мой рецепт) — 138 ккал/100 г, порция 150 г", known)
+        smart = json.loads(BotTest.SPOKEN)
+        smart["fixes"] = ["«греча» — гречка", "2 кг каши — наверно 200 г, проверь", "", 5, "x" * 200, "пятая", "шестая"]
+        with mock.patch.object(ai, "claude", return_value=json.dumps(smart, ensure_ascii=False)) as c:
+            r = kcal_call("/api/kcal/voice", {"text": "греча две тыщи грамм, ой нет, двести"}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        self.assertEqual(r.json["fixes"], ["«греча» — гречка", "2 кг каши — наверно 200 г, проверь", "5", "x" * 90])
+        q = c.call_args[0][0]
+        self.assertIn("ЕГО ЧАСТЫЕ ПРОДУКТЫ", q)
+        self.assertIn("- Каша Nordic — обычно 120 г", q)
+        self.assertIn("СКАЗАЛ: «греча две тыщи грамм, ой нет, двести»", q)
+        self.assertNotIn("ПОПРАВКА:", q)
+        self.assertEqual((c.call_args.kwargs.get("model"), c.call_args.kwargs.get("effort")), (ai.VOICE_MODEL, ai.VOICE_EFFORT))
+        # «Поправить»: прежний разбор (как на экране) + поправка → весь список заново
+        prev = {"text": "гречка 200 и хлеб", "water_ml": 250, "items": [
+            {"name": "Гречка", "g": 180, "kcal": 198, "p": 7, "f": 2, "c": 38, "salt": 0.5}, {"name": "", "g": 5}, "мусор"]}
+        with mock.patch.object(ai, "claude", return_value=BotTest.SPOKEN) as c:
+            r = kcal_call("/api/kcal/voice", {"text": "хлеба не было, гречки 150", "prev": prev}, token=tok)
+        self.assertEqual(r.code, 200, r.json)
+        q = c.call_args[0][0]
+        self.assertIn("РАНЬШЕ РАЗОБРАЛ: сказал «гречка 200 и хлеб»", q)
+        self.assertIn('"name": "Гречка", "g": 180', q)
+        self.assertIn("вода: 250 мл", q)
+        self.assertIn("ПОПРАВКА: «хлеба не было, гречки 150»", q)
+        self.assertIn("Верни ВЕСЬ список заново", q)
+        self.assertEqual(coach.spoken_prev({"items": [], "water_ml": 0}), None)
+        self.assertEqual(coach.spoken_prev("гречка"), None)
+        # сильная модель не ответила — быстрая, ответ тот же
+        calls = []
+
+        def flaky(q, **kw):
+            calls.append(kw.get("model"))
+            if kw.get("model") == ai.VOICE_MODEL:
+                raise ai.AIError("долго думает")
+            return BotTest.SPOKEN
+        with mock.patch.object(ai, "claude", side_effect=flaky):
+            r = kcal_call("/api/kcal/voice", {"text": "блины"}, token=tok)
+        self.assertEqual((r.code, calls), (200, [ai.VOICE_MODEL, ai.CHAT_MODEL]))
+        self.assertEqual(r.json["fixes"], [])
         self.assertEqual(self.meals(), 0)
 
     def test_recipe_parse_limits(self):

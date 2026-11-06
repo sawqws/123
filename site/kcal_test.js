@@ -57,7 +57,8 @@ const RECIPE_PARSE = { text: 'Сырники: пачка творога 200 г, 
     { name: 'Мука пшеничная', g: 75, est: true, kcal: 256, p: 7.7, f: 0.8, c: 53, salt: 0 }, { name: 'Масло подсолнечное', g: 17, est: true, kcal: 153, p: 0, f: 17, c: 0, salt: 0 }] };
 const rsum = page => page.$$eval('#rsum > div', els => { const c = els.map(e => e.textContent.trim()), out = []; for (let i = 6; i < c.length; i += 6) out.push(c.slice(i, i + 6)); return out; }); // итог рецепта по строкам
 const digits = v => +String(v).replace(/\D/g, '');
-const VOICE = { text: 'Съел тарелку гречки с котлетой, кусок хлеба и выпил стакан воды', comment: 'Гречка — обычная тарелка, около 250 г', water_ml: 250, items: [ // ответ /api/kcal/voice (сервер подменён)
+const VOICE = { text: 'Съел тарелку гречки с котлетой, кусок хлеба и выпил стакан воды', comment: 'Гречка — обычная тарелка, около 250 г', water_ml: 250,
+  fixes: ['«греча» — гречка', 'Хлеб — кусок, около 30 г'], items: [ // ответ /api/kcal/voice (сервер подменён)
   { name: 'Гречка отварная', g: 250, lo: 200, hi: 300, sure: 'mid', kcal: 275, p: 10, f: 3, c: 52, salt: 0.5 },
   { name: 'Котлета', g: 100, lo: 85, hi: 115, sure: 'high', kcal: 230, p: 15, f: 16, c: 7, salt: 1.1 },
   { name: 'Хлеб', g: 30, lo: 20, hi: 60, sure: 'low', kcal: 75, p: 2.4, f: 0.9, c: 15, salt: 0.4 }] };
@@ -1336,6 +1337,8 @@ async function addFood(page, q, grams, meal) {
         if (mode === 'net') return r.abort('failed');
         if (mode === '401') return r.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"нужен вход"}' });
         if (mode === 'water') return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: 'Выпил пол-литра воды', items: [], water_ml: 500, comment: '' }) });
+        if (voices[voices.length - 1].body.prev) return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: 'хлеба не было, котлет две', water_ml: 250, comment: '',
+          fixes: ['Учёл: хлеба не было', 'Котлет две — 200 г'], items: [VOICE.items[0], { ...VOICE.items[1], g: 200, kcal: 460, p: 30, f: 32, c: 14, salt: 2.2, sure: 'mid' }] }) });
         return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(VOICE) });
       });
       await page.click('#addTab'); await sleep(550);
@@ -1366,6 +1369,8 @@ async function addFood(page, q, grams, meal) {
         'запись ушла на /api/kcal/voice с токеном', JSON.stringify(voices[0]).slice(0, 140));
       ok((await text(page, '#sheetTitle')) === 'Еда голосом' && (await page.locator('#found .vi').count()) === 3, 'предпросмотр: 3 позиции', await text(page, '#sheetTitle'));
       ok((await text(page, '.rec-said')).includes('тарелку гречки') && (await text(page, '.vnote')).includes('обычная тарелка'), '«Ты сказал» и комментарий', await text(page, '.rec-said'));
+      ok((await text(page, '.vfix-t')) === 'Понял так' && (await page.$$eval('.vfix-i', e => e.map(x => x.textContent))).join('|') === '«греча» — гречка|Хлеб — кусок, около 30 г'
+        && await page.isVisible('#vfixb') && (await text(page, '#vfixb')) === 'Поправить', '«Понял так» — что понял не дословно, и «Поправить»', await text(page, '.vfix'));
       ok((await page.inputValue('#pg0')) === '250' && (await text(page, '#pm0')).includes('275 ккал') && (await text(page, '#found [data-i="0"] .range')) === '≈ 200–300 г'
         && (await page.locator('#found [data-i="0"] .est').count()) === 1 && (await page.locator('#found [data-i="1"] .est').count()) === 0, 'граммы, ккал, «≈» и диапазон — как у фото', await text(page, '#found [data-i="0"]'));
       ok((await text(page, '#found [data-i="2"] .range')).includes('Проверь вес'), 'неуверенно — «Проверь вес»', await text(page, '#found [data-i="2"]'));
@@ -1411,6 +1416,32 @@ async function addFood(page, q, grams, meal) {
       ok(its.length === 3 && its.every(i => i.meal === 'lunch') && JSON.stringify(S1.days['2026-10-21'].water) === '[250]', '«Записать» — 3 позиции в «Обед» и вода 250 мл', JSON.stringify({ n: its.length, w: S1.days['2026-10-21'].water }));
       ok((await toastText(page)) === '3 блюда · 580 ккал · +250 млОтменить', 'тост «3 блюда · 580 ккал · +250 мл» — еда и вода', await toastText(page));
       ok((await text(page, '#water')).includes('0,3 из 3,5 л'), 'вода на «Сегодня» обновилась', await text(page, '#water'));
+      // «Поправить» (Глеб 06.11: «умная, как ты»): к разбору — что не так → prev (как на экране) + поправка → весь список заново
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      await page.fill('#recText', 'гречка с котлетой, хлеб и стакан воды'); await page.press('#recText', 'Enter'); await sleep(700);
+      await page.click('#found [data-i="0"] [data-d="10"]'); await sleep(120);
+      await page.click('#vwt'); await sleep(120); await page.click('#vwt'); await sleep(120); // вода снята и снова включена
+      await page.click('#mseg [data-m="dinner"]'); await sleep(200);
+      await page.click('#vfixb'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Поправить' && await page.isVisible('#mic') && await page.isVisible('#recText') && (await text(page, '#recGo')) === 'Пересчитать', 'лист «Поправить»: микрофон, поле, «Пересчитать»');
+      await shot(page, '22-voice-fix');
+      await page.click('#backBtn'); await sleep(650);
+      ok((await text(page, '#sheetTitle')) === 'Еда голосом' && (await page.inputValue('#pg0')) === '260' && (await page.getAttribute('#mseg [data-m="dinner"]', 'aria-pressed')) === 'true'
+        && (await page.locator('#found .vi').count()) === 3, '«Назад» из «Поправить» — предпросмотр как был (260 г, «Ужин»)', await page.inputValue('#pg0'));
+      const nv = voices.length;
+      await page.click('#vfixb'); await sleep(650);
+      await page.fill('#recText', 'хлеба не было, котлет две'); await page.press('#recText', 'Enter'); await sleep(700);
+      const pv = voices[nv] && voices[nv].body;
+      ok(pv && pv.text === 'хлеба не было, котлет две' && pv.prev && pv.prev.text === VOICE.text && pv.prev.water_ml === 250 && pv.prev.items.length === 3
+        && pv.prev.items[0].g === 260 && pv.prev.items[0].kcal === 286, 'ушло: поправка + разбор как на экране (гречка 260 г, вода 250)', JSON.stringify(pv).slice(0, 200));
+      ok((await text(page, '#sheetTitle')) === 'Еда голосом' && (await page.locator('#found .vi').count()) === 2 && (await page.inputValue('#pg1')) === '200'
+        && (await text(page, '.vsaid')).includes('Поправил«хлеба не было, котлет две»') && (await text(page, '.vfix')).includes('Учёл: хлеба не было')
+        && (await page.getAttribute('#mseg [data-m="dinner"]', 'aria-pressed')) === 'true', 'новый список: 2 позиции, котлеты 200 г, «Поправил …», приём пищи сохранился', await text(page, '.vsaid'));
+      await shot(page, '22-voice-fixed');
+      await page.click('#vlog'); await sleep(700);
+      its = await items(page);
+      ok(its.length === 5 && its.slice(3).every(i => i.meal === 'dinner') && its[4].g === 200 && Math.round(its[4].kcal) === 460, '«Записать» после поправки — 2 позиции в «Ужин»', JSON.stringify(its.slice(3)));
+      await page.click('#toast button'); await sleep(400);
       // только вода
       mode = 'water';
       await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
