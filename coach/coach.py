@@ -2193,6 +2193,34 @@ def tick():
         selfcheck.tick(sys.modules[__name__])
     except Exception as e:
         print("selfcheck:", e)
+    try:
+        backup_db()
+    except Exception as e:
+        print("backup:", e)
+
+
+BACKUP_KEEP = 14  # дней копий базы
+
+
+def backup_db(now=None):
+    """Копия всей базы раз в день (Глеб 06.11: «чтобы всё сохранялось»): DATA/backups/coach-ГГГГ-ММ-ДД.db, последние 14.
+    Вернуть день — coach/kcal_restore.py (из истории дня или из такой копии)."""
+    day = (now or datetime.datetime.now()).date().isoformat()
+    folder = os.path.join(DATA, "backups")
+    path = os.path.join(folder, f"coach-{day}.db")
+    if os.path.exists(path):
+        return None
+    os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    db.backup(tmp)
+    os.replace(tmp, path)
+    old = sorted(f for f in os.listdir(folder) if re.fullmatch(r"coach-\d{4}-\d{2}-\d{2}\.db", f))
+    for f in old[:-BACKUP_KEEP]:
+        try:
+            os.remove(os.path.join(folder, f))
+        except OSError:
+            pass
+    return path
 
 
 def clean_photos(days=3):
@@ -3225,6 +3253,8 @@ def kcal_clean(b, today):
         out[k] = {"items": items, "water": drinks, "type": v.get("type") if v.get("type") in ("train", "rest") else None}
         if "u" in v:  # время правки дня: на сервере остаётся более свежая версия (coach/SYNC.md, п. 5)
             out[k]["u"] = kcal_u(v["u"], k)
+            if "b" in v:  # с какой версии сервера браузер начинал правку — для слияния вместо затирания (store.save_kcal_days)
+                out[k]["b"] = kcal_u(v["b"], k)
     goals = None
     if any(k in b for k in ("goals", "salt", "water", "portion")):
         g = b.get("goals") if isinstance(b.get("goals"), dict) else {}
@@ -3330,7 +3360,28 @@ def kcal_state(uid):
             for d, v in db.kcal_last(uid, KCAL_BACK).items()}
     g = db.kcal_goals(uid) or {}
     return {"days": days, "goals": g.get("goals") or None, "salt": g.get("salt"), "water": g.get("water") or None,
-            "portion": g.get("portion"), "recipes": db.kcal_recipes(uid)}
+            "portion": g.get("portion"), "recipes": db.kcal_recipes(uid), "forma": forma_days(uid)}
+
+
+FORMA_BACK = 90  # дней еды и воды Формы в /api/kcal/state
+
+
+def forma_days(uid, back=FORMA_BACK):
+    """Еда и вода, записанные в самой Форме (бот: голос, фото, текст; Claude по просьбе; кнопки воды) — по дням:
+    {день: {meals: [{time, title, kcal, p, f, c}], water: мл}}. Глеб 06.11: «заполнял через тебя — со вчера нет вообще»:
+    «Калории» показывали их только в их день (GET /api/kcal/forma — только сегодня), со следующего дня они пропадали."""
+    today = today_of(uid)
+    since, until = (today - datetime.timedelta(days=back)).isoformat(), today.isoformat()
+    out = {}
+    for m in db.q("SELECT day, time, title, kcal, protein, fat, carbs FROM meals WHERE user=? AND day>=? AND day<=? "
+                  "ORDER BY day, time, id", (uid, since, until)):
+        out.setdefault(m["day"], {"meals": [], "water": 0})["meals"].append(
+            {"time": m["time"], "title": m["title"], "kcal": round(m["kcal"] or 0), "p": round(m["protein"] or 0),
+             "f": round(m["fat"] or 0), "c": round(m["carbs"] or 0)})
+    for w in db.q("SELECT day, SUM(ml) AS ml FROM water WHERE user=? AND day>=? AND day<=? GROUP BY day", (uid, since, until)):
+        if w["ml"]:
+            out.setdefault(w["day"], {"meals": [], "water": 0})["water"] = int(w["ml"])
+    return out
 
 
 class VoiceError(Exception):
@@ -3358,7 +3409,28 @@ def decode_audio(b):
     return raw, AUDIO_EXT.get(kind, ".webm")
 
 
-def recipe_voice(raw, ext):
+FOOD_WHISPER = os.environ.get("KCAL_WHISPER_MODEL", "small")  # Глеб 06.11: «диктовка не совсем чётко определяет» — base путал еду
+FOOD_BEAM = 3
+FOOD_HINT = ("Что съел и выпил: гречка, рис, овсянка, каша, макароны, курица, куриная грудка, котлета, говядина, индейка, "
+              "яйца, омлет, творог, йогурт, кефир, молоко, сыр, сырники, блины, банан, яблоко, хлеб, батон, суп, борщ, "
+              "салат, огурец, помидор, картошка, пюре, рыба, лосось, тунец, протеин, граммов, грамм, миллилитров, "
+              "столовая ложка, чайная ложка, тарелка, порция, половина, четверть, минус, примерно.")
+
+
+def food_words(uid):
+    """Подсказка для распознавания еды: общий словарь + его частые продукты и марки (Teos, Nordic…)."""
+    names = []
+    try:
+        for line in spoken_known(uid)[:20]:
+            n = line.split(" — ")[0].replace(" (мой рецепт)", "").replace(" (из бота)", "").strip()
+            if n and n not in names and len(n) <= 40:
+                names.append(n)
+    except Exception:  # подсказка — не главное
+        pass
+    return FOOD_HINT + (" Мои продукты: " + ", ".join(names) + "." if names else "")
+
+
+def recipe_voice(raw, ext, uid=None):
     """Звук → текст: common/voice.py (faster-whisper на процессоре сервера) отдельным процессом через media.transcribe."""
     folder = os.path.join(DATA, "voice", "kcal")
     os.makedirs(folder, exist_ok=True)
@@ -3369,8 +3441,13 @@ def recipe_voice(raw, ext):
         sec = media._seconds(path) if hasattr(media, "_seconds") else 0
         if sec > AUDIO_SECONDS + 10:
             raise ValueError("запись длиннее 2 минут — расскажи короче или напиши текстом")
-        try:
-            return media.transcribe(path, timeout=240)
+        try:  # еда: модель точнее (small) и словарь еды + его продукты; не вышло (нет модели, память) — обычная
+            try:
+                return media.transcribe(path, timeout=150, model=FOOD_WHISPER or None, prompt=food_words(uid), beam=FOOD_BEAM)
+            except media.MediaError:
+                if not FOOD_WHISPER:
+                    raise
+                return media.transcribe(path, timeout=150, prompt=food_words(uid))
         except media.MediaError as e:
             raise VoiceError(str(e)) from None
     finally:
@@ -3386,7 +3463,7 @@ def kcal_voice(uid, b):
     sure, kcal, p, f, c, salt}] — как у /api/kcal/photo, water_ml: чистая вода в мл (0 — не было), comment}.
     Ни еды, ни воды — NotFood (422)."""
     if b.get("audio"):
-        text = recipe_voice(*decode_audio(b))
+        text = recipe_voice(*decode_audio(b), uid=uid)
     else:
         text = " ".join(str(b.get("text") or "").split())
         if len(text) < 2:
@@ -3455,7 +3532,7 @@ def kcal_recipe_parse(uid, b):
     """POST /api/kcal/recipe/parse {text} | {audio, mime} → предпросмотр рецепта (ничего не сохраняет):
     {text: что сказал, name, servings, out, method, note, items: [{name, g, est, kcal, p, f, c, salt}]}."""
     if b.get("audio"):
-        text = recipe_voice(*decode_audio(b))
+        text = recipe_voice(*decode_audio(b), uid=uid)
     else:
         text = " ".join(str(b.get("text") or "").split())
         if len(text) < 3:

@@ -56,12 +56,15 @@ def whisper_python():
     return next((p for p in PYTHONS if os.path.exists(p)), None)
 
 
-def transcribe(path, timeout=300):
+def transcribe(path, timeout=300, model=None, prompt=None, beam=None):
+    """model/prompt/beam — своя модель whisper, словарь-подсказка и ширина поиска (диктовка еды: small + названия еды)."""
     py = whisper_python()
     if not py:
         raise MediaError("на сервере не установлено распознавание речи (common/setup.sh)")
+    extra = (["--model", model] if model else []) + (["--prompt", prompt[:600]] if prompt else []) + \
+        (["--beam", str(beam)] if beam else [])
     try:
-        p = subprocess.run([py, os.path.join(HERE, "voice.py"), path], capture_output=True, text=True,
+        p = subprocess.run([py, os.path.join(HERE, "voice.py"), path, *extra], capture_output=True, text=True,
                            timeout=timeout)
     except subprocess.TimeoutExpired:
         raise MediaError("голосовое слишком длинное — разбей на части") from None
