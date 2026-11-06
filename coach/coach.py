@@ -824,10 +824,25 @@ def habits_brief(uid, t):
     return esc(line)
 
 
+GROW = "иду расти"  # Глеб 06.11: «сон — для максимального роста»: отбой — последняя тренировка дня
+
+
 def regime_remind(uid, day):
-    """За remind минут до отбоя по режиму: во сколько встать, тренировка завтра, что осталось сделать вечером."""
+    """За remind минут до отбоя по режиму: во сколько встать и сколько сна выйдет, тренировка завтра, что осталось."""
     bed, lines = remind_lines(uid, day)
-    send(uid, box("🌙", f"Отбой в {bed}", "\n".join(lines)), with_app(uid, [], "📱 Открыть"))
+    send(uid, box("🌙", f"Отбой в {bed} — {GROW}", "\n".join(lines)), with_app(uid, [], "📱 Открыть"))
+
+
+def sleep_ahead(uid, day, bed, wake):
+    """(чистый сон, если лечь в bed и встать в wake; сколько нужно) в часах, как планер сна: в кровати минус засыпание,
+    × эффективность сна WHOOP за 14 ночей; нужно — WHOOP за прошлую ночь, но подростку не меньше 8,5 ч."""
+    days = insights.by_day(db, uid, (day - datetime.timedelta(days=14)).isoformat(), day.isoformat())
+    in_bed = (f_regime._mins(wake) - f_regime._mins(bed)) % 1440 - f_plan.FALL_ASLEEP
+    net = round(max(0, in_bed) * insights.sleep_eff(days, day) / 5) * 5 / 60  # до 5 минут
+    age = profile(uid).get("age")
+    floor = 8.5 if age and age < 18 else 7.5
+    last = (days.get(day.isoformat()) or {}).get("sleep") or {}
+    return net, max(last.get("need") or 0, floor)
 
 
 def remind_lines(uid, day):
@@ -835,7 +850,14 @@ def remind_lines(uid, day):
     cfg = f_regime.load(db, uid, profile(uid))
     bed, _ = f_regime.bed_wake(cfg, day)
     nxt = day + datetime.timedelta(days=1)
-    lines = [f"Подъём завтра в <b>{f_regime.bed_wake(cfg, nxt)[1]}</b>"]
+    wake = f_regime.bed_wake(cfg, nxt)[1]
+    try:  # сколько сна выйдет — той же строкой, чтобы не тратить место чек-листа
+        net, need = sleep_ahead(uid, day, bed, wake)
+        ahead = f" · сна ~{hm(net)} из {hm(need)}"
+    except Exception:  # нет данных WHOOP или сбой — напоминание всё равно уходит
+        traceback.print_exc()
+        ahead = ""
+    lines = [f"Подъём завтра в <b>{wake}</b>{ahead}"]
     if f_regime.train_on(cfg, nxt):
         lines.append(f"🏋️ Завтра тренировка в {esc(f_regime.train_time(cfg, nxt))}")
     try:  # невыполненные привычки и цели — одной строкой в этом же напоминании
