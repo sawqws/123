@@ -318,12 +318,28 @@ class ApiTest(unittest.TestCase):
         rem = [x for x in sent if "Отбой в 23:15" in x[0]]
         self.assertEqual(len(rem), 1)  # раз в день, с 22:30 (за 45 мин до 23:15)
         text, buttons = rem[0]
-        self.assertTrue(text.startswith("🌙 <b>Отбой в 23:15</b>\n<blockquote>"))
-        self.assertIn("Подъём завтра в <b>08:00</b>", text)
+        self.assertTrue(text.startswith("🌙 <b>Отбой в 23:15 — иду расти</b>\n<blockquote>"))
+        self.assertRegex(text, r"Подъём завтра в <b>08:00</b> · сна ~\d+:\d\d из \d+:\d\d\n")
         self.assertIn("Завтра тренировка в 10:00", text)  # ср — тренировка
         self.assertLessEqual(text.split("<blockquote>")[1].count("\n") + 1, 5)
         self.assertTrue(any(b.get("text") == "📱 Открыть" for row in buttons for b in row))
         self.assertIsNone(R.due(dict(copy.deepcopy(R.load(self.db, T.U)), remind=0), datetime.datetime(2026, 11, 3, 22, 40)))
+
+    def test_sleep_ahead(self):
+        """Глеб 06.11 («сон — для роста»): в напоминании об отбое — сколько чистого сна выйдет до подъёма и сколько нужно."""
+        with mock.patch.object(coach.insights, "by_day", lambda *a: {}), \
+                mock.patch.object(coach, "profile", lambda uid: {"age": 14}):
+            net, need = coach.sleep_ahead(T.U, self.TODAY, "22:00", "06:45")
+        self.assertEqual((coach.hm(net), coach.hm(need)), ("7:40", "8:30"))  # (8:45 − 15 мин) × 0,9; подростку ≥ 8,5 ч
+        days = {self.TODAY.isoformat(): {"sleep": {"need": 9.75, "efficiency": 95}}}
+        with mock.patch.object(coach.insights, "by_day", lambda *a: days), \
+                mock.patch.object(coach, "profile", lambda uid: {"age": 14}):
+            net, need = coach.sleep_ahead(T.U, self.TODAY, "23:30", "08:00")
+        self.assertEqual((coach.hm(net), coach.hm(need)), ("7:50", "9:45"))  # эффективность и потребность — из WHOOP
+        with mock.patch.object(coach, "sleep_ahead", side_effect=RuntimeError("сбой")):
+            self.call("/api/regime/save", {"cfg": CFG})
+            _, lines = coach.remind_lines(T.U, self.TODAY)
+        self.assertEqual(lines[0], "Подъём завтра в <b>08:00</b>")  # сбой расчёта — напоминание без цифры сна
 
 
 if __name__ == "__main__":
