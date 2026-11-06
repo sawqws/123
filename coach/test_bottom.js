@@ -4,9 +4,14 @@
 // 1) iPhone 14: все вкладки Формы, лист «＋ Добавить» и всё, что из него открывается (экраны — и их листы), во вкладке
 //    «Питание» — все листы «Калорий» в рамке; в каждом — фокус в поле, уход из него, закрыть. Меню Формы (.tabbar и круг
 //    «Чат») не сдвигается (прятание с клавиатурой в чате — body.kb — можно), нет прокрутки вбок, нет ошибок в консоли.
+//    Пока открыт лист «Калорий» — меню Формы уехало вниз за экран и не нажимается (body.kcal-sheet), лист стоит до низа
+//    экрана (низкий — на 8 px + полоса «Домой» выше), без щели над меню; закрыли — меню ровно на прежнем месте.
+//    Полоса «Домой» — CDP Emulation.setSafeAreaInsetsOverride (низ 34): Форма передаёт её рамке (forma-safe → --safe-b).
 // 2) Эмуляция iOS 26, приложение с экрана «Домой» (navigator.standalone, окно 430×956): поле в «Калориях» в фокусе, окно
 //    «село» до 894 — Форма не мигает; ушёл из поля / закрыл лист / кончилась запись — лечит (F.heal: слой или #app), окно
 //    снова 956, меню внизу; сдвиг visualViewport.offsetTop — scrollTo; Safari и компьютер — не трогает.
+//    Микрофон (настоящий getUserMedia, подставное устройство Chromium): кончилась запись — rec-stop, поток держим;
+//    ушли в фон — поток отпущен (дорожка ended), Форме mic-stop.
 //    Чего эмуляция не может: настоящий WebKit, клавиатуру и сам баг iOS — «лечение» здесь срабатывает по договору теста
 //    (мигнули слой или #app — окно возвращаем сами), проверяется, КОГДА Форма лечит и что меню после этого внизу.
 const { chromium, devices } = require('playwright');
@@ -70,10 +75,27 @@ async function bars(page) {
     let fx = 0;
     try { const fd = frame && frame.contentDocument; if (fd && document.body.classList.contains('tab-food')) fx = fd.documentElement.scrollWidth - fd.documentElement.clientWidth; } catch (e) { /* чужая */ }
     return { bar: r('.tabbar'), chat: r('.tabbar button[data-tab="coach"]'), hidden: !cs || cs.visibility === 'hidden' || +cs.opacity < .05 || cs.display === 'none',
-      kb: document.body.classList.contains('kb'), sx: document.documentElement.scrollWidth - innerWidth, fx, sy: Math.round(scrollY) };
+      kb: document.body.classList.contains('kb'), sx: document.documentElement.scrollWidth - innerWidth, fx, sy: Math.round(scrollY),
+      ih: innerHeight, pe: cs ? cs.pointerEvents : '', ks: document.body.classList.contains('kcal-sheet') };
   });
 }
 const sameBox = (a, b) => !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= 1);
+// открыт лист «Калорий»: меню Формы и круг «Чат» уехали вниз за экран, прозрачные и не нажимаются; нет прокрутки вбок
+async function away(page, name) {
+  const b = await bars(page);
+  ok(b.ks && b.hidden && b.pe === 'none' && b.bar[0] >= b.ih - 1 && b.chat[0] >= b.ih - 1 && b.sx <= 1 && b.fx <= 1, name,
+    `меню ${JSON.stringify(b.bar)}/${JSON.stringify(b.chat)} окно ${b.ih} спрятано ${b.hidden} pe ${b.pe} kcal-sheet ${b.ks}${b.sx > 1 ? ' вбок ' + b.sx : ''}`);
+  return b;
+}
+// низ листа «Калорий» (в координатах окна Формы) и сколько до низа окна; низкий лист — 8 px + полоса «Домой»
+async function sheetGap(page, fr) {
+  const top = await page.$eval('.kp-frame', f => f.getBoundingClientRect().top);
+  const s = await fr.evaluate(() => { const e = document.querySelector('#sheet'), b = e.getBoundingClientRect();
+    return { bottom: b.bottom, short: e.classList.contains('short'), safe: getComputedStyle(document.documentElement).getPropertyValue('--safe-b').trim(),
+      pad: getComputedStyle(document.querySelector('#sheetBody')).paddingBottom, rad: getComputedStyle(e).borderBottomLeftRadius }; });
+  const ih = await page.evaluate(() => innerHeight);
+  return { ...s, gap: Math.round((ih - (top + s.bottom)) * 2) / 2 };
+}
 async function check(page, base, name, opts = {}) {
   const b = await bars(page);
   const moved = !(b.kb && opts.kbOk) && (!sameBox(b.bar, base.bar) || !sameBox(b.chat, base.chat));
@@ -90,18 +112,19 @@ async function focusBlur(page, ctx, base, name, root, opts = {}) {  // ctx — p
   if (!el) return false;
   await el.evaluate(e => e.focus());
   await sleep(250);
-  await check(page, base, `${name}: поле в фокусе`, opts);
+  if (opts.away) await away(page, `${name}: поле в фокусе — меню спрятано`); else await check(page, base, `${name}: поле в фокусе`, opts);
   await el.evaluate(e => e.blur());
   await sleep(400);
-  await check(page, base, `${name}: ушёл из поля`, opts);
+  if (opts.away) await away(page, `${name}: ушёл из поля — меню спрятано`); else await check(page, base, `${name}: ушёл из поля`, opts);
   return true;
 }
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, name + '.png') }); };
 
-async function newPage(browser, ctxOpts, emu) {
+async function newPage(browser, ctxOpts, emu, safe) {
   const ctx = await browser.newContext({ colorScheme: 'dark', ...ctxOpts });
   await ctx.addInitScript(spy, emu || null);
   const page = await ctx.newPage();
+  if (safe) await (await ctx.newCDPSession(page)).send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 47, bottom: safe, left: 0, right: 0 } });
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') page.errors.push(m.text()); });
@@ -133,9 +156,10 @@ const closeAll = async page => {
 
 // ---------- 1) все панели, iPhone 14 ----------
 async function panels(browser) {
-  const page = await newPage(browser, { ...devices['iPhone 14'] });
+  const page = await newPage(browser, { ...devices['iPhone 14'] }, null, 34);  // iPhone с полосой «Домой» 34 px
   const base = await bars(page);
   ok(base.bar && base.bar[1] > 600, 'меню Формы внизу экрана', JSON.stringify(base));
+  ok(Math.abs(base.ih - base.bar[1] - 42) <= 1, 'меню Формы — на 8 px + полоса «Домой» (34) от низа', `${base.ih - base.bar[1]} px`);
   for (const t of ['trends', 'food', 'coach', 'today']) {
     await tab(page, t);
     if (t === 'food') await page.waitForSelector('#kcal-pane.ready', { timeout: 10000 });
@@ -191,6 +215,8 @@ async function panels(browser) {
   const fr = await kcalFrame(page);
   const kAdd = async () => (await fr.$('#addTab')).boundingBox();
   const add0 = await kAdd();
+  ok(await fr.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--safe-b').trim()) === '34px'
+    && await fr.evaluate(() => document.documentElement.style.getPropertyValue('--safe-b')) === '34px', 'Форма передала рамке полосу «Домой» (forma-safe → --safe-b 34px)');
   const meal = () => fr.evaluate(() => mealNow());
   const SHEETS = [
     ['Добавить', () => fr.click('#addTab')],
@@ -219,15 +245,19 @@ async function panels(browser) {
   for (const [name, open] of SHEETS) {
     await page.evaluate(() => { window.__ui = []; });
     try { await open(); } catch (e) { ok(false, `«Калории» → ${name}`, 'не открылся: ' + e.message.split('\n')[0]); continue; }
-    await sleep(700);
+    await sleep(800);
     const on = await fr.evaluate(() => document.querySelector('#sheet').classList.contains('on'));
     if (!ok(on, `«Калории» → ${name}: лист открыт`)) continue;
-    await check(page, base, `«Калории» → ${name}`);
+    await away(page, `«Калории» → ${name}: меню Формы уехало вниз`);
+    const g = await sheetGap(page, fr);
+    ok(g.short ? Math.abs(g.gap - 42) <= 1 : Math.abs(g.gap) <= 1 && g.rad === '0px' && g.pad === '58px',
+      `«Калории» → ${name}: ${g.short ? 'низкий лист — 8 px + полоса «Домой» над низом' : 'лист до низа экрана, без щели, отступ под полосу «Домой»'}`, JSON.stringify(g));
     const add1 = await kAdd();
-    const had = await focusBlur(page, fr, base, `«Калории» → ${name}`, '#sheetBody');
+    const had = await focusBlur(page, fr, base, `«Калории» → ${name}`, '#sheetBody', { away: true });
     if (name === 'Надиктовать') await shot(page, 'kcal-voice');
-    await fr.evaluate(() => closeSheet()); await sleep(650);
-    await check(page, base, `«Калории» → ${name}: закрыт`);
+    if (name === 'Вода') await shot(page, 'kcal-water');
+    await fr.evaluate(() => closeSheet()); await sleep(900);
+    await check(page, base, `«Калории» → ${name}: закрыт — меню на прежнем месте`);
     const add2 = await kAdd();
     ok(sameBox([add0.y, add0.x], [add2.y, add2.x]), `«Калории» → ${name}: круг «+» на месте`, JSON.stringify([add0, add1, add2]));
     const ui = await page.evaluate(() => window.__ui);
@@ -263,6 +293,9 @@ async function voiceSheet(page) {
   return fr;
 }
 const flips = page => page.evaluate(() => window.__flips.slice());
+// низ открытого листа «Калорий» в координатах окна Формы (пока лист открыт, меню Формы спрятано — «подлетает» сам лист)
+const sheetBottom = async (page, fr) => Math.round(await page.$eval('.kp-frame', f => f.getBoundingClientRect().top)
+  + await fr.evaluate(() => document.querySelector('#sheet').getBoundingClientRect().bottom));
 const heals = page => page.kb.filter(k => k.when === 'heal').map(k => k.heal);
 
 async function emulation(browser) {
@@ -275,15 +308,19 @@ async function emulation(browser) {
     await page.evaluate(() => { window.__flips = []; });
     await fr.focus('#recText'); await sleep(300);
     ok(await page.evaluate(() => document.activeElement && document.activeElement.tagName === 'IFRAME'), `${mode}: фокус в рамке «Калорий»`);
+    await away(page, `${mode}: открыт «Надиктовать» — меню Формы спрятано`);
+    ok(await sheetBottom(page, fr) === 956, `${mode}: лист «Калорий» до низа экрана`, String(await sheetBottom(page, fr)));
     await sink(page); await sleep(1500);
-    const sunk = await bars(page);
-    ok(sunk.bar[1] < base.bar[1] - 50, `${mode}: эмуляция — меню «подлетело» на 62 px`, `${base.bar[1]} → ${sunk.bar[1]}`);
+    const sunk = await sheetBottom(page, fr);
+    ok(sunk < 956 - 50, `${mode}: эмуляция — лист «подлетел» на 62 px`, `956 → ${sunk}`);
     ok((await flips(page)).length === 0, `${mode}: поле в фокусе — Форма не мигает`, (await flips(page)).join(','));
     await shot(page, `emu-${mode}-sunk`);
     await fr.evaluate(() => document.activeElement.blur()); await sleep(1800);
     const f = await flips(page);
     ok(f.includes(mode), `${mode}: ушёл из поля — Форма лечит (${mode === 'layer' ? 'слой' : '#app'})`, f.join(',') || 'не мигала');
-    await check(page, base, `${mode}: меню вернулось вниз`);
+    ok(Math.abs(await sheetBottom(page, fr) - 956) <= 1, `${mode}: лист снова до низа экрана`, String(await sheetBottom(page, fr)));
+    await fr.evaluate(() => closeSheet()); await sleep(900);
+    await check(page, base, `${mode}: закрыл лист — меню вернулось вниз, на прежнее место`);
     await sleep(1200);
     const h = heals(page);
     ok(h.some(x => x.startsWith('питание: 894→956') && x.includes(mode === 'layer' ? '(слой)' : '(#app)')), `${mode}: замер heal «питание: 894→956»`, JSON.stringify(h));
@@ -306,7 +343,8 @@ async function emulation(browser) {
     await page.context().close();
   }
 
-  // запись голоса: окно «село» во время записи, две попытки не помогли (стоп) — кончилась запись (mic-stop) — лечит снова
+  // запись голоса: окно «село» во время записи, две попытки не помогли (стоп) — кончилась запись (rec-stop) — лечит снова;
+  // поток микрофона живёт (без mic-stop), ушли в фон — отпущен (дорожка ended, mic-stop)
   {
     const page = await emuPage(browser);
     const base = await bars(page);
@@ -322,10 +360,25 @@ async function emulation(browser) {
     await page.evaluate(() => { window.__mode = 'layer'; window.__flips = []; });
     if (rec) { await fr.click('#mic'); await sleep(1800); }
     const ui = await page.evaluate(() => window.__ui);
-    if (ok(rec, 'запись: микрофон включился (подставной)', 'не включился — проверка mic-stop пропущена')) {
-      ok(ui.includes('mic-stop'), 'запись кончилась — Форма слышит mic-stop', ui.join(','));
+    if (ok(rec, 'запись: микрофон включился (подставное устройство)', 'не включился — проверка rec-stop/mic-stop пропущена')) {
+      ok(ui.includes('rec-stop') && !ui.includes('mic-stop'), 'запись кончилась — Форма слышит rec-stop; микрофон не отпущен (не спросит снова)', ui.join(','));
       ok((await flips(page)).includes('layer'), 'запись кончилась — Форма лечит (после двух неудач)', (await flips(page)).join(',') || 'не мигала');
-      await check(page, base, 'запись кончилась — меню внизу');
+      ok(Math.abs(await sheetBottom(page, fr) - 956) <= 1, 'запись кончилась — лист снова до низа экрана', String(await sheetBottom(page, fr)));
+      const tr = () => fr.evaluate(() => MIC.stream ? MIC.stream.getTracks().map(t => t.readyState + (t.enabled ? '+' : '-')).join(',') : 'нет');
+      ok(await tr() === 'live-', 'после записи поток живой, дорожка выключена', await tr());
+      await page.evaluate(() => { window.__ui = []; });
+      const t0 = await fr.evaluateHandle(() => MIC.stream.getTracks()[0]);
+      await fr.evaluate(() => { // ушли в фон (смахнул домой): visibilityState рамки — hidden
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        delete document.visibilityState; delete document.hidden;
+      });
+      await sleep(300);
+      const ui2 = await page.evaluate(() => window.__ui);
+      ok(await t0.evaluate(t => t.readyState) === 'ended' && await tr() === 'нет' && ui2.includes('mic-stop'), 'ушли в фон — микрофон отпущен (настоящая дорожка ended), Форма слышит mic-stop', ui2.join(','));
+      await fr.evaluate(() => closeSheet()); await sleep(900);
+      await check(page, base, 'закрыл лист после записи — меню внизу, на прежнем месте');
     }
     await page.context().close();
   }

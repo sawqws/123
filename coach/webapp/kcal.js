@@ -4,7 +4,10 @@
    нет его — берём у сервера по сессии Формы (POST /api/kcal/link). Рамка создаётся один раз при первом показе
    вкладки и дальше живёт (переключение вкладок — мгновенно, без перезагрузки и с той же прокруткой).
    Тема — как у Формы, смена — postMessage {type: 'forma-theme', theme}. «Калории» сообщают {type: 'kcal-changed'}
-   после сохранения — Форма тихо обновляет день (мини-карточка «Питание» и вода на главной). */
+   после сохранения — Форма тихо обновляет день (мини-карточка «Питание» и вода на главной).
+   Низ экрана: в рамке env(safe-area-inset-bottom) = 0, поэтому Форма передаёт свой (F.safeBottom → --bottom):
+   postMessage {type: 'forma-safe', bottom} при загрузке рамки и при каждой смене. Пока у «Калорий» открыт лист
+   (sheet-open … sheet-close), меню Формы уезжает вниз (body.kcal-sheet, kcal.css) — лист стоит до низа экрана, как в iOS. */
 (window.FormaModules = window.FormaModules || []).push(F => {
   const { S, api } = F;
   const TOKEN = 'kcal.token';
@@ -14,7 +17,14 @@
     set(k, v) { try { localStorage.setItem(k, v); return localStorage.getItem(k) === v; } catch (e) { return false; } },
   };
   const theme = () => document.documentElement.classList.contains('lt') ? 'light' : 'dark';
-  let pane = null, frame = null, ready = false, sent = null, timer = 0, opening = false;
+  let pane = null, frame = null, ready = false, sent = null, timer = 0, opening = false, safeSent = null, sheetT = 0;
+  const root = document.documentElement;
+  const safe = () => Math.max(0, Math.round(parseFloat(root.style.getPropertyValue('--bottom')) || 0));  // F.safeBottom (more.js)
+  const sheet = on => {  // лист «Калорий» открыт — меню Формы прячется; закрыли — возвращается (закрыл и сразу открыл другой — не мигает)
+    clearTimeout(sheetT);
+    if (on) document.body.classList.add('kcal-sheet');
+    else sheetT = setTimeout(() => document.body.classList.remove('kcal-sheet'), 90);
+  };
 
   // каркас, похожий на «Калории», пока они грузятся: сегменты, кольцо дня, приёмы пищи
   const SKEL = `<div class="kp-sk" aria-hidden="true"><div class="kp-seg"><i class="sk"></i><i class="sk"></i><i class="sk"></i><i class="sk"></i></div>
@@ -29,7 +39,9 @@
     pane.setAttribute('aria-label', 'Питание');
     pane.innerHTML = SKEL + `<div class="kp-err card" hidden><div class="empty"><span class="e">⚠️</span><b>Питание не открылось</b><span class="kp-msg"></span></div>
       <button class="btn primary" data-a="kcal-retry">Повторить</button></div>`;
-    document.body.append(pane);
+    const dim = document.createElement('div');  // затемнение и над рамкой (полоса под чёлкой), пока открыт лист «Калорий»
+    dim.className = 'kp-dim'; dim.setAttribute('aria-hidden', 'true');
+    document.body.append(pane, dim);
     open();
   }
   function fail(e) {
@@ -53,7 +65,8 @@
       shared = ls.set(TOKEN, tok);  // нет хранилища — отдадим токен «Калориям» через #pair= (они его прочтут и уберут)
     }
     if (frame) frame.remove();
-    ready = false; pane.classList.remove('ready');
+    ready = false; pane.classList.remove('ready'); safeSent = null;
+    clearTimeout(sheetT); document.body.classList.remove('kcal-sheet');  // новая рамка — листов в ней нет
     const frameTheme = theme();
     frame = document.createElement('iframe');
     frame.className = 'kp-frame';
@@ -64,6 +77,7 @@
       requestAnimationFrame(() => pane.classList.add('ready'));
       sent = frameTheme;
       if (theme() !== sent) post();  // тему сменили, пока грузилось
+      postSafe();
     });
     frame.src = `/kcal/?embed=1&theme=${frameTheme}${shared ? '' : '#pair=' + encodeURIComponent(tok)}`;
     pane.append(frame);
@@ -73,9 +87,17 @@
     sent = theme();
     try { frame.contentWindow.postMessage({ type: 'forma-theme', theme: sent }, location.origin); } catch (e) { /* рамка уже ушла */ }
   }
-  // тема Формы меняется классом html.lt (theme() в app.js: Telegram, система) — следим за ним, а не за каждым местом смены
-  new MutationObserver(() => { if (ready && theme() !== sent) post(); })
-    .observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  function postSafe() {  // низ экрана Формы → «Калориям» (их --safe-b: отступ листов над полосой «Домой»)
+    if (!frame || !ready || !frame.contentWindow) return;
+    const b = safe();
+    if (b === safeSent) return;
+    safeSent = b;
+    try { frame.contentWindow.postMessage({ type: 'forma-safe', bottom: b }, location.origin); } catch (e) { /* рамка уже ушла */ }
+  }
+  // тема Формы меняется классом html.lt (theme() в app.js: Telegram, система) — следим за ним, а не за каждым местом смены;
+  // низ экрана — html[data-bottom], его ставит F.safeBottom при каждом пересчёте
+  new MutationObserver(() => { if (ready && theme() !== sent) post(); postSafe(); })
+    .observe(root, { attributes: true, attributeFilter: ['class', 'data-bottom'] });
 
   // «Калории» что-то сохранили → тихо обновить день Формы (с паузой: подряд несколько правок — один запрос)
   async function pull() {
@@ -96,10 +118,11 @@
   });
   // iPhone, приложение с экрана «Домой» (iOS 26): после клавиатуры окно «садится» и меню Формы висит выше (F.heal, more.js).
   // Поле — внутри рамки, и Форма сама не видит, когда клавиатура закрылась, — «Калории» говорят: focus/blur поля,
-  // sheet-open/sheet-close, mic-stop. Набор кончился, лист закрыт или открыт, микрофон выключен — проверить окно и вылечить;
-  // поле в фокусе — ничего (F.heal ещё и сам смотрит в рамку: typingNow)
+  // sheet-open/sheet-close, rec-stop (запись кончилась), mic-stop (микрофон отпущен). Набор кончился, лист закрыт или открыт,
+  // запись кончилась — проверить окно и вылечить; поле в фокусе — ничего (F.heal ещё и сам смотрит в рамку: typingNow)
   function ui(what) {
-    if (!F.healSoon || !['blur', 'sheet-open', 'sheet-close', 'mic-stop'].includes(what)) return;
+    if (what === 'sheet-open' || what === 'sheet-close') sheet(what === 'sheet-open');
+    if (!F.healSoon || !['blur', 'sheet-open', 'sheet-close', 'rec-stop', 'mic-stop'].includes(what)) return;
     F.healSoon('питание', 350, 900);
     if (what === 'blur' && F.kbProbe) F.kbProbe('kcal-blur');  // замер (meta kb:<uid>) — не чаще раза в 20 с
   }

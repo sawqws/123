@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 
 const ROOT = path.join(__dirname, '..', 'docs');
-const PORT = 8771;
+const PORT = +process.env.KCAL_PORT || 8771; // свой порт — KCAL_PORT=8783 (если рядом гоняют ещё один прогон)
 const URL = `http://localhost:${PORT}/kcal/`;
 const API = `http://localhost:${PORT}`; // на своём домене «Калории» ходят на свой же адрес (coach/SYNC.md §5)
 const FORMA_API = 'https://coach.2-27-206-165.sslip.io'; // на github.io — сервер Формы
@@ -38,6 +38,7 @@ async function newPage(browser, opts = {}) {
   page.on('console', m => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && page.errors.push(m.text()));
   page.on('dialog', d => d.accept());
   if (opts.seed) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('kcal.v1', s); sessionStorage.setItem('seeded', 1); } }, JSON.stringify(opts.seed));
+  if (opts.mic) await ctx.addInitScript(fakeMic);
   if (opts.init) await ctx.addInitScript(opts.init);
   await page.goto((opts.url || URL) + (opts.hash || ''));
   await sleep(700);
@@ -50,6 +51,33 @@ const items = async page => (await state(page))?.days['2026-10-21']?.items || []
 const sum = (arr, k) => arr.reduce((a, i) => a + (i[k] || 0), 0);
 const toastText = page => page.textContent('#toast');
 const dayTypeOf = (S, d) => S.days[d].type || S.days[d].ftype;
+// приложение ушло в фон и вернулось (iPhone: смахнул домой) — document.visibilityState 'hidden' → 'visible'
+const toBackground = page => page.evaluate(() => {
+  const set = v => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => v }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => v === 'hidden' }); };
+  set('hidden'); document.dispatchEvent(new Event('visibilitychange'));
+  set('visible'); document.dispatchEvent(new Event('visibilitychange'));
+});
+// подставной микрофон: getUserMedia считает вызовы, поток — одна живая дорожка (stop() её завершает, считаем остановки);
+// таймер «отпустить через 3 минуты» (setTimeout(micDrop, 180000)) не ждём — он лежит в __mic.keep, тест зовёт его сам
+function fakeMic() {
+  window.__mic = { calls: 0, stopped: 0, keep: null };
+  navigator.mediaDevices.getUserMedia = async () => {
+    __mic.calls++;
+    const t = { kind: 'audio', enabled: true, readyState: 'live', stop() { if (this.readyState !== 'ended') { this.readyState = 'ended'; __mic.stopped++; } } };
+    __mic.track = t; return { getTracks: () => [t] };
+  };
+  window.MediaRecorder = class { constructor(s, o) { this.mimeType = (o && o.mimeType) || ''; this.state = 'inactive'; __mic.live = s.getTracks()[0].enabled; }
+    static isTypeSupported(t) { return t === 'audio/mp4'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; setTimeout(() => { this.ondataavailable && this.ondataavailable({ data: new Blob([new Uint8Array(3000).fill(7)], { type: 'audio/mp4' }) }); this.onstop && this.onstop(); }, 20); } };
+  const st = window.setTimeout, ct = window.clearTimeout;
+  window.setTimeout = function (f, ms, ...a) {
+    if (ms === 180000 && f === window.micDrop) { const id = st(() => {}, 2147483647); __mic.keep = { id, f }; return id; }
+    return st.call(window, f, ms, ...a);
+  };
+  window.clearTimeout = function (id) { if (__mic.keep && __mic.keep.id === id) __mic.keep = null; return ct.call(window, id); };
+}
+const threeMin = page => page.evaluate(() => { const k = __mic.keep; __mic.keep = null; if (k) k.f(); return !!k; }); // «прошло 3 минуты»
 
 const RECIPE_PARSE = { text: 'Сырники: пачка творога 200 г, 2 яйца, 3 ложки муки, жарил на масле, вышло 2 порции', name: 'Сырники', servings: 2, out: 0,
   method: 'жарка на масле', note: '2 яйца ≈ 110 г, 3 ложки муки ≈ 75 г', items: [ // ответ /api/kcal/recipe/parse (сервер подменён)
@@ -695,13 +723,23 @@ async function addFood(page, q, grams, meal) {
       ok(fab.y + fab.height <= H - 90, 'embed: «+» выше меню Формы', JSON.stringify(fab));
       ok(!(await page.textContent('body')).includes('Домой'), 'embed: без подсказок «На экран Домой»');
       ok(await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(r => r.length)) === 0, 'embed: свой service worker не регистрируется');
-      // лист добавления целиком виден над меню Формы
+      // листы — до низа экрана, как обычные листы iOS (Глеб 06.11: «расстояние между панелью и главным меню»): пока лист открыт,
+      // меню Формы уезжает вниз (sheet-open → body.kcal-sheet в Форме); полоса «Домой» — от Формы (forma-safe → --safe-b)
+      const ui = () => page.evaluate(() => window.__msgs.filter(m => m && m.type === 'kcal-ui').map(m => m.what));
+      const safeB = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--safe-b').trim());
       await page.click('#addTab'); await sleep(700);
       let sh = await page.locator('#sheet').boundingBox();
-      ok(sh.y >= 0 && sh.y + sh.height <= H - 90 + 1, 'embed: лист «Добавить» целиком над меню Формы', JSON.stringify(sh));
+      ok(sh.y >= 0 && Math.abs(sh.y + sh.height - H) <= 1 && (await ui()).includes('sheet-open'), 'embed: лист «Добавить» — до низа экрана, Форме — sheet-open', JSON.stringify(sh));
+      ok(await page.$eval('#sheet', e => getComputedStyle(e).borderBottomLeftRadius) === '0px', 'embed: снизу лист без скругления (стоит на краю экрана)');
+      await page.evaluate(() => window.postMessage({ type: 'forma-safe', bottom: 34 }, location.origin)); await sleep(150);
+      ok(await safeB() === '34px' && await page.$eval('#sheetBody', e => getComputedStyle(e).paddingBottom) === '58px', 'embed: forma-safe 34 → отступ листа над полосой «Домой» (24 + 34 px)', await safeB());
+      await page.evaluate(() => window.postMessage({ type: 'forma-safe', bottom: 'x' }, location.origin)); await sleep(100);
+      await page.evaluate(() => window.postMessage({ type: 'forma-safe', bottom: 900 }, location.origin)); await sleep(100);
+      ok(await safeB() === '80px', 'embed: forma-safe — не число не берём, больше 80 — 80', await safeB());
+      await page.evaluate(() => window.postMessage({ type: 'forma-safe', bottom: 34 }, location.origin)); await sleep(100);
       await page.fill('#q', 'банан'); await sleep(150); await page.click('#results [data-k] >> nth=0'); await sleep(500);
       const okb = await page.locator('#ok').boundingBox();
-      ok(okb && okb.y + okb.height <= H - 90, 'embed: кнопка «Добавить» в листе не под меню Формы', JSON.stringify(okb));
+      ok(okb && okb.y + okb.height <= H - 34, 'embed: кнопка «Добавить» в листе — над полосой «Домой»', JSON.stringify(okb));
       await page.click('#ok'); await sleep(700);
       ok((await page.evaluate(() => window.__msgs)).some(m => m && m.type === 'kcal-changed'), 'embed: после сохранения — kcal-changed наверх', JSON.stringify(await page.evaluate(() => window.__msgs)));
       // без связи: фото — без кода, в настройках — без «Связать/Подключить»
@@ -710,8 +748,9 @@ async function addFood(page, q, grams, meal) {
       await page.click('#gear'); await sleep(600);
       ok(!(await page.$('#pairBtn')), 'embed: в настройках нет «Связать с Формой»');
       sh = await page.locator('#sheet').boundingBox();
-      ok(sh.y >= 0 && sh.y + sh.height <= H - 90 + 1, 'embed: высокий лист «Настройки» над меню Формы', JSON.stringify(sh));
+      ok(sh.y >= 0 && Math.abs(sh.y + sh.height - H) <= 1, 'embed: высокий лист «Настройки» — до низа экрана', JSON.stringify(sh));
       await page.click('#sheetClose'); await sleep(600);
+      ok((await ui()).includes('sheet-close'), 'embed: закрыл лист — Форме sheet-close (меню возвращается)', (await ui()).join(','));
       // разделы: сегменты, линза едет, прилипают при прокрутке
       const th0 = await page.$eval('#eseg .thumb', e => e.style.transform);
       await page.click('#eseg [data-tab=history]'); await sleep(700);
@@ -719,7 +758,7 @@ async function addFood(page, q, grams, meal) {
       ok(await page.$eval('#eseg .thumb', e => e.style.transform) !== th0, 'embed: линза сегментов переехала');
       await page.click('#addW'); await sleep(600);
       sh = await page.locator('#sheet').boundingBox();
-      ok(sh.y + sh.height <= H - 90, 'embed: низкий лист (вес) над меню Формы', JSON.stringify(sh));
+      ok(Math.abs(sh.y + sh.height - (H - 8 - 34)) <= 1, 'embed: низкий лист (вес) — над полосой «Домой» (8 + 34 px от низа)', JSON.stringify(sh));
       await page.click('#sheetClose'); await sleep(600);
       await page.evaluate(() => scrollTo(0, 0)); await sleep(400); // кнопка веса внизу — страница прокрутилась, панель уехала; вверху — снова видна
       await page.click('#eseg [data-tab=today]'); await sleep(700);
@@ -1250,7 +1289,8 @@ async function addFood(page, q, grams, meal) {
         localStorage.setItem('kcal.token', 'tokv');
         window.__mic = { calls: 0, deny: false, stopped: 0 };
         navigator.mediaDevices.getUserMedia = async () => { __mic.calls++; if (__mic.deny) { const e = new Error('нет'); e.name = 'NotAllowedError'; throw e; }
-          return { getTracks: () => [{ stop() { __mic.stopped++; } }] }; };
+          const t = { kind: 'audio', enabled: true, readyState: 'live', stop() { if (this.readyState !== 'ended') { this.readyState = 'ended'; __mic.stopped++; } } };
+          __mic.track = t; return { getTracks: () => [t] }; };
         window.MediaRecorder = class { constructor(s, o) { this.mimeType = (o && o.mimeType) || ''; this.state = 'inactive'; __mic.opts = o; }
           static isTypeSupported(t) { return t === 'audio/mp4'; }
           start() { this.state = 'recording'; }
@@ -1270,7 +1310,8 @@ async function addFood(page, q, grams, meal) {
       await shot(page, '21-recipe-listening');
       await page.click('#mic'); await sleep(900);
       ok(parses.length === 1 && parses[0].audio.startsWith('data:audio/mp4;base64,') && parses[0].mime === 'audio/mp4' && !parses[0].text, 'нажал ещё раз — запись ушла на сервер', JSON.stringify(parses[0]).slice(0, 120));
-      ok(await page.evaluate(() => __mic.stopped) === 1, 'микрофон выключен после записи');
+      ok(await page.evaluate(() => __mic.track.enabled === false && __mic.stopped === 0), 'после записи дорожка выключена, поток держим (не спросит снова)',
+        JSON.stringify(await page.evaluate(() => [__mic.track.enabled, __mic.stopped])));
       ok((await text(page, '#sheetTitle')) === 'Новый рецепт' && (await page.locator('#ings .ing').count()) === 4, 'голос → предпросмотр');
       // удержание: держал ~1 с и отпустил — стоп
       await page.click('#backBtn'); await sleep(650);
@@ -1289,7 +1330,9 @@ async function addFood(page, q, grams, meal) {
       await page.click('#backBtn'); await sleep(650);
       await page.click('#mic'); await sleep(1200); await page.click('#mic'); await sleep(700);
       ok((await text(page, '#recSt')).includes('Голос не распознан') && (await text(page, '#recSt')).includes('текстом') && (await text(page, '#sheetTitle')) === 'Мой рецепт', 'голос не распознан — «напиши текстом»', await text(page, '#recSt'));
-      // отказ в доступе к микрофону
+      ok(await page.evaluate(() => __mic.calls) === 1, 'три записи — разрешение спросили один раз', String(await page.evaluate(() => __mic.calls)));
+      // отказ в доступе к микрофону (поток отпущен — ушли в фон — и следующая запись спрашивает снова)
+      await toBackground(page);
       await page.evaluate(() => { __mic.deny = true; });
       await page.click('#mic'); await sleep(400);
       ok((await text(page, '#recSt')).includes('Нет доступа к микрофону') && (await text(page, '#recSt')).includes('текстом') && !(await page.evaluate(() => document.querySelector('#mic').classList.contains('on'))), 'отказ — понятный текст, можно писать', await text(page, '#recSt'));
@@ -1302,7 +1345,8 @@ async function addFood(page, q, grams, meal) {
       ok(parses.length === n0 && (await text(page, '#recSt')).includes('Нажми и говори'), '«Отменить запись» — ничего не ушло');
       const st0 = await page.evaluate(() => __mic.stopped);
       await page.click('#mic'); await sleep(800); await page.keyboard.press('Escape'); await sleep(600);
-      ok(await page.evaluate(() => __mic.stopped) === st0 + 1 && parses.length === n0 && await page.isHidden('#sheet'), 'закрыл лист во время записи — микрофон выключен, ничего не ушло');
+      ok(await page.evaluate(() => __mic.stopped) === st0 && !(await page.evaluate(() => __mic.track.enabled)) && parses.length === n0 && await page.isHidden('#sheet'),
+        'закрыл лист во время записи — запись стоп, ничего не ушло, дорожка выключена');
       ok(page.errors.length === 0, 'нет ошибок в консоли (голос)', page.errors.join(' | '));
       await ctx.close();
     }
@@ -1332,15 +1376,7 @@ async function addFood(page, q, grams, meal) {
        как у фото + вода → правка граммов, ×, снятие воды, приём пищи → «Записать» (еда и вода), «Отменить»; только вода; 422, сеть, 401 */
     {
       const voices = []; let mode = 'ok';
-      const { ctx, page } = await newPage(browser, { init: () => {
-        localStorage.setItem('kcal.token', 'tokvc');
-        window.__mic = { calls: 0, stopped: 0 };
-        navigator.mediaDevices.getUserMedia = async () => { __mic.calls++; return { getTracks: () => [{ stop() { __mic.stopped++; } }] }; };
-        window.MediaRecorder = class { constructor(s, o) { this.mimeType = (o && o.mimeType) || ''; this.state = 'inactive'; }
-          static isTypeSupported(t) { return t === 'audio/mp4'; }
-          start() { this.state = 'recording'; }
-          stop() { this.state = 'inactive'; setTimeout(() => { this.ondataavailable && this.ondataavailable({ data: new Blob([new Uint8Array(3000).fill(7)], { type: 'audio/mp4' }) }); this.onstop && this.onstop(); }, 20); } };
-      } });
+      const { ctx, page } = await newPage(browser, { mic: true, init: () => localStorage.setItem('kcal.token', 'tokvc') });
       await ctx.route(API + '/api/kcal/voice', async r => {
         voices.push({ body: JSON.parse(r.request().postData()), auth: r.request().headers().authorization });
         if (mode === 'slow') await sleep(3300);
@@ -1373,7 +1409,7 @@ async function addFood(page, q, grams, meal) {
       await shot(page, '22-voice-listening');
       mode = 'slow';
       await page.click('#mic'); await sleep(350);
-      ok((await text(page, '#recSt')).startsWith('Слушаю…') && await page.evaluate(() => __mic.stopped) === 1, 'отпустил — «Слушаю…», микрофон выключен', await text(page, '#recSt'));
+      ok((await text(page, '#recSt')).startsWith('Слушаю…') && await page.evaluate(() => __mic.track.enabled === false && __mic.stopped === 0), 'отпустил — «Слушаю…», дорожка выключена (поток держим)', await text(page, '#recSt'));
       await sleep(2500);
       ok((await text(page, '#recSt')).startsWith('Считаю…'), 'потом — «Считаю…»', await text(page, '#recSt'));
       await sleep(1100);
@@ -1475,13 +1511,87 @@ async function addFood(page, q, grams, meal) {
       ok((await text(page, '#recSt')).includes('Нет связи с сервером') && !(await page.evaluate(() => document.querySelector('#mic').disabled)), 'нет сети — «Нет связи с сервером»', await text(page, '#recSt'));
       const st0 = await page.evaluate(() => __mic.stopped), n0 = voices.length;
       await page.click('#mic'); await sleep(800); await page.keyboard.press('Escape'); await sleep(600);
-      ok(await page.evaluate(() => __mic.stopped) === st0 + 1 && voices.length === n0 && await page.isHidden('#sheet'), 'Esc во время записи — лист закрыт, микрофон выключен, ничего не ушло');
+      ok(await page.evaluate(() => __mic.stopped === 0 && !__mic.track.enabled && !!__mic.keep) && voices.length === n0 && await page.isHidden('#sheet'),
+        'Esc во время записи — запись остановлена, ничего не ушло, лист закрыт (поток — ещё 3 минуты)', JSON.stringify(await page.evaluate(() => [__mic.stopped, __mic.track.enabled, !!__mic.keep])));
+      ok(await threeMin(page) && await page.evaluate(() => __mic.stopped) === st0 + 1 && await page.evaluate(() => __mic.calls) === 1, '3 минуты без записи — микрофон отпущен (за весь раздел спросили один раз)');
       mode = '401';
       await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
       await page.fill('#recText', 'банан'); await page.click('#recGo'); await sleep(700);
       ok(await page.evaluate(() => localStorage.getItem('kcal.token')) === null && await page.isVisible('#code') && (await text(page, '.portion .title')) === 'Еда голосом'
         && (await toastText(page)).includes('Связь с Формой потеряна'), '401 — «Связь с Формой потеряна» и экран кода', await toastText(page));
       ok(page.errors.length === 0, 'нет ошибок в консоли (надиктовать)', page.errors.join(' | '));
+      await ctx.close();
+    }
+    /* 22б. Микрофон спрашивают один раз (Глеб 06.11: «каждый раз просит разрешение»): общий поток на страницу — записи подряд,
+       «Поправить» и «Мой рецепт» без нового getUserMedia; ушёл в фон — поток отпущен (идущая запись кончается как по кнопке),
+       следующая запись спрашивает снова; закрыл лист — поток живёт ещё 3 минуты, потом отпущен; внутри Формы — mic-stop */
+    {
+      const voices = []; let parses = 0;
+      const { ctx, page } = await newPage(browser, { mic: true, url: URL + '?embed=1&theme=dark', init: () => {
+        localStorage.setItem('kcal.token', 'tokmic'); window.__msgs = []; addEventListener('message', e => window.__msgs.push(e.data)); } });
+      await ctx.route(API + '/api/kcal/voice', r => { const b = JSON.parse(r.request().postData()); voices.push(b);
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(b.prev ? { ...VOICE, text: 'хлеба не было', items: VOICE.items.slice(0, 2) } : VOICE) }); });
+      await ctx.route(API + '/api/kcal/recipe/parse', r => { parses++; return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(RECIPE_PARSE) }); });
+      const m = () => page.evaluate(() => ({ calls: __mic.calls, stopped: __mic.stopped, on: __mic.track ? __mic.track.enabled : null,
+        state: __mic.track ? __mic.track.readyState : null, keep: !!__mic.keep, live: __mic.live }));
+      const ui = () => page.evaluate(() => window.__msgs.filter(x => x && x.type === 'kcal-ui').map(x => x.what));
+      const say = async () => { await page.click('#mic'); await sleep(1200); await page.click('#mic'); await sleep(700); };
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      await say();
+      let s = await m();
+      ok(voices.length === 1 && !!voices[0].audio && s.calls === 1 && s.live === true && s.on === false && s.stopped === 0,
+        'первая запись: спросили микрофон; после неё дорожка выключена, поток живёт', JSON.stringify(s));
+      ok((await ui()).includes('rec-stop') && !(await ui()).includes('mic-stop'), 'Форме: запись кончилась (rec-stop), микрофон не отпущен (без mic-stop)', (await ui()).join(','));
+      await page.click('#backBtn'); await sleep(650);
+      await say();
+      s = await m();
+      ok(voices.length === 2 && !!voices[1].audio && s.calls === 1 && s.live === true, 'вторая запись подряд — без нового разрешения (тот же поток, на запись дорожка включена)', JSON.stringify(s));
+      await page.click('#vfixb'); await sleep(650);
+      ok(!(await m()).keep, '«Поправить» открыт — поток не отпускаем');
+      await say();
+      s = await m();
+      ok(voices.length === 3 && !!voices[2].audio && !!voices[2].prev && s.calls === 1 && s.stopped === 0, '«Поправить» голосом — тот же поток, без вопроса', JSON.stringify(s));
+      await page.keyboard.press('Escape'); await sleep(600);
+      s = await m();
+      ok(s.keep && s.stopped === 0 && await page.isHidden('#sheet'), 'закрыл лист — поток ещё держим (отпустим через 3 минуты)', JSON.stringify(s));
+      await page.click('#addTab'); await sleep(550); await page.click('#recipeCta'); await sleep(650);
+      ok(!(await m()).keep, 'открыл «Мой рецепт» — таймер снят');
+      await say();
+      s = await m();
+      ok(parses === 1 && (await text(page, '#sheetTitle')) === 'Новый рецепт' && s.calls === 1, '«Мой рецепт» голосом — тот же поток', JSON.stringify(s));
+      // ушёл в фон (на предпросмотре) — поток отпущен, Форме mic-stop; следующая запись спрашивает снова
+      await page.evaluate(() => { window.__msgs = []; });
+      await toBackground(page); await sleep(100);
+      s = await m();
+      ok(s.stopped === 1 && s.state === 'ended' && (await ui()).includes('mic-stop'), 'ушёл в фон — микрофон отпущен (дорожка остановлена), Форме mic-stop', JSON.stringify(s) + ' ' + (await ui()).join(','));
+      await page.click('#backBtn'); await sleep(650);
+      await say();
+      s = await m();
+      ok(parses === 2 && s.calls === 2 && s.live === true && (await text(page, '#sheetTitle')) === 'Новый рецепт', 'после фона запись снова спрашивает разрешение', JSON.stringify(s));
+      // ушёл в фон во время записи — запись кончилась как по кнопке и ушла, поток отпущен
+      await page.click('#backBtn'); await sleep(650);
+      await page.click('#mic'); await sleep(1200);
+      await toBackground(page); await sleep(800);
+      s = await m();
+      ok(parses === 3 && s.stopped === 2 && (await text(page, '#sheetTitle')) === 'Новый рецепт', 'ушёл в фон во время записи — запись кончилась и ушла, микрофон отпущен', JSON.stringify(s));
+      // «Отменить запись» — поток живёт; Esc во время записи — запись стоп, ничего не ушло, лист закрыт, поток — 3 минуты
+      await page.click('#backBtn'); await sleep(650);
+      await page.click('#mic'); await sleep(1200); await page.click('#recCancel'); await sleep(400);
+      s = await m();
+      ok(parses === 3 && s.calls === 3 && s.on === false && s.stopped === 2 && !s.keep, '«Отменить запись» — ничего не ушло, дорожка выключена, поток живёт', JSON.stringify(s));
+      await page.click('#mic'); await sleep(900); await page.keyboard.press('Escape'); await sleep(600);
+      s = await m();
+      ok(parses === 3 && s.calls === 3 && s.on === false && s.stopped === 2 && s.keep && await page.isHidden('#sheet'), 'Esc во время записи — запись стоп, ничего не ушло, лист закрыт; поток — ещё 3 минуты', JSON.stringify(s));
+      await page.evaluate(() => { window.__msgs = []; });
+      ok(await threeMin(page) && (await m()).stopped === 3 && (await m()).state === 'ended' && (await ui()).includes('mic-stop'), '3 минуты без записи — микрофон отпущен, Форме mic-stop', JSON.stringify(await m()));
+      await page.click('#addTab'); await sleep(550); await page.click('#voiceCta'); await sleep(650);
+      await say();
+      ok((await m()).calls === 4 && voices.length === 4, 'после 3 минут — снова спрашивает', JSON.stringify(await m()));
+      // два быстрых нажатия, пока спрашиваем, — один запрос
+      await toBackground(page); await page.click('#backBtn'); await sleep(650);
+      await page.evaluate(() => Promise.all([micGet(), micGet()]).then(([a, b]) => { window.__same = a === b; micOn(false); }));
+      ok((await m()).calls === 5 && await page.evaluate(() => window.__same), 'два запроса потока сразу — один getUserMedia', JSON.stringify(await m()));
+      ok(page.errors.length === 0, 'нет ошибок в консоли (микрофон один раз)', page.errors.join(' | '));
       await ctx.close();
     }
     /* 22а. Без связи с Формой — «Надиктовать» просит связать; узкий iPhone SE — всё влезает; внутри Формы (?embed=1) — записывает */
