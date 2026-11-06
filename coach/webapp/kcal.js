@@ -92,7 +92,17 @@
     const t = ev.data && ev.data.type;
     if (t === 'kcal-changed') { clearTimeout(timer); timer = setTimeout(pull, PULL_AFTER); }
     else if (t === 'kcal-auth') open(true);  // «Калориям» не подошёл токен — новый по сессии Формы, без кода
+    else if (t === 'kcal-ui') ui(ev.data.what);
   });
+  // iPhone, приложение с экрана «Домой» (iOS 26): после клавиатуры окно «садится» и меню Формы висит выше (F.heal, more.js).
+  // Поле — внутри рамки, и Форма сама не видит, когда клавиатура закрылась, — «Калории» говорят: focus/blur поля,
+  // sheet-open/sheet-close, mic-stop. Набор кончился, лист закрыт или открыт, микрофон выключен — проверить окно и вылечить;
+  // поле в фокусе — ничего (F.heal ещё и сам смотрит в рамку: typingNow)
+  function ui(what) {
+    if (!F.healSoon || !['blur', 'sheet-open', 'sheet-close', 'mic-stop'].includes(what)) return;
+    F.healSoon('питание', 350, 900);
+    if (what === 'blur' && F.kbProbe) F.kbProbe('kcal-blur');  // замер (meta kb:<uid>) — не чаще раза в 20 с
+  }
 
   F.actions['kcal-retry'] = () => { F.haptic('tap'); open(); };
   // сама вкладка: содержимое — рамка #kcal-pane поверх области вкладки (body.tab-food, app.js), в #view пусто
