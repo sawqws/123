@@ -310,7 +310,7 @@
         b: root.dataset.bottom || '', full: full.h, heal: lastHeal,
         top: r ? Math.round(r.top) : -1, bottom: r ? Math.round(r.bottom) : -1, btop: Math.round(b.top), bh: Math.round(b.height),
         bar: br ? Math.round(br.top) : -1, barb: br ? Math.round(br.bottom) : -1, sy: Math.round(scrollY),
-        focus: document.activeElement?.id === 'q', kb: document.body.classList.contains('kb'),
+        focus: typingNow(), kb: document.body.classList.contains('kb'),
         app: standalone, tg: !!(F.tg && F.tg.initData), ua: navigator.userAgent.slice(0, 160) }).catch(() => {});
     }, wait);
   };
@@ -370,21 +370,40 @@
   // убираем и возвращаем элемент во весь экран (display), WebKit пересчитывает окно. Сначала пустой служебный слой
   // (ничего не трогает), не помогло — #app целиком (прокрутка возвращается, анимации сразу в конец — без повторного «выезда»).
   // Только iPhone + экран «Домой», не в Telegram; не чаще раза в 0,5 с и 6 раз в минуту; два раза подряд не помогло — ждём,
-  // пока высота окна сама сменится. Итог — в замер (heal).
+  // пока высота окна сама сменится или будет явный повод (F.healSoon). Итог — в замер (heal).
+  // «Питание» (Глеб 06.11: «в диктовке опять подлетает»): поле — в рамке «Калорий», родитель не получает её focusout, а
+  // activeElement у него — IFRAME. Поэтому typingNow смотрит внутрь рамки, а «Калории» сами сообщают (kcal.js → F.healSoon).
+  // Сдвиг visualViewport.offsetTop (iOS 26 не возвращает его в 0 после клавиатуры) — scrollTo на то же место.
   const full = { w: 0, h: 0 };
   const noteFull = () => { if (innerWidth !== full.w) { full.w = innerWidth; full.h = 0; } full.h = Math.max(full.h, innerHeight); };
-  const typingNow = () => { const a = document.activeElement; return !!a && a !== document.body && a.matches('input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range]), textarea, select, [contenteditable]:not([contenteditable="false"])'); };
+  // идёт набор: поле в фокусе — у Формы или внутри рамки того же сайта («Питание» = «Калории» в iframe: у родителя
+  // activeElement тогда — сам IFRAME, а клавиатура открыта; Глеб 06.11: «в диктовке опять подлетает нижняя строка»)
+  const FIELD = 'input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range]), textarea, select, [contenteditable]:not([contenteditable="false"])';
+  const typingNow = () => {
+    let a = document.activeElement;
+    if (a && a.tagName === 'IFRAME') { try { a = a.contentDocument && a.contentDocument.activeElement; } catch (e) { a = null; } }  // чужой сайт — не видно
+    return !!a && a !== a.ownerDocument.body && a.matches(FIELD);
+  };
   let lastHeal = '', healAt = 0, healLog = [], healFails = 0, stuckH = 0;
   const flip = el => { el.style.display = 'none'; void el.offsetHeight; el.style.display = ''; void el.offsetHeight; };
   F.heal = why => {
     if (!IPHONE || !standalone || (F.tg && F.tg.initData)) return false;
     noteFull();
-    const before = innerHeight, now = Date.now();
-    if (full.h - before <= 4 || typingNow() || before === stuckH) return false;
+    const before = innerHeight, now = Date.now(), vt = vv ? vv.offsetTop : 0;
+    const low = full.h - before > 4 && before !== stuckH;
+    // iOS 26: после клавиатуры visualViewport.offsetTop не возвращается в 0 — видимая часть сдвинута, fixed-низ «висит»
+    if ((!low && vt <= 1) || typingNow()) return false;
     // листает — не мигаем посреди прокрутки (сбило бы инерцию): попробуем, когда остановится
     if (F.idle && F.idle() < 700) { clearTimeout(F.heal.t); F.heal.t = setTimeout(() => F.heal(why), 800); return false; }
+    let shift = '';
+    if (vt > 1) {  // сброс сдвига: прокрутка «на то же место» заставляет WebKit вернуть видимую часть
+      scrollTo(scrollX, scrollY);
+      const after = vv.offsetTop;
+      shift = `${why}: сдвиг ${Math.round(vt)}→${Math.round(after)} (scrollTo${after > 1 ? ', не помогло' : ''})`;
+      if (!low) { lastHeal = shift; probe('heal', 300); return true; }
+    }
     healLog = healLog.filter(t => now - t < 60000);
-    if (now - healAt < 500 || healLog.length >= 6) return false;
+    if (now - healAt < 500 || healLog.length >= 6) { if (shift) { lastHeal = shift; probe('heal', 300); } return !!shift; }
     healAt = now; healLog.push(now);
     const layer = document.createElement('div');
     layer.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100lvh;visibility:hidden;pointer-events:none;z-index:-1';
@@ -393,7 +412,7 @@
       const ok = full.h - innerHeight <= 4;
       healFails = ok ? 0 : healFails + 1;
       if (healFails >= 2) { stuckH = innerHeight; healFails = 0; }
-      lastHeal = `${why}: ${before}→${innerHeight} (${how}${ok ? '' : ', не помогло'})`;
+      lastHeal = `${shift ? shift + '; ' : ''}${why}: ${before}→${innerHeight} (${how}${ok ? '' : ', не помогло'})`;
       if (ok) { F.safeBottom(); F.coLayout(); }
       probe('heal', 300);
     };
@@ -412,10 +431,14 @@
     return true;
   };
   const healSoon = (why, ...waits) => waits.forEach(ms => setTimeout(() => F.heal(why), ms));
+  // явный повод «набор кончился» (ушёл из поля, закрыл лист, выключил микрофон — и в «Калориях» внутри рамки, kcal.js) —
+  // новая попытка, даже если две прошлые не помогли (иначе после записи голоса окно так и оставалось бы низким)
+  F.healSoon = (why, ...waits) => { stuckH = 0; healFails = 0; healSoon(why, ...waits); };
+  F.kbProbe = probe;
   noteFull();
   addEventListener('resize', () => { noteFull(); if (innerHeight !== stuckH) stuckH = 0; if (!typingNow()) healSoon('окно', 300); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) healSoon('возврат', 300); });
-  document.addEventListener('focusout', e => { if (e.target && e.target.matches && e.target.matches('input, textarea, [contenteditable]')) healSoon('клавиатура', 350, 900); });
+  document.addEventListener('focusout', e => { if (e.target && e.target.matches && e.target.matches('input, textarea, [contenteditable]')) F.healSoon('клавиатура', 350, 900); });
   // смена вкладки: класс body меняет app.js — смотрим, сменилась ли S.tab (вход в чат: окно проверяем и меряем)
   let lastTab = S.tab;
   new MutationObserver(() => {
