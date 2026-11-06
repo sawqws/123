@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 
 import words
 
@@ -42,6 +43,9 @@ CREATE TABLE IF NOT EXISTS water (
 );
 CREATE TABLE IF NOT EXISTS kcal_days (user INTEGER NOT NULL, day TEXT NOT NULL, data TEXT, updated TEXT,
   PRIMARY KEY (user, day));
+CREATE TABLE IF NOT EXISTS kcal_hist (id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, data TEXT, at TEXT,
+  why TEXT DEFAULT '');
+CREATE INDEX IF NOT EXISTS kcal_hist_day ON kcal_hist (user, day);
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS reviews (id INTEGER PRIMARY KEY, user INTEGER NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL,
   ref TEXT NOT NULL DEFAULT '', at TEXT, title TEXT, text TEXT, seen INTEGER NOT NULL DEFAULT 0, created TEXT,
@@ -86,6 +90,69 @@ def morning_value(v):
 def kcal_water(data):
     """Вода дня «Калорий» в мл (0, если дня нет)."""
     return int(sum(x for x in ((data or {}).get("water") or []) if isinstance(x, (int, float))))
+
+
+KCAL_HIST = 60  # версий на день в истории
+
+
+def kcal_content(d):
+    """Что видно в дне: еда, вода, тип (u и служебное — не в счёт)."""
+    d = d if isinstance(d, dict) else {}
+    return json.dumps([d.get("items") or [], d.get("water") or [], d.get("type")], ensure_ascii=False, sort_keys=True)
+
+
+def _sig(it):
+    def n(v):
+        try:
+            return round(float(v or 0))
+        except (TypeError, ValueError):
+            return 0
+    return (str(it.get("meal") or ""), str(it.get("name") or ""), n(it.get("g")), n(it.get("kcal")))
+
+
+def kcal_merge(base, server, client):
+    """Слияние дня по позициям (как git): base — общая версия (None — неизвестна), server — что сейчас на сервере,
+    client — присланное. Из присланного убираем то, что удалили на сервере после base; добавляем то, что на сервере
+    добавили после base и чего у присланного нет. base неизвестна — ничего не удаляем, только добавляем недостающее.
+    Вода — так же, по глоткам. Тип дня — присланный, если он есть."""
+    from collections import Counter
+    S = [i for i in server.get("items") or [] if isinstance(i, dict)]
+    C = [i for i in client.get("items") or [] if isinstance(i, dict)]
+    cs, ss = Counter(map(_sig, C)), Counter(map(_sig, S))
+    if base is None:
+        gone, added = Counter(), ss - cs
+    else:
+        bs = Counter(_sig(i) for i in base.get("items") or [] if isinstance(i, dict))
+        gone, added = bs - ss, (ss - bs) - (cs - bs)
+    items = []
+    for it in C:
+        k = _sig(it)
+        if gone[k] > 0:
+            gone[k] -= 1
+            continue
+        items.append(it)
+    for it in S:
+        k = _sig(it)
+        if added[k] > 0:
+            added[k] -= 1
+            items.append(it)
+
+    def wmerge(bw, sw, cw):
+        sc, cc = Counter(sw), Counter(cw)
+        if bw is None:
+            g, a = Counter(), sc - cc
+        else:
+            bc = Counter(bw)
+            g, a = bc - sc, (sc - bc) - (cc - bc)
+        out = []
+        for ml in cw:
+            if g[ml] > 0:
+                g[ml] -= 1
+                continue
+            out.append(ml)
+        return out + list(a.elements())
+    water = wmerge(None if base is None else base.get("water") or [], server.get("water") or [], client.get("water") or [])
+    return {"items": items, "water": water, "type": client.get("type") or server.get("type")}
 
 
 class Store:
@@ -318,25 +385,93 @@ class Store:
     # ---------- «Калории» (сайт на GitHub Pages шлёт свой дневник: POST /api/kcal/sync) ----------
 
     def save_kcal_days(self, uid, days):
-        """days — {день: уже очищенные данные дня} (coach.kcal_clean). День заменяется целиком, но если у присланного
-        есть u (время правки, мс), а у сохранённого u больше — остаётся сохранённый. → список таких пропущенных дней."""
+        """days — {день: уже очищенные данные дня} (coach.kcal_clean). → список дней, где на сервере теперь версия новее
+        присланной (браузер её заберёт: GET /api/kcal/state).
+        Глеб 06.11: «пропали 2–3 дня питания — сделать, чтобы всё сохранялось». Поэтому:
+        - каждая заменённая версия дня остаётся в kcal_hist (вернуть — kcal_versions / coach/kcal_restore.py);
+        - b — u версии сервера, с которой браузер начинал правку. На сервере с тех пор есть правки, которых браузер не видел
+          (другое устройство, бот), — не затираем, а сливаем по позициям (kcal_merge): его удаления и добавления + чужие;
+        - без b (старый браузер): у присланного u меньше сохранённого — остаётся сохранённый, иначе замена (как раньше)."""
         now, stale = now_iso(), []
         with self.lock:
             for d, data in days.items():
-                if data.get("u") is not None:
-                    row = self.db.execute("SELECT data FROM kcal_days WHERE user=? AND day=?", (uid, str(d))).fetchone()
-                    try:
-                        old = json.loads(row[0] or "{}") if row else {}
-                    except ValueError:
-                        old = {}
-                    old_u = old.get("u") if isinstance(old, dict) else None
-                    if isinstance(old_u, int) and old_u > data["u"]:
-                        stale.append(str(d))
-                        continue
+                data = dict(data)
+                b = data.pop("b", None)
+                row = self.db.execute("SELECT data FROM kcal_days WHERE user=? AND day=?", (uid, str(d))).fetchone()
+                try:
+                    old = json.loads(row[0] or "{}") if row else {}
+                except ValueError:
+                    old = {}
+                old = old if isinstance(old, dict) else {}
+                old_u = old.get("u") if isinstance(old.get("u"), int) else None
+                if row and data.get("u") is not None and isinstance(b, int) and old_u is not None and b < old_u \
+                        and kcal_content(old) != kcal_content(data):
+                    base = self._kcal_version(uid, d, b) if b > 0 else None
+                    data = {**kcal_merge(base, old, data), "u": max(old_u, data["u"]) + 1}
+                    stale.append(str(d))
+                elif data.get("u") is not None and old_u is not None and old_u > data["u"]:
+                    stale.append(str(d))
+                    continue
+                if row and kcal_content(old) != kcal_content(data):
+                    self.db.execute("INSERT INTO kcal_hist (user, day, data, at, why) VALUES (?,?,?,?,?)",
+                                    (uid, str(d), row[0], now, "merge" if str(d) in stale else "replace"))
+                    self.db.execute("DELETE FROM kcal_hist WHERE user=? AND day=? AND id NOT IN (SELECT id FROM kcal_hist "
+                                    "WHERE user=? AND day=? ORDER BY id DESC LIMIT ?)", (uid, str(d), uid, str(d), KCAL_HIST))
                 self.db.execute("INSERT OR REPLACE INTO kcal_days VALUES (?,?,?,?)",
                                 (uid, str(d), json.dumps(data, ensure_ascii=False), now))
             self.db.commit()
-        return sorted(stale)
+        return sorted(set(stale))
+
+    def _kcal_version(self, uid, day, u):
+        """Версия дня с этим u (сейчас или из истории) — общая база для слияния; нет — None."""
+        rows = self.db.execute("SELECT data FROM kcal_hist WHERE user=? AND day=? ORDER BY id DESC", (uid, str(day))).fetchall()
+        cur = self.db.execute("SELECT data FROM kcal_days WHERE user=? AND day=?", (uid, str(day))).fetchone()
+        for r in ([cur] if cur else []) + list(rows):
+            try:
+                v = json.loads(r[0] or "{}")
+            except ValueError:
+                continue
+            if isinstance(v, dict) and v.get("u") == u:
+                return v
+        return None
+
+    def kcal_versions(self, uid, day):
+        """История дня (новые сверху): [{id, at, why, data}] — что было до каждой замены."""
+        out = []
+        for r in self.q("SELECT id, data, at, why FROM kcal_hist WHERE user=? AND day=? ORDER BY id DESC", (uid, str(day))):
+            try:
+                out.append({"id": r["id"], "at": r["at"], "why": r["why"], "data": json.loads(r["data"] or "{}")})
+            except ValueError:
+                continue
+        return out
+
+    def kcal_put(self, uid, day, data, why="restore"):
+        """Положить день как есть (восстановление): прежняя версия — в историю, u — новее всех, чтобы браузеры забрали."""
+        with self.lock:
+            row = self.db.execute("SELECT data FROM kcal_days WHERE user=? AND day=?", (uid, str(day))).fetchone()
+            old_u = 0
+            if row:
+                try:
+                    old_u = int((json.loads(row[0] or "{}") or {}).get("u") or 0)
+                except (ValueError, TypeError, AttributeError):
+                    old_u = 0
+                self.db.execute("INSERT INTO kcal_hist (user, day, data, at, why) VALUES (?,?,?,?,?)",
+                                (uid, str(day), row[0], now_iso(), why))
+            data = {**data, "u": max(old_u + 1, int(time.time() * 1000))}
+            self.db.execute("INSERT OR REPLACE INTO kcal_days VALUES (?,?,?,?)",
+                            (uid, str(day), json.dumps(data, ensure_ascii=False), now_iso()))
+            self.db.commit()
+        return data
+
+    def backup(self, path):
+        """Копия всей базы на диск (sqlite backup — целая, даже пока бот пишет)."""
+        dst = sqlite3.connect(path)
+        try:
+            with self.lock:
+                self.db.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")  # копия — один файл, без -wal рядом
+        finally:
+            dst.close()
 
     def kcal_last(self, uid, n=400):
         """Последние n сохранённых дней «Калорий» → {день: данные дня} (по дате, старые — первыми)."""

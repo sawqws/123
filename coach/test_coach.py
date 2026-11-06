@@ -2650,7 +2650,7 @@ class KcalTest(unittest.TestCase):
         self.assertEqual(kcal_call("/api/kcal/state", method="GET").code, 401)
         r = kcal_call("/api/kcal/state", token=tok, method="GET")
         self.assertEqual(r.code, 200, r.json)
-        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None, "portion": None, "recipes": []})
+        self.assertEqual(r.json, {"days": {}, "goals": None, "salt": None, "water": None, "portion": None, "recipes": [], "forma": {}})
         self.assertEqual(r.headers["Access-Control-Allow-Origin"], "https://sawqws.github.io")
         day = {**self.SYNC["days"][TODAY.isoformat()], "u": 1730000000123}
         self.run_today(lambda: kcal_call("/api/kcal/sync", {**self.SYNC, "days": {TODAY.isoformat(): day}}, token=tok))
@@ -2727,7 +2727,8 @@ class KcalTest(unittest.TestCase):
         audio = "data:audio/mp4;base64," + base64.b64encode(b"\x00" * 4000).decode()
         seen = {}
 
-        def fake(path, timeout=300):
+        def fake(path, timeout=300, **kw):
+            seen["kw"] = kw
             seen["ext"], seen["size"], seen["path"] = os.path.splitext(path)[1], os.path.getsize(path), path
             return "омлет из трёх яиц на сливочном масле"
         with mock.patch.object(coach.media, "transcribe", side_effect=fake), \
@@ -2776,7 +2777,8 @@ class KcalTest(unittest.TestCase):
         audio = "data:audio/mp4;base64," + base64.b64encode(b"\x00" * 4000).decode()
         seen = {}
 
-        def fake(path, timeout=300):
+        def fake(path, timeout=300, **kw):
+            seen["kw"] = kw
             seen["path"] = path
             return "гречка 200 грамм минус четверть"
         with mock.patch.object(coach.media, "transcribe", side_effect=fake), mock.patch.object(coach.media, "_seconds", return_value=6.0), \
@@ -2862,6 +2864,100 @@ class KcalTest(unittest.TestCase):
         self.assertEqual((r.code, calls), (200, [ai.VOICE_MODEL, ai.CHAT_MODEL]))
         self.assertEqual(r.json["fixes"], [])
         self.assertEqual(self.meals(), 0)
+
+    def test_kcal_days_never_lost(self):
+        # Глеб 06.11: «заполнял 2–3 дня — всё пропало; сделать, чтобы всё сохранялось»: история версий, слияние вместо затирания
+        tok = self.pair()
+        it = lambda n, g, k, meal="lunch": {"name": n, "meal": meal, "g": g, "kcal": k, "p": 1, "f": 1, "c": 1, "salt": 0}
+        sync = lambda days: kcal_call("/api/kcal/sync", {"days": days}, token=tok).json
+        # телефон: гречка (u=100), сервер принял
+        self.assertEqual(sync({"2026-10-10": {"items": [it("Гречка", 200, 220)], "u": 100, "b": 0}})["stale"], [])
+        # iPad видел версию 100 и добавил банан (u=200, b=100) — обычная замена
+        self.assertEqual(sync({"2026-10-10": {"items": [it("Гречка", 200, 220), it("Банан", 120, 107)], "u": 200, "b": 100}})["stale"], [])
+        # телефон не видел банан (b=100), удалил гречку и добавил творог (u=300) — раньше банан пропадал; теперь слияние
+        r = sync({"2026-10-10": {"items": [it("Творог", 180, 200)], "u": 300, "b": 100}})
+        self.assertEqual(r["stale"], ["2026-10-10"])  # телефон заберёт слитое
+        day = self.db.kcal_last(U, 5)["2026-10-10"]
+        self.assertEqual(sorted(i["name"] for i in day["items"]), ["Банан", "Творог"])  # гречку удалил он, банан — с iPad
+        self.assertEqual(day["u"], 301)
+        # без b (старый браузер) и с u меньше — сервер не трогаем; версии остаются в истории
+        self.assertEqual(sync({"2026-10-10": {"items": [], "u": 250}})["stale"], ["2026-10-10"])
+        self.assertEqual(len(self.db.kcal_last(U, 5)["2026-10-10"]["items"]), 2)
+        vers = self.db.kcal_versions(U, "2026-10-10")
+        self.assertEqual([len(v["data"]["items"]) for v in vers], [2, 1])  # до слияния — 2 (гречка, банан), до него — 1
+        self.assertEqual(vers[0]["why"], "merge")
+        # b неизвестна серверу (истории нет) — ничего не удаляем, только добавляем недостающее
+        self.db.save_kcal_days(U, {"2026-10-09": {"items": [it("Суп", 300, 120)], "water": [250], "type": None, "u": 50}})
+        r = sync({"2026-10-09": {"items": [it("Хлеб", 30, 75)], "water": [300], "u": 60, "b": 7}})
+        d9 = self.db.kcal_last(U, 5)["2026-10-09"]
+        self.assertEqual((sorted(i["name"] for i in d9["items"]), sorted(d9["water"])), (["Суп", "Хлеб"], [250, 300]))
+        # восстановление: kcal_put — прежнее в историю, u новее всех
+        out = self.db.kcal_put(U, "2026-10-09", {"items": [it("Суп", 300, 120)], "water": [], "type": None})
+        self.assertGreater(out["u"], 61)
+        self.assertEqual(self.db.kcal_versions(U, "2026-10-09")[0]["why"], "restore")
+        # тот же день без изменений — в историю не пишется
+        n = len(self.db.kcal_versions(U, "2026-10-09"))
+        self.db.save_kcal_days(U, {"2026-10-09": {**self.db.kcal_last(U, 5)["2026-10-09"]}})
+        self.assertEqual(len(self.db.kcal_versions(U, "2026-10-09")), n)
+
+    def test_kcal_merge_rules(self):
+        from store import kcal_merge
+        a, b, c, d = ({"name": n, "meal": "lunch", "g": 100, "kcal": k} for n, k in (("A", 1), ("B", 2), ("C", 3), ("D", 4)))
+        base = {"items": [a, b], "water": [250, 250]}
+        server = {"items": [a, c], "water": [250, 250, 500]}        # сервер: удалил B, добавил C, +500 воды
+        client = {"items": [a, b, d], "water": [250], "type": "train"}  # браузер: добавил D, выпил на 250 меньше
+        m = kcal_merge(base, server, client)
+        self.assertEqual([i["name"] for i in m["items"]], ["A", "D", "C"])
+        self.assertEqual((sorted(m["water"]), m["type"]), ([250, 500], "train"))
+        # оба добавили одно и то же — не дублируем
+        self.assertEqual([i["name"] for i in kcal_merge({"items": []}, {"items": [c]}, {"items": [c]})["items"]], ["C"])
+
+    def test_forma_meals_every_day(self):
+        # Глеб 06.11: «заполнял через тебя — со вчера нет вообще»: еда и вода бота видны в «Калориях» за все дни, не только сегодня
+        tok = self.pair()
+        self.db.save_meal(U, {"title": "Каша Nordic 110 г + молоко 750 мл", "kcal": 846, "protein": 40, "fat": 30, "carbs": 110,
+                              "salt": 0.5, "day": "2026-10-09", "time": "09:10"})
+        self.db.add_water(U, "2026-10-09", "09:15", 800)
+        self.db.add_water(U, "2026-10-09", "12:00", 300)
+        st = kcal_call("/api/kcal/state", token=tok, method="GET").json
+        self.assertEqual(st["forma"]["2026-10-09"], {"meals": [{"time": "09:10", "title": "Каша Nordic 110 г + молоко 750 мл",
+                                                               "kcal": 846, "p": 40, "f": 30, "c": 110}], "water": 1100})
+
+    def test_backup_daily(self):
+        now = datetime.datetime(2026, 10, 11, 4, 0)
+        p = coach.backup_db(now)
+        self.assertTrue(os.path.exists(p) and p.endswith("coach-2026-10-11.db"))
+        self.assertIsNone(coach.backup_db(now))  # раз в день
+        import sqlite3
+        con = sqlite3.connect(p)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+                         self.db.q("SELECT COUNT(*) AS n FROM users")[0]["n"])  # копия целая
+        con.close()
+        for i in range(20):
+            coach.backup_db(now - datetime.timedelta(days=i + 1))
+        self.assertEqual(len(os.listdir(os.path.dirname(p))), coach.BACKUP_KEEP, os.listdir(os.path.dirname(p)))
+        self.assertTrue(os.path.exists(p))  # свежая осталась
+
+    def test_food_whisper_hint(self):
+        # Глеб 06.11: «диктовка не совсем чётко определяет» — модель точнее + словарь еды и его продукты; нет модели — обычная
+        tok = self.pair()
+        self.db.save_kcal_days(U, {"2026-10-10": {"items": [{"name": "Йогурт Teos 2%", "meal": "snack", "g": 140, "kcal": 90}]}})
+        audio = "data:audio/mp4;base64," + base64.b64encode(b"\x00" * 4000).decode()
+        calls = []
+
+        def fake(path, timeout=300, **kw):
+            calls.append(kw)
+            if kw.get("model") == "small":
+                raise coach.media.MediaError("нет памяти")
+            return "тэос сто сорок"
+        with mock.patch.object(coach.media, "transcribe", side_effect=fake), mock.patch.object(coach.media, "_seconds", return_value=4.0), \
+                mock.patch.object(ai, "claude", return_value=BotTest.SPOKEN):
+            r = kcal_call("/api/kcal/voice", {"audio": audio}, token=tok)
+        self.assertEqual((r.code, r.json["text"]), (200, "тэос сто сорок"))
+        self.assertEqual([c.get("model") for c in calls], ["small", None])
+        self.assertIn("гречка", calls[0]["prompt"])
+        self.assertIn("Йогурт Teos 2%", calls[0]["prompt"])
+        self.assertEqual(calls[0]["beam"], coach.FOOD_BEAM)
 
     def test_recipe_parse_limits(self):
         tok = self.pair()

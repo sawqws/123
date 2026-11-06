@@ -806,6 +806,7 @@ async function addFood(page, q, grams, meal) {
         '2026-10-19': { items: [{ name: 'Серверное старое', meal: 'lunch', g: 100, kcal: 1, p: 0, f: 0, c: 0, salt: 0 }], u: 3000 },
         '2026-10-18': { items: [{ name: 'Только на сервере', meal: 'snack', g: 50, kcal: 80, p: 1, f: 2, c: 3, salt: 0 }], u: 100 },
         '2024-01-01': { items: [{ name: 'Слишком старое', meal: 'snack', g: 50, kcal: 80, p: 1, f: 2, c: 3, salt: 0 }], u: 100 } },
+        forma: { '2026-10-20': { meals: [{ time: '09:10', title: 'Каша Nordic + молоко (бот)', kcal: 846, p: 40, f: 30, c: 110 }], water: 800 }, 'плохой': { meals: 5 } },
         goals: { train: { kcal: 3000, p: 140, f: 100, c: 400 }, rest: { kcal: 2500, p: 120, f: 90, c: 300 } }, salt: 6, water: { train: 3200, rest: 2600 } };
       const { ctx, page } = await newPage(browser, { seed, state: st, init: () => localStorage.setItem('kcal.token', 'tok') });
       await sleep(600);
@@ -821,6 +822,17 @@ async function addFood(page, q, grams, meal) {
       ok((await text(page, '#left')) === '3 000', 'новая норма сразу на экране', await text(page, '#left'));
       const b0 = ctx.syncs[0] && ctx.syncs[0].body;
       ok(b0 && b0.days['2026-10-19'].u === 5000 && b0.days['2026-10-20'].u === 2000 && b0.days['2026-10-20'].items[0].name === 'С сервера', 'sync после слияния: дни с u', JSON.stringify(b0 && Object.keys(b0.days)));
+      // Глеб 06.11 «всё пропало»: b — с какой версии сервера начата правка (сервер сливает, а не затирает)
+      ok(b0.days['2026-10-20'].b === 2000 && b0.days['2026-10-19'].b === 0, 'sync шлёт b: серверный день — его u, свой несинхронизированный — 0', JSON.stringify([b0.days['2026-10-20'].b, b0.days['2026-10-19'].b]));
+      ok((await state(page)).days['2026-10-19'].b === 5000, 'сервер принял день — b = отправленный u', JSON.stringify((await state(page)).days['2026-10-19']));
+      // еда и вода Формы (бот, Claude) за прошлый день — в итогах и разделом «Из Формы», не только сегодня
+      await page.click('.wd[data-d="2026-10-20"]'); await sleep(500);
+      ok(await page.isVisible('#fmeals') && (await text(page, '#fmeals')).includes('Каша Nordic + молоко (бот)') && (await text(page, '#fmeals')).includes('846'),
+        'прошлый день: «Из Формы» — еда, записанная ботом', await page.isVisible('#fmeals') ? await text(page, '#fmeals') : 'нет раздела');
+      ok((await text(page, '#water')).includes('1,3 из'), 'прошлый день: вода Формы (800) + своя (500) = 1,3 л', await text(page, '#water'));
+      ok(await page.evaluate(() => Math.round(totals('2026-10-20').kcal)) === 1146, 'итог прошлого дня: 300 + 846 = 1146 ккал', String(await page.evaluate(() => Math.round(totals('2026-10-20').kcal))));
+      ok(await page.evaluate(() => !FD['плохой'] && JSON.parse(localStorage.getItem('kcal.fdays'))['2026-10-20'].water === 800), 'еда Формы по дням хранится (мусор отброшен)');
+      await page.click('#todayBtn'); await sleep(500);
       // правка дня → u = время правки, другие дни не трогаются
       await addFood(page, 'банан', 120, 'snack'); await sleep(1200);
       S1 = await state(page);

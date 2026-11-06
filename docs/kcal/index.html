@@ -1372,7 +1372,8 @@ function clean(x) {
     const water = (Array.isArray(d.water) ? d.water : []).map(num).filter(v => v > 0 && v <= 3000).map(Math.round);
     out.days[k] = { items, ...(water.length ? { water } : {}), ...(d.type === 'train' || d.type === 'rest' ? { type: d.type } : {}),
       ...(d.ftype === 'train' || d.ftype === 'rest' ? { ftype: d.ftype } : {}), // ftype — тип дня по Форме (type — выбран вручную)
-      ...(num(d.u) > 0 ? { u: Math.round(num(d.u)) } : {}) }; // u — время последней правки дня (мс): при слиянии с сервером новее побеждает
+      ...(num(d.u) > 0 ? { u: Math.round(num(d.u)) } : {}), // u — время последней правки дня (мс): при слиянии с сервером новее побеждает
+      ...(num(d.b) > 0 ? { b: Math.round(num(d.b)) } : {}) }; // b — с какой версии сервера начата правка (сервер сливает, а не затирает)
   }
   const food = f => ({ name: String(f.name).slice(0, 80), ...per(f), unit: unit(f.unit) });
   out.custom = (Array.isArray(x.custom) ? x.custom : []).filter(f => f && f.name).map(food).slice(0, 200);
@@ -1490,6 +1491,24 @@ function cleanForma(x) { // ответ сервера → только изве�
   };
 }
 const formaFor = d => F && F.day === d && getToken() ? F : null; // данные Формы — только за их день и пока связано
+/* еда и вода Формы за прошлые дни (Глеб 06.11: «заполнял через тебя — со вчера нет вообще»): раньше они были видны только
+   в свой день (GET /api/kcal/forma — сегодня), со следующего дня пропадали из дневника и итогов. Теперь GET /api/kcal/state
+   отдаёт forma: {день: {meals, water}} за 90 дней — сегодня берём свежее из F, прошлые дни — отсюда */
+const FDKEY = 'kcal.fdays';
+function cleanFD(x) {
+  const out = {}, n = v => Number.isFinite(+v) ? +v : 0;
+  for (const [k, v] of Object.entries(x || {})) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !v || typeof v !== 'object') continue;
+    const meals = (Array.isArray(v.meals) ? v.meals : []).filter(m => m && typeof m === 'object').slice(0, 30)
+      .map(m => ({ time: typeof m.time === 'string' ? m.time.slice(0, 5) : '', title: typeof m.title === 'string' && m.title.slice(0, 80) || 'Еда',
+        kcal: Math.max(0, n(m.kcal)), p: Math.max(0, n(m.p)), f: Math.max(0, n(m.f)), c: Math.max(0, n(m.c)) }));
+    const water = Math.min(10000, Math.max(0, Math.round(n(v.water))));
+    if (meals.length || water) out[k] = { meals, water };
+  }
+  return out;
+}
+let FD = (() => { try { return cleanFD(JSON.parse(localStorage.getItem(FDKEY)) || {}); } catch (e) { return {}; } })();
+const formaDay = d => formaFor(d) || (getToken() && FD[d]) || null; // еда и вода Формы за день: сегодня — свежие, прошлые — из state
 /* sync: обычный — 14 дней + старые дни, поправленные после прошлой отправки; полный (первая связка или нет S.fullSync) —
    вся история до 400 дней кусками по 31 дню, потом флаг. При старте с токеном сначала GET /api/kcal/state и слияние по u. */
 const CHUNK = 31, KEEP_DAYS = 400;
@@ -1497,7 +1516,7 @@ const blankDay = d => !d.items.length && !(d.water && d.water.length) && !d.type
 function dayOut(k) {
   const d = S.days[k], r = v => r1(num(v));
   return { items: d.items.map(it => ({ name: it.name, meal: it.meal, g: r(it.g), kcal: r(it.kcal), p: r(it.p), f: r(it.f), c: r(it.c), salt: r(it.salt) })),
-    water: d.water || [], type: dayType(k), u: d.u || 0 };
+    water: d.water || [], type: dayType(k), u: d.u || 0, b: d.b || 0 };
 }
 function bodyFor(keys, recs) { const days = {}; for (const k of keys) days[k] = dayOut(k); return JSON.stringify({ days, goals: S.goals, salt: S.salt, water: S.water, portion: S.portion, ...(recs && recs.length ? { recipes: recs } : {}) }); }
 const recipesOut = full => S.recipes.filter(r => full || (r.u || 0) > S.recU); // полная отправка — все, обычная — поправленные после прошлой
@@ -1524,6 +1543,8 @@ async function syncNow(force, keepalive) { // ошибки сети и 429 — �
   syncBusy = true;
   try {
     let maxU = 0, j = null, stale = false; // stale — дни, где на сервере версия новее
+    const sentU = {}, staleDays = new Set(); // u отправленных дней — после ответа это и есть версия сервера (b)
+    for (const ks of chunks) for (const k of ks) if (S.days[k]) sentU[k] = S.days[k].u || 0;
     for (const [ci, ks] of chunks.entries()) {
       const b = body || bodyFor(ks, ci ? [] : recs);
       const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 15000);
@@ -1537,12 +1558,15 @@ async function syncNow(force, keepalive) { // ошибки сети и 429 — �
       for (const k of ks) maxU = Math.max(maxU, S.days[k] ? S.days[k].u || 0 : 0);
       j = await r.json().catch(() => null);
       if (j && j.stale && (Array.isArray(j.stale) ? j.stale.length : Object.keys(j.stale).length)) stale = true;
+      if (j && Array.isArray(j.stale)) j.stale.forEach(d => staleDays.add(d));
       if (j && Array.isArray(j.rstale) && j.rstale.length) stale = true; // рецепт на сервере новее
     }
     if (getToken() !== tok) return;
     syncLast = body || ''; syncAt = Date.now();
     if (full) S.fullSync = true;
-    S.syncU = Math.max(S.syncU, maxU); S.recU = recs.reduce((a, r) => Math.max(a, r.u || 0), S.recU); persist();
+    S.syncU = Math.max(S.syncU, maxU); S.recU = recs.reduce((a, r) => Math.max(a, r.u || 0), S.recU);
+    for (const [k, u] of Object.entries(sentU)) if (S.days[k] && u && !staleDays.has(k)) S.days[k].b = u; // сервер принял — эта версия общая
+    persist();
     if (j && 'forma' in j) applyForma(j.forma);
     if (stale) pullState(); // на сервере эти дни новее — взять их
   } catch (e) { /* нет сети — повтор при следующем сохранении */ } finally {
@@ -1571,6 +1595,7 @@ function mergeState(x) { // у кого u больше — тот прав; дн
     sd.items = sd.items.map((it, i) => ({ ...it, id: `s${k.replace(/-/g, '')}-${i}`, // с сервера — без состава на 100 г: восстановить из граммов
       ...(!it.per100 && it.g > 0 ? { per100: { kcal: it.kcal * 100 / it.g, p: it.p * 100 / it.g, f: it.f * 100 / it.g, c: it.c * 100 / it.g, salt: it.salt * 100 / it.g }, unit: null } : {}) }));
     if (sd.type) { sd.ftype = sd.type; delete sd.type; } // тип дня с сервера — как подсказка (ручной выбор здесь сильнее)
+    if (su) sd.b = su; else delete sd.b; // правка этого дня начнётся с версии сервера
     if (ld && ld.ftype && !sd.ftype) sd.ftype = ld.ftype;
     S.days[k] = sd; dayMemo[k] = dayKey(sd); n++;
   }
@@ -1584,6 +1609,10 @@ function mergeState(x) { // у кого u больше — тот прав; дн
     if (i < 0) { if (!r.del) { S.recipes.push(r); n++; } } else if (r.u > (S.recipes[i].u || 0)) { S.recipes[i] = r; n++; }
   }
   S.recipes = trimRecipes(S.recipes);
+  if (x.forma && typeof x.forma === 'object' && !Array.isArray(x.forma)) { // еда и вода, записанные в самой Форме (бот, Claude), — по дням
+    const fd = cleanFD(x.forma);
+    if (JSON.stringify(fd) !== JSON.stringify(FD)) { FD = fd; try { localStorage.setItem(FDKEY, JSON.stringify(FD)); } catch (e) {} n++; }
+  }
   if (n) { persist(); refreshView(); }
   return n;
 }
@@ -1636,7 +1665,7 @@ function dayType(d) { // выбран вручную → по Форме (ден
 function totals(d) { // своё + съеденное, записанное в самой Форме
   const t = { kcal: 0, p: 0, f: 0, c: 0, salt: 0 };
   for (const it of day(d).items) { t.kcal += it.kcal; t.p += it.p; t.f += it.f; t.c += it.c; t.salt += it.salt || 0; }
-  const fm = formaFor(d);
+  const fm = formaDay(d);
   if (fm) for (const m of fm.meals) { t.kcal += m.kcal; t.p += m.p; t.f += m.f; t.c += m.c; }
   return t;
 }
@@ -1740,7 +1769,7 @@ function setApp(calm, html) {
 function renderToday(animate) {
   const t = totals(cur), type = dayType(cur), g = S.goals[type], d = day(cur);
   const left = g.kcal - t.kcal, over = left < 0, pct = t.kcal / g.kcal;
-  const x = parseIso(cur), st = streak(), fm = formaFor(cur);
+  const x = parseIso(cur), st = streak(), fm = formaFor(cur), fmd = formaDay(cur);
   $('#navTitle').textContent = dateTitle(cur);
   $('#todayBtn').hidden = cur === today();
   setActions(`<button class="ibtn press" id="camBtn" aria-label="Еда по фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</button>
@@ -1788,8 +1817,8 @@ function renderToday(animate) {
           <span class="k num">${fmt(i.kcal)}</span></button></div>`).join('')}
           <button class="cell add" data-add="${m}">${I.plus}Добавить<span class="ph" data-photo="${m}" role="button" aria-label="По фото">${I.cam.replace('viewBox="0 0 26 26"', 'viewBox="0 0 26 26" style="width:22px;height:22px"')}</span></button></div></section>`;
     }).join('')}
-    ${fm && fm.meals.length ? `<section class="sec" id="fmeals"><div class="sec-h"><h2>Из Формы</h2><span class="num">${fmt(fm.meals.reduce((a, m) => a + m.kcal, 0))} ккал</span></div>
-      <div class="list">${fm.meals.map(m => `<div class="cell ro"><span class="t"><div class="n">${esc(m.title)}</div>
+    ${fmd && fmd.meals.length ? `<section class="sec" id="fmeals"><div class="sec-h"><h2>Из Формы</h2><span class="num">${fmt(fmd.meals.reduce((a, m) => a + m.kcal, 0))} ккал</span></div>
+      <div class="list">${fmd.meals.map(m => `<div class="cell ro"><span class="t"><div class="n">${esc(m.title)}</div>
         <div class="m num">${m.time ? m.time + ' · ' : ''}Б ${Math.round(m.p)} · Ж ${Math.round(m.f)} · У ${Math.round(m.c)}</div></span><span class="k num">${fmt(m.kcal)}</span></div>`).join('')}</div>
       <div class="foot">Записано в Форме — там и правится.</div></section>` : ''}
   </div></div></div>`);
@@ -1862,11 +1891,11 @@ function formaCard(fm, animate) {
       </div></div>${lines.join('')}</section>`;
 }
 /* ——— вода ——— */
-const waterOf = d => (day(d).water || []).reduce((a, v) => a + v, 0) + ((formaFor(d) || {}).water || 0); // своя вода + выпитое, записанное в Форме
+const waterOf = d => (day(d).water || []).reduce((a, v) => a + v, 0) + ((formaDay(d) || {}).water || 0); // своя вода + выпитое, записанное в Форме
 const waterGoal = d => S.water[dayType(d)];
 const liters = ml => dec(ml / 1000);
 function waterCard() {
-  const w = waterOf(cur), goal = waterGoal(cur), pct = Math.min(100, w / goal * 100), n = (day(cur).water || []).length, fw = (formaFor(cur) || {}).water || 0;
+  const w = waterOf(cur), goal = waterGoal(cur), pct = Math.min(100, w / goal * 100), n = (day(cur).water || []).length, fw = (formaDay(cur) || {}).water || 0;
   return `<section class="sec" id="water"><div class="sec-h"><h2>Вода</h2><span class="num">${liters(w)} из ${liters(goal)} л</span></div>
     <div class="card wcard"><div class="wbar${w >= goal ? ' full' : ''}"><i style="width:${pct}%"></i><span class="num">${w >= goal ? 'Норма выпита' : 'Ещё ' + liters(goal - w) + ' л'}</span></div>
       <div class="wbtns"><button class="wb press" data-ml="250"><b>+250</b><span>стакан</span></button><button class="wb press" data-ml="500"><b>+500</b><span>бутылка</span></button>
