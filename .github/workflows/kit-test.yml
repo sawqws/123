@@ -131,8 +131,11 @@ jobs:
           if (-not ($o.vaults.PSObject.Properties.Value | Where-Object { $_.path -eq $v -and $_.open })) { throw 'хранилище не в obsidian.json' }
           $files = git -C $r -c core.quotepath=false ls-tree -r --name-only main
           foreach ($f in 'Начни здесь.md', '.claude/CLAUDE.md', '.obsidian/plugins/obsidian-git/main.js', '.gitignore') { if ($files -notcontains $f) { throw "в GitHub нет $f" } }
-          if ((git -C $r rev-list --count main) -ne '1') { throw 'лишние коммиты после второго запуска' }
-          if ((git -C $r log -1 --format=%s main) -ne 'Заметки: настройка') { throw "кодировка коммита: $(git -C $r log -1 --format=%s main)" }
+          # второй запуск может сохранить только файлы, которые Obsidian создал сам при первом открытии
+          $n = [int](git -C $r rev-list --count main); if ($n -gt 2) { throw "лишние коммиты: $n" }
+          if ($n -eq 2) { $x = @(git -C $r diff --name-only main~1 main); "второй коммит: $($x -join ', ')"
+            if ($x | Where-Object { $_ -notmatch '^\.obsidian/[^/]+\.json$' -or $_ -eq '.obsidian/community-plugins.json' }) { throw "второй запуск поменял лишнее: $x" } }
+          if ((git -C $r log --format=%s main | Select-Object -Last 1) -ne 'Заметки: настройка') { throw "кодировка коммита: $(git -C $r log --format=%s main)" }
           if (git -C $v status --porcelain) { throw 'незакоммиченное в хранилище' }
           if (@(Select-String "$HOME\.claude\CLAUDE.md" -Pattern 'babushka-notes').Count -ne 1) { throw 'правила Claude не один раз' }
           $d = [Environment]::GetFolderPath('Desktop'); if (-not (Test-Path -LiteralPath "$d\Claude — Заметки.lnk")) { throw 'нет ярлыка' }
@@ -152,6 +155,21 @@ jobs:
           $fh = Get-Item "$v\.git\FETCH_HEAD" -ErrorAction SilentlyContinue
           "FETCH_HEAD: $($fh.LastWriteTime) · сейчас $(Get-Date) (свежий — плагин Git сработал сам)"
           if (-not (Test-Path "$v\.obsidian\workspace.json")) { throw 'Obsidian не открыл хранилище' }
+      - name: Плагин сам отправляет правки (справочно — без «Доверять автору» может не включиться)
+        if: matrix.os == 'windows-2025'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
+          $v = "$HOME\Заметки"; $r = "$env:RUNNER_TEMP\remote.git"
+          foreach ($f in @(Get-Item "$env:LOCALAPPDATA\Programs\Obsidian\resources\obsidian.asar", "$env:APPDATA\obsidian\obsidian-*.asar" -ErrorAction SilentlyContinue)) {
+            "== $($f.FullName)"; $t = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($f.FullName))
+            foreach ($w in 'Trust author', 'Доверять') { $i = $t.IndexOf($w); if ($i -ge 0) { $t.Substring([Math]::Max(0, $i - 160), 360) } } }
+          if (-not (Get-Process Obsidian -ErrorAction SilentlyContinue)) { Start-Process "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe"; Start-Sleep 15 }
+          Add-Content -LiteralPath "$v\Проверка.md" "проверка $(Get-Date)" -Encoding UTF8
+          for ($i = 0; $i -lt 40 -and ((git -C $r log -1 --format=%s main) -notmatch '^Заметки 20'); $i++) { Start-Sleep 5 }
+          git -C $r log --format='%h %s' main
+          if ((git -C $r log -1 --format=%s main) -match '^Заметки 20') { 'ПЛАГИН РАБОТАЕТ САМ' } else { 'ПЛАГИН НЕ ОТПРАВИЛ (ждёт «Доверять автору»?)' }
       - uses: actions/upload-artifact@v4
         if: always() && matrix.os == 'windows-2025'
         with: { name: obsidian-win, path: '${{ runner.temp }}/obsidian-win.png', if-no-files-found: ignore }
