@@ -125,7 +125,7 @@ $ob = Join-Path $Vault '.obsidian'
 WriteNew (Join-Path $ob 'appearance.json') "{`n  `"baseFontSize`": 20`n}`n"
 $cpFile = Join-Path $ob 'community-plugins.json'
 $cp = @()
-if (Test-Path -LiteralPath $cpFile) { try { $cp = @(Get-Content -LiteralPath $cpFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { $cp = @() } }
+if (Test-Path -LiteralPath $cpFile) { try { $cp = @((Get-Content -LiteralPath $cpFile -Raw -Encoding UTF8 | ConvertFrom-Json) | ForEach-Object { "$_" }) } catch { $cp = @() } }
 if ($cp -notcontains 'obsidian-git') { WriteText $cpFile ((ConvertTo-Json -InputObject @($cp + 'obsidian-git') -Compress) + "`n") }
 $pd = Join-Path $ob 'plugins\obsidian-git'
 New-Item -ItemType Directory -Force -Path $pd | Out-Null
@@ -178,6 +178,7 @@ Ok "Obsidian откроет «${VaultName}» сам"
 Say 'Git'
 if (-not (Test-Path -LiteralPath (Join-Path $Vault '.git'))) { G init -q; G symbolic-ref HEAD refs/heads/main }
 G config core.quotepath false
+G config core.autocrlf false
 $authed = $false
 if (-not $env:BABUSHKA_REMOTE) {
   if (-not (Has 'gh')) { Fail 'нет GitHub CLI (gh)' }
@@ -245,13 +246,43 @@ $claude = (Get-Command claude -ErrorAction SilentlyContinue).Source
 if (-not $claude -and (Test-Path "$HOME\.local\bin\claude.exe")) { $claude = "$HOME\.local\bin\claude.exe" }
 if ($claude) {
   $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Claude — Заметки.lnk'
-  $sh = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
-  $sh.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-  $sh.Arguments = "-NoLogo -NoExit -Command `"& '$($claude -replace "'", "''")'`""
-  $sh.WorkingDirectory = $full
-  if ($claude -like '*.exe') { $sh.IconLocation = "$claude,0" }
-  $sh.Save()
-  Ok 'ярлык «Claude — Заметки» на рабочем столе'
+  try {
+    if (-not ('BabushkaLnk' -as [type])) {
+      Add-Type -TypeDefinition @'
+using System; using System.Text; using System.Runtime.InteropServices; using System.Runtime.InteropServices.ComTypes;
+[ComImport, Guid("00021401-0000-0000-C000-000000000046")] class BabushkaShellLink {}
+[ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+interface IBabushkaShellLinkW {
+  void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder f, int c, IntPtr fd, uint fl);
+  void GetIDList(out IntPtr p); void SetIDList(IntPtr p);
+  void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int c);
+  void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string s);
+  void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int c);
+  void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string s);
+  void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int c);
+  void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string s);
+  void GetHotkey(out short h); void SetHotkey(short h);
+  void GetShowCmd(out int i); void SetShowCmd(int i);
+  void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder s, int c, out int i);
+  void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string s, int i);
+  void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string s, uint r);
+  void Resolve(IntPtr h, uint f);
+  void SetPath([MarshalAs(UnmanagedType.LPWStr)] string s);
+}
+public static class BabushkaLnk {
+  public static void Save(string lnk, string target, string args, string dir, string icon) {
+    var l = (IBabushkaShellLinkW)new BabushkaShellLink();
+    l.SetPath(target); l.SetArguments(args); l.SetWorkingDirectory(dir);
+    if (!string.IsNullOrEmpty(icon)) l.SetIconLocation(icon, 0);
+    ((IPersistFile)l).Save(lnk, true);
+  }
+}
+'@
+    }
+    $icon = if ($claude -like '*.exe') { $claude } else { '' }
+    [BabushkaLnk]::Save($lnk, "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe", "-NoLogo -NoExit -Command `"& '$($claude -replace "'", "''")'`"", $full, $icon)
+    Ok 'ярлык «Claude — Заметки» на рабочем столе'
+  } catch { Warn "ярлык не сделан: $($_.Exception.Message)" }
 } else { Warn 'Claude Code (команда claude) не найден — ярлык не сделан' }
 
 # ---------- 6. Открыть Obsidian ----------

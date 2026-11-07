@@ -175,6 +175,7 @@ ok "Obsidian откроет «${NAME}» сам"
 say 'Git'
 [ -d "$VAULT/.git" ] || { G init -q; G symbolic-ref HEAD refs/heads/main; }
 G config core.quotepath false
+G config core.autocrlf false
 authed=0
 if [ -z "${BABUSHKA_REMOTE:-}" ]; then
   has gh || fail 'нет GitHub CLI (gh)'

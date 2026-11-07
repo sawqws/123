@@ -135,8 +135,10 @@ jobs:
           if ((git -C $r log -1 --format=%s main) -ne 'Заметки: настройка') { throw "кодировка коммита: $(git -C $r log -1 --format=%s main)" }
           if (git -C $v status --porcelain) { throw 'незакоммиченное в хранилище' }
           if (@(Select-String "$HOME\.claude\CLAUDE.md" -Pattern 'babushka-notes').Count -ne 1) { throw 'правила Claude не один раз' }
-          $l = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Claude — Заметки.lnk")
+          $d = [Environment]::GetFolderPath('Desktop'); if (-not (Test-Path -LiteralPath "$d\Claude — Заметки.lnk")) { throw 'нет ярлыка' }
+          $l = (New-Object -ComObject Shell.Application).NameSpace($d).ParseName('Claude — Заметки.lnk').GetLink
           if ($l.WorkingDirectory -ne $v -or $l.Arguments -notlike '*claude.exe*') { throw "ярлык: $($l.WorkingDirectory) $($l.Arguments)" }
+          if ((Get-Content "$v\.obsidian\community-plugins.json" -Raw).Trim() -ne '["obsidian-git"]') { throw "список плагинов: $(Get-Content "$v\.obsidian\community-plugins.json" -Raw)" }
           'всё на месте'
       - name: Obsidian открыл хранилище сам
         if: matrix.os == 'windows-2025'
