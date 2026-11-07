@@ -78,3 +78,158 @@ jobs:
           assert any(r['path'].endswith('code/app') and r['has_claude_md'] for r in s['git_repos']), s['git_repos']
           assert 's1' in s['claude_code']['skills']; print('ok')"
           grep -q 'Второй мозг' ~/claude-kit/prompt.md
+
+  # «Заметки» для бабушки (docs/kit/babushka.*): GitHub подменён локальным репозиторием, остальное — как у человека.
+  babushka-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env: { PS_RUN: "iex ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($env:GITHUB_WORKSPACE + '\\docs\\kit\\babushka.ps1')))" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Подставные GitHub и claude
+        shell: pwsh
+        run: |
+          git init -q --bare "$env:RUNNER_TEMP\remote.git"
+          git config --global user.name 'Тест'; git config --global user.email t@t
+          New-Item -ItemType Directory -Force "$HOME\.local\bin" | Out-Null
+          Copy-Item "$env:SystemRoot\System32\whoami.exe" "$HOME\.local\bin\claude.exe"
+      - name: Без входа в GitHub — код 10 (из bash, как Claude Code)
+        shell: bash
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN; export GH_CONFIG_DIR="$RUNNER_TEMP/gh-empty" BABUSHKA_SKIP_INSTALL=1 BABUSHKA_NO_LAUNCH=1
+          c=0; powershell -NoProfile -ExecutionPolicy Bypass -Command "$PS_RUN" || c=$?
+          [ "$c" = 10 ] || { echo "ждали код 10, а он $c"; exit 1; }
+      - name: Настройка (на 2025 — с настоящей установкой и запуском Obsidian)
+        shell: bash
+        run: |
+          export BABUSHKA_REMOTE="$RUNNER_TEMP\\remote.git"
+          [ "${{ matrix.os }}" = windows-2025 ] || export BABUSHKA_SKIP_INSTALL=1 BABUSHKA_NO_LAUNCH=1
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$PS_RUN"
+      - name: Второй запуск ничего не ломает
+        shell: bash
+        run: BABUSHKA_REMOTE="$RUNNER_TEMP\\remote.git" BABUSHKA_SKIP_INSTALL=1 BABUSHKA_NO_LAUNCH=1 powershell -NoProfile -ExecutionPolicy Bypass -Command "$PS_RUN"
+      - name: Проверка
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
+          $v = "$HOME\Заметки"; $r = "$env:RUNNER_TEMP\remote.git"
+          $json = '.claude\settings.json', '.obsidian\appearance.json', '.obsidian\community-plugins.json', '.obsidian\plugins\obsidian-git\data.json', '.obsidian\plugins\obsidian-git\manifest.json' | ForEach-Object { "$v\$_" }
+          $json += "$env:APPDATA\obsidian\obsidian.json"
+          foreach ($f in $json + "$v\.gitignore", "$v\Начни здесь.md", "$v\.claude\CLAUDE.md", "$v\.claude\NOW.md", "$v\.obsidian\plugins\obsidian-git\main.js") {
+            if (-not (Test-Path -LiteralPath $f)) { throw "нет $f" }
+            $b = [IO.File]::ReadAllBytes($f); if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB) { throw "BOM в $f" }
+          }
+          foreach ($f in $json) { node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" $f; if ($LASTEXITCODE) { throw "битый JSON $f" } }
+          $main = [IO.File]::ReadAllText("$v\.obsidian\plugins\obsidian-git\main.js")
+          foreach ($k in (Get-Content "$v\.obsidian\plugins\obsidian-git\data.json" -Raw | ConvertFrom-Json).PSObject.Properties.Name) { if ($main -notmatch "[{,]${k}:") { throw "ключа $k нет в плагине" } }
+          if ((Get-Content "$v\.obsidian\community-plugins.json" -Raw | ConvertFrom-Json) -notcontains 'obsidian-git') { throw 'плагин не включён' }
+          $o = Get-Content "$env:APPDATA\obsidian\obsidian.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+          if (-not ($o.vaults.PSObject.Properties.Value | Where-Object { $_.path -eq $v -and $_.open })) { throw 'хранилище не в obsidian.json' }
+          $files = git -C $r -c core.quotepath=false ls-tree -r --name-only main
+          foreach ($f in 'Начни здесь.md', '.claude/CLAUDE.md', '.obsidian/plugins/obsidian-git/main.js', '.gitignore') { if ($files -notcontains $f) { throw "в GitHub нет $f" } }
+          # второй запуск может сохранить только файлы, которые Obsidian создал сам при первом открытии
+          $n = [int](git -C $r rev-list --count main); if ($n -gt 2) { throw "лишние коммиты: $n" }
+          if ($n -eq 2) { $x = @(git -C $r diff --name-only main~1 main); "второй коммит: $($x -join ', ')"
+            if ($x | Where-Object { $_ -notmatch '^\.obsidian/[^/]+\.json$' -or $_ -eq '.obsidian/community-plugins.json' }) { throw "второй запуск поменял лишнее: $x" } }
+          if ((git -C $r log --format=%s main | Select-Object -Last 1) -ne 'Заметки: настройка') { throw "кодировка коммита: $(git -C $r log --format=%s main)" }
+          if (git -C $v status --porcelain) { throw 'незакоммиченное в хранилище' }
+          if (@(Select-String "$HOME\.claude\CLAUDE.md" -Pattern 'babushka-notes').Count -ne 1) { throw 'правила Claude не один раз' }
+          $d = [Environment]::GetFolderPath('Desktop'); if (-not (Test-Path -LiteralPath "$d\Claude — Заметки.lnk")) { throw 'нет ярлыка' }
+          $l = (New-Object -ComObject Shell.Application).NameSpace($d).ParseName('Claude — Заметки.lnk').GetLink
+          if ($l.WorkingDirectory -ne $v -or $l.Arguments -notlike '*claude.exe*') { throw "ярлык: $($l.WorkingDirectory) $($l.Arguments)" }
+          if ((Get-Content "$v\.obsidian\community-plugins.json" -Raw).Trim() -ne '["obsidian-git"]') { throw "список плагинов: $(Get-Content "$v\.obsidian\community-plugins.json" -Raw)" }
+          'всё на месте'
+      - name: Obsidian открыл хранилище сам
+        if: matrix.os == 'windows-2025'
+        shell: pwsh
+        run: |
+          $v = "$HOME\Заметки"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path "$v\.obsidian\workspace.json"); $i++) { Start-Sleep 2 }
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $s = [Windows.Forms.SystemInformation]::VirtualScreen; $bmp = New-Object Drawing.Bitmap $s.Width, $s.Height
+          [Drawing.Graphics]::FromImage($bmp).CopyFromScreen($s.Location, [Drawing.Point]::Empty, $s.Size); $bmp.Save("$env:RUNNER_TEMP\obsidian-win.png")
+          $fh = Get-Item "$v\.git\FETCH_HEAD" -ErrorAction SilentlyContinue
+          "FETCH_HEAD: $($fh.LastWriteTime) · сейчас $(Get-Date) (свежий — плагин Git сработал сам)"
+          if (-not (Test-Path "$v\.obsidian\workspace.json")) { throw 'Obsidian не открыл хранилище' }
+      - name: Плагин сам отправляет правки (справочно — без «Доверять автору» может не включиться)
+        if: matrix.os == 'windows-2025'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
+          $v = "$HOME\Заметки"; $r = "$env:RUNNER_TEMP\remote.git"
+          foreach ($f in @(Get-Item "$env:LOCALAPPDATA\Programs\Obsidian\resources\obsidian.asar", "$env:APPDATA\obsidian\obsidian-*.asar" -ErrorAction SilentlyContinue)) {
+            "== $($f.FullName)"; $t = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($f.FullName))
+            foreach ($w in 'Trust author', 'Доверять') { $i = $t.IndexOf($w); if ($i -ge 0) { $t.Substring([Math]::Max(0, $i - 160), 360) } } }
+          if (-not (Get-Process Obsidian -ErrorAction SilentlyContinue)) { Start-Process "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe"; Start-Sleep 15 }
+          Add-Content -LiteralPath "$v\Проверка.md" "проверка $(Get-Date)" -Encoding UTF8
+          for ($i = 0; $i -lt 40 -and ((git -C $r log -1 --format=%s main) -notmatch '^Заметки 20'); $i++) { Start-Sleep 5 }
+          git -C $r log --format='%h %s' main
+          if ((git -C $r log -1 --format=%s main) -match '^Заметки 20') { 'ПЛАГИН РАБОТАЕТ САМ' } else { 'ПЛАГИН НЕ ОТПРАВИЛ (ждёт «Доверять автору»?)' }
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.os == 'windows-2025'
+        with: { name: obsidian-win, path: '${{ runner.temp }}/obsidian-win.png', if-no-files-found: ignore }
+
+  babushka-mac:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Без входа в GitHub — код 10
+        run: |
+          git config --global user.name 'Тест'; git config --global user.email t@t
+          c=0; GH_CONFIG_DIR=$RUNNER_TEMP/gh-empty BABUSHKA_SKIP_INSTALL=1 BABUSHKA_NO_LAUNCH=1 bash docs/kit/babushka.sh || c=$?
+          [ "$c" = 10 ] || { echo "ждали код 10, а он $c"; exit 1; }
+      - name: Настройка без Homebrew (gh и Obsidian — с GitHub), с запуском Obsidian
+        run: |
+          brew uninstall --force gh >/dev/null 2>&1 || true; ! command -v gh
+          git init -q --bare $RUNNER_TEMP/remote.git; mkdir -p ~/.local/bin; printf '#!/bin/sh\n' > ~/.local/bin/claude; chmod +x ~/.local/bin/claude
+          BABUSHKA_NO_BREW=1 BABUSHKA_REMOTE=$RUNNER_TEMP/remote.git bash docs/kit/babushka.sh
+          ~/.local/bin/gh --version; ls -d /Applications/Obsidian.app
+      - name: Второй запуск и проверка
+        run: |
+          BABUSHKA_REMOTE=$RUNNER_TEMP/remote.git BABUSHKA_SKIP_INSTALL=1 BABUSHKA_NO_LAUNCH=1 bash docs/kit/babushka.sh
+          V=~/Заметки; R=$RUNNER_TEMP/remote.git
+          for f in .gitignore 'Начни здесь.md' .claude/CLAUDE.md .claude/NOW.md .obsidian/plugins/obsidian-git/main.js; do test -s "$V/$f" || { echo "нет $f"; exit 1; }; done
+          for f in "$V/.claude/settings.json" "$V/.obsidian/appearance.json" "$V/.obsidian/community-plugins.json" "$V/.obsidian/plugins/obsidian-git/data.json" ~/Library/Application\ Support/obsidian/obsidian.json; do
+            node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$f" || { echo "битый JSON $f"; exit 1; }; done
+          python3 - <<'PY'
+          import json, os
+          v = os.path.realpath(os.path.expanduser('~/Заметки'))
+          o = json.load(open(os.path.expanduser('~/Library/Application Support/obsidian/obsidian.json')))
+          assert any(x['path'] == v and x['open'] for x in o['vaults'].values()), o
+          m = open(v + '/.obsidian/plugins/obsidian-git/main.js').read()
+          for k in json.load(open(v + '/.obsidian/plugins/obsidian-git/data.json')): assert f',{k}:' in m or f'{{{k}:' in m, k
+          print('ok')
+          PY
+          [ "$(git -C $R rev-list --count main)" = 1 ] && [ "$(git -C $R log -1 --format=%s main)" = 'Заметки: настройка' ]
+          git -C $R -c core.quotepath=false ls-tree -r --name-only main | grep -qx 'Начни здесь.md'
+          [ -z "$(git -C $V status --porcelain)" ] && [ "$(grep -c babushka-notes ~/.claude/CLAUDE.md)" = 1 ] && test -x ~/Desktop/'Claude — Заметки.command'
+      - name: Obsidian открыл хранилище сам
+        run: |
+          for i in $(seq 30); do [ -f ~/Заметки/.obsidian/workspace.json ] && break; sleep 2; done
+          screencapture -x $RUNNER_TEMP/obsidian-mac.png || true
+          ls -l ~/Заметки/.git/FETCH_HEAD; date
+          test -f ~/Заметки/.obsidian/workspace.json
+      - name: Плагин сам отправляет правки (справочно — без «Доверять автору» может не включиться)
+        continue-on-error: true
+        run: |
+          A=$(ls -d /Applications/Obsidian.app); R=$RUNNER_TEMP/remote.git
+          for f in "$A/Contents/Resources/obsidian.asar" ~/Library/Application\ Support/obsidian/obsidian-*.asar; do
+            [ -f "$f" ] || continue; echo "== $f"
+            python3 -c "import sys; t=open(sys.argv[1],'rb').read()
+          for w in ('Trust author'.encode(), 'Доверять'.encode()):
+              i=t.find(w); print(t[max(0,i-160):i+200].decode('utf-8','replace') if i>=0 else 'нет: '+w.decode())" "$f"; done
+          pgrep -x Obsidian >/dev/null || { open "$A"; sleep 15; }
+          echo "проверка $(date)" >> ~/Заметки/Проверка.md
+          for i in $(seq 40); do git -C $R log -1 --format=%s main | grep -q '^Заметки 20' && break; sleep 5; done
+          git -C $R log --format='%h %s' main
+          screencapture -x $RUNNER_TEMP/obsidian-mac2.png || true
+          git -C $R log -1 --format=%s main | grep -q '^Заметки 20' && echo 'ПЛАГИН РАБОТАЕТ САМ' || echo 'ПЛАГИН НЕ ОТПРАВИЛ (ждёт «Доверять автору»?)'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: obsidian-mac, path: '${{ runner.temp }}/obsidian-mac*.png', if-no-files-found: ignore }
