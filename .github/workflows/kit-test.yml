@@ -197,6 +197,18 @@ jobs:
           screencapture -x $RUNNER_TEMP/obsidian-mac.png || true
           ls -l ~/Заметки/.git/FETCH_HEAD; date
           test -f ~/Заметки/.obsidian/workspace.json
+      - name: Плагин сам отправляет правки (справочно — без «Доверять автору» может не включиться)
+        continue-on-error: true
+        run: |
+          A=$(ls -d /Applications/Obsidian.app); R=$RUNNER_TEMP/remote.git
+          for f in "$A/Contents/Resources/obsidian.asar" ~/Library/Application\ Support/obsidian/obsidian-*.asar; do
+            [ -f "$f" ] || continue; echo "== $f"; LC_ALL=C grep -a -o '.\{0,160\}Trust author.\{0,200\}' "$f" | head -3; LC_ALL=C grep -a -o '.\{0,60\}Доверять.\{0,80\}' "$f" | head -3; done
+          pgrep -x Obsidian >/dev/null || { open "$A"; sleep 15; }
+          echo "проверка $(date)" >> ~/Заметки/Проверка.md
+          for i in $(seq 40); do git -C $R log -1 --format=%s main | grep -q '^Заметки 20' && break; sleep 5; done
+          git -C $R log --format='%h %s' main
+          screencapture -x $RUNNER_TEMP/obsidian-mac2.png || true
+          git -C $R log -1 --format=%s main | grep -q '^Заметки 20' && echo 'ПЛАГИН РАБОТАЕТ САМ' || echo 'ПЛАГИН НЕ ОТПРАВИЛ (ждёт «Доверять автору»?)'
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: obsidian-mac, path: '${{ runner.temp }}/obsidian-mac.png', if-no-files-found: ignore }
+        with: { name: obsidian-mac, path: '${{ runner.temp }}/obsidian-mac*.png', if-no-files-found: ignore }

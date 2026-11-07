@@ -189,7 +189,7 @@ if [ -z "${BABUSHKA_REMOTE:-}" ]; then
     fi
   fi
   if [ $authed = 0 ]; then
-    printf '\n\033[35mНУЖЕН ВХОД В GITHUB: %s auth login --hostname github.com --web --git-protocol https — потом запусти этот скрипт снова.\033[0m\n' "$(command -v gh)"
+    printf '\n\033[35mНУЖЕН ВХОД В GITHUB. Команда: gh auth login --hostname github.com --web --git-protocol https (gh = %s). Потом запусти этот скрипт снова.\033[0m\n' "$(command -v gh)"
     exit 10
   fi
 fi

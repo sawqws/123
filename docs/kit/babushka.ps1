@@ -196,7 +196,7 @@ if (-not $env:BABUSHKA_REMOTE) {
 }
 if (-not $env:BABUSHKA_REMOTE -and -not $authed) {
   Write-Host ''
-  Write-Host "НУЖЕН ВХОД В GITHUB: & '$((Get-Command gh).Source)' auth login --hostname github.com --web --git-protocol https — потом запусти этот скрипт снова." -ForegroundColor Magenta
+  Write-Host "НУЖЕН ВХОД В GITHUB. Команда: gh auth login --hostname github.com --web --git-protocol https (gh = $((Get-Command gh).Source)). Потом запусти этот скрипт снова." -ForegroundColor Magenta
   exit 10
 }
 if (-not (git config user.name)) { Fail 'у git нет имени автора (git config --global user.name)' }
