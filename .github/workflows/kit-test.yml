@@ -220,7 +220,10 @@ jobs:
         run: |
           A=$(ls -d /Applications/Obsidian.app); R=$RUNNER_TEMP/remote.git
           for f in "$A/Contents/Resources/obsidian.asar" ~/Library/Application\ Support/obsidian/obsidian-*.asar; do
-            [ -f "$f" ] || continue; echo "== $f"; LC_ALL=C grep -a -o '.\{0,160\}Trust author.\{0,200\}' "$f" | head -3; LC_ALL=C grep -a -o '.\{0,60\}Доверять.\{0,80\}' "$f" | head -3; done
+            [ -f "$f" ] || continue; echo "== $f"
+            python3 -c "import sys; t=open(sys.argv[1],'rb').read()
+          for w in ('Trust author'.encode(), 'Доверять'.encode()):
+              i=t.find(w); print(t[max(0,i-160):i+200].decode('utf-8','replace') if i>=0 else 'нет: '+w.decode())" "$f"; done
           pgrep -x Obsidian >/dev/null || { open "$A"; sleep 15; }
           echo "проверка $(date)" >> ~/Заметки/Проверка.md
           for i in $(seq 40); do git -C $R log -1 --format=%s main | grep -q '^Заметки 20' && break; sleep 5; done
