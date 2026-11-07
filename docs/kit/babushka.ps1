@@ -172,7 +172,7 @@ if (-not $mine) {
   $cfg.vaults | Add-Member -NotePropertyName $id -NotePropertyValue $mine
 } else { $mine | Add-Member -NotePropertyName open -NotePropertyValue $true -Force }
 WriteText $oj (($cfg | ConvertTo-Json -Depth 10) + "`n")
-Ok "Obsidian откроет «$VaultName» сам"
+Ok "Obsidian откроет «${VaultName}» сам"
 
 # ---------- 3. Git ----------
 Say 'Git'

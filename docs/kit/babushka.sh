@@ -169,7 +169,7 @@ if mine is None: mine = vaults[secrets.token_hex(8)] = {'path': vault, 'ts': int
 mine['open'] = True
 json.dump(cfg, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
 PY
-ok "Obsidian откроет «$NAME» сам"
+ok "Obsidian откроет «${NAME}» сам"
 
 # ---------- 3. Git ----------
 say 'Git'
