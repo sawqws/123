@@ -24,7 +24,12 @@ G() { git -C "$VAULT" "$@" || fail "git $* — ошибка"; }
 new() { [ -e "$1" ] || { mkdir -p "$(dirname "$1")"; cat > "$1"; }; }   # записать, только если файла нет
 app() { for d in /Applications "$HOME/Applications"; do [ -d "$d/Obsidian.app" ] && { echo "$d/Obsidian.app"; return; }; done; }
 brew_ok() { [ "${BABUSHKA_NO_BREW:-}" != 1 ] && has brew; }
-latest() { curl -fsSL "https://api.github.com/repos/$1/releases/latest" | grep -o '"browser_download_url": *"[^"]*"' | grep -o 'https://[^"]*' | grep -E "$2" | head -1; }
+# Ссылка на файл последнего релиза: версия — из перенаправления releases/latest (без лимитов API), запасной путь — API.
+latest() {
+  local t; t=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest" 2>/dev/null | sed -n 's#.*/releases/tag/##p')
+  if [ -n "$t" ]; then printf 'https://github.com/%s/releases/download/%s/%s\n' "$1" "$t" "${3//VER/${t#v}}"; return; fi
+  curl -fsSL "https://api.github.com/repos/$1/releases/latest" | grep -o '"browser_download_url": *"[^"]*"' | grep -o 'https://[^"]*' | grep -E "$2" | head -1
+}
 
 # ---------- 1. Программы ----------
 if [ "${BABUSHKA_SKIP_INSTALL:-}" != 1 ] && mac; then
@@ -40,7 +45,7 @@ if [ "${BABUSHKA_SKIP_INSTALL:-}" != 1 ] && mac; then
   elif brew_ok; then brew install gh && ok 'GitHub CLI поставлен'
   else
     a=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo amd64)
-    u=$(latest cli/cli "_macOS_${a}\.zip$"); t=$(mktemp -d)
+    u=$(latest cli/cli "_macOS_${a}\.zip$" "gh_VER_macOS_${a}.zip"); t=$(mktemp -d)
     { [ -n "$u" ] && curl -fsSL "$u" -o "$t/gh.zip" && unzip -q "$t/gh.zip" -d "$t" && mkdir -p ~/.local/bin && cp "$t"/gh_*/bin/gh ~/.local/bin/gh; } \
       && ok 'GitHub CLI поставлен (~/.local/bin/gh)' || warn 'GitHub CLI не встал'
     rm -rf "$t"
@@ -48,7 +53,7 @@ if [ "${BABUSHKA_SKIP_INSTALL:-}" != 1 ] && mac; then
   if [ -n "$(app)" ]; then ok 'Obsidian есть'
   elif brew_ok; then brew install --cask obsidian && ok 'Obsidian поставлен'
   else
-    u=$(latest obsidianmd/obsidian-releases '\.dmg$'); t=$(mktemp -d)
+    u=$(latest obsidianmd/obsidian-releases '\.dmg$' 'Obsidian-VER.dmg'); t=$(mktemp -d)
     dst=/Applications; [ -w "$dst" ] || { dst="$HOME/Applications"; mkdir -p "$dst"; }
     { [ -n "$u" ] && curl -fsSL "$u" -o "$t/o.dmg" && hdiutil attach -quiet -nobrowse -mountpoint "$t/m" "$t/o.dmg" \
       && cp -R "$t/m/Obsidian.app" "$dst/"; } && ok "Obsidian поставлен ($dst)" || warn 'Obsidian не встал'
