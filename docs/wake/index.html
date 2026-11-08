@@ -102,6 +102,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .row > .k { flex: 1; font-size: 16px; }
 .row > .k small { display: block; color: var(--mute); font-size: 13px; margin-top: 2px; }
 .row .link2 { color: var(--ember); font-size: 13px; padding: 4px 0; min-height: 36px; }
+.pill { flex: none; min-height: 36px; padding: 0 14px; border-radius: 18px; background: var(--surface2); color: var(--ember); font-size: 14px;
+  font-weight: 500; transition: transform .12s, background .2s; }
+.pill:active { transform: scale(.95); }
+@media (hover: hover) { .pill:hover { background: #2a2b33; } }
+.row .ok { color: var(--sleep); }
+.row .bad { color: #ff9a8a; }
+.big { font: 200 64px/1 var(--display); font-variant-numeric: tabular-nums; text-align: center; margin: 6px 0 10px; color: var(--ember); }
 
 .step { display: flex; align-items: center; gap: 4px; }
 .step button { width: 40px; height: 40px; border-radius: 20px; background: var(--surface2); font-size: 22px; line-height: 1;
@@ -294,6 +301,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
           <button class="play" id="preview" aria-label="Послушать мелодию"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11a.6.6 0 0 0 .9.5l9-5.5a.6.6 0 0 0 0-1l-9-5.5a.6.6 0 0 0-.9.5Z"/></svg></button>
         </div>
         <div class="row">
+          <div class="k">Экран ночью<small id="darkSub"></small></div>
+          <div class="seg" id="darkSeg" role="group" aria-label="Экран ночью">
+            <button data-v="0">Горит</button><button data-v="1">Выключен</button>
+          </div>
+        </div>
+        <div class="row" id="darkRow" hidden></div>
+        <div class="row" id="micRow">
           <label class="k" for="micSw">Слушать звуки<small>Если телефон не на кровати</small></label>
           <span class="sw"><input type="checkbox" id="micSw" role="switch"><span></span></span>
         </div>
@@ -364,6 +378,18 @@ const Core = (() => {
     const from = wakeAt - win * MIN, bs = ends(onset, cycle, wakeAt), i = bs.findIndex(b => b >= from);
     return { from, wakeAt, onset, ends: bs, onCycle: i >= 0, pred: i >= 0 ? bs[i] : wakeAt, k: i >= 0 ? i + 1 : bs.length };
   }
+  /** экран выключен — датчиков нет. Конец цикла в окне → он; нет — край окна, если до границы цикла ≤ 15 мин (сон там лёгкий);
+      иначе — в срок: будить раньше незачем */
+  function darkAt({ onset, cycle, from, to }) {
+    const C = cycle * MIN, NEAR = 15 * MIN, kOf = t => Math.floor((t - onset) / C);
+    if (to - onset < C) return { at: to, k: 0, why: 'deadline' };  // меньше цикла — просто в срок
+    const k = Math.max(1, Math.ceil((from - onset) / C)), b = onset + k * C;
+    if (b >= from && b <= to) return { at: b, k, why: 'cycle' };
+    const fs = (from - onset) % C, ce = C - (to - onset) % C;  // от конца прошлого цикла до окна; от окна до конца цикла
+    if (ce <= NEAR && ce <= fs) return { at: to, k: kOf(to), why: 'near' };
+    if (fs <= NEAR) return { at: from, k: kOf(from), why: 'near' };
+    return { at: to, k: kOf(to), why: 'deadline' };
+  }
   /** когда лечь: k полных циклов и пробуждение в окне (с запасом от края — больше сна) */
   function beds({ wakeAt, win, cycle, latency, need }) {
     const target = wakeAt - Math.round(win * 0.25) * MIN, out = [];
@@ -374,7 +400,7 @@ const Core = (() => {
   class Night {
     constructor(o) {
       Object.assign(this, { start: o.start, wakeAt: o.wakeAt, win: o.win, cycle: o.cycle || 90, latency: o.latency ?? 15,
-        ep: o.ep || [], onset: o.onset || null, end: o.end || null, snooze: !!o.snooze });
+        ep: o.ep || [], onset: o.onset || null, end: o.end || null, snooze: !!o.snooze, dark: o.dark || null });
     }
     get from() { return this.wakeAt - this.win * MIN; }
     act(e) { return e && e.m != null ? e.m : e && e.s != null ? e.s * 0.8 : null; }
@@ -423,14 +449,14 @@ const Core = (() => {
         minutes: Math.round((woke - on) / MIN), light: half(c.l), deep: half(c.d), awake: half(c.w),
         moves: this.ep.filter(e => (this.act(e) ?? 0) >= 1).length };
     }
-    toJSON() { const { start, wakeAt, win, cycle, latency, ep, onset, end, snooze } = this; return { start, wakeAt, win, cycle, latency, ep, onset, end, snooze }; }
+    toJSON() { const { start, wakeAt, win, cycle, latency, ep, onset, end, snooze, dark } = this; return { start, wakeAt, win, cycle, latency, ep, onset, end, snooze, dark }; }
   }
   /** порог движения: 2,5 × «тихий» уровень (30-й перцентиль за 20 минут), не меньше 0,03 м/с² */
   function motionScore(peak, peaks) {
     const s = peaks.slice(-40).sort((x, y) => x - y), base = s.length ? s[Math.floor(s.length * 0.3)] : peak;
     return Math.round(peak / Math.max(0.03, base * 2.5) * 100) / 100;
   }
-  return { MIN, EP, pad, hm, mins, toHM, dur, nextAt, ends, plan, beds, Night, motionScore };
+  return { MIN, EP, pad, hm, mins, toHM, dur, nextAt, ends, plan, darkAt, beds, Night, motionScore };
 })();
 
 /* ═════════ Состояние ═════════ */
@@ -449,7 +475,8 @@ const ls = {
 };
 const getTok = () => { try { return localStorage.getItem('kcal.token') || ''; } catch (e) { return ''; } };
 const setTok = t => { try { t ? localStorage.setItem('kcal.token', t) : localStorage.removeItem('kcal.token'); } catch (e) {} };
-const cfg = Object.assign({ wake: '07:00', src: 'own', day: null, win: 20, snd: 'dawn', mic: false, how: false }, ls.get('wake.cfg', {}));
+const cfg = Object.assign({ wake: '07:00', src: 'own', day: null, win: 20, snd: 'dawn', mic: false, how: false, dark: false, howDark: false, darkTest: null },
+  ls.get('wake.cfg', {}));
 if (!mins(cfg.wake)) cfg.wake = '07:00';
 if (![10, 20, 30, 45].includes(cfg.win)) cfg.win = 20;
 const saveCfg = () => ls.set('wake.cfg', cfg);
@@ -535,6 +562,10 @@ function renderMain() {
   document.querySelectorAll('#winSeg button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === cfg.win)));
   document.querySelectorAll('#sndSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === cfg.snd)));
   $('#micSw').checked = !!cfg.mic;
+  document.querySelectorAll('#darkSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === (cfg.dark ? '1' : '0'))));
+  $('#darkSub').textContent = cfg.dark ? 'будит по циклам WHOOP' : 'ловит движение — точнее';
+  $('#micRow').hidden = !!cfg.dark;
+  renderDarkRow();
 
   const bs = Core.beds({ wakeAt: w, win: cfg.win, cycle: c.cycle, latency: c.latency, need: c.need });
   const kE = (bs.find(b => b.enough) || bs[bs.length - 1]).k;
@@ -542,9 +573,12 @@ function renderMain() {
   const later = main.bed > t + 5 * MIN;  // «хороший» отбой ещё впереди — показываем план от него
   const onset = later ? main.bed + c.latency * MIN : t + c.latency * MIN;
   const p = Core.plan({ onset, wakeAt: w, win: cfg.win, cycle: c.cycle });
+  const dk = Core.darkAt({ onset, cycle: c.cycle, from, to: w });
+  if (cfg.dark) p.pred = dk.at;
   const left = w - t;
   let sub;
-  if (left < 50 * MIN) sub = `До подъёма ${Math.max(1, Math.round(left / MIN))} мин — разбужу при первом движении в окне`;
+  if (cfg.dark && !later) sub = `Уснёшь сейчас — разбужу в <b>${hm(dk.at)}</b>, ${dk.why === 'cycle' ? `в конце ${dk.k}-го цикла` : dk.why === 'near' ? 'рядом с концом цикла' : 'в крайнее время'}. Экран можно выключить`;
+  else if (left < 50 * MIN) sub = `До подъёма ${Math.max(1, Math.round(left / MIN))} мин — разбужу при первом движении в окне`;
   else if (later) sub = `Ляг в <b>${hm(main.bed)}</b> — ${kE} ${plural(kE, 'цикл', 'цикла', 'циклов')}, сна ${dur(main.sleep)}. Проснёшься в конце цикла`;
   else if (p.onCycle) sub = `Уснёшь сейчас — разбужу около <b>${hm(p.pred)}</b>, после ${p.k}-го цикла. Сна ~${dur((p.pred - onset) / MIN)}`;
   else sub = `Уснёшь сейчас — сна до ${dur((w - onset) / MIN)}. Разбужу, как шевельнёшься в окне, или в ${hm(w)}`;
@@ -561,6 +595,16 @@ function renderMain() {
     .map(b => `<div class="bed"><span class="t num">${hm(b.bed)}</span><span class="d">${b.k} ${plural(b.k, 'цикл', 'цикла', 'циклов')} · сна ${dur(b.sleep)}</span><span class="tag${b.enough ? '' : ' low'}">${b.enough ? 'по норме' : 'меньше нормы'}</span></div>`).join('');
   renderForma();
   $('#goHint').textContent = getTok() ? `Не прозвенит сайт — Тренер напишет в Telegram в ${hm(w)}` : `Про запас поставь обычный будильник на ${hm(w)}`;
+}
+function renderDarkRow() {
+  const r = $('#darkRow'), d = cfg.darkTest;
+  r.hidden = !cfg.dark;
+  if (!cfg.dark) return;
+  r.innerHTML = !d ? `<div class="k">Сначала проверь<small>Играет ли звук с выключенным экраном на этом телефоне</small></div><button class="pill" id="dtBtn">Проверить</button>`
+    : d.ok ? `<div class="k ok">Проверено<small>Звук играет и с выключенным экраном</small></div><button class="pill" id="dtBtn">Ещё раз</button>`
+    : `<div class="k bad">Не работает<small>Здесь звук глохнет без экрана — оставь его гореть или поставь будильник iPhone</small></div><button class="pill" id="scBtn">Будильник iPhone</button>`;
+  if ($('#dtBtn')) $('#dtBtn').onclick = darkTestOpen;
+  if ($('#scBtn')) $('#scBtn').onclick = openShortcut;
 }
 function renderForma() {
   const el = $('#forma'), d = fd();
@@ -585,6 +629,7 @@ const SR = 16000, SND_LEN = 180, RISE = 75;  // 3 мин: 75 с тихо → г�
 const sounds = {};  // kind → {url, buf}
 let AC = null;  // живой AudioContext — запасной путь, если <audio> не дали
 const AU = new Audio(); AU.preload = 'auto'; AU.setAttribute('playsinline', '');
+AU.addEventListener('pause', () => { if (night && night.dark && !night.end && document.visibilityState === 'visible') setTimeout(darkCheck, 300); });
 function wav(buf) {
   const d = buf.getChannelData(0), n = d.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
   const s = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
@@ -670,6 +715,84 @@ function stopAlarm() {
   if (acSrc) { try { acSrc.stop(); } catch (e) {} acSrc = null; }
   clearInterval(vibT); if (navigator.vibrate) navigator.vibrate(0);
 }
+/* Экран выключен: таймеры и датчики iPhone спят, поэтому будит не код, а сам звук — одна длинная дорожка
+   (тишина до нужной минуты, потом мелодия), запущенная нажатием «Спать». Её iPhone доигрывает и без экрана,
+   если не мешают (проверка — «Проверить»). MP3: 16 кГц моно, кадр 36 мс, без «резервуара» — куски склеиваются без щелчков. */
+const DARK = { sil: null, mel: {}, url: '' };
+const SIL_SEC = 0.972, FR = 144, FR_SEC = 0.036;  // silence.mp3 — 27 кадров по 36 байт; мелодии — кадры по 144 байта (32 кбит/с)
+function darkLoad(kind) {
+  const get = u => fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.arrayBuffer(); });
+  return Promise.all([DARK.sil || get('silence.mp3'), DARK.mel[kind] || get(kind + '.mp3')]).then(([a, b]) => { DARK.sil = a; DARK.mel[kind] = b; return true; });
+}
+const darkReady = () => !!(DARK.sil && DARK.mel[cfg.snd]);
+/** дорожка: sec секунд тишины, потом мелодия (с нарастанием или сразу громко), дальше громкая часть ещё reps раз */
+function darkTrack(sec, kind, { loud = false, reps = 7 } = {}) {  // 3 мин + 7 × 1:45 ≈ 15 мин звона, как у будильника iPhone
+  const n = Math.max(0, Math.round(sec / SIL_SEC)), mel = DARK.mel[kind], tail = mel.slice(Math.round(RISE / FR_SEC) * FR);
+  const parts = new Array(n).fill(DARK.sil);
+  parts.push(loud ? tail : mel);
+  for (let i = 0; i < reps; i++) parts.push(tail);
+  return { url: URL.createObjectURL(new Blob(parts, { type: 'audio/mpeg' })), off: n * SIL_SEC };
+}
+/** запустить дорожку — только из нажатия (iPhone иначе не даст звук) */
+function darkPlay(sec, o = {}) {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  const tr = darkTrack(Math.max(0, sec), cfg.snd, o);
+  if (DARK.url) URL.revokeObjectURL(DARK.url);
+  DARK.url = tr.url; DARK.off = tr.off;
+  AU.onended = null; AU.loop = false; AU.src = tr.url;
+  const p = AU.play(); if (p && p.catch) p.catch(() => toast('Звук не включился — нажми ещё раз'));
+  if ('mediaSession' in navigator && window.MediaMetadata) {
+    try { navigator.mediaSession.metadata = new MediaMetadata({ title: 'Будильник', artist: o.title || 'Тихо до подъёма', artwork: [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }] }); } catch (e) {}
+  }
+  return tr;
+}
+let openURL = u => { location.href = u; };
+function darkTestOpen() {
+  if (!darkReady()) { toast('Загружаю звук…'); darkLoad(cfg.snd).then(darkTestOpen, () => toast('Звук не загрузился — проверь интернет')); return; }
+  openSheet(`<h2 id="shT">Проверка без экрана</h2><p>Минута — и станет ясно, разбудит ли сайт этот телефон с выключенным экраном.</p>
+    <ul class="steps">
+      <li>${svgI('vol')}<span>Громкость — повыше<small>Звук пойдёт как музыка, беззвучный режим не мешает</small></span></li>
+      <li>${svgI('lock')}<span>Нажми «Начать» и сразу заблокируй экран боковой кнопкой<small>Через 30 секунд зазвенит. Услышишь — разблокируй</small></span></li>
+    </ul><button class="go" id="dtGo">Начать</button>`, darkTestStop);
+  $('#dtGo').onclick = darkTestRun;
+}
+const DT = { on: false, t0: 0, hid: 0, hidAt: 0, timer: 0 };
+function darkTestRun() {
+  darkPlay(30, { loud: true, reps: 0, title: 'Проверка — звон через 30 секунд' });
+  Object.assign(DT, { on: true, t0: now(), hid: 0, hidAt: 0 });
+  $('#shBody').innerHTML = `<h2 id="shT">Заблокируй экран</h2><div class="big num" id="dtLeft">30</div>
+    <p style="text-align:center">Через 30 секунд зазвенит. Потом разблокируй и вернись сюда.</p><button class="lnk" id="dtStop">Отменить</button>`;
+  $('#dtStop').onclick = closeSheet;
+  clearInterval(DT.timer);
+  DT.timer = setInterval(() => { const l = $('#dtLeft'); if (l) l.textContent = Math.max(0, 30 - Math.floor((now() - DT.t0) / 1000)); }, 500);
+}
+function darkTestStop() { if (!DT.on) return; DT.on = false; clearInterval(DT.timer); AU.pause(); }
+function darkTestBack() {  // вернулся на страницу после блокировки
+  const hid = DT.hid, pos = AU.currentTime || 0;
+  if (hid < 20000) {
+    $('#shBody').innerHTML = `<h2 id="shT">Экран не выключался</h2><p>Нужно заблокировать экран сразу после «Начать» и подождать звонка.</p><button class="go" id="dtAgain">Ещё раз</button>`;
+    $('#dtAgain').onclick = darkTestRun; DT.on = false; clearInterval(DT.timer); AU.pause(); return;
+  }
+  const went = pos >= 30.5;  // дорожка шла, пока экран был выключен
+  clearInterval(DT.timer);
+  $('#shBody').innerHTML = `<h2 id="shT">Звон был слышен?</h2><p>${went ? 'Судя по сайту, звук шёл и с выключенным экраном.' : 'Судя по сайту, звук остановился, когда экран погас.'}</p>
+    <button class="go" id="dtYes">Да, слышал</button><button class="lnk" id="dtNo">Нет</button>`;
+  const done = ok => { DT.on = false; AU.pause(); cfg.darkTest = { ok, t: Date.now(), pos: Math.round(pos) }; saveCfg(); shBack = null; closeSheet(); renderMain();
+    toast(ok ? 'Можно спать с выключенным экраном' : 'Здесь без экрана не разбудит'); };
+  $('#dtYes').onclick = () => done(true); $('#dtNo').onclick = () => done(false);
+}
+function openShortcut() {
+  const c = fx(), t = now(), w = wakeAt();
+  const at = Core.darkAt({ onset: t + c.latency * MIN, cycle: c.cycle, from: w - cfg.win * MIN, to: w }).at;
+  openSheet(`<h2 id="shT">Будильник iPhone</h2><p>Самый надёжный способ с выключенным экраном: время считает сайт, звенит обычный будильник iPhone.</p>
+    <ul class="steps">
+      <li>${svgI('bolt')}<span>Один раз: «Быстрые команды» → «+»<small>Добавь действие «Создать будильник» — найди поиском по слову «будильник»</small></span></li>
+      <li>${svgI('lock')}<span>Время будильника — «Входные данные команды»<small>Нажми на поле времени и выбери эту переменную. Назови команду «Умный будильник»</small></span></li>
+    </ul>
+    <button class="go" id="scGo">Поставить на ${hm(at)}</button><p class="hint" style="margin-top:10px">Это время — если уснёшь сейчас. Сайт не будет следить за сном.</p>`);
+  $('#scGo').onclick = () => openURL(`shortcuts://run-shortcut?name=${encodeURIComponent('Умный будильник')}&input=text&text=${encodeURIComponent(hm(at))}`);
+}
+
 let preT = 0;
 async function preview() {
   const btn = $('#preview');
@@ -753,6 +876,22 @@ async function goSleep() {
   if (!sounds[cfg.snd]) prepare(cfg.snd).then(s => { if (!AU.src || AU.src === SILENT) AU.src = s.url; }).catch(() => {});
   setTimeout(nightStatus, 2500);
 }
+function goDark() {
+  if (!darkReady()) { toast('Готовлю звук — нажми ещё раз'); darkLoad(cfg.snd).catch(() => toast('Звук не загрузился — проверь интернет')); return; }
+  const c = fx(), t = now(), w = wakeAt();
+  const d = Core.darkAt({ onset: t + c.latency * MIN, cycle: c.cycle, from: w - cfg.win * MIN, to: w });
+  const tr = darkPlay((d.at - t) / 1000, { title: `Разбужу в ${hm(d.at)}` });  // в самом нажатии
+  night = new Core.Night({ start: t, wakeAt: w, win: cfg.win, cycle: c.cycle, latency: c.latency, dark: { at: d.at, why: d.why, k: d.k, off: tr.off } });
+  lastEp = t; saveNight();
+  showNight(); arm();
+}
+function darkCheck() {  // вернулся на экран ночью: iPhone мог остановить звук (звонок, музыка, «Пауза» на экране блокировки)
+  if (!night || !night.dark || night.end) return;
+  const lost = AU.paused && now() < night.dark.at;
+  $('#nwarn').hidden = !lost; $('#nwarn').textContent = lost ? 'Звук будильника остановился — без него с выключенным экраном не разбужу' : '';
+  $('#resume').hidden = !lost; $('#resume').textContent = 'Включить звук';
+  $('#resume').onclick = () => { darkPlay((night.dark.at - now()) / 1000, { title: `Разбужу в ${hm(night.dark.at)}` }); darkCheck(); };
+}
 function arm() {
   if (!getTok() || !night) return;
   api('/api/wake/arm', { at: localISO(night.wakeAt + MIN), from: hm(night.from) }).catch(() => {});
@@ -768,9 +907,9 @@ function nightStatus() {
 }
 function showNight() {
   $('#night').hidden = false; $('#app').setAttribute('aria-hidden', 'true');
-  $('#nline').textContent = night.snooze ? `Разбужу в ${hm(night.wakeAt)}` : `Разбужу ${hm(night.from)}–${hm(night.wakeAt)}`;
+  $('#nline').textContent = night.snooze ? `Разбужу в ${hm(night.wakeAt)}` : night.dark ? `Разбужу в ${hm(night.dark.at)}` : `Разбужу ${hm(night.from)}–${hm(night.wakeAt)}`;
   $('#resume').hidden = true; $('#nwarn').hidden = true;
-  $('#nstatT').textContent = night.snooze ? 'Ещё пять минут' : 'Включаю датчики…';
+  $('#nstatT').textContent = night.dark ? 'Экран можно выключить' : night.snooze ? 'Ещё пять минут' : 'Включаю датчики…';
   nightTick(); clearInterval(nightT); nightT = setInterval(nightTick, 1000);
   wakeFace();
 }
@@ -788,19 +927,26 @@ function nightTick() {
     while (t - lastEp >= EP && guard++ < 3000) { lastEp += EP; closeEpoch(lastEp); }
     if (guard) saveNight();
   }
+  if (night.dark) {  // без датчиков: звук сам начнётся в dark.at; на экране — рассвет в ту же минуту
+    if (t >= night.dark.at) ring(night.snooze ? 'deadline' : { cycle: 'cycle', near: 'near' }[night.dark.why] || 'deadline');
+    return;
+  }
   const why = night.decide(t);
   if (why) ring(why);
 }
 function ring(why) {
   clearInterval(nightT); stopSensors();
-  const t = now(); night.end = { t, reason: why }; saveNight();
+  const t = now(), said = why;
+  if (why === 'near') why = 'cycle';  // в истории и Форме — «в конце цикла»
+  night.end = { t, reason: why }; saveNight();
   $('#night').hidden = true;
   const A = $('#alarm'); A.hidden = false; A.classList.remove('rise');
   $('#aclock').textContent = hm(t);
   $('#awhy').textContent = { move: 'Ты шевельнулся — сон лёгкий, самое время', sound: 'Ты ворочался — сон лёгкий, самое время',
-    cycle: 'Цикл сна закончился — сейчас легко встать', deadline: night.snooze ? 'Пять минут прошли' : 'Пора — это крайнее время' }[why];
+    cycle: 'Цикл сна закончился — сейчас легко встать', near: 'Конец цикла рядом — сейчас легче встать',
+    deadline: night.snooze ? 'Пять минут прошли' : 'Пора — это крайнее время' }[said];
   requestAnimationFrame(() => requestAnimationFrame(() => A.classList.add('rise')));
-  playAlarm();
+  if (!(night.dark && !AU.paused && AU.currentTime >= night.dark.off - 3)) playAlarm();  // с выключенным экраном мелодия уже играет из дорожки
   if (getTok() && !night.snooze) api('/api/wake/done', night.summary(t, why)).catch(() => {});
   else if (getTok()) api('/api/wake/done', { cancel: true }).catch(() => {});
 }
@@ -822,12 +968,13 @@ function finishNight() {
 function snooze() {
   stopAlarm();
   ls.set('wake.night0', night.toJSON());
-  const t = now();
-  night = new Core.Night({ start: t, wakeAt: t + 5 * MIN, win: 0, cycle: night.cycle, latency: 0, snooze: true });
+  const t = now(), dark = !!night.dark;
+  night = new Core.Night({ start: t, wakeAt: t + 5 * MIN, win: 0, cycle: night.cycle, latency: 0, snooze: true, dark: dark ? { at: t + 5 * MIN, why: 'snooze', off: 0 } : null });
+  if (dark) night.dark.off = darkPlay(300, { loud: true, title: `Разбужу в ${hm(t + 5 * MIN)}` }).off;  // нажатие — звук можно
   lastEp = t; saveNight();
   $('#alarm').hidden = true;
   showNight();
-  keepAwake();
+  if (!dark) keepAwake();
 }
 function nightOff() {
   openSheet(`<h2 id="shT">Выключить будильник?</h2><p>Утром он не прозвенит.</p>
@@ -853,7 +1000,17 @@ function resumeNight() {
     toast('Сайт был закрыт — будильник не прозвенел'); finishNight(); return true;
   }
   showNight();
-  $('#resume').hidden = false; $('#nstatT').textContent = 'Сайт перезапустился — нажми, чтобы слушать дальше';
+  if (n.dark) {
+    $('#resume').hidden = false; $('#resume').textContent = 'Включить звук будильника';
+    $('#nstatT').textContent = 'Сайт перезапустился — без звука не разбужу';
+    $('#resume').onclick = () => {
+      if (!darkReady()) { darkLoad(cfg.snd).catch(() => {}); toast('Готовлю звук — нажми ещё раз'); return; }
+      night.dark.off = darkPlay((night.dark.at - now()) / 1000, { title: `Разбужу в ${hm(night.dark.at)}` }).off; saveNight();
+      $('#resume').hidden = true; $('#nstatT').textContent = 'Экран можно выключить';
+    };
+    return true;
+  }
+  $('#resume').hidden = false; $('#resume').textContent = 'Продолжить ночь'; $('#nstatT').textContent = 'Сайт перезапустился — нажми, чтобы слушать дальше';
   $('#resume').onclick = async () => {
     unlockAudio(); $('#resume').hidden = true;
     const [awake] = await Promise.all([keepAwake(), startSensors(cfg.mic)]);
@@ -876,7 +1033,20 @@ function closeSheet() {
   setTimeout(() => { if (!shOpen) sh.hidden = true; }, 380);
   if (shBack) { const f = shBack; shBack = null; f(); }
 }
+function openHowDark(then) {
+  const tg = getTok();
+  openSheet(`<h2 id="shT">Перед сном</h2>
+  <ul class="steps">
+    <li>${svgI('bolt')}<span>Поставь на зарядку</span></li>
+    <li>${svgI('vol')}<span>Громкость — повыше<small>Будильник звучит как музыка, беззвучный режим не мешает</small></span></li>
+    <li>${svgI('lock')}<span>Можно заблокировать экран<small>Только не включай потом музыку или видео — они остановят будильник</small></span></li>
+    <li>${svgI('bed')}<span>Разбужу по циклам WHOOP<small>${tg ? `Не прозвенит — Тренер напишет в Telegram в ${hm(wakeAt())}` : `Про запас — обычный будильник на ${hm(wakeAt())}`}</small></span></li>
+  </ul>
+  <button class="go" id="howGo">${then ? 'Понятно, спать' : 'Понятно'}</button>`);
+  $('#howGo').onclick = () => { cfg.howDark = true; saveCfg(); shBack = null; closeSheet(); if (then) then(); };
+}
 function openHow(then) {
+  if (cfg.dark) return openHowDark(then);
   const tg = getTok();
   openSheet(`<h2 id="shT">Перед сном</h2>
   <ul class="steps">
@@ -931,10 +1101,11 @@ function nightSVG(r) {
 function showNightSheet(r, fresh) {
   openSheet(`<h2 id="shT">${fresh ? 'Доброе утро' : 'Ночь ' + nightName(r)}</h2>
     <p>Проснулся в ${esc(r.woke)} ${esc(WHY[r.reason] || '')}</p>
-    <div class="ns"><div><b class="num">${dur(r.minutes)}</b><span>сна (оценка)</span></div><div><b class="num">${esc(r.onset)}</b><span>уснул</span></div><div><b class="num">${r.moves}</b><span>${plural(r.moves, 'движение', 'движения', 'движений')}</span></div></div>
-    <figure class="sky" style="margin-top:14px">${nightSVG(r)}<div class="lbl num"><span style="left:0">${esc(r.start)}</span><span style="left:100%">${esc(r.woke)}</span></div>
+    <div class="ns"><div><b class="num">${dur(r.minutes)}</b><span>сна (оценка)</span></div><div><b class="num">${esc(r.onset)}</b><span>уснул${r.a ? '' : ' (примерно)'}</span></div>${r.a ? `<div><b class="num">${r.moves}</b><span>${plural(r.moves, 'движение', 'движения', 'движений')}</span></div>` : ''}</div>
+    ${r.a ? `<figure class="sky" style="margin-top:14px">${nightSVG(r)}<div class="lbl num"><span style="left:0">${esc(r.start)}</span><span style="left:100%">${esc(r.woke)}</span></div>
     <div class="legend"><span><i style="background:#3f5f7d"></i>спокойно</span><span><i style="background:#7ba1bb"></i>ворочался</span><span><i style="background:#e8dccb"></i>не спал</span></div>
-    <figcaption>По движению телефона — примерно. Точные фазы — в WHOOP.</figcaption></figure>
+    <figcaption>По движению телефона — примерно. Точные фазы — в WHOOP.</figcaption></figure>`
+    : '<p class="hint" style="text-align:left;margin:12px 0 0">Экран был выключен — движение не записывалось. Фазы этой ночи — в WHOOP.</p>'}
     <button class="go" id="nsOk" style="margin-top:18px">Готово</button>`);
   $('#nsOk').onclick = closeSheet;
 }
@@ -958,10 +1129,17 @@ $('#wPlus').onclick = () => setWake(toHM(mins(cfg.wake) + 5));
 $('#wakeIn').onchange = e => setWake(e.target.value);
 $('#wakeIn').onkeydown = e => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); setWake(toHM(mins(cfg.wake) + (e.key === 'ArrowUp' ? 5 : -5))); } };
 document.querySelectorAll('#winSeg button').forEach(b => b.onclick = () => { cfg.win = +b.dataset.v; saveCfg(); renderMain(); });
-document.querySelectorAll('#sndSeg button').forEach(b => b.onclick = () => { cfg.snd = b.dataset.v; saveCfg(); renderMain(); setTimeout(() => prepare(cfg.snd).catch(() => {}), 50); });
+document.querySelectorAll('#sndSeg button').forEach(b => b.onclick = () => { cfg.snd = b.dataset.v; saveCfg(); renderMain(); setTimeout(() => { prepare(cfg.snd).catch(() => {}); if (cfg.dark) darkLoad(cfg.snd).catch(() => {}); }, 50); });
 $('#micSw').onchange = e => { cfg.mic = e.target.checked; saveCfg(); };
 $('#preview').onclick = preview;
-$('#go').onclick = () => { if (!cfg.how) openHow(goSleep); else goSleep(); };
+$('#go').onclick = () => {
+  const f = cfg.dark ? goDark : goSleep;
+  if (!(cfg.dark ? cfg.howDark : cfg.how)) openHow(f); else f();
+};
+document.querySelectorAll('#darkSeg button').forEach(b => b.onclick = () => {
+  cfg.dark = b.dataset.v === '1'; saveCfg(); renderMain();
+  if (cfg.dark) darkLoad(cfg.snd).catch(() => {});
+});
 $('#howBtn').onclick = () => openHow(null);
 $('#histBtn').onclick = openHist;
 $('#shBg').onclick = closeSheet; $('#shX').onclick = closeSheet;
@@ -980,8 +1158,14 @@ document.addEventListener('keydown', e => {
   pn.addEventListener('touchend', () => { if (y0 == null) return; pn.style.transition = ''; pn.style.transform = ''; if (dy > 90) closeSheet(); y0 = null; });
 })();
 document.addEventListener('visibilitychange', () => {
+  if (DT.on) {  // проверка без экрана: сколько экран был выключен
+    if (document.visibilityState === 'hidden') DT.hidAt = now();
+    else if (DT.hidAt) { DT.hid += now() - DT.hidAt; DT.hidAt = 0; darkTestBack(); }
+    return;
+  }
   if (!night || night.end) return;
   if (document.visibilityState === 'hidden') { hiddenAt = now(); return; }
+  if (night.dark) { hiddenAt = 0; nightTick(); darkCheck(); return; }
   keepAwake();
   const gap = hiddenAt ? now() - hiddenAt : 0; hiddenAt = 0;
   if (gap > 2 * MIN) { lastEp = now(); toast('Экран гас — в это время я не слышал движений'); }
@@ -999,9 +1183,9 @@ if (!location.hostname.endsWith('github.io') && !/^(localhost|127\.)/.test(locat
 applyPlan();
 renderMain();
 if (!resumeNight()) refresh(); else if (getTok()) refresh();
-(window.requestIdleCallback || (f => setTimeout(f, 800)))(() => prepare(cfg.snd).catch(() => {}));
+(window.requestIdleCallback || (f => setTimeout(f, 800)))(() => { prepare(cfg.snd).catch(() => {}); if (cfg.dark) darkLoad(cfg.snd).catch(() => {}); });
 if ('serviceWorker' in navigator && !/^(localhost|127\.)/.test(location.hostname)) navigator.serviceWorker.register('sw.js').catch(() => {});
-window.__wake = { Core, jump: ms => { OFF += ms; }, night: () => night, S, cfg, sounds, AU };  // для проверки
+window.__wake = { Core, jump: ms => { OFF += ms; }, night: () => night, S, cfg, sounds, AU, DARK, DT, darkLoad, darkTrack, setOpen: f => { openURL = f; } };  // для проверки
 </script>
 </body>
 </html>
