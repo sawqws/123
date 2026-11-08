@@ -292,6 +292,20 @@ class ParseTest(unittest.TestCase):
         with mock.patch.object(sc, "sh", return_value=(127, "")):
             self.assertEqual(sc.pm2_check({})[0], [])  # нет pm2 (локально) — не проблема
 
+    def test_pm2_deploy_restarts_are_not_crashes(self):
+        """13 выкаток за сутки: бот выходит сам («Форма остановлен» / KeyboardInterrupt старого кода) — не проблема."""
+        err, out = os.path.join(TMP, "pm2-err2.log"), os.path.join(TMP, "pm2-out2.log")
+        write(err, "Traceback (most recent call last):\n  File \"/root/horo/coach/coach.py\", line 170, in tg\n"
+                   "    with urllib.request.urlopen(req, timeout=70) as r:\nKeyboardInterrupt\n")
+        write(out, "Веб-сервер: http://127.0.0.1:8789\nФорма запущен\nФорма остановлен\n" * 12)
+        env = {"status": "online", "restart_time": 181, "pm_err_log_path": err, "pm_out_log_path": out}
+        state = {"restarts": 168, "offsets": {err: 0, out: 0}}
+        with mock.patch.object(sc, "sh", return_value=(0, json.dumps([{"name": "coach-bot", "pm2_env": env}]))):
+            self.assertEqual(sc.pm2_check(state)[0], [])
+        env["restart_time"] = 187  # ещё 6 перезапусков без остановки — падения
+        with mock.patch.object(sc, "sh", return_value=(0, json.dumps([{"name": "coach-bot", "pm2_env": env}]))):
+            self.assertIn("coach-bot падал и перезапускался 6 раз с прошлой проверки", [p["what"] for p in sc.pm2_check(state)[0]])
+
 
 class DecideTest(unittest.TestCase):
     def test_clean_is_quiet_weekly_ok(self):

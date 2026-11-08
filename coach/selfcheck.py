@@ -50,6 +50,7 @@ KEEP = 7  # отчётов на диске
 NET = re.compile(r"time[d ]?\s?out|timeout|ConnectionReset|Connection (?:reset|refused|aborted)|RemoteDisconnected|"
                  r"URLError|urlopen error|Temporary failure|Name or service|Network is unreachable|IncompleteRead|"
                  r"SSL|HTTP Error (?:429|5\d\d)|Bad Gateway|Service Unavailable|getUpdates|BrokenPipe", re.I)
+STOPPED = "Форма остановлен"  # coach.run при pm2 stop/restart (SIGINT от выкатки и поддержки) — не падение
 RUNNING = threading.Event()  # прогон идёт в этом процессе (вдобавок к flock между процессами)
 
 
@@ -168,7 +169,7 @@ def parse_logs(text):
             i += 1
             key = last.strip()[:200]
             where = next((b.strip() for b in reversed(block) if b.strip().startswith('File "') and "/coach/" in b), "")
-            if key and not NET.search(key):
+            if key and not NET.search(key) and key != "KeyboardInterrupt":  # SIGINT от pm2 stop/restart
                 e = errs.setdefault(key, {"n": 0, "where": where, "trace": "\n".join(block[-8:] + [last])[-1500:]})
                 e["n"] += 1
             continue
@@ -212,14 +213,17 @@ def pm2_check(state, name="coach-bot"):
     if status != "online":
         found.append({"kind": "pm2", "sev": "error", "where": "сервер", "what": f"{name}: статус {status}",
                       "steps": ["pm2 status"], "configs": [], "also": [], "shot": ""})
+    offsets = state.setdefault("offsets", {})
+    err, out = (read_new(p, offsets) if p else "" for p in (env.get("pm_err_log_path"), env.get("pm_out_log_path")))
+    # выкатки и поддержка перезапускают бота сами (их по дню бывает 10+) — в счёт только падения
+    stops = out.count(STOPPED) + len(re.findall(r"^KeyboardInterrupt\s*$", err, re.M))
     restarts, before = int(env.get("restart_time") or 0), state.get("restarts")
-    if before is not None and restarts - int(before) >= 5:  # перезапуски поддержкой/обновлением бывают, 5+ за сутки — падает
-        found.append({"kind": "pm2", "sev": "error", "where": "сервер", "what": f"{name} перезапускался {restarts - int(before)} раз с прошлой проверки",
+    crashes = restarts - int(before) - stops if before is not None else 0
+    if crashes >= 5:
+        found.append({"kind": "pm2", "sev": "error", "where": "сервер", "what": f"{name} падал и перезапускался {crashes} раз с прошлой проверки",
                       "steps": ["pm2 status", f"pm2 logs {name}"], "configs": [], "also": [], "shot": ""})
     state["restarts"] = restarts
-    offsets = state.setdefault("offsets", {})
-    text = "".join(read_new(p, offsets) for p in (env.get("pm_err_log_path"), env.get("pm_out_log_path")) if p)
-    for what, e in sorted(parse_logs(text).items(), key=lambda x: -x[1]["n"])[:8]:
+    for what, e in sorted(parse_logs(err + out).items(), key=lambda x: -x[1]["n"])[:8]:
         found.append({"kind": "log", "sev": "error", "where": e["where"] or f"логи {name}", "what": f"{what} (×{e['n']})",
                       "steps": [f"pm2 logs {name} --err"], "trace": e["trace"], "configs": [], "also": [], "shot": ""})
     return found, {"pm2": status, "restarts": restarts}
