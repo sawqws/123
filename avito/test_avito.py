@@ -269,11 +269,13 @@ class Flow(FlowBase):
         d = self.make_ad()
         self.cb("pub")
         self.assertEqual(len(self.albums), 2)  # после фона и в наборе для Авито
-        kit = [p for m, p in self.sent if m == "sendMessage" and "Выложить на Авито" in p.get("text", "")][-1]
-        self.assertIn("<code>iPhone 13 128 ГБ</code>", kit["text"])
-        self.assertIn("<code>35000</code>", kit["text"])
+        kit = [p for m, p in self.sent if m == "sendMessage" and "Подача на Авито" in p.get("text", "")][-1]
         self.assertEqual(kit["reply_markup"]["inline_keyboard"][0][0]["url"], avito.ADD_URL)
-        self.assertTrue(self.texts()[-1].startswith("Отличный телефон."))  # описание — отдельным сообщением
+        texts = self.texts()
+        i = texts.index("<code>iPhone 13 128 ГБ</code>")  # порядок подачи: название, описание, цена, поля — отдельными сообщениями
+        self.assertTrue(texts[i + 1].startswith("<code>Отличный телефон."))
+        self.assertEqual(texts[i + 2], "<code>35000</code>")
+        self.assertIn("Подача на Авито", texts[i + 3])
         self.cb("live")
         self.assertEqual(d["status"], "live")
         avito.on_message(self.msg(text="вот https://www.avito.ru/moskva/telefony/iphone_13_4012345678."))
@@ -1029,6 +1031,21 @@ class InitData(unittest.TestCase):
         self.assertEqual(bodies[1]["reply_markup"]["inline_keyboard"][0][0], {"text": "📊 Цена", "callback_data": "mk"})
 
 class BatchLogic(unittest.TestCase):
+    def test_no_inches_in_description(self):
+        reply = json.dumps({"title": "Кеды", "description": "Длина стельки около 28,6 см (11¼ дюйма), замер на фото."})
+        with mock.patch.object(ai, "claude", return_value=reply):
+            self.assertEqual(ai.write_ad("кеды")["description"], "Длина стельки около 28,6 см, замер на фото.")
+
+    def test_unread_ruler_is_flagged(self):
+        d = {"photos": [{"orig": "/x/orig_1.jpg", "clean": "/x/orig_1.jpg"}]}
+        with mock.patch.object(avito, "read_inches", return_value=0):
+            avito.fix_rulers(d)
+        self.assertTrue(d["ruler_unread"])
+        d = {"photos": [{"orig": "/x/orig_1.jpg", "clean": "/x/orig_1.jpg"}]}
+        with mock.patch.object(avito, "read_inches", return_value=None):
+            avito.fix_rulers(d)
+        self.assertNotIn("ruler_unread", d)
+
     def test_under_round(self):
         for src, want in ((20000, 19900), (19900, 19900), (5240, 5200), (5000, 4900), (835, 830), (1000, 900)):
             self.assertEqual(market.under_round(src), want)
