@@ -14,6 +14,8 @@ MIN_TICKS = 12     # настоящая рулетка — длинная лин
 LABEL_REACH = 3.2  # как далеко от оси конца линии (в радиусах кружка) может стоять число рулетки
 SIZE = 1200        # итоговый квадрат — как у остальных кадров (photos.py)
 FILL = 0.86        # какую часть кадра занимает линейка
+TAPE_BACK = 0.4    # лента от оси назад, в радиусах кружка: только старая линия, логотип на стельке виден
+TAPE_FRONT = 1.9   # лента от оси вперёд: закрывает обычные деления старой рулетки
 FONTS = ["DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "arialbd.ttf", "C:/Windows/Fonts/arialbd.ttf"]
 
@@ -161,10 +163,20 @@ def nice_cm(cm):
     return (f"{value:.1f}" if value % 1 else f"{value:.0f}").replace(".", ",")
 
 
-def frame(img, r):
-    """Квадрат как у остальных кадров объявления: линейка видна целиком, чего не хватает по краям — белое поле."""
+def backdrop(img, side):
+    """Поле вокруг снимка цветом пола: края кадра без резких белых полос и без размазанной руки."""
     import numpy as np
     from PIL import Image
+    rgb = np.asarray(img)
+    band = max(1, img.width // 12)
+    edges = np.concatenate([rgb[:, :band].reshape(-1, 3), rgb[:, -band:].reshape(-1, 3)])
+    return Image.new("RGB", (side, side), tuple(int(v) for v in np.median(edges, axis=0)))
+
+
+def frame(img, r):
+    """Квадрат как у остальных кадров объявления: линейка видна целиком, снимок плавно переходит в цвет пола."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
     side = int(np.linalg.norm(r["b"] - r["a"]) / FILL)
     center = (r["a"] + r["b"]) / 2
 
@@ -172,22 +184,30 @@ def frame(img, r):
         return (length - side) // 2 if length <= side else int(min(max(mid - side / 2, 0), length - side))
 
     origin = np.array([start(img.width, center[0]), start(img.height, center[1])])
-    canvas = Image.new("RGB", (side, side), (255, 255, 255))
-    canvas.paste(img, (int(-origin[0]), int(-origin[1])))
+    canvas = backdrop(img, side)
+    soft = max(4, side // 45)  # мягкий переход от снимка к полю
+    fade = Image.new("L", img.size, 0)
+    ImageDraw.Draw(fade).rectangle([soft * 2 if origin[0] < 0 else -1, soft * 2 if origin[1] < 0 else -1,
+                                    img.width - (soft * 2 if origin[0] < 0 else -1),
+                                    img.height - (soft * 2 if origin[1] < 0 else -1)], fill=255)
+    fade = fade.filter(ImageFilter.GaussianBlur(soft))
+    canvas.paste(img, (int(-origin[0]), int(-origin[1])), fade)
     k = SIZE / side
     return canvas.resize((SIZE, SIZE), Image.LANCZOS), dict(r, a=(r["a"] - origin) * k, b=(r["b"] - origin) * k,
                                                             radius=r["radius"] * k, line=r["line"] * k)
 
 
 def draw(img, r, cm):
-    """Сантиметровая линейка той же длины: от нижнего конца вверх, деления через 1 см, числа через 5 см."""
+    """Сантиметровая лента той же длины: непрозрачная, поэтому след прежней рулетки под ней не виден.
+    От нижнего конца вверх, деления через 1 см, числа через 5 см."""
     import numpy as np
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFilter
     k = 2  # рисуем вдвое крупнее и уменьшаем: края получаются гладкими
     layer = Image.new("RGBA", (img.width * k, img.height * k), (0, 0, 0, 0))
     pen = ImageDraw.Draw(layer)
     a, b = r["a"] * k, r["b"] * k  # a — верхний конец, b — нижний
     side = r["n"] * r["side"]
+    along = (a - b) / np.linalg.norm(a - b)  # снизу вверх
     span = np.linalg.norm(b - a)
     unit = span / 100
     mid = 1 - r["mid"]  # доля длины от нижнего конца, где на кадре середина
@@ -197,37 +217,40 @@ def draw(img, r, cm):
     def at(u):
         return b + (a - b) * ((1 + w) * u / (1 + w * u))
 
-    dark, white = (0, 0, 0, 130), (255, 255, 255, 255)
-    width = max(int(r["line"] * k), 4 * k)  # как у прежней линии: закрывает след от неё
-    edge = max(k, width // 8)
-    tick = max(k * 2, width // 3)
+    radius = r["radius"] * k
+    back, front = radius * TAPE_BACK, radius * TAPE_FRONT  # от оси: кружки назад, деления вперёд
+    over = radius * 1.1  # лента длиннее линии: закрывает кружки на концах
+    tape = [tuple(a + along * over - side * back), tuple(a + along * over + side * front),
+            tuple(b - along * over + side * front), tuple(b - along * over - side * back)]
+    shade = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shade).polygon(tape, fill=(0, 0, 0, 110))
+    layer = Image.alpha_composite(layer, shade.filter(ImageFilter.GaussianBlur(radius * 0.25)))
+    pen = ImageDraw.Draw(layer)
+    ink = (20, 24, 30, 255)
+    pen.polygon(tape, fill=(255, 255, 255, 255), outline=(0, 0, 0, 120))
+    wide = back + front
+    start = -back  # деления идут от заднего края ленты
+    line = max(k * 2, int(radius * 0.09))
     ticks = [(at(n / cm), n) for n in range(0, int(cm) + 1)]
-    segments = [(a, b, width)]
-    for p, n in ticks[1:]:
-        segments.append((p, p + side * unit * (3.0 if n % 5 == 0 else 1.6), tick))
-    for color, extra in ((dark, edge * 2), (white, 0)):
-        for p, q, wide in segments:
-            pen.line([tuple(p), tuple(q)], fill=color, width=wide + extra)
-        for end in (a, b):
-            rad = r["radius"] * k * 0.95 + extra / 2  # кружки тоже прежнего размера
-            pen.ellipse([end[0] - rad, end[1] - rad, end[0] + rad, end[1] + rad], fill=color)
+    for p, n in ticks:
+        length = wide * (0.42 if n % 5 == 0 else 0.24)
+        pen.line([tuple(p + side * start), tuple(p + side * (start + length))], fill=ink, width=line)
     big = font(int(unit * 4.2))
     text = f"≈{nice_cm(cm)} см"
     c = at(0.5)
     x0, y0, x1, y1 = pen.textbbox(tuple(c), text, font=big, anchor="mm")
     pad_x, pad_y = unit * 1.3, unit * 0.8
-    small = font(int(unit * 2.8))
+    small = font(int(unit * 2.5))
     for p, n in ticks[1:]:
         if n % 5:
             continue
-        q = p + side * unit * 3.6
-        anchor = "lm" if side[0] >= 0 else "rm"
-        bx0, by0, bx1, by1 = pen.textbbox(tuple(q), str(n), font=small, anchor=anchor)
+        q = p + side * (start + wide * 0.7)
+        bx0, by0, bx1, by1 = pen.textbbox(tuple(q), str(n), font=small, anchor="mm")
         if bx1 > x0 - pad_x and bx0 < x1 + pad_x and by1 > y0 - pad_y and by0 < y1 + pad_y:
             continue  # число не вылезает из-за подписи с длиной
-        pen.text(tuple(q), str(n), font=small, fill=white, anchor=anchor, stroke_width=edge, stroke_fill=(0, 0, 0, 255))
+        pen.text(tuple(q), str(n), font=small, fill=ink, anchor="mm")
     pen.rounded_rectangle([x0 - pad_x, y0 - pad_y, x1 + pad_x, y1 + pad_y], radius=(y1 - y0) / 2 + pad_y,
-                          fill=white, outline=(0, 0, 0, 90), width=k)
+                          fill=(255, 255, 255, 255), outline=(0, 0, 0, 150), width=k)
     pen.text(tuple(c), text, font=big, fill=(0, 0, 0, 255), anchor="mm")
     layer = layer.resize(img.size, Image.LANCZOS)
     return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")

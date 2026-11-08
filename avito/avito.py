@@ -989,17 +989,17 @@ def publish(chat):
         lines.append("Описания пока нет — напиши о вещи пару слов, и я его составлю.")
     if not d.get("price"):
         lines.append("Цены пока нет — пришли сюда число, подскажу по рынку: «📊 Цена».")
-    lines += [f"{name}: <code>{esc(d['params'][key])}</code>" for key, name in PARAM_NAMES.items()
+    lines += [f"{name}: {esc(d['params'][key])}" for key, name in PARAM_NAMES.items()
               if (d.get("params") or {}).get(key)]
     rows = [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]]
     if d.get("batch"):
         rows.append([b("📦 К таблице", "bt|table")])
-    send(chat, fmt("📤 Подача на Авито", "\n".join(lines), "Нажми на текст — скопируется. Выложил — жми «✅ Выложил»."), rows)
+    send(chat, fmt("📤 Подача на Авито", "\n".join(lines), "Копируй сообщения выше: долгий тап → Копировать. Выложил — жми «✅ Выложил»."), rows)
 
 
 def copy_message(chat, text):
-    """Отдельное сообщение, которое копируется одним нажатием."""
-    tg("sendMessage", chat_id=chat, text=f"<code>{esc(str(text))}</code>", parse_mode="HTML")
+    """Отдельное сообщение обычным шрифтом, без разметки (Глеб, 08.11: моноширинный не нужен): копируется как есть."""
+    tg("sendMessage", chat_id=chat, text=str(text))
 
 
 def send_description(chat, d):
