@@ -6,7 +6,7 @@ set -euo pipefail
 ORCA_TAG=v2.4.2
 ORCA_ASSET=OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage
 THREE_URL=https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js
-THREE_SHA=${THREE_SHA:-}
+THREE_SHA=9274bbcec8d96168626c732b5d31c775aa8cfb7eaa0599bec0c175908a2c1ce2
 BASE=https://cdimage.ubuntu.com/ubuntu-base/releases/noble/release
 TOP=/opt/orca
 ROOT=$TOP/root
@@ -70,8 +70,8 @@ fi
 if [ ! -f "$ROOT/opt/three.min.js" ]; then
   echo "== three.js"
   curl -fsSL -m 120 -o "$ROOT/opt/three.min.js" "$THREE_URL"
-  if [ -n "$THREE_SHA" ]; then echo "$THREE_SHA  $ROOT/opt/three.min.js" | sha256sum -c - >/dev/null; fi
+  echo "$THREE_SHA  $ROOT/opt/three.min.js" | sha256sum -c - >/dev/null || { rm -f "$ROOT/opt/three.min.js"; exit 1; }
 fi
 
-mkdir -p /var/lib/printer-bot/build /var/lib/printer-bot/ai/models/src /var/lib/printer-bot/ai/models/stl /var/lib/printer-bot/ai/models/png
+mkdir -p "$ROOT/job" /var/lib/printer-bot/build /var/lib/printer-bot/ai/models/src /var/lib/printer-bot/ai/models/stl /var/lib/printer-bot/ai/models/png
 echo "Готово: $(du -sh "$ROOT" | cut -f1)"
