@@ -654,6 +654,7 @@ function unlockAudio() {
 let acSrc = null, vibT = 0;
 function playAlarm() {
   const s = sounds[cfg.snd];
+  if (!s) { prepare(cfg.snd).then(() => { if (!$('#alarm').hidden) playAlarm(); }, () => {}); if (navigator.vibrate) navigator.vibrate([500, 700, 500]); return; }  // мелодия ещё не готова
   const fallback = () => {
     if (!AC || !s) return;
     try { acSrc = AC.createBufferSource(); acSrc.buffer = s.buf; acSrc.loop = true; acSrc.loopStart = RISE; acSrc.loopEnd = SND_LEN; acSrc.connect(AC.destination); AC.resume(); acSrc.start(); } catch (e) {}
