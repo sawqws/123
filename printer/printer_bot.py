@@ -114,7 +114,7 @@ class Moon:
         self.request("DELETE", "/server/files/gcodes/" + urllib.parse.quote(name))
 
     def details(self):
-        query = "gcode_move=speed_factor,extrude_factor&fan=speed&print_stats=filament_used&toolhead=homed_axes"
+        query = "gcode_move=speed_factor,extrude_factor&fan=speed&output_pin%20fan0=value&print_stats=filament_used"
         return self.request("GET", "/printer/objects/query?" + query, timeout=6)["status"]
 
     def history(self, count=5):
@@ -548,7 +548,7 @@ def soft(fn, *a):
     """Дополнительные сведения для Claude: не получилось — обойдётся без них."""
     try:
         return fn(*a)
-    except (Offline, kit.Fail, KeyError, ValueError, TypeError):
+    except (Offline, kit.Fail, KeyError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -567,14 +567,24 @@ def facts():
             lines.append(f"По нарезке файл печатается {hm(meta['estimated_time'])}.")
         if meta.get("filament_weight_total"):
             lines.append(f"По нарезке пластика {meta['filament_weight_total']:.0f} г.")
+    return "\n".join(lines + (soft(extra_facts) or []))
+
+
+def extra_facts():
+    """Подробности для Claude. Настоящий принтер отдаёт и null, поэтому числа проверяются."""
+    lines = []
     more = soft(moon.details) or {}
     move = more.get("gcode_move") or {}
-    if move.get("speed_factor"):
-        lines.append(f"Скорость {move['speed_factor'] * 100:.0f} %, поток {(move.get('extrude_factor') or 1) * 100:.0f} %.")
-    if "speed" in (more.get("fan") or {}):
-        lines.append(f"Обдув {more['fan']['speed'] * 100:.0f} %.")
+    if isinstance(move.get("speed_factor"), (int, float)):
+        flow = move.get("extrude_factor")
+        lines.append(f"Скорость {move['speed_factor'] * 100:.0f} %" + (f", поток {flow * 100:.0f} %." if isinstance(flow, (int, float)) else "."))
+    fan = (more.get("fan") or {}).get("speed")
+    if not isinstance(fan, (int, float)):
+        fan = (more.get("output_pin fan0") or {}).get("value")
+    if isinstance(fan, (int, float)):
+        lines.append(f"Обдув {fan * 100:.0f} %.")
     used = (more.get("print_stats") or {}).get("filament_used")
-    if used:
+    if isinstance(used, (int, float)) and used:
         lines.append(f"Пластика уже ушло {used / 1000:.1f} м.")
     jobs = soft(moon.history) or []
     if jobs:
@@ -590,7 +600,7 @@ def facts():
     names = soft(moon.files) or []
     if names:
         lines.append(f"Файлы на принтере, всего {len(names)}, новые сверху: " + ", ".join(f["path"] for f in names[:10]))
-    return "\n".join(lines)
+    return lines
 
 
 def make_prompt(question, photo=None):

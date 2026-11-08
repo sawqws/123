@@ -493,6 +493,19 @@ class Ask(Base):
         self.t.send("как дела?")
         self.assertEqual(self.t.last, "Всё идёт нормально.")
 
+    def test_null_values_from_real_printer(self):
+        """08.11 настоящий принтер прислал fan.speed = null, и ответ падал."""
+        self.moon.details = lambda: {"gcode_move": {"speed_factor": None, "extrude_factor": None}, "fan": {"speed": None},
+                                     "output_pin fan0": {"value": 0.6}, "print_stats": {"filament_used": None}}
+        self.t.send("как дела?")
+        self.assertEqual(self.t.last, "Всё идёт нормально.")
+        self.assertIn("Обдув 60 %", self.asked[0][0])
+
+    def test_broken_extra_data_shape_does_not_stop_answer(self):
+        self.moon.history = lambda: [None]
+        self.t.send("как дела?")
+        self.assertEqual(self.t.last, "Всё идёт нормально.")
+
     def test_offline_printer_is_told_to_claude(self):
         self.moon.offline = True
         self.t.send("как дела?")
