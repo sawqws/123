@@ -50,6 +50,9 @@ if [ -n "${PRINTER_TOKEN:-}" ]; then
 fi
 [ -s "$ENV" ] || { echo "Нет $ENV: передай PRINTER_TOKEN"; exit 1; }
 
+echo "== Песочница для нарезки"
+NEEDRESTART_SUSPEND=1 bash "$DIR/printer/setup_slicer.sh"
+
 echo "== Запуск"
 pm2 delete printer-bot >/dev/null 2>&1 || true
 pm2 start "$DIR/printer/ecosystem.config.js"
