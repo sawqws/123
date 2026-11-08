@@ -49,6 +49,7 @@ AI_TTL = 24 * 3600  # разговор с Claude забывается через
 AI_LOCK = threading.Lock()  # вопросы по очереди и в одном разговоре
 ANSWER_SIZE = 3500  # на сообщение: после разметки должно влезть в 4096
 TAG = re.compile(r"\[\[([a-z]+)(?::([^\]\n]+))?\]\]")
+TEMP_LINE = re.compile(r"^(ok\s*)?(T\d?|B):", re.I)  # старые замеры температуры в журнале: Claude принимал их за текущие
 STATES = {"printing": "🟢 Печатает", "paused": "⏸ На паузе", "complete": "✅ Готово", "cancelled": "⛔ Отменена",
           "error": "⚠️ Ошибка", "standby": "⚪️ Свободен"}
 
@@ -592,11 +593,12 @@ def extra_facts():
         for j in jobs:
             when = local_now(j.get("end_time") or j.get("start_time") or 0).strftime("%d.%m %H:%M")
             lines.append(f"- {j.get('filename')}: {j.get('status')}, {hm(j.get('print_duration'))}, {when}")
-    notes = [m.get("message") or "" for m in soft(moon.journal) or [] if m.get("type") == "response"]
-    notes = [n for n in notes if n.strip() and n.strip() != "ok"][-6:]
+    notes = [m for m in soft(moon.journal) or [] if m.get("type") == "response"]
+    notes = [m for m in notes if (m.get("message") or "").strip() not in ("", "ok")
+             and not TEMP_LINE.match(m["message"].strip())][-6:]
     if notes:
         lines.append("Последние сообщения Klipper:")
-        lines += [f"- {n.strip()[:160]}" for n in notes]
+        lines += [f"- {local_now(m.get('time') or 0).strftime('%d.%m %H:%M')} {m['message'].strip()[:160]}" for m in notes]
     names = soft(moon.files) or []
     if names:
         lines.append(f"Файлы на принтере, всего {len(names)}, новые сверху: " + ", ".join(f["path"] for f in names[:10]))

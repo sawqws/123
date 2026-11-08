@@ -477,7 +477,9 @@ class Ask(Base):
                                      "print_stats": {"filament_used": 12500.0}}
         self.moon.history = lambda: [{"filename": "old.gcode", "status": "cancelled", "print_duration": 3600,
                                       "end_time": 1700000000}]
-        self.moon.journal = lambda: [{"type": "response", "message": "!! Move out of range"},
+        self.moon.journal = lambda: [{"type": "response", "message": "!! Move out of range", "time": 1700000000},
+                                     {"type": "response", "message": "T:250.6 /248.0 B:75.0 /75.0"},
+                                     {"type": "response", "message": "ok T:250.0 /248.0"},
                                      {"type": "response", "message": "ok"}, {"type": "command", "message": "G28"}]
         self.t.send("что было?")
         prompt = self.asked[0][0]
@@ -485,6 +487,8 @@ class Ask(Base):
                      "!! Move out of range", "stand.gcode"):
             self.assertIn(part, prompt)
         self.assertNotIn("G28", prompt)
+        self.assertNotIn("250.6", prompt)  # старый замер не должен выглядеть текущим
+        self.assertNotIn("250.0", prompt)
 
     def test_missing_extra_data_does_not_stop_answer(self):
         def broken():
