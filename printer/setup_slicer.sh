@@ -14,7 +14,8 @@ PACKAGES="libgtk-3-0t64 libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0 libsoup-3
 libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libmspack0t64 libsecret-1-0 xvfb xauth openscad nodejs ca-certificates"
 [ "$(id -u)" = 0 ] || { echo "Запусти от root"; exit 1; }
 
-command -v bwrap >/dev/null || { echo "== bubblewrap"; apt-get install -y -qq bubblewrap >/dev/null; }
+# needrestart выключен: 08.11 установка пакета через него перезапустила pm2 и вместе с ним всех ботов
+command -v bwrap >/dev/null || { echo "== bubblewrap"; NEEDRESTART_SUSPEND=1 apt-get install -y -qq bubblewrap >/dev/null; }
 mkdir -p "$TOP"
 
 if [ ! -f "$ROOT/etc/os-release" ]; then
