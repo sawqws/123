@@ -59,7 +59,9 @@ def ask(prompt, session=None, timeout=300):
     if session:
         cmd += ["--resume", session]
     try:
-        p = subprocess.run(cmd, cwd=WORK, env=clean_env(), capture_output=True, text=True, timeout=timeout)
+        # stdin закрыт: иначе claude -p дописывает к вопросу всё, что придёт на вход
+        p = subprocess.run(cmd, cwd=WORK, env=clean_env(), stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=timeout)
     except FileNotFoundError:
         raise AIError("Claude Code не установлен на сервере") from None
     except subprocess.TimeoutExpired:

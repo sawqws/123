@@ -640,6 +640,7 @@ class Claude(unittest.TestCase):
         self.assertEqual(allowed, ["WebSearch", "WebFetch"])  # Read без условий открыл бы /etc/*.env
         self.assertNotIn("--resume", cmd)
         self.assertEqual(kw["cwd"], self.tmp)
+        self.assertEqual(kw["stdin"], subprocess.DEVNULL)  # иначе claude -p допишет к вопросу чужой ввод
         self.assertEqual(set(kw["env"]), {"PATH", "CLAUDE_CODE_OAUTH_TOKEN"})
 
     def test_prompt_lists_actions_and_forbids_pretending(self):
