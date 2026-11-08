@@ -22,6 +22,8 @@ if ! command -v python3 >/dev/null || ! command -v git >/dev/null || ! command -
     $APT install nodejs
   fi
 fi
+# подпись «см» на замерах (avito/ruler.py)
+[ -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] || { apt-get update && $APT install fonts-dejavu-core; }
 command -v pm2 >/dev/null || npm install -g pm2
 command -v claude >/dev/null || npm install -g @anthropic-ai/claude-code
 
@@ -37,7 +39,7 @@ echo "== 3/5 Удаление фона (rembg, ~400 МБ вместе с мод�
 VENV="$DIR/avito/.venv"
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
-"$VENV/bin/pip" install -q "rembg[cpu]" pillow
+"$VENV/bin/pip" install -q "rembg[cpu]" pillow numpy scipy
 "$VENV/bin/python" -c "from rembg import new_session; new_session('${AVITO_BG_MODEL:-isnet-general-use}')" \
   || echo "⚠️ Модель не скачалась — бот попробует при первом фото"
 bash "$DIR/common/setup.sh" || echo "⚠️ Голосовые не поставились — бот работает и без них"

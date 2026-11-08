@@ -174,5 +174,14 @@ def stats(items):
             "fast": nice(q[0]), "high": nice(q[2]), "min": min(prices), "max": max(prices)}
 
 
+def under_round(price):
+    """Цена чуть ниже круглого порога, чтобы попасть в фильтр «до 20 000»: 20 000 → 19 900, 5 240 → 5 200, 835 → 830."""
+    price = int(price)
+    if price < 1000:
+        return price // 10 * 10
+    price = price // 100 * 100
+    return price - 100 if price % 1000 == 0 else price
+
+
 def fmt_rub(x):
     return f"{int(x):,}".replace(",", " ") + " ₽"
