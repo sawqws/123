@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(REPO, "studio", "kit"))
 sys.path.insert(0, HERE)
 import ai  # noqa: E402
 import botkit as kit  # noqa: E402
+import slicer  # noqa: E402
 
 URL = (os.environ.get("PRINTER_URL") or "http://127.0.0.1:17125").rstrip("/")
 WS_PORT = int(os.environ.get("PRINTER_WS_PORT") or 17999)
@@ -50,6 +51,12 @@ AI_LOCK = threading.Lock()  # вопросы по очереди и в одно�
 ANSWER_SIZE = 3500  # на сообщение: после разметки должно влезть в 4096
 TAG = re.compile(r"\[\[([a-z]+)(?::([^\]\n]+))?\]\]")
 TEMP_LINE = re.compile(r"^(ok\s*)?(T\d?|B):", re.I)  # старые замеры температуры в журнале: Claude принимал их за текущие
+BUILD_ROUNDS = 4  # сколько раз Claude может пересобрать модель за один вопрос
+SLICE_LOCK = threading.Lock()  # слайсер один: процессор у сервера тоже один
+PENDING_LOCK = threading.Lock()
+REVIEW = ("Бот собрал модели. Открой картинки инструментом Read и сверь с просьбой Глеба: форма, размеры, что влезает на стол. "
+          "Есть ошибка — исправь исходник и снова поставь [[build:имя]]. Всё верно — ответь Глебу 1–3 строки, что сделал, "
+          "и поставь [[model:имя]] у деталей, которые ему показать. Если что-то меняла сборка, а показывать нечего, так и скажи.")
 STATES = {"printing": "🟢 Печатает", "paused": "⏸ На паузе", "complete": "✅ Готово", "cancelled": "⛔ Отменена",
           "error": "⚠️ Ошибка", "standby": "⚪️ Свободен"}
 
@@ -129,7 +136,7 @@ class Moon:
         body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\n'
                 "Content-Type: application/octet-stream\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
         self.request("POST", "/server/files/upload", body,
-                     {"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=300)
+                     {"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=1200)
 
 
 moon = Moon()
@@ -290,14 +297,15 @@ class PrinterBot(kit.Bot):
 
 
 bot = PrinterBot("Принтер", emoji="🖨", about="Твой 3D-принтер в Telegram: сколько осталось, пауза, отмена, запуск файлов, "
-                                         "сообщения о готовности и сбоях. На вопросы отвечает Claude.",
+                                         "нарезка STL, сообщения о готовности и сбоях. На вопросы отвечает Claude, он же правит модели.",
                  short="3D-принтер в Telegram",
-                 commands=[("start", "Статус"), ("files", "Файлы"), ("new", "Новый разговор"), ("help", "Что умею")],
+                 commands=[("start", "Статус"), ("files", "Файлы"), ("models", "Модели"), ("new", "Новый разговор"),
+                           ("help", "Что умею")],
                  token=os.environ.get("PRINTER_TOKEN", ""),
                  support={"name": "Принтер", "folders": ["printer"], "pm2": "printer-bot", "cwd": REPO,
                           "tests": ["python3 printer/test_printer.py"]},
-                 kb=[[kit.b("🖨 Статус", "home"), kit.b("📁 Файлы", "files")], [kit.KB_SUPPORT]],
-                 kb_version=2, kb_placeholder="Спроси что угодно или пришли G-code")
+                 kb=[[kit.b("🖨 Статус", "home"), kit.b("📁 Файлы", "files")], [kit.b("📐 Модели", "models"), kit.KB_SUPPORT]],
+                 kb_version=3, kb_placeholder="Спроси, опиши модель или пришли STL")
 
 OFFLINE_LINES = ["🔴 Нет связи с принтером", "Он выключен или без интернета. Если включён, туннель поднимется сам за минуту."]
 
@@ -308,11 +316,11 @@ def home_buttons(snap):
     state = snap.get("state")
     if state == "printing":
         return [[kit.b("🔄 Обновить", "home|r"), kit.b("⏸ Пауза", "pause"), kit.b("⛔ Отмена", "cancel")],
-                [kit.b("📁 Файлы", "files")]]
+                [kit.b("📁 Файлы", "files"), kit.b("📐 Модели", "models")]]
     if state == "paused":
         return [[kit.b("▶️ Продолжить", "resume", "success"), kit.b("⛔ Отмена", "cancel")],
                 [kit.b("🔄 Обновить", "home|r")]]
-    row = [kit.b("📁 Файлы", "files", "primary")]
+    row = [kit.b("📁 Файлы", "files", "primary"), kit.b("📐 Модели", "models")]
     if snap.get("st") and is_hot(snap["st"]):
         row.append(kit.b("🧊 Остудить", "cool"))
     return [row, [kit.b("🔄 Обновить", "home|r")]]
@@ -336,10 +344,10 @@ def home(c):
 def help_(c):
     c.say(kit.card("🖨 <b>Что умею</b>", [
         "Спроси что угодно текстом, голосом или фото: отвечает Claude, он видит текущую печать. /new — начать заново.",
-        "Показываю, сколько осталось. Пауза, отмена, запуск файлов, остывание.",
-        "Пишу сам: старт, первый слой, готово, ошибка, пропала связь.",
-        "Пришли .gcode до 20 МБ — положу на принтер.",
-        "/gcode G28 — любая команда принтеру."]), [[kit.b("‹ Главное", "home")]])
+        "Опиши, что нарисовать или поправить: Claude соберёт модель и покажет картинку.",
+        "Пришли .stl — нарежу. Пришли .gcode — положу на принтер. Файл до 20 МБ.",
+        "Показываю остаток, пауза, отмена, запуск, остывание. Пишу сам о старте, готовности и сбоях.",
+        "/gcode G28 — любая команда принтеру."]), [[kit.b("📐 Модели", "models"), kit.b("‹ Главное", "home")]])
 
 
 def need(snap):
@@ -530,13 +538,285 @@ def got_document(c):
     doc = c.msg["document"]
     name = safe_name(doc.get("file_name"))
     low = name.lower()
-    if not low.endswith((".gcode", ".gco")):
-        return c.say(kit.error("Пока принимаю только .gcode. Нарезать STL можно в чате с Claude на компьютере."))
+    if not low.endswith((".gcode", ".gco", ".stl")):
+        return c.say(kit.error("Понимаю .stl и .gcode. Другую модель сохрани как STL."))
     if (doc.get("file_size") or 0) > TG_FILE_LIMIT:
         return c.say(kit.error("Telegram отдаёт ботам файлы только до 20 МБ. Этот больше, его положу с компьютера."))
     c.typing()
-    moon.upload(name, tg_download(doc["file_id"]))
-    show_file(c, find(fid(name)))
+    if low.endswith(".stl"):
+        return got_stl(c, name, doc)
+    data = tg_download(doc["file_id"])
+    path = new_gcode_path()
+    with open(path, "wb") as f:
+        f.write(data)
+    deliver(c, None, path, name, [f"📄 {kit.esc(name)}"])
+
+
+def got_stl(c, name, doc):
+    path = new_gcode_path(".stl")
+    try:
+        with open(path, "wb") as f:
+            f.write(tg_download(doc["file_id"]))
+        send_model(c, slicer.add_stl(path, name))
+    except slicer.ModelError as e:
+        c.say(kit.error(kit.esc(e)))
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+# ---------- модели ----------
+
+def find_model(model_id):
+    for m in slicer.catalog():
+        if fid(m["name"]) == model_id:
+            return m["name"]
+    raise kit.Fail("Этой модели уже нет")
+
+
+def new_gcode_path(suffix=".gcode"):
+    folder = os.path.join(slicer.HOME, "gcode")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, uuid.uuid4().hex + suffix)
+
+
+def model_buttons(name):
+    model_id = fid(name)
+    rows = [[kit.b("✂️ Нарезать", f"cut|{model_id}", "success"), kit.b("➕ На стол", f"add|{model_id}")]]
+    project = any(m["name"] == name and m["project"] for m in slicer.catalog())
+    rows.append([kit.b("‹ Модели", "models")] + ([] if project else [kit.b("🗑 Удалить", f"mdel|{model_id}")]))
+    return rows
+
+
+def send_model(c, name):
+    info = slicer.describe(name)
+    lines = [f"📏 {info['x']:.0f} × {info['y']:.0f} × {info['z']:.0f} мм"]
+    if not info["fits"]:
+        lines.append("⚠️ Не влезает на стол. Claude может уменьшить или разрезать: напиши ему.")
+    c.send_photo(info["png"], kit.card(f"📐 <b>{kit.esc(name)}</b>", lines), model_buttons(name))
+
+
+def leave_photo(c):
+    """С сообщения-картинки текстом не уйти: убираем его, следующий экран придёт новым сообщением."""
+    if c.mid and (c.msg or {}).get("photo"):
+        c.delete()
+        c.mid = None
+
+
+@bot.command("models")
+@bot.button("models")
+def models(c):
+    leave_photo(c)
+    page = int(c.args[0]) if c.args and c.args[0].isdigit() else 0
+    items = slicer.catalog()
+    chunk = items[page * PAGE:(page + 1) * PAGE]
+    rows = [[kit.b(m["name"], f"m|{fid(m['name'])}")] for m in chunk]
+    nav = [kit.b("‹", f"models|{page - 1}") if page else None,
+           kit.b("›", f"models|{page + 1}") if (page + 1) * PAGE < len(items) else None]
+    plate = bot.db.get("plate") or []
+    rows += [[x for x in nav if x], [kit.b(f"🍽 Стол: {len(plate)}", "plate")] if plate else [], [kit.b("‹ Главное", "home")]]
+    lines = [f"Всего {kit.plural(len(items), 'модель', 'модели', 'моделей')}, новые сверху."] if items else ["Пока пусто."]
+    c.show(kit.card("📐 <b>Модели</b>", lines, "<i>Пришли .stl или опиши словами, что нарисовать</i>"), [r for r in rows if r])
+
+
+@bot.button("m")
+def model_card(c):
+    leave_photo(c)
+    send_model(c, find_model(c.args[0]))
+
+
+@bot.button("mdel")
+def model_delete_ask(c):
+    name = find_model(c.args[0])
+    leave_photo(c)
+    c.show(kit.card("🗑 <b>Удалить модель?</b>", [kit.esc(name)]),
+           [[kit.b("🗑 Да, удалить", f"mdelok|{c.args[0]}", "danger"), kit.b("‹ Нет", f"m|{c.args[0]}")]])
+
+
+@bot.button("mdelok")
+def model_delete(c):
+    name = find_model(c.args[0])
+    try:
+        slicer.delete(name)
+    except slicer.ModelError as e:
+        raise kit.Fail(str(e)) from None
+    bot.db.set("plate", [n for n in bot.db.get("plate") or [] if n != name])
+    c.toast("Удалил")
+    c.args = []
+    models(c)
+
+
+def profile_rows(prefix):
+    return [[kit.b(label, f"{prefix}|{key}")] for key, (label, _, _) in slicer.PROFILES.items()]
+
+
+@bot.button("cut")
+def cut_menu(c):
+    name = find_model(c.args[0])
+    leave_photo(c)
+    rows = [[kit.b(label, f"go_cut|{c.args[0]}|{key}", "success" if key == "bal" else None)]
+            for key, (label, _, _) in slicer.PROFILES.items()]
+    c.show(kit.card("✂️ <b>Как нарезать?</b>", [kit.esc(name), "Баланс: слой 0,30, 3 стенки. Прочнее: слой 0,28, крышка толще. Быстрее: слой 0,32, 2 стенки."]),
+           rows + [[kit.b("‹ Назад", f"m|{c.args[0]}")]])
+
+
+def start_cut(c, names, profile, stem):
+    if SLICE_LOCK.locked():
+        return c.toast("Уже режу другую модель, подожди", alert=True)
+    c.ack("Режу")
+    leave_photo(c)
+    bot.later(run_cut, c, names, profile, stem)
+
+
+@bot.button("go_cut")
+def go_cut(c):
+    name = find_model(c.args[0])
+    start_cut(c, [name], c.args[1], name)
+
+
+@bot.button("add")
+def plate_add(c):
+    name = find_model(c.args[0])
+    plate = (bot.db.get("plate") or []) + [name]
+    bot.db.set("plate", plate)
+    c.toast(f"На столе деталей: {len(plate)}")
+
+
+@bot.button("plate")
+def plate_screen(c):
+    leave_photo(c)
+    plate = bot.db.get("plate") or []
+    if not plate:
+        c.args = []
+        return models(c)
+    counts = {n: plate.count(n) for n in plate}
+    lines = [kit.esc(n) + (f" × {k}" if k > 1 else "") for n, k in counts.items()]
+    try:
+        slicer.layout(plate)
+        fit = True
+    except slicer.ModelError as e:
+        fit = False
+        lines.append(f"⚠️ {kit.esc(e)}")
+    rows = profile_rows("cutplate") if fit else []
+    c.show(kit.card("🍽 <b>Стол</b>", lines), rows + [[kit.b("🧹 Очистить", "plateclear"), kit.b("‹ Модели", "models")]])
+
+
+@bot.button("plateclear")
+def plate_clear(c):
+    bot.db.delete("plate")
+    c.toast("Стол пуст")
+    c.args = []
+    models(c)
+
+
+@bot.button("cutplate")
+def cut_plate(c):
+    plate = bot.db.get("plate") or []
+    if not plate:
+        return c.toast("На столе пусто")
+    start_cut(c, plate, c.args[0], f"plate_{plate[0]}_x{len(plate)}" if len(plate) > 1 else plate[0])
+
+
+def gcode_name(stem, profile):
+    """Имя файла на принтере: не затирает то, что там уже есть."""
+    names = {f["path"] for f in soft(moon.files) or []}
+    base = f"{slicer.safe_stem(stem)}_{profile}"
+    name, n = base + ".gcode", 2
+    while name in names:
+        name, n = f"{base}_{n}.gcode", n + 1
+    return name
+
+
+def gcode_lines(path, name):
+    """Что нарезалось: время и вес из служебных строк G-code."""
+    with open(path, "rb") as f:
+        head = f.read(65536)
+        f.seek(max(0, os.path.getsize(path) - 262144))
+        text = (head + f.read()).decode("utf-8", "replace")
+    lines = [f"📄 {kit.esc(name)}"]
+    took = re.search(r"estimated printing time \(normal mode\)\s*=\s*([^\n]+)", text) or re.search(r"total estimated time:\s*([^\n;]+)", text)
+    if took:
+        lines.append(f"⏱ {kit.esc(took.group(1).strip())}")
+    grams = re.search(r"total filament used \[g\]\s*=\s*([\d.]+)", text)
+    if grams:
+        lines.append(f"🧵 {float(grams.group(1)):.0f} г")
+    return lines
+
+
+def run_cut(c, names, profile, stem):
+    label = slicer.PROFILES.get(profile, ("", "", ""))[0]
+    title = f"✂️ <b>Режу</b> · {kit.esc(label)}"
+    mid = c.say(kit.card(title, [kit.esc(stem), "Сервер слабый: обычно несколько минут."]))
+    started, done = time.time(), threading.Event()
+
+    def tick():
+        while not done.wait(30):
+            bot.edit(c.chat, mid, kit.card(title, [kit.esc(stem), f"⏳ Уже {hm(time.time() - started)}"]))
+
+    if not bot.testing_mode:
+        threading.Thread(target=tick, daemon=True).start()
+    path = new_gcode_path()
+    try:
+        with SLICE_LOCK:
+            slicer.slice_plate(names, profile, path)
+    except slicer.ModelError as e:
+        return bot.edit(c.chat, mid, kit.error(kit.esc(e)), [[kit.b("‹ Модели", "models")]])
+    finally:
+        done.set()
+    name = gcode_name(stem, profile)
+    deliver(c, mid, path, name, gcode_lines(path, name))
+    if len(names) > 1:
+        bot.db.delete("plate")
+
+
+def deliver(c, mid, path, name, lines):
+    """Кладёт G-code на принтер. Пока принтер печатает или не на связи, файл ждёт: передача по туннелю нагружает слабый
+    процессор принтера, а печать важнее. Запускает печать только Глеб, кнопкой в карточке файла."""
+    snap = snapshot()
+    if snap.get("online") and not snap.get("klippy") and snap.get("state") not in ACTIVE:
+        try:
+            upload_file(path, name)
+        except (Offline, kit.Fail) as e:
+            print("upload:", e, flush=True)
+        else:
+            if not mid:  # присланный G-code: сразу карточка файла
+                return show_file(c, find(fid(name)))
+            return bot.edit(c.chat, mid, kit.card("✅ <b>Нарезал, файл на принтере</b>", lines),
+                            [[kit.b("📄 Открыть", f"f|{fid(name)}", "success")]])
+    pending = bot.db.get("pending") or []
+    bot.db.set("pending", pending + [{"path": path, "name": name}])
+    why = "Принтер печатает" if snap.get("state") in ACTIVE else "Принтер не на связи"
+    text = kit.card("✅ <b>Файл готов, ждёт принтер</b>", lines + [f"{why}: положу файл сам, как освободится, и напишу."])
+    return bot.edit(c.chat, mid, text, [[kit.b("🖨 Статус", "home")]]) if mid else c.say(text, [[kit.b("🖨 Статус", "home")]])
+
+
+def upload_file(path, name):
+    with open(path, "rb") as f:
+        moon.upload(name, f.read())
+    os.remove(path)
+
+
+def flush_pending():
+    """Положить на принтер всё, что ждало, пока он освободится."""
+    if not PENDING_LOCK.acquire(blocking=False):
+        return
+    try:
+        for item in list(bot.db.get("pending") or []):
+            snap = snapshot()
+            if not snap.get("online") or snap.get("klippy") or snap.get("state") in ACTIVE:
+                return
+            rest = [x for x in bot.db.get("pending") or [] if x != item]
+            if os.path.exists(item["path"]):
+                try:
+                    upload_file(item["path"], item["name"])
+                except (Offline, kit.Fail) as e:
+                    print("pending:", e, flush=True)
+                    return
+                bot.notify(kit.card("📄 <b>Файл на принтере</b>", [kit.esc(item["name"])]),
+                           [[kit.b("📄 Открыть", f"f|{fid(item['name'])}", "success")]])
+            bot.db.set("pending", rest)
+    finally:
+        PENDING_LOCK.release()
 
 
 # ---------- вопросы к Claude ----------
@@ -662,6 +942,46 @@ def action_buttons(raw):
     return text, [row[i:i + 3] for i in range(0, len(row), 3)]
 
 
+def tag_args(raw, tag):
+    return list(dict.fromkeys(arg.strip() for name, arg in TAG.findall(raw) if name == tag and arg.strip()))
+
+
+def build_report(names):
+    """Собирает модели и пишет для Claude, что получилось: размеры и картинки изменившихся деталей или ошибку."""
+    lines = [REVIEW]
+    for name in names[:3]:
+        before = slicer.fingerprints()
+        try:
+            parts = slicer.build(name)
+        except slicer.ModelError as e:
+            lines.append(f"Сборка {name} упала: {e}\nИсправь исходник и снова поставь метку сборки.")
+            continue
+        after = slicer.fingerprints()
+        changed = [p for p in parts if before.get(p) != after.get(p)]
+        if not changed:
+            lines.append(f"{name}: собралось, но ни одна деталь не изменилась.")
+        for part in changed:
+            info = slicer.describe(part)
+            note = "" if info["fits"] else ", НЕ ВЛЕЗАЕТ НА СТОЛ"
+            lines.append(f"{part}: {info['x']:.1f} × {info['y']:.1f} × {info['z']:.1f} мм{note}, картинка models/png/{part}.png")
+    return "\n".join(lines)
+
+
+def build_loop(c, mid, raw, sid):
+    """Claude правит исходник и ставит метку, бот собирает, Claude смотрит картинку и при ошибке правит снова."""
+    for _ in range(BUILD_ROUNDS):
+        names = tag_args(raw, "build")
+        if not names:
+            return raw, sid
+        bot.edit(c.chat, mid, "📐 <i>Собираю модель…</i>")
+        report = build_report(names)
+        bot.edit(c.chat, mid, "👀 <i>Проверяю, что получилось…</i>")
+        raw, sid = ai.ask(report, sid)
+    if tag_args(raw, "build"):
+        raw += "\n\n⚠️ За несколько попыток не собралось как надо. Напиши, что поправить."
+    return raw, sid
+
+
 def answer(c, photo=None):
     mid = c.say("💭 <i>Думаю…</i>")
     try:
@@ -671,12 +991,18 @@ def answer(c, photo=None):
             sid = saved.get("sid") if time.time() - (saved.get("ts") or 0) < AI_TTL else None
             name = ai.keep_photo(photo) if photo else None
             raw, sid = ai.ask(make_prompt(c.text, name), sid)
+            raw, sid = build_loop(c, mid, raw, sid)
             bot.db.set("ai", {"sid": sid, "ts": time.time()})
         text, buttons = action_buttons(raw)
         parts = chunks(text) or ["Готово."]
         bot.edit(c.chat, mid, render(parts[0]), buttons if len(parts) == 1 else None)
         for i, part in enumerate(parts[1:], 2):
             c.say(render(part), buttons if i == len(parts) else None)
+        for model in tag_args(raw, "model")[:4]:
+            try:
+                send_model(c, model)
+            except slicer.ModelError as e:
+                c.say(kit.error(kit.esc(e)))
     except ai.AIError as e:
         bot.edit(c.chat, mid, kit.error(kit.esc(e)), [[kit.b("‹ Главное", "home")]])
     except Exception:
@@ -790,6 +1116,8 @@ def watch():
         check_cooling(snap)
     except (Offline, kit.Fail) as e:
         print("cooling:", e, flush=True)
+    if bot.db.get("pending") and snap.get("online") and not snap.get("klippy") and snap.get("state") not in ACTIVE:
+        bot.later(flush_pending)
 
 
 bot.every(1, watch)

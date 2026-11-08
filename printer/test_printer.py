@@ -97,11 +97,28 @@ class FakeMoon:
         return []
 
 
+def cube(w=10.0, d=10.0, h=10.0):
+    """Плоский список координат коробки: 12 треугольников."""
+    c = [(0, 0, 0), (w, 0, 0), (w, d, 0), (0, d, 0), (0, 0, h), (w, 0, h), (w, d, h), (0, d, h)]
+    faces = [(0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7), (0, 1, 5), (0, 5, 4), (1, 2, 6), (1, 6, 5), (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7)]
+    return [x for f in faces for i in f for x in c[i]]
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.moon = pb.moon = FakeMoon()
         self.t = pb.bot.testing(OWNER)
         self.t.bot.support = None
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, True)
+        patcher = mock.patch.object(pb.slicer, "HOME", self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def add_model(self, name="box", w=10.0, d=10.0, h=10.0):
+        os.makedirs(pb.slicer.models_dir("stl"), exist_ok=True)
+        pb.slicer.Mesh(cube(w, d, h)).save(pb.slicer.stl_path(name))
+        return pb.fid(name)
 
     def sent_buttons(self):
         """Каждая кнопка последнего сообщения укладывается в правила стиля."""
@@ -317,8 +334,8 @@ class Files(Base):
     def test_too_big_or_wrong_files_are_explained(self):
         self.t.send("", document=self.document("big.gcode", 30 * 1024 * 1024))
         self.assertIn("20 МБ", self.t.last)
-        self.t.send("", document=self.document("model.stl"))
-        self.assertIn("только .gcode", self.t.last)
+        self.t.send("", document=self.document("model.3mf"))
+        self.assertIn("Понимаю .stl и .gcode", self.t.last)
         self.assertEqual(self.moon.calls, [])
 
     def test_stranger_document_ignored(self):
@@ -639,6 +656,515 @@ class Ask(Base):
         self.assertEqual(self.asked, [])
 
 
+class Models(Base):
+    """Каталог, картинки, нарезка и стол в боте. Слайсер подменён."""
+
+    def setUp(self):
+        super().setUp()
+        self.cuts = []
+        patcher = mock.patch.object(pb.slicer, "slice_plate", self.fake_cut)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fake_cut(self, names, profile, out):
+        self.cuts.append((list(names), profile))
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("; estimated printing time (normal mode) = 1h 2m 3s\nG28\n; total filament used [g] = 12.34\n")
+        return 1.0
+
+    def stl_message(self, name="деталь.stl", data=None):
+        data = data if data is not None else b"x"
+        with mock.patch.object(pb, "tg_download", return_value=data):
+            self.t.send("", document={"file_name": name, "file_size": len(data), "file_id": "x"})
+
+    def stl_bytes(self):
+        path = os.path.join(self.home, "in.stl")
+        pb.slicer.Mesh(cube(30, 20, 10)).save(path)
+        with open(path, "rb") as f:
+            return f.read()
+
+    def test_stl_file_becomes_model_card(self):
+        self.stl_message(data=self.stl_bytes())
+        self.assertEqual(self.t.calls[-1][0], "sendPhoto")
+        self.assertIn("деталь", self.t.last)
+        self.assertIn("30 × 20 × 10 мм", self.t.last)
+        for button in ("✂️ Нарезать", "➕ На стол", "‹ Модели", "🗑 Удалить"):
+            self.assertIn(button, self.t.buttons)
+        self.sent_buttons()
+        self.assertEqual(self.moon.calls, [])
+        self.assertEqual(os.listdir(os.path.join(self.home, "gcode")), [])  # временный файл не остался
+
+    def test_broken_stl_is_explained(self):
+        self.stl_message(data=b"not a model at all")
+        self.assertIn("⚠️", self.t.last)
+        self.assertIn("не STL", self.t.last)
+        self.assertEqual(pb.slicer.catalog(), [])
+
+    def test_too_big_model_warns(self):
+        self.add_model("wide", w=300, d=10)
+        pb.send_model(kit.Ctx(pb.bot, OWNER, {"id": OWNER}), "wide")
+        self.assertIn("Не влезает", self.t.last)
+
+    def test_models_list_and_pages(self):
+        for i in range(pb.PAGE + 2):
+            self.add_model(f"m{i}")
+        self.t.send("/models")
+        self.assertIn(f"Всего {pb.PAGE + 2}", self.t.last)
+        self.assertIn("›", self.t.buttons)
+        self.t.press("models|1")
+        self.assertEqual(len([b for b in self.t.buttons if b.startswith("m")]), 2)
+        self.sent_buttons()
+
+    def test_empty_list_tells_what_to_do(self):
+        self.t.send("/models")
+        self.assertIn("Пока пусто", self.t.last)
+        self.assertIn("Пришли .stl", self.t.last)
+
+    def test_home_has_models_button(self):
+        self.t.send("/start")
+        self.assertIn("📐 Модели", self.t.buttons)
+        self.moon.st = printing()
+        self.t.press("home|r")
+        self.assertIn("📐 Модели", self.t.buttons)
+        self.sent_buttons()
+
+    def test_project_part_cannot_be_deleted(self):
+        i = self.add_model("big_box_left")
+        with open(pb.slicer.models_dir("organizers_parts.json"), "w", encoding="utf-8") as f:
+            json.dump(["big_box_left"], f)
+        self.t.press("m|" + i)
+        self.assertNotIn("🗑 Удалить", self.t.buttons)
+        self.t.press("mdelok|" + i)
+        self.assertIn("органайзера", self.t.last)
+        self.assertTrue(os.path.exists(pb.slicer.stl_path("big_box_left")))
+
+    def test_delete_asks_first(self):
+        i = self.add_model()
+        self.t.press("mdel|" + i)
+        self.assertTrue(os.path.exists(pb.slicer.stl_path("box")))
+        self.assertIn("Удалить модель?", self.t.last)
+        self.t.press("mdelok|" + i)
+        self.assertFalse(os.path.exists(pb.slicer.stl_path("box")))
+
+    def test_cut_uploads_but_never_starts(self):
+        i = self.add_model()
+        self.t.press("cut|" + i)
+        self.assertEqual(self.t.buttons[:3], ["⚖️ Баланс", "🛡 Прочнее", "⚡ Быстрее"])
+        self.sent_buttons()
+        self.t.press(f"go_cut|{i}|bal")
+        self.assertEqual(self.cuts, [(["box"], "bal")])
+        self.assertEqual([c[0] for c in self.moon.calls], ["upload"])
+        self.assertEqual(self.moon.calls[0][1], "box_bal.gcode")
+        for part in ("Нарезал", "1h 2m 3s", "12 г"):
+            self.assertIn(part, self.t.last)
+        self.assertEqual(self.t.buttons, ["📄 Открыть"])
+        self.t.press(self.t.keyboard[0]["callback_data"])
+        self.assertIn("🖨 Печатать", self.t.buttons)
+        self.assertEqual([c[0] for c in self.moon.calls], ["upload"])
+        self.assertEqual(os.listdir(os.path.join(self.home, "gcode")), [])
+
+    def test_new_file_does_not_overwrite(self):
+        self.moon.items.append({"path": "box_bal.gcode", "modified": 1, "size": 1})
+        self.t.press(f"go_cut|{self.add_model()}|bal")
+        self.assertEqual(self.moon.calls[0][1], "box_bal_2.gcode")
+
+    def test_busy_printer_gets_file_after_print(self):
+        self.moon.st = printing()
+        self.t.press(f"go_cut|{self.add_model()}|bal")
+        self.assertEqual(self.moon.calls, [])  # передача грузит процессор принтера: во время печати нельзя
+        self.assertIn("Принтер печатает", self.t.last)
+        pb.watch()
+        self.assertEqual(self.moon.calls, [])
+        self.moon.st = idle()
+        pb.watch()
+        self.assertEqual([c[0] for c in self.moon.calls], ["upload"])
+        self.assertIn("Файл на принтере", self.t.last)
+        self.assertEqual(self.t.bot.db.get("pending"), [])
+        self.assertEqual(os.listdir(os.path.join(self.home, "gcode")), [])
+        pb.watch()
+        self.assertEqual(len(self.moon.calls), 1)
+
+    def test_gcode_sent_during_print_waits_too(self):
+        self.moon.st = printing()
+        self.stl_message("new.gcode", b"G28")
+        self.assertEqual(self.moon.calls, [])
+        self.assertIn("ждёт принтер", self.t.last)
+
+    def test_offline_printer_gets_file_later(self):
+        self.moon.offline = True
+        self.t.press(f"go_cut|{self.add_model()}|bal")
+        self.assertIn("не на связи", self.t.last)
+        self.moon.offline = False
+        pb.watch()
+        self.assertEqual([c[0] for c in self.moon.calls], ["upload"])
+
+    def test_failed_upload_stays_in_queue(self):
+        def broken(name, data):
+            raise pb.Offline("обрыв")
+        self.moon.upload = broken
+        self.t.press(f"go_cut|{self.add_model()}|bal")
+        self.assertEqual(len(self.t.bot.db.get("pending")), 1)
+        pb.flush_pending()
+        self.assertEqual(len(self.t.bot.db.get("pending")), 1)
+        self.assertEqual(len(os.listdir(os.path.join(self.home, "gcode"))), 1)
+        self.assertFalse(pb.PENDING_LOCK.locked())
+
+    def test_slicer_error_is_shown(self):
+        with mock.patch.object(pb.slicer, "slice_plate", side_effect=pb.slicer.ModelError("Слайсер не смог нарезать (код 3)")):
+            self.t.press(f"go_cut|{self.add_model()}|bal")
+        self.assertIn("код 3", self.t.last)
+        self.assertEqual(self.moon.calls, [])
+
+    def test_second_cut_waits_for_first(self):
+        i = self.add_model()
+        with pb.SLICE_LOCK:
+            self.t.press(f"go_cut|{i}|bal")
+        self.assertEqual(self.cuts, [])
+
+    def test_plate_collects_parts_and_clears_after_cut(self):
+        i = self.add_model("a", 50, 50, 10)
+        j = self.add_model("b", 40, 40, 10)
+        self.t.press("add|" + i)
+        self.t.press("add|" + i)
+        self.t.press("add|" + j)
+        self.t.send("/models")
+        self.assertIn("🍽 Стол: 3", self.t.buttons)
+        self.t.press("plate")
+        self.assertIn("a × 2", self.t.last)
+        self.assertIn("⚖️ Баланс", self.t.buttons)
+        self.sent_buttons()
+        self.t.press("cutplate|bal")
+        self.assertEqual(self.cuts, [(["a", "a", "b"], "bal")])
+        self.assertIn("plate_a_x3_bal.gcode", self.moon.calls[0][1])
+        self.assertIsNone(self.t.bot.db.get("plate"))
+
+    def test_plate_that_does_not_fit_cannot_be_cut(self):
+        i = self.add_model("a", 200, 200, 10)
+        self.t.press("add|" + i)
+        self.t.press("add|" + i)
+        self.t.press("plate")
+        self.assertIn("не влезают", self.t.last)
+        self.assertNotIn("⚖️ Баланс", self.t.buttons)
+        self.t.press("plateclear")
+        self.assertIsNone(self.t.bot.db.get("plate"))
+
+
+class Build(Base):
+    """Claude правит исходник, бот собирает, Claude проверяет. Claude и сборка подменены."""
+
+    def setUp(self):
+        super().setUp()
+        self.replies, self.prompts, self.built = [], [], []
+        for target, fake in ((pb.ai, "ask"), (pb.slicer, "build")):
+            patcher = mock.patch.object(target, fake, getattr(self, "fake_" + fake))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def fake_ask(self, prompt, session=None, timeout=600):
+        self.prompts.append(prompt)
+        return self.replies.pop(0), "sid"
+
+    def fake_build(self, name):
+        self.built.append(name)
+        if name == "broken":
+            raise pb.slicer.ModelError("OpenSCAD не собрал модель:\nERROR: syntax error")
+        self.add_model(name, 30, 20, 10 + len(self.built))
+        return [name]
+
+    def test_build_review_then_show(self):
+        self.replies = ["Рисую. [[build:cup]]", "Готово, чашка 30 мм. [[model:cup]]"]
+        self.t.send("нарисуй чашку")
+        self.assertEqual(self.built, ["cup"])
+        review = self.prompts[1]
+        for part in ("cup: 30.0 × 20.0 × 11.0 мм", "models/png/cup.png", "Read"):
+            self.assertIn(part, review)
+        self.assertEqual(self.t.calls[-1][0], "sendPhoto")
+        self.assertIn("✂️ Нарезать", self.t.buttons)
+        texts = [m.get("text") or "" for m in self.t.messages]
+        self.assertTrue(any("Готово, чашка 30 мм." == x for x in texts), texts)
+        self.assertFalse(any("[[" in x for x in texts))
+        self.assertEqual(self.moon.calls, [])
+
+    def test_build_error_goes_back_to_claude(self):
+        self.replies = ["[[build:broken]]", "Исправил. [[build:cup]]", "Готово. [[model:cup]]"]
+        self.t.send("нарисуй")
+        self.assertIn("syntax error", self.prompts[1])
+        self.assertEqual(self.built, ["broken", "cup"])
+        self.assertNotIn("syntax error", " ".join(m.get("text") or "" for m in self.t.messages))
+
+    def test_endless_rebuild_stops(self):
+        self.replies = [f"[[build:cup{i}]]" for i in range(pb.BUILD_ROUNDS + 1)]
+        self.t.send("нарисуй")
+        self.assertEqual(len(self.built), pb.BUILD_ROUNDS)
+        self.assertIn("не собралось", self.t.last)
+
+    def test_unchanged_build_is_reported(self):
+        self.add_model("same", 30, 20, 11)
+        self.replies = ["[[build:same]]", "Ничего не изменилось."]
+        self.t.send("собери")
+        self.assertIn("не изменилась", self.prompts[1])
+
+    def test_unknown_model_tag_does_not_break_answer(self):
+        self.replies = ["Вот. [[model:nothing]]"]
+        self.t.send("покажи")
+        self.assertIn("нет", self.t.last)
+
+    def test_no_tag_can_print(self):
+        self.moon.items.append({"path": "x.gcode", "modified": 1, "size": 1})
+        self.replies = ["Запускаю. [[print:x.gcode]] [[go:x.gcode]] [[start]]"]
+        self.t.send("запусти печать")
+        self.assertEqual(self.t.buttons, [])
+        self.assertEqual(self.moon.calls, [])
+
+
+class Slicing(Base):
+    """printer/slicer.py: разбор STL, раскладка, песочница, сборка и вызов слайсера. Процессы подменены."""
+
+    def stl(self, name="m", **kw):
+        self.add_model(name, **kw)
+        return pb.slicer.stl_path(name)
+
+    def test_binary_and_text_stl(self):
+        mesh = pb.slicer.Mesh.load(self.stl(w=30, d=20, h=10))
+        self.assertEqual(len(mesh), 12)
+        self.assertEqual(tuple(round(x) for x in mesh.size()), (30, 20, 10))
+        path = os.path.join(self.home, "t.stl")
+        with open(path, "w", encoding="ascii") as f:
+            f.write("solid x\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid x\n")
+        self.assertEqual(len(pb.slicer.Mesh.load(path)), 1)
+
+    def test_garbage_is_refused(self):
+        path = os.path.join(self.home, "g.stl")
+        for data in (b"", b"garbage", b"solid x\nendsolid x\n", b"solid x\nvertex a b c\n"):
+            with open(path, "wb") as f:
+                f.write(data)
+            with self.assertRaises(pb.slicer.ModelError, msg=data):
+                pb.slicer.Mesh.load(path)
+
+    def test_nan_is_refused(self):
+        path = os.path.join(self.home, "n.stl")
+        with open(path, "wb") as f:
+            f.write(b" " * 80 + (1).to_bytes(4, "little") + struct_nan() + b"\0\0")
+        with self.assertRaises(pb.slicer.ModelError):
+            pb.slicer.Mesh.load(path)
+
+    def test_placement_stands_on_bed(self):
+        mesh = pb.slicer.Mesh([x + 7 for x in cube(30, 20, 10)])
+        x0, y0, z0, x1, y1, z1 = mesh.placed(50, 60).bbox()
+        self.assertEqual((x0, y0, z0, x1, y1, z1), (50, 60, 0, 80, 80, 10))
+        x0, y0, z0, x1, y1, z1 = mesh.placed(50, 60, rotate=True).bbox()
+        self.assertEqual((x0, y0, z0, x1, y1, z1), (50, 60, 0, 70, 90, 10))
+
+    def test_rotation_keeps_faces_outward(self):
+        rotated = pb.slicer.Mesh(cube(30, 20, 10)).placed(0, 0, rotate=True)
+        path = os.path.join(self.home, "r.stl")
+        rotated.save(path)
+        with open(path, "rb") as f:
+            data = f.read()
+        first_normal = pb.slicer.struct.unpack("<3f", data[84:96])
+        self.assertEqual(tuple(round(x) for x in first_normal), (0, 0, -1))  # нижняя грань смотрит вниз
+
+    def test_degenerate_triangles_are_dropped(self):
+        path = os.path.join(self.home, "d.stl")
+        pb.slicer.Mesh(cube() + [1, 1, 1, 1, 1, 1, 1, 1, 1]).save(path)
+        self.assertEqual(len(pb.slicer.Mesh.load(path)), 12)
+
+    def test_arrange_centers_one_part(self):
+        self.assertEqual(pb.slicer.arrange([(100, 50)]), [(60, 85, False)])
+
+    def test_arrange_turns_long_side_along_x(self):
+        self.assertEqual(pb.slicer.arrange([(50, 100)]), [(60, 85, True)])
+
+    def test_arrange_many_without_overlap(self):
+        sizes = [(120, 60), (120, 60), (60, 40), (30, 30), (30, 30)]
+        spots = pb.slicer.arrange(sizes)
+        boxes = []
+        for (w, d), (x, y, rot) in zip(sizes, spots):
+            w, d = (d, w) if rot else (w, d)
+            self.assertGreaterEqual(min(x, y), pb.slicer.MARGIN)
+            self.assertLessEqual(max(x + w, y + d), pb.slicer.BED - pb.slicer.MARGIN)
+            boxes.append((x, y, x + w, y + d))
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                apart = a[2] + pb.slicer.GAP <= b[0] or b[2] + pb.slicer.GAP <= a[0] or a[3] + pb.slicer.GAP <= b[1] or b[3] + pb.slicer.GAP <= a[1]
+                self.assertTrue(apart, (a, b))
+
+    def test_arrange_refuses_what_does_not_fit(self):
+        for sizes in ([(215, 10)], [(200, 120), (200, 120)]):
+            with self.assertRaises(pb.slicer.ModelError):
+                pb.slicer.arrange(sizes)
+
+    def test_picture_has_model(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("нет Pillow")
+        out = os.path.join(self.home, "p.png")
+        pb.slicer.render(pb.slicer.Mesh(cube(30, 20, 10)), out, 300, 200)
+        with Image.open(out) as img:
+            self.assertEqual(img.size, (300, 200))
+            self.assertGreater(len(img.convert("L").getcolors(100000)), 3)  # не пустой фон
+
+    def test_add_stl_cleans_name_and_keeps_old(self):
+        path = self.stl("source", w=20, d=20, h=20)
+        self.assertEqual(pb.slicer.add_stl(path, "../../etc/моя деталь!.STL"), "моя_деталь")
+        self.assertEqual(pb.slicer.add_stl(path, "моя деталь!.stl"), "моя_деталь_2")
+
+    def test_bad_names_never_reach_disk(self):
+        for name in ("../x", "a/b", "", "a b", "..", "x" * 61):
+            with self.assertRaises(pb.slicer.ModelError):
+                pb.slicer.build(name)
+            with self.assertRaises(pb.slicer.ModelError):
+                pb.slicer.describe(name)
+
+    def test_sandbox_sees_only_its_job_and_has_no_network(self):
+        cmd = pb.slicer.sandbox(["node", "x.js"], "/job-dir", 800)
+        text = " ".join(cmd)
+        for part in ("MemoryMax=800M", "env -i", "--unshare-all", "--ro-bind /opt/orca/root /", "--bind /job-dir /job",
+                     "--die-with-parent", "nice -n 19 node x.js"):
+            self.assertIn(part, text)
+        self.assertNotIn("/root ", text.replace("/opt/orca/root ", ""))
+        self.assertNotIn("/etc", text)
+        self.assertNotIn("--share-net", text)
+        self.assertEqual(sum(a in ("--bind", "--ro-bind") for a in cmd), 2)
+
+    def fake_run(self, make=None, code=0, out=""):
+        calls = []
+
+        def run(cmd, job, memory, timeout):
+            calls.append((cmd, job, memory))
+            for rel, data in (make or {}).items():
+                with open(os.path.join(job, rel), "wb") as f:
+                    f.write(data)
+            return code, out
+        self.clear_run()
+        self.run_patch = mock.patch.object(pb.slicer, "run", run)
+        self.run_patch.start()
+        self.addCleanup(self.clear_run)
+        return calls
+
+    def clear_run(self):
+        if getattr(self, "run_patch", None):
+            self.run_patch.stop()
+            self.run_patch = None
+
+    def scad(self, name="cup"):
+        os.makedirs(pb.slicer.models_dir("src"), exist_ok=True)
+        with open(os.path.join(pb.slicer.models_dir("src"), name + ".scad"), "w", encoding="utf-8") as f:
+            f.write("cube(10);")
+
+    def stl_data(self):
+        with open(self.stl("tmp_source"), "rb") as f:
+            return f.read()
+
+    def jobs(self):
+        return os.listdir(os.path.join(self.home, "build"))
+
+    def test_build_scad(self):
+        self.scad()
+        calls = self.fake_run({"cup.stl": self.stl_data()})
+        self.assertEqual(pb.slicer.build("cup"), ["cup"])
+        self.assertTrue(os.path.exists(pb.slicer.stl_path("cup")))
+        self.assertEqual(calls[0][0][:2], ["openscad", "-o"])
+        self.assertEqual(self.jobs(), [])
+
+    def test_build_scad_error_keeps_output_for_claude(self):
+        self.scad()
+        self.fake_run(code=1, out="ERROR: Parser error in line 3")
+        with self.assertRaises(pb.slicer.ModelError) as e:
+            pb.slicer.build("cup")
+        self.assertIn("Parser error", str(e.exception))
+        self.assertEqual(self.jobs(), [])
+
+    def test_build_without_source(self):
+        self.fake_run()
+        with self.assertRaises(pb.slicer.ModelError):
+            pb.slicer.build("nothing")
+
+    def test_build_result_must_be_real_stl(self):
+        self.scad()
+        self.fake_run({"cup.stl": b"not stl"})
+        with self.assertRaises(pb.slicer.ModelError):
+            pb.slicer.build("cup")
+        self.assertFalse(os.path.exists(pb.slicer.stl_path("cup")))
+
+    def test_build_project_marks_parts(self):
+        os.makedirs(pb.slicer.models_dir("src"), exist_ok=True)
+        with open(os.path.join(pb.slicer.models_dir("src"), "organizers.html"), "w", encoding="utf-8") as f:
+            f.write("<script></script>")
+        data = self.stl_data()
+        calls = self.fake_run({"stl/box_a.stl": data, "stl/box_b.stl": data})
+        self.assertEqual(pb.slicer.build("organizers"), ["box_a", "box_b"])
+        self.assertEqual(calls[0][0][0], "node")
+        marks = {m["name"]: m["project"] for m in pb.slicer.catalog()}
+        self.assertTrue(marks["box_a"])
+        self.assertFalse(marks["tmp_source"])
+        self.assertEqual(self.jobs(), [])
+
+    def test_slice_uses_our_profile_and_placed_parts(self):
+        self.add_model("a", 60, 60, 10)
+        self.add_model("b", 40, 40, 10)
+        seen = {}
+
+        def run(cmd, job, memory, timeout):
+            seen["cmd"], seen["memory"] = cmd, memory
+            seen["boxes"] = [pb.slicer.Mesh.load(os.path.join(job, f"part{i}.stl")).bbox() for i in range(2)]
+            seen["files"] = sorted(os.listdir(job))
+            os.makedirs(os.path.join(job, "out"), exist_ok=True)
+            with open(os.path.join(job, "out", "plate_1.gcode"), "w", encoding="utf-8") as f:
+                f.write("G28\n")
+            return 0, ""
+        out = os.path.join(self.home, "gcode", "x.gcode")
+        with mock.patch.object(pb.slicer, "run", run):
+            pb.slicer.slice_plate(["a", "b"], "bal", out)
+        with open(out, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "G28\n")
+        text = " ".join(seen["cmd"])
+        self.assertIn("--arrange 0", text)
+        self.assertIn("machine.json;process_bal.json", text)
+        self.assertIn("--load-filaments filament_mid.json", text)
+        self.assertIn("filament_mid.json", seen["files"])
+        for box in seen["boxes"]:
+            self.assertGreaterEqual(min(box[0], box[1]), pb.slicer.MARGIN)
+            self.assertLessEqual(max(box[3], box[4]), pb.slicer.BED - pb.slicer.MARGIN)
+            self.assertEqual(box[2], 0)
+        self.assertEqual(self.jobs(), [])
+
+    def test_slice_failures(self):
+        self.add_model("a")
+        out = os.path.join(self.home, "gcode", "x.gcode")
+        self.fake_run(code=137)
+        with self.assertRaises(pb.slicer.ModelError) as e:
+            pb.slicer.slice_plate(["a"], "bal", out)
+        self.assertIn("памяти", str(e.exception))
+        self.fake_run(code=206, out="Nothing to be sliced")
+        with mock.patch("builtins.print"), self.assertRaises(pb.slicer.ModelError) as e:
+            pb.slicer.slice_plate(["a"], "bal", out)
+        self.assertIn("код 206", str(e.exception))
+        with self.assertRaises(pb.slicer.ModelError):
+            pb.slicer.slice_plate(["a"], "nope", out)
+        self.add_model("tall", h=300)
+        with self.assertRaises(pb.slicer.ModelError) as e:
+            pb.slicer.slice_plate(["tall"], "bal", out)
+        self.assertIn("по высоте", str(e.exception))
+        self.assertEqual(self.jobs(), [])
+        self.assertFalse(os.path.exists(out))
+
+    def test_all_profiles_exist_and_are_for_this_printer(self):
+        for label, process, filament in pb.slicer.PROFILES.values():
+            for name in ("machine.json", process, filament):
+                with open(os.path.join(pb.slicer.PROFILES_DIR, name), encoding="utf-8") as f:
+                    data = json.load(f)
+                self.assertIn("name", data, name)
+            with open(os.path.join(pb.slicer.PROFILES_DIR, process), encoding="utf-8") as f:
+                self.assertIn("Creality Ender-3 V3 KE 0.4 nozzle", json.load(f)["compatible_printers"])
+
+
+def struct_nan():
+    return pb.slicer.struct.pack("<12f", 0, 0, 1, float("nan"), 0, 0, 1, 0, 0, 0, 1, 0)
+
+
 class Claude(unittest.TestCase):
     """printer/ai.py: как зовётся Claude Code. Сам процесс подменён."""
 
@@ -661,9 +1187,10 @@ class Claude(unittest.TestCase):
         cmd, kw = run.call_args[0][0], run.call_args[1]
         denied = cmd[cmd.index("--disallowedTools") + 1:cmd.index("--allowedTools")]
         allowed = cmd[cmd.index("--allowedTools") + 1:]
-        for tool in ("Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"):
+        for tool in ("Bash", "NotebookEdit", "Task", "Agent"):
             self.assertIn(tool, denied)
-        self.assertEqual(allowed, ["WebSearch", "WebFetch"])  # Read без условий открыл бы /etc/*.env
+        # Read без условий открыл бы /etc/*.env, Edit без условий дал бы править что угодно
+        self.assertEqual(allowed, ["WebSearch", "WebFetch", "Edit(./models/src/**)", "Write(./models/src/**)"])
         self.assertNotIn("--resume", cmd)
         self.assertEqual(kw["cwd"], self.tmp)
         self.assertEqual(kw["stdin"], subprocess.DEVNULL)  # иначе claude -p допишет к вопросу чужой ввод

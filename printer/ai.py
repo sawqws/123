@@ -1,24 +1,23 @@
 """Claude в боте «Принтер»: вопросы текстом, голосом и фото, ответы со знанием текущей печати.
 
 Думает Claude Code на сервере (`claude -p`, тот же вход, что у остальных ботов). Работает в отдельной папке вне
-репозитория: не подхватывает чужие CLAUDE.md и читает файлы только из неё. Управлять принтером не может: нет ни команд,
-ни правки файлов, только интернет и чтение присланных фото. Действия он предлагает метками в ответе, бот показывает
-их кнопками, нажимает Глеб.
+репозитория: не подхватывает чужие CLAUDE.md и читает файлы только из неё. Управлять принтером не может: команд нет,
+править можно только исходники моделей (models/src). Собирает и нарезает их бот, в песочнице (printer/slicer.py).
+Действия Claude предлагает метками в ответе, бот показывает их кнопками, нажимает Глеб.
 """
 import json
 import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WORK = os.path.join(tempfile.gettempdir(), "printer-ai")
+WORK = os.path.join(os.environ.get("PRINTER_HOME") or "/var/lib/printer-bot", "ai")
 PHOTOS = "photos"
-NO_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"]
-WEB = ["WebSearch", "WebFetch"]
+NO_TOOLS = ["Bash", "NotebookEdit", "Task", "Agent"]
+ALLOWED = ["WebSearch", "WebFetch", "Edit(./models/src/**)", "Write(./models/src/**)"]
 SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|KEY|COOKIE|CREDENTIAL|OWNER", re.I)
 PHOTO_DAYS = 7
 
@@ -51,11 +50,11 @@ def keep_photo(path, now=None):
     return f"{PHOTOS}/{name}"
 
 
-def ask(prompt, session=None, timeout=300):
+def ask(prompt, session=None, timeout=600):
     """(ответ, id разговора). Разговор потерян — начинает новый. Сбой — AIError с понятным текстом."""
     os.makedirs(WORK, exist_ok=True)
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--append-system-prompt", rules(),
-           "--max-turns", "10", "--disallowedTools", *NO_TOOLS, "--allowedTools", *WEB]
+           "--max-turns", "25", "--disallowedTools", *NO_TOOLS, "--allowedTools", *ALLOWED]
     if session:
         cmd += ["--resume", session]
     try:
