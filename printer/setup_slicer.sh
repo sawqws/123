@@ -33,7 +33,8 @@ fi
 
 inside() {  # команда внутри образа от root, с сетью: только для установки пакетов
   env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive \
-    nice -n 15 bwrap --bind "$ROOT" / --proc /proc --dev /dev --tmpfs /tmp --ro-bind /etc/resolv.conf /etc/resolv.conf "$@"
+    nice -n 15 bwrap --cap-add ALL --bind "$ROOT" / --proc /proc --dev /dev --perms 1777 --tmpfs /tmp \
+    --ro-bind /etc/resolv.conf /etc/resolv.conf "$@"
 }
 
 if ! inside sh -c 'command -v openscad >/dev/null && command -v node >/dev/null && command -v xvfb-run >/dev/null'; then
