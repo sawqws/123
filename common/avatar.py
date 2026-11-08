@@ -45,6 +45,8 @@ BOTS = {
     "catcher": dict(title="Ловец · имена", glow="#6f9bd6", mark="at", env=("/etc/catcher-bot.env", "CATCHER_TOKEN")),
     "sites": dict(title="Студия сайтов", glow="#e08aa5", mark="globe", env=("/etc/studio-sites.env", "STUDIO_TOKEN")),
     "pulse": dict(title="Пульс · чаты Claude", glow="#3fd1a6", mark="gauge", env=("/etc/pulse-bot.env", "PULSE_TOKEN")),
+    "printer": dict(title="Принтер · 3D-печать", glow="#d9603f", mark="printer",
+                    env=("/etc/printer-bot.env", "PRINTER_TOKEN")),
 }
 ONYX = (12, 11, 10)                     # фон: тёплый почти чёрный
 EMBER = (110, 76, 38)                   # второе свечение снизу слева — тёмное золото, как в образце
@@ -235,6 +237,12 @@ def mark_shapes(mark):
     if mark == "gauge":  # три кольца-счётчика контекста разной заполненности
         return [(L, arc(0, 0, 0.94, -90, 200, 80)), (L, arc(0, 0, 0.64, -90, 110, 60)),
                 (L, arc(0, 0, 0.34, -90, 290, 48)), (D, 0, 0, 0.09)]
+    if mark == "printer":  # 3D-принтер: рама, балка с соплом и деталь из слоёв на столе
+        w, top, base, r = 0.76, -0.86, 0.84, 0.16
+        frame = [(-w, base)] + arc(-w + r, top + r, r, 180, 270, 10) + arc(w - r, top + r, r, 270, 360, 10) + [(w, base)]
+        head = [(-0.2, -0.46), (0.2, -0.46), (0.2, -0.22), (0.08, -0.22), (0, -0.06), (-0.08, -0.22), (-0.2, -0.22)]
+        return [(L, frame), (L, [(-1.0, base), (1.0, base)]), (L, [(-w, -0.46), (w, -0.46)]), (F, head),
+                (L, [(-0.46, 0.58), (0.46, 0.58)]), (L, [(-0.34, 0.36), (0.34, 0.36)]), (L, [(-0.2, 0.14), (0.2, 0.14)])]
     raise ValueError("нет знака " + mark)
 
 
