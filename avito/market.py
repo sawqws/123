@@ -9,6 +9,8 @@ import os
 import re
 import statistics
 import subprocess
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +20,9 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML
       "Chrome/131.0.0.0 Safari/537.36")
 WANT = 100   # сколько объявлений собираем
 PAGES = 3    # на странице поиска ~50 объявлений
+BLOCK_PAUSE = 1800  # секунд не запускаем браузер после блокировки
+_browser_lock = threading.Lock()
+_blocked_until = 0
 
 
 class Blocked(Exception):
@@ -50,6 +55,20 @@ def fetch_plain(url):
 
 
 def fetch_browser(url):
+    """Настоящий Chromium, ~0,9 ГБ: одновременно один (на сервере 2 ГБ, а пачка ищет цены параллельно).
+    Авито его не пустил — полчаса сразу Blocked, цены пойдут из интернета."""
+    global _blocked_until
+    with _browser_lock:
+        if time.time() < _blocked_until:
+            raise Blocked("Авито недавно не пустил браузер")
+        try:
+            return browser_page(url)
+        except Blocked:
+            _blocked_until = time.time() + BLOCK_PAUSE
+            raise
+
+
+def browser_page(url):
     try:
         p = subprocess.run(["node", os.path.join(HERE, "search.js"), url], capture_output=True, text=True,
                            timeout=90, cwd=os.path.dirname(HERE))

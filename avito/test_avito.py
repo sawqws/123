@@ -91,6 +91,16 @@ class Market(unittest.TestCase):
             with self.assertRaises(market.Blocked):
                 market.collect("x")
 
+    def test_browser_not_repeated_after_block(self):
+        self.addCleanup(setattr, market, "_blocked_until", 0)
+        market._blocked_until = 0
+        run = mock.Mock(return_value=mock.Mock(returncode=2, stdout="", stderr=""))
+        with mock.patch.object(market.subprocess, "run", run):
+            for _ in range(3):
+                with self.assertRaises(market.Blocked):
+                    market.fetch_browser("https://www.avito.ru/all?q=x")
+        self.assertEqual(run.call_count, 1)  # Chromium ~0,9 ГБ: второй раз не запускаем
+
     def test_url(self):
         self.assertEqual(market.search_url("кроссовки nike", "moskva", 2),
                          "https://www.avito.ru/moskva?q=%D0%BA%D1%80%D0%BE%D1%81%D1%81%D0%BE%D0%B2%D0%BA%D0%B8+nike&p=2")
