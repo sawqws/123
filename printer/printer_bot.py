@@ -587,12 +587,14 @@ def extra_facts():
     used = (more.get("print_stats") or {}).get("filament_used")
     if isinstance(used, (int, float)) and used:
         lines.append(f"Пластика уже ушло {used / 1000:.1f} м.")
-    jobs = soft(moon.history) or []
+    jobs = [j for j in soft(moon.history) or [] if j.get("status") != "in_progress"]  # идущая уже описана выше
     if jobs:
         lines.append("Последние печати:")
         for j in jobs:
             when = local_now(j.get("end_time") or j.get("start_time") or 0).strftime("%d.%m %H:%M")
-            lines.append(f"- {j.get('filename')}: {j.get('status')}, {hm(j.get('print_duration'))}, {when}")
+            # у оборванной печати Moonraker хранит 0: это не значит, что она шла меньше минуты
+            took = f", {hm(j['print_duration'])}" if j.get("print_duration") else ""
+            lines.append(f"- {j.get('filename')}: {j.get('status')}{took}, {when}")
     notes = [m for m in soft(moon.journal) or [] if m.get("type") == "response"]
     notes = [m for m in notes if (m.get("message") or "").strip() not in ("", "ok")
              and not TEMP_LINE.match(m["message"].strip())][-6:]

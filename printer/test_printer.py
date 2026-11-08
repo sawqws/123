@@ -497,6 +497,15 @@ class Ask(Base):
         self.t.send("как дела?")
         self.assertEqual(self.t.last, "Всё идёт нормально.")
 
+    def test_history_does_not_invent_durations(self):
+        self.moon.history = lambda: [{"filename": "now.gcode", "status": "in_progress", "print_duration": 0, "start_time": 1700000000},
+                                     {"filename": "cut.gcode", "status": "interrupted", "print_duration": 0, "start_time": 1700000000}]
+        self.t.send("что было?")
+        prompt = self.asked[0][0]
+        self.assertNotIn("now.gcode", prompt)
+        self.assertIn("cut.gcode: interrupted,", prompt)
+        self.assertNotIn("меньше минуты", prompt)
+
     def test_null_values_from_real_printer(self):
         """08.11 настоящий принтер прислал fan.speed = null, и ответ падал."""
         self.moon.details = lambda: {"gcode_move": {"speed_factor": None, "extrude_factor": None}, "fan": {"speed": None},
