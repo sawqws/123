@@ -11,6 +11,7 @@ USER_NAME=printertunnel
 
 if [ -z "${SKIP_PULL:-}" ]; then
   git -C "$DIR" fetch origin main
+  [ -z "$(git -C "$DIR" rev-list "origin/main..HEAD" 2>/dev/null)" ] || git -C "$DIR" branch -f "local-$(date +%m%d-%H%M)" HEAD  # местные правки — в ветку, Главный покажет их Глебу
   git -C "$DIR" checkout -B main origin/main
 fi
 

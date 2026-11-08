@@ -65,6 +65,13 @@ def main(argv):
             print(f"{'🟢' if a['status'] == 'online' else '🔴'} {a['name']:<12} {a['status']:<8} "
                   f"{round(a['uptime'] / 60)} мин  {a['mem']} МБ  перезапусков {a['restarts']}")
         print("сервер:", json.dumps(r["server"], ensure_ascii=False), "· оплачен до", r.get("paid") or "—")
+        local = r.get("local") or {}
+        if local.get("ahead"):
+            print(f"⚠️ Только на сервере, в main нет: {len(local['ahead'])}. Перенеси в main (hub/CLAUDE.md, «Правки на сервере»):")
+            print("\n".join("   " + x for x in local["ahead"]))
+        if local.get("lost"):
+            print(f"⚠️ Выпали из кода: {len(local['lost'])}. У Глеба кнопка «🧩 Вернуть»; перенёс в main сам — удали ветку:")
+            print("\n".join("   " + x for x in local["lost"]))
     elif cmd == "logs":
         print(call("logs", {"name": args[0], "lines": int(args[1]) if len(args) > 1 else 60})["out"])
     elif cmd == "restart":
