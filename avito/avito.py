@@ -969,39 +969,43 @@ PARAM_NAMES = {"condition": "состояние", "brand": "бренд", "size":
 
 
 def publish(chat):
-    """Готовый набор для Авито: фото альбомом, название, цена, категория, описание отдельным сообщением.
-    Публиковать сам бот не может: API Авито для частных объявлений нет, а вход в аккаунт браузером — риск бана."""
+    """Набор для Авито сообщениями, в порядке подачи (Глеб, 08.11): фото, название, описание, цена, поля формы.
+    Нажал на текст — скопировался. Публиковать сам бот не может: API Авито для частных объявлений нет,
+    а вход в аккаунт браузером — риск бана."""
     d = draft()
     if not d or not d.get("title"):
         return send(chat, fail("Сначала опиши вещь — сделаю объявление."))
     paths = [p.get("clean") or p["orig"] for p in d.get("photos") or []]
     if paths:
-        send_album(chat, paths, "🖼 Фото — по порядку (сохрани: долгий тап → Сохранить)")
-    steps = ["1. Нажми «Подать на Авито» (или «+» в приложении Авито)."]
+        send_album(chat, paths, "🖼 Фото по порядку")
+    copy_message(chat, d["title"])
+    send_description(chat, d)
+    if d.get("price"):
+        copy_message(chat, d["price"])
+    lines = []
     if d.get("category"):
-        steps.append(f"2. Категория: {esc(d['category'])}")
-    steps += [f"3. Фото — альбом выше{'' if paths else ' (фото нет — можно без них)'}.",
-              f"4. Название: <code>{esc(d['title'])}</code>",
-              (f"5. Цена: <code>{d['price']}</code>" if d.get("price")
-               else "5. Цена: пришли сюда число, подскажу по рынку — «📊 Цена»."),
-              ("6. Описание — следующим сообщением (долгий тап → Копировать)." if d.get("description")
-               else "6. Описания пока нет — напиши о вещи пару слов, и я его составлю.")]
-    fields = [f"{name}: <code>{esc(d['params'][key])}</code>" for key, name in PARAM_NAMES.items()
+        lines.append(f"Категория: {esc(d['category'])}")
+    if not d.get("description"):
+        lines.append("Описания пока нет — напиши о вещи пару слов, и я его составлю.")
+    if not d.get("price"):
+        lines.append("Цены пока нет — пришли сюда число, подскажу по рынку: «📊 Цена».")
+    lines += [f"{name}: <code>{esc(d['params'][key])}</code>" for key, name in PARAM_NAMES.items()
               if (d.get("params") or {}).get(key)]
-    if fields:
-        steps.append("7. Поля формы — " + ", ".join(fields))
     rows = [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]]
     if d.get("batch"):
         rows.append([b("📦 К таблице", "bt|table")])
-    send(chat, fmt("📤 Выложить на Авито — 1 минута", "\n".join(steps),
-                   "Нажми на название или цену — скопируется. Выложил — жми «✅ Выложил»."), rows)
-    send_description(chat, d)
+    send(chat, fmt("📤 Подача на Авито", "\n".join(lines), "Нажми на текст — скопируется. Выложил — жми «✅ Выложил»."), rows)
+
+
+def copy_message(chat, text):
+    """Отдельное сообщение, которое копируется одним нажатием."""
+    tg("sendMessage", chat_id=chat, text=f"<code>{esc(str(text))}</code>", parse_mode="HTML")
 
 
 def send_description(chat, d):
-    """Описание отдельным сообщением (без разметки — копируется как есть). Пустое Telegram не примет (400)."""
+    """Описание отдельным сообщением. Пустое Telegram не примет (400)."""
     if (d.get("description") or "").strip():
-        tg("sendMessage", chat_id=chat, text=d["description"][:4096])
+        copy_message(chat, d["description"][:4096])
 
 
 def set_live(chat, url=None, mid=None):
@@ -1193,13 +1197,15 @@ def ruler_cmd(*args):
 
 
 def read_inches(photo):
-    """Дюймы на рулетке iPhone в этом кадре или None (рулетки нет, она в сантиметрах, число не прочитать)."""
+    """Дюймы на рулетке iPhone в этом кадре. None — рулетки нет, 0 — есть, но число не прочитать (или она в сантиметрах)."""
     crop = photo + ".label.jpg"
     try:
-        return ai.read_ruler(crop) if ruler_cmd("label", photo, crop).get("found") else None
+        if not ruler_cmd("label", photo, crop).get("found"):
+            return None
+        return ai.read_ruler(crop) or 0
     except ai.AIError as e:
         print("ruler:", e)
-        return None
+        return 0
     finally:
         if os.path.exists(crop):
             os.remove(crop)
@@ -1210,14 +1216,17 @@ def fix_rulers(d):
     for photo in d["photos"]:
         orig = photo["orig"]
         inches = read_inches(orig) if photo.get("clean") == orig else None
-        if not inches:
+        if inches is None:
             continue
         dst = orig.replace("orig_", "cm_")
-        if ruler_cmd("cm", orig, dst, str(inches)).get("ok"):
-            with lock:
+        done = inches and ruler_cmd("cm", orig, dst, str(inches)).get("ok")
+        with lock:
+            if done:
                 photo["clean"] = dst
                 d["ai_images"] = [dst if p == orig else p for p in d.get("ai_images") or []]  # и Claude видит сантиметры
-                save()
+            else:
+                d["ruler_unread"] = True  # не молчим: Глеб просил дюймов на фото не оставлять
+            save()
 
 
 def square_closeups(d):
@@ -1347,6 +1356,8 @@ def batch_table():
         lines.append(f"<b>{n}.</b> {esc(title)} — {approx}{price}")
         if d.get("batch_err"):
             lines.append(f"    ⚠️ описание не получилось: {esc(d['batch_err'])}")
+        if d.get("ruler_unread"):
+            lines.append("    ⚠️ проверь фото с рулеткой: могли остаться дюймы")
         lines += [f"    ❓ {esc(q)}" for q in d.get("questions") or []]
         row.append(b(f"📤 {n}", f"bt|pub|{d['id']}"))
         if len(row) == 3:

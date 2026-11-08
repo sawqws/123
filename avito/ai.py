@@ -86,6 +86,9 @@ def json_from(text):
         raise AIError("Claude ответил не по формату") from None
 
 
+INCHES = re.compile(r"\s*\([^()]*дюйм[^()]*\)", re.I)  # Глеб: в объявлении только сантиметры
+
+
 def write_ad(info, images=(), previous=None, request=""):
     """{title, description, query, category, questions}. info — всё, что рассказал продавец."""
     parts = ["Составь объявление для Авито."]
@@ -99,7 +102,7 @@ def write_ad(info, images=(), previous=None, request=""):
     if len(title) > 50:
         title = title[:50].rsplit(" ", 1)[0].rstrip(",;:- ")
     params = ad.get("params") if isinstance(ad.get("params"), dict) else {}
-    return {"title": title, "description": str(ad.get("description") or "").strip(),
+    return {"title": title, "description": INCHES.sub("", str(ad.get("description") or "")).strip(),
             "query": str(ad.get("query") or title).strip(), "category": str(ad.get("category") or "").strip(),
             "params": {str(k): str(v).strip() for k, v in params.items() if str(v).strip()},
             "questions": [str(q) for q in (ad.get("questions") or [])][:3]}
