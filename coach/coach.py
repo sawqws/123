@@ -15,6 +15,7 @@
   WHOOP_CLIENT_SECRET
   KCAL_SITE            адрес сайта «Калории» для связи в одно нажатие (по умолчанию https://sawqws.github.io/123/kcal/)
   KCAL_DIR             папка сайта «Калории», который Форма отдаёт по /kcal/ (по умолчанию <репо>/docs/kcal)
+  WAKE_DIR             папка сайта «Будильник», который Форма отдаёт по /wake/ (по умолчанию <репо>/docs/wake)
 
 Только стандартная библиотека Python.
 """
@@ -33,6 +34,7 @@ import re
 import secrets
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import threading
@@ -839,10 +841,15 @@ def sleep_ahead(uid, day, bed, wake):
     days = insights.by_day(db, uid, (day - datetime.timedelta(days=14)).isoformat(), day.isoformat())
     in_bed = (f_regime._mins(wake) - f_regime._mins(bed)) % 1440 - f_plan.FALL_ASLEEP
     net = round(max(0, in_bed) * insights.sleep_eff(days, day) / 5) * 5 / 60  # до 5 минут
+    return net, sleep_need(uid, days, day)
+
+
+def sleep_need(uid, days, day):
+    """Сколько сна нужно в ночь после дня day, ч: WHOOP за прошлую ночь (сон дня day), но подростку не меньше 8,5, взрослому 7,5."""
     age = profile(uid).get("age")
     floor = 8.5 if age and age < 18 else 7.5
     last = (days.get(day.isoformat()) or {}).get("sleep") or {}
-    return net, max(last.get("need") or 0, floor)
+    return max(last.get("need") or 0, floor)
 
 
 def remind_lines(uid, day):
@@ -2186,6 +2193,10 @@ def tick():
                     bg(regime_remind, uid, rd)
         except Exception as e:
             print("regime:", uid, e)
+        try:  # «Будильник»: страховка — сайт не разбудил (ушёл в фон, телефон сел) → «⏰ Подъём» в Telegram в at
+            wake_tick(uid)
+        except Exception as e:
+            print("wake:", uid, e)
         # итог недели — воскресенье, 19:00
         if tok and now.weekday() == 6 and now.hour == 19 and db.once(f"week:{uid}:{now.date()}"):
             bg(progress_report, uid, uid, True, chat=uid)
@@ -2353,12 +2364,13 @@ class Web(BaseHTTPRequestHandler):
         if not allowed(uid):
             return self.reply(403, {"error": "Это личный тренер"})
         key = hashlib.sha256(tok.encode()).hexdigest()
-        if path in ("/api/kcal/sync", "/api/kcal/forma", "/api/kcal/state"):
-            if not pwa.throttle(f"kcal{path.rsplit('/', 1)[1]}:" + key, *SYNC_RATE):
+        if path in ("/api/kcal/sync", "/api/kcal/forma", "/api/kcal/state") + WAKE_PATHS:  # + «Будильник» (SYNC.md п. 9)
+            if not pwa.throttle(path[5:].replace("/", "") + ":" + key, *SYNC_RATE):  # kcalsync:…, wakearm:… — у каждого свой счётчик
                 return self.reply(429, {"error": "Много запросов подряд — попробуй через час"})
             try:
                 fn = {"/api/kcal/sync": lambda: kcal_sync(uid, body), "/api/kcal/forma": lambda: kcal_forma(uid),
-                      "/api/kcal/state": lambda: kcal_state(uid)}[path]
+                      "/api/kcal/state": lambda: kcal_state(uid), "/api/wake": lambda: wake_get(uid),
+                      "/api/wake/arm": lambda: wake_arm(uid, body), "/api/wake/done": lambda: wake_done(uid, body)}[path]
                 return self.reply(200, fn())
             except ValueError as e:
                 return self.reply(400, {"error": str(e)})
@@ -2664,11 +2676,12 @@ class Web(BaseHTTPRequestHandler):
                               "text/html; charset=utf-8")
         if path == "/api/kcal/shop":  # «Калории»: продукты из магазинов (браузеру Open Food Facts не отдаёт CORS)
             return self.kcal_shop_get(dict(urllib.parse.parse_qsl(u.query)).get("q", ""))
-        if path in ("/api/kcal/forma", "/api/kcal/state"):  # «Калории»: день Формы, весь дневник (Bearer)
+        if path in ("/api/kcal/forma", "/api/kcal/state", "/api/wake"):  # «Калории»: день Формы, дневник; «Будильник» (Bearer)
             return self.kcal(path, {})
-        if path == "/kcal" or path.startswith("/kcal/"):  # «Калории» внутри Формы: тот же домен, один вход
-            code, body, ctype, cache, extra = kcal_static(path, u.query, self.headers)
-            return self.reply(code, body, ctype, cache, headers=extra)
+        for prefix, static in (("/kcal", kcal_static), ("/wake", wake_static)):  # «Калории» и «Будильник» внутри Формы: тот же домен, один вход
+            if path == prefix or path.startswith(prefix + "/"):
+                code, body, ctype, cache, extra = static(path, u.query, self.headers)
+                return self.reply(code, body, ctype, cache, headers=extra)
         if path.startswith("/api/"):
             return self.api(path, dict(urllib.parse.parse_qsl(u.query)))
         if path == "/site" or path.startswith("/site/"):
@@ -2815,7 +2828,9 @@ MAX_PHOTO = 8 * 1024 * 1024
 KCAL_ORIGIN = "https://sawqws.github.io"  # сайт «Калории» (GitHub Pages, /123/kcal/) — только ему CORS
 KCAL_PATHS = ("/api/kcal/pair", "/api/kcal/photo", "/api/kcal/shop", "/api/kcal/chat", "/api/kcal/sync", "/api/kcal/forma",
               "/api/kcal/state", "/api/kcal/recipe/parse", "/api/kcal/voice")
-SYNC_RATE = (120, 3600)  # /api/kcal/sync, /forma и /state — каждому столько на токен в час (у каждого свой счётчик)
+WAKE_PATHS = ("/api/wake", "/api/wake/arm", "/api/wake/done")  # «Будильник» (docs/wake, SYNC.md п. 9) — тот же Bearer «Калорий»
+KCAL_PATHS += WAKE_PATHS
+SYNC_RATE = (120, 3600)  # /api/kcal/sync, /forma, /state и /api/wake* — каждому столько на токен в час (у каждого свой счётчик)
 KCAL_SITE = os.environ.get("KCAL_SITE") or "https://sawqws.github.io/123/kcal/"  # «Калории» в одно нажатие: + #pair=<токен>
 KCAL_RATE = (30, 3600)  # фото на токен в час — чужой не сожжёт подписку Claude
 CHAT_RATE = (60, 3600)  # сообщений в чат на токен в час
@@ -3544,40 +3559,65 @@ def kcal_recipe_parse(uid, b):
     return {"text": text, **{k: out[k] for k in ("name", "servings", "out", "method", "note", "items")}}
 
 
-# ---------- «Калории» внутри Формы: сайт docs/kcal по адресу /kcal/ (тот же домен — один вход, общий localStorage) ----------
+# ---------- «Калории» и «Будильник» внутри Формы: сайты docs/kcal и docs/wake по адресам /kcal/ и /wake/ ----------
+# (тот же домен — один вход, общий localStorage с токеном «Калорий»)
 KCAL_DIR = os.environ.get("KCAL_DIR") or os.path.join(REPO, "docs", "kcal")
-KCAL_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+WAKE_DIR = os.environ.get("WAKE_DIR") or os.path.join(REPO, "docs", "wake")
+KCAL_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
               ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json; charset=utf-8",
-              ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2"}
-KCAL_FRESH = (".html", ".js", ".json", ".webmanifest")  # меняются с каждой выкаткой — проверять у сервера (ETag)
+              ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2",
+              ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".wav": "audio/wav"}  # звук будильника
+KCAL_FRESH = (".html", ".js", ".css", ".json", ".webmanifest")  # меняются с каждой выкаткой — проверять у сервера (ETag)
 _kcal_gz = {}  # (файл, mtime, размер) → сжатое: foods.json ~600 КБ → ~100 КБ, сжимаем один раз
 
 
 def kcal_static(path, query="", headers=None):
-    """GET /kcal и /kcal/<файл> → (код, тело, тип, Cache-Control, заголовки). Только файлы из самой папки KCAL_DIR
-    (без подпапок, «..», скрытых и ссылок наружу) и только известных типов; остальное — 404."""
+    """GET /kcal и /kcal/<файл> — сайт «Калории» из KCAL_DIR (см. site_static)."""
+    return site_static(path, query, headers, KCAL_DIR, "/kcal")
+
+
+def wake_static(path, query="", headers=None):
+    """GET /wake и /wake/<файл> — сайт «Будильник» из WAKE_DIR (см. site_static); папки нет — 404."""
+    return site_static(path, query, headers, WAKE_DIR, "/wake")
+
+
+def site_static(path, query, headers, folder, prefix):
+    """GET <prefix> и <prefix>/<файл> → (код, тело, тип, Cache-Control, заголовки). Только файлы из самой папки folder
+    (без подпапок, «..», скрытых и ссылок наружу) и только известных типов; остальное — 404. Звук — с Range
+    (Safari на iPhone без ответа 206 не играет <audio>)."""
     headers = headers or {}
     nf = (404, {"error": "not found"}, "application/json; charset=utf-8", "no-store", {})
-    if path == "/kcal":
-        return 302, "", "text/plain; charset=utf-8", "no-store", {"Location": "/kcal/" + ("?" + query if query else "")}
-    name = path[len("/kcal/"):] or "index.html"
+    if path == prefix:
+        return 302, "", "text/plain; charset=utf-8", "no-store", {"Location": prefix + "/" + ("?" + query if query else "")}
+    name = path[len(prefix) + 1:] or "index.html"
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", name) or ".." in name:
         return nf
     ext = os.path.splitext(name)[1].lower()
-    root = os.path.realpath(KCAL_DIR)
+    root = os.path.realpath(folder)
     file = os.path.realpath(os.path.join(root, name))
     if ext not in KCAL_TYPES or os.path.dirname(file) != root or not os.path.isfile(file):
         return nf
     st = os.stat(file)
     etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    ctype = KCAL_TYPES[ext]
     extra = {"ETag": etag, "Vary": "Accept-Encoding"}
     if name == "sw.js":
-        extra["Service-Worker-Allowed"] = "/kcal/"
+        extra["Service-Worker-Allowed"] = prefix + "/"
     cache = "no-cache" if ext in KCAL_FRESH else "public, max-age=86400"
     if etag in [t.strip() for t in (headers.get("If-None-Match") or "").split(",")]:
-        return 304, b"", KCAL_TYPES[ext], cache, extra
+        return 304, b"", ctype, cache, extra
     with open(file, "rb") as f:
         body = f.read()
+    if ctype.startswith("audio/"):
+        extra["Accept-Ranges"] = "bytes"
+        m = re.fullmatch(r"\s*bytes=(\d*)-(\d*)\s*", headers.get("Range") or "")
+        if m and (m.group(1) or m.group(2)):
+            n = len(body)
+            a, b = m.groups()
+            lo, hi = (int(a), min(int(b) if b else n - 1, n - 1)) if a else (max(0, n - int(b)), n - 1)
+            if lo > hi:
+                return 416, b"", ctype, cache, {**extra, "Content-Range": f"bytes */{n}"}
+            return 206, body[lo:hi + 1], ctype, cache, {**extra, "Content-Range": f"bytes {lo}-{hi}/{n}"}
     if ext in KCAL_FRESH + (".svg",) and len(body) > 1024 and "gzip" in (headers.get("Accept-Encoding") or ""):
         key = (file, st.st_mtime_ns, st.st_size)
         if key not in _kcal_gz:
@@ -3585,7 +3625,7 @@ def kcal_static(path, query="", headers=None):
                 _kcal_gz.clear()
             _kcal_gz[key] = gzip.compress(body, 6, mtime=0)
         body, extra["Content-Encoding"] = _kcal_gz[key], "gzip"
-    return 200, body, KCAL_TYPES[ext], cache, extra
+    return 200, body, ctype, cache, extra
 
 
 def kcal_forma(uid):
@@ -3613,6 +3653,160 @@ def kcal_forma(uid):
                         for m in db.meals(uid, day.isoformat())],
         "regime": reg,
     }
+
+
+# ---------- «Будильник»: умное пробуждение в лёгком сне (сайт docs/wake, договор — coach/SYNC.md п. 9) ----------
+WAKE_AHEAD = 20 * 3600  # страховку ставят не дальше чем на 20 ч вперёд
+WAKE_LATE = 2 * 3600  # страховка просрочена дольше (сервер лежал) — не будим, просто снимаем
+WAKE_REASONS = ("move", "sound", "cycle", "deadline", "manual")
+WAKE_TIMES = ("start", "onset", "woke")
+WAKE_NUMS = ("window", "minutes", "light", "deep", "awake", "moves")
+WAKE_KEEP = 30  # итогов ночи в meta wake:nights:<uid>
+WAKE_CYCLE = (70, 120)  # обрезка средней длины цикла сна, мин
+_wake_lock = threading.Lock()  # страховка: поставить/снять (сайт) и разбудить (tick) — не вперемешку
+
+
+def wake_get(uid):
+    """GET /api/wake → данные для будильника: ближайший подъём по режиму, потребность и эффективность сна, длина цикла,
+    последняя ночь и восстановление WHOOP, стоит ли страховка. Ничего не меняет."""
+    u = db.user(uid)
+    now = user_now(u)
+    today = now.date()
+    cfg = f_regime.load(db, uid, u["profile"])
+    # ближайший подъём: сейчас раньше сегодняшнего — сегодня, иначе завтра; отбой — вечером накануне этого подъёма
+    day = today if now.hour * 60 + now.minute < f_regime._mins(f_regime.bed_wake(cfg, today)[1]) \
+        else today + datetime.timedelta(days=1)
+    eve = day - datetime.timedelta(days=1)
+    days = insights.by_day(db, uid, (today - datetime.timedelta(days=15)).isoformat(), today.isoformat())
+    lo = (today - datetime.timedelta(days=13)).isoformat()
+    nights = [v["sleep"] for d, v in days.items() if lo <= d <= today.isoformat() and v.get("sleep")]
+    lens = [(s["light"] + s["deep"] + s["rem"]) * 60 / s["cycles"] for s in nights if (s.get("cycles") or 0) >= 2]
+    last_day = max((d for d, v in days.items() if d <= today.isoformat() and v.get("sleep")), default=None)
+    s = days[last_day]["sleep"] if last_day else None
+    r = (days.get(today.isoformat()) or {}).get("recovery")
+    return {
+        "now": now.strftime("%Y-%m-%dT%H:%M"), "tz": round(now.utcoffset().total_seconds() / 60),
+        "plan": {"day": day.isoformat(), "wake": f_regime.bed_wake(cfg, day)[1], "bed": f_regime.bed_wake(cfg, eve)[0],
+                 "mode": f_regime.mode_of(cfg, day)},
+        "need": sleep_need(uid, days, eve), "eff": insights.sleep_eff(days, eve), "latency": f_plan.FALL_ASLEEP,
+        "cycle": round(min(WAKE_CYCLE[1], max(WAKE_CYCLE[0], statistics.median(lens)))) if len(lens) >= 3 else None,
+        "nights": len(lens),
+        "last": {"day": last_day, **{k: s.get(k) for k in ("hours", "in_bed", "light", "deep", "rem", "cycles",
+                                                            "performance", "start", "end")}} if s else None,
+        "recovery": {"score": r.get("score"), "hrv": r.get("hrv"), "rhr": r.get("rhr")} if r else None,
+        "armed": wake_public(wake_armed(uid, now.timestamp())),
+    }
+
+
+def wake_armed(uid, now=None):
+    """Стоящая страховка {at, from, ts} или None (нет, битая или просрочена дольше WAKE_LATE)."""
+    try:
+        a = json.loads(db.meta(f"wake:arm:{uid}") or "null")
+    except ValueError:
+        return None
+    if not isinstance(a, dict) or not isinstance(a.get("ts"), (int, float)):
+        return None
+    return a if (now or time.time()) - a["ts"] <= WAKE_LATE else None
+
+
+def wake_public(a):
+    return {"at": a["at"], "from": a["from"]} if a else None
+
+
+def wake_clock(v):
+    """ЧЧ:ММ или None."""
+    try:
+        return f_regime._clock(v, "время") if isinstance(v, str) and len(v) <= 5 else None
+    except ValueError:
+        return None
+
+
+def wake_arm(uid, b):
+    """POST /api/wake/arm {at: "ГГГГ-ММ-ДДTЧЧ:ММ" (местное), from: "ЧЧ:ММ"} — страховка: в at Тренер пишет «⏰ Подъём».
+    at — от сейчас до +20 ч, иначе ValueError (400). Повторный arm заменяет прошлый."""
+    now = user_now(db.user(uid))
+    at = str(b.get("at") or "").strip()
+    try:
+        if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d", at):
+            raise ValueError
+        when = datetime.datetime.fromisoformat(at).replace(tzinfo=now.tzinfo)
+    except ValueError:
+        raise ValueError("at — время подъёма ГГГГ-ММ-ДДTЧЧ:ММ") from None
+    if when <= now:
+        raise ValueError("Время подъёма уже прошло")
+    if (when - now).total_seconds() > WAKE_AHEAD:
+        raise ValueError("Подъём — не дальше чем через 20 часов")
+    frm = b.get("from")
+    frm = at[11:] if frm in (None, "") else wake_clock(frm)
+    if not frm:
+        raise ValueError("from — начало окна ЧЧ:ММ")
+    rec = {"at": at, "from": frm, "ts": when.timestamp()}
+    with _wake_lock:
+        db.meta(f"wake:arm:{uid}", json.dumps(rec))
+    return {"ok": True, "armed": wake_public(rec)}
+
+
+def wake_num(v):
+    """Число 0..1440 (минуты, доли, движения) или None: строки, bool, NaN и бесконечность — None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
+        return None
+    v = min(1440, max(0, v))
+    return int(v) if float(v).is_integer() else round(v, 2)
+
+
+def wake_done(uid, b):
+    """POST /api/wake/done — снять страховку; {cancel: true} — и всё, иначе ещё и итог ночи в meta wake:nights:<uid>
+    (последние WAKE_KEEP; поля проверены и обрезаны, лишние отброшены)."""
+    with _wake_lock:
+        db.meta(f"wake:arm:{uid}", "")
+    if b.get("cancel"):
+        return {"ok": True}
+    night = {k: wake_clock(b.get(k)) for k in WAKE_TIMES}
+    night["reason"] = b.get("reason") if b.get("reason") in WAKE_REASONS else None
+    night.update({k: wake_num(b.get(k)) for k in WAKE_NUMS})
+    if any(v is not None for v in night.values()):
+        now = user_now(db.user(uid))
+        try:
+            old = json.loads(db.meta(f"wake:nights:{uid}") or "[]")
+        except ValueError:
+            old = []
+        old = old if isinstance(old, list) else []
+        rec = {"day": now.date().isoformat(), "saved": now.strftime("%Y-%m-%dT%H:%M"), **night}
+        db.meta(f"wake:nights:{uid}", json.dumps((old + [rec])[-WAKE_KEEP:], ensure_ascii=False))
+    return {"ok": True}
+
+
+def wake_tick(uid, now=None):
+    """Из tick раз в минуту: страховка дошла до своего at (не раньше) — «⏰ Подъём» в Telegram ровно один раз
+    (db.once), потом снимается. Просрочена дольше WAKE_LATE (сервер лежал) — не будим, просто снимаем."""
+    now = now or time.time()
+    with _wake_lock:
+        raw = db.meta(f"wake:arm:{uid}")
+        if not raw:
+            return
+        a = wake_armed(uid, now)
+        if not a:  # битая или просроченная
+            db.meta(f"wake:arm:{uid}", "")
+            return
+        if now < a["ts"]:
+            return
+    if db.once(f"wake:{uid}:{a['ts']}"):
+        bg(wake_ring, uid, a)
+
+
+def wake_ring(uid, a):
+    """Отправить «⏰ Подъём» и снять страховку; Telegram не принял — снять отметку once: следующий tick повторит."""
+    at = esc(a["at"][11:])
+    window = f" · окно с {esc(a['from'])}" if a.get("from") and a["from"] != a["at"][11:] else ""
+    try:
+        send(uid, box("⏰", "Подъём", f"Будильник на сайте не сработал — пора вставать\nПодъём в <b>{at}</b>{window}"))
+    except Exception:
+        db.unsend(f"wake:{uid}:{a['ts']}")
+        raise
+    with _wake_lock:  # снимаем, только если за это время не поставили новую
+        cur = wake_armed(uid, a["ts"])
+        if cur and cur["ts"] == a["ts"]:
+            db.meta(f"wake:arm:{uid}", "")
 
 
 class NotFood(Exception):
