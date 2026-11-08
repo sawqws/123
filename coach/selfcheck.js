@@ -32,7 +32,7 @@ const LAPTOP = { viewport: { width: 1366, height: 768 } };
 const SIZES = [['phone', PHONE], ['laptop', LAPTOP]];
 const want = c => !ONLY || ONLY.split(',').includes(c);
 // нажатия, которые уводят со страницы или закрывают приложение — нажимаем, но уход не ошибка
-const LEAVE_OK = new Set(['connect', 'open', 'tochat']);
+const LEAVE_OK = new Set(['connect', 'open', 'tochat', 'wake-open']);  // wake-open — сайт «Будильник» /wake/
 const t0 = Date.now();
 let dead = false;  // фикстура перестала отвечать — дальше не обходим (иначе каждый экран — «не открылась»)
 const late = () => dead || Date.now() - t0 > BUDGET;
