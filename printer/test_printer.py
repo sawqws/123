@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Тесты бота «Принтер» без сети: python3 printer/test_printer.py"""
 import datetime
+import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
+import types
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -79,6 +86,15 @@ class FakeMoon:
     def upload(self, name, data):
         self.calls.append(("upload", name, data))
         self.items.append({"path": name, "modified": 1700000200, "size": len(data)})
+
+    def details(self):
+        return {}
+
+    def history(self):
+        return []
+
+    def journal(self):
+        return []
 
 
 class Base(unittest.TestCase):
@@ -426,6 +442,256 @@ class Wire(unittest.TestCase):
         frame = pb.ws_frame("x" * 300)
         self.assertEqual(frame[1] & 0x7F, 126)
         self.assertEqual(int.from_bytes(frame[2:4], "big"), 300)
+
+
+class Ask(Base):
+    """Вопросы к Claude: сам Claude подменён, принтер — FakeMoon."""
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+        self.reply = "Всё идёт нормально."
+        patcher = mock.patch.object(pb.ai, "ask", self.fake_ask)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fake_ask(self, prompt, session=None, timeout=300):
+        self.asked.append((prompt, session))
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply, "sid-1"
+
+    def test_question_gets_answer_with_live_data(self):
+        self.moon.st = printing()
+        self.t.send("сколько осталось?")
+        prompt = self.asked[0][0]
+        for part in ("сколько осталось?", "Печатает · 50 %", "Слой 45 из 333", "Сопло 248°", "box.gcode"):
+            self.assertIn(part, prompt)
+        self.assertNotIn("<b>", prompt)
+        self.assertIn("Думаю", self.t.messages[0]["text"])
+        self.assertEqual(self.t.last, "Всё идёт нормально.")
+        self.assertEqual(self.t.calls[-1][0], "editMessageText")
+
+    def test_extra_data_reaches_prompt(self):
+        self.moon.details = lambda: {"gcode_move": {"speed_factor": 1.0, "extrude_factor": 0.95}, "fan": {"speed": 0.5},
+                                     "print_stats": {"filament_used": 12500.0}}
+        self.moon.history = lambda: [{"filename": "old.gcode", "status": "cancelled", "print_duration": 3600,
+                                      "end_time": 1700000000}]
+        self.moon.journal = lambda: [{"type": "response", "message": "!! Move out of range"},
+                                     {"type": "response", "message": "ok"}, {"type": "command", "message": "G28"}]
+        self.t.send("что было?")
+        prompt = self.asked[0][0]
+        for part in ("Скорость 100 %, поток 95 %", "Обдув 50 %", "12.5 м", "old.gcode: cancelled, 1 ч 0 мин",
+                     "!! Move out of range", "stand.gcode"):
+            self.assertIn(part, prompt)
+        self.assertNotIn("G28", prompt)
+
+    def test_missing_extra_data_does_not_stop_answer(self):
+        def broken():
+            raise pb.Offline("нет")
+        self.moon.details = self.moon.history = self.moon.journal = broken
+        self.t.send("как дела?")
+        self.assertEqual(self.t.last, "Всё идёт нормально.")
+
+    def test_offline_printer_is_told_to_claude(self):
+        self.moon.offline = True
+        self.t.send("как дела?")
+        self.assertIn("не на связи", self.asked[0][0])
+        self.assertEqual(self.t.last, "Всё идёт нормально.")
+
+    def test_stranger_never_reaches_claude(self):
+        self.t.send("расскажи всё", uid=999)
+        self.assertEqual(self.asked, [])
+        self.assertIn("личный бот", self.t.last)
+
+    def test_conversation_continues_and_resets(self):
+        self.t.send("раз")
+        self.t.send("два")
+        self.assertEqual([s for _, s in self.asked], [None, "sid-1"])
+        self.t.send("/new")
+        self.assertIn("Новый разговор", self.t.last)
+        self.t.send("три")
+        self.assertIsNone(self.asked[-1][1])
+
+    def test_old_conversation_is_forgotten(self):
+        self.t.send("раз")
+        self.t.bot.db.set("ai", {"sid": "sid-1", "ts": time.time() - pb.AI_TTL - 1})
+        self.t.send("два")
+        self.assertIsNone(self.asked[-1][1])
+
+    def test_status_and_files_buttons_do_not_go_to_claude(self):
+        self.t.send("/start")
+        self.t.press("home|r")
+        self.t.press("files")
+        self.assertEqual(self.asked, [])
+
+    def test_tags_become_buttons_but_nothing_happens_by_itself(self):
+        self.moon.st = printing()
+        self.reply = "Поставь на паузу и проверь пластик. [[pause]] [[status]]"
+        self.t.send("пропал пластик")
+        self.assertEqual(self.t.last, "Поставь на паузу и проверь пластик.")
+        self.assertEqual(self.t.buttons, ["⏸ Пауза", "🖨 Статус"])
+        self.assertEqual(self.moon.calls, [])
+        self.sent_buttons()
+
+    def test_tag_impossible_now_gives_no_button(self):
+        self.reply = "Нечего ставить на паузу. [[pause]] [[resume]] [[cancel]] [[nonsense]]"
+        self.t.send("пауза")
+        self.assertEqual(self.t.buttons, [])
+        self.assertNotIn("[[", self.t.last)
+
+    def test_cancel_tag_still_asks(self):
+        self.moon.st = printing()
+        self.reply = "Отменяй. [[cancel]]"
+        self.t.send("отмени")
+        self.t.press("cancel")
+        self.assertIn("Отменить печать?", self.t.last)
+        self.assertEqual(self.moon.calls, [])
+
+    def test_file_tag_opens_card_and_does_not_print(self):
+        self.reply = "Открывай файл. [[file:box.gcode]] [[file:no_such.gcode]]"
+        self.t.send("поставь коробку")
+        self.assertEqual(len(self.t.buttons), 1)
+        self.sent_buttons()
+        self.t.press(self.t.keyboard[0]["callback_data"])
+        self.assertIn("🖨 Печатать", self.t.buttons)
+        self.assertEqual(self.moon.calls, [])
+
+    def test_answer_is_escaped_and_formatted(self):
+        self.reply = "## Итог\nслой < 0,3 & **важно** `G28`\n- пункт"
+        self.t.send("вопрос")
+        self.assertEqual(self.t.last, "<b>Итог</b>\nслой &lt; 0,3 &amp; <b>важно</b> <code>G28</code>\n• пункт")
+
+    def test_long_answer_is_split_and_buttons_go_last(self):
+        self.moon.st = printing()
+        self.reply = "\n".join(["строка ответа " * 10] * 60) + " [[pause]]"
+        self.t.send("расскажи подробно")
+        answers = self.t.messages[1:]
+        self.assertGreater(len(answers), 1)
+        for m in answers:
+            self.assertLessEqual(len(m["text"]), 4096)
+        self.assertFalse(answers[0].get("reply_markup", {}).get("inline_keyboard"))
+        self.assertEqual(self.t.buttons, ["⏸ Пауза"])
+
+    def test_error_replaces_thinking(self):
+        self.reply = pb.ai.AIError("У Claude закончился лимит, попробуй позже")
+        self.t.send("вопрос")
+        self.assertIn("⚠️", self.t.last)
+        self.assertIn("лимит", self.t.last)
+        self.assertEqual(self.t.calls[-1][0], "editMessageText")
+
+    def test_unexpected_error_replaces_thinking(self):
+        self.reply = RuntimeError("сломалось")
+        with mock.patch("traceback.print_exc"):
+            self.t.send("вопрос")
+        self.assertIn("⚠️", self.t.last)
+        self.assertNotIn("сломалось", self.t.last)
+        self.assertFalse(pb.AI_LOCK.locked())
+
+    def test_photo_is_passed_to_claude(self):
+        with mock.patch.object(pb.ai, "keep_photo", return_value="photos/a.jpg") as keep:
+            pb.on_photo(kit.Ctx(pb.bot, OWNER, {"id": OWNER}, text="что с первым слоем?", photo="/tmp/a.jpg"))
+        keep.assert_called_once_with("/tmp/a.jpg")
+        for part in ("что с первым слоем?", "photos/a.jpg", "Read"):
+            self.assertIn(part, self.asked[0][0])
+
+    def test_photo_without_caption_still_asks(self):
+        with mock.patch.object(pb.ai, "keep_photo", return_value="photos/a.jpg"):
+            pb.on_photo(kit.Ctx(pb.bot, OWNER, {"id": OWNER}, text="", photo="/tmp/a.jpg"))
+        self.assertIn("Посмотри фото", self.asked[0][0])
+
+    def test_image_sent_as_file_goes_to_claude(self):
+        fake = types.SimpleNamespace(photo_path=lambda token, msg, folder: "/tmp/a.png")
+        with mock.patch.object(kit, "media", return_value=fake), mock.patch.object(pb.ai, "keep_photo", return_value="photos/a.png"):
+            self.t.send("", document={"file_id": "1", "file_name": "a.png", "mime_type": "image/png"})
+        self.assertIn("photos/a.png", self.asked[0][0])
+
+    def test_gcode_file_still_goes_to_printer(self):
+        with mock.patch.object(pb, "tg_download", return_value=b"G28"):
+            self.t.send("", document={"file_id": "1", "file_name": "new.gcode", "file_size": 3})
+        self.assertEqual(self.moon.calls, [("upload", "new.gcode", b"G28")])
+        self.assertEqual(self.asked, [])
+
+
+class Claude(unittest.TestCase):
+    """printer/ai.py: как зовётся Claude Code. Сам процесс подменён."""
+
+    @staticmethod
+    def done(result="Ответ", sid="s1", code=0, is_error=False, err=""):
+        out = json.dumps({"result": result, "session_id": sid, "is_error": is_error})
+        return subprocess.CompletedProcess([], code, out, err)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        patcher = mock.patch.object(pb.ai, "WORK", self.tmp)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_cannot_control_anything_and_keeps_no_secrets(self):
+        env = {"PRINTER_TOKEN": "1:x", "HUB_KEY": "k", "BOT_OWNER": "1", "PATH": "/bin", "CLAUDE_CODE_OAUTH_TOKEN": "t"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(subprocess, "run", return_value=self.done()) as run:
+            self.assertEqual(pb.ai.ask("вопрос"), ("Ответ", "s1"))
+        cmd, kw = run.call_args[0][0], run.call_args[1]
+        denied = cmd[cmd.index("--disallowedTools") + 1:cmd.index("--allowedTools")]
+        allowed = cmd[cmd.index("--allowedTools") + 1:]
+        for tool in ("Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"):
+            self.assertIn(tool, denied)
+        self.assertEqual(allowed, ["WebSearch", "WebFetch"])  # Read без условий открыл бы /etc/*.env
+        self.assertNotIn("--resume", cmd)
+        self.assertEqual(kw["cwd"], self.tmp)
+        self.assertEqual(set(kw["env"]), {"PATH", "CLAUDE_CODE_OAUTH_TOKEN"})
+
+    def test_prompt_lists_actions_and_forbids_pretending(self):
+        rules = pb.ai.rules()
+        for tag in ("[[status]]", "[[files]]", "[[pause]]", "[[resume]]", "[[cancel]]", "[[cool]]", "[[file:"):
+            self.assertIn(tag, rules)
+        self.assertIn("Никогда не пиши", rules)
+
+    def test_resumes_conversation(self):
+        with mock.patch.object(subprocess, "run", return_value=self.done(sid="s2")) as run:
+            self.assertEqual(pb.ai.ask("вопрос", "s1"), ("Ответ", "s2"))
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--resume") + 1], "s1")
+
+    def test_lost_conversation_starts_new(self):
+        lost = subprocess.CompletedProcess([], 1, "", "No conversation found with session ID: s1")
+        with mock.patch.object(subprocess, "run", side_effect=[lost, self.done(sid="s9")]) as run, mock.patch("builtins.print"):
+            self.assertEqual(pb.ai.ask("вопрос", "s1"), ("Ответ", "s9"))
+        self.assertNotIn("--resume", run.call_args[0][0])
+
+    def test_failures_have_clear_text(self):
+        cases = [(subprocess.CompletedProcess([], 1, "", "Please run /login"), "не вошёл"),
+                 (subprocess.CompletedProcess([], 1, "", "OAuth session expired"), "не вошёл"),
+                 (subprocess.CompletedProcess([], 1, "", "usage limit reached"), "лимит"),
+                 (self.done(result="", is_error=True), "не ответил"),
+                 (subprocess.CompletedProcess([], 0, "не json", ""), "не ответил")]
+        for result, text in cases:
+            with mock.patch.object(subprocess, "run", return_value=result), mock.patch("builtins.print"):
+                with self.assertRaises(pb.ai.AIError) as e:
+                    pb.ai.ask("вопрос")
+            self.assertIn(text, str(e.exception))
+
+    def test_timeout_and_no_claude(self):
+        with mock.patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("claude", 1)):
+            with self.assertRaises(pb.ai.AIError):
+                pb.ai.ask("вопрос")
+        with mock.patch.object(subprocess, "run", side_effect=FileNotFoundError()):
+            with self.assertRaises(pb.ai.AIError):
+                pb.ai.ask("вопрос")
+
+    def test_photo_moves_inside_work_folder_and_old_ones_go(self):
+        src = os.path.join(self.tmp, "in.jpg")
+        open(src, "wb").close()
+        rel = pb.ai.keep_photo(src)
+        self.assertTrue(rel.startswith("photos/") and rel.endswith(".jpg"))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, rel)))
+        self.assertFalse(os.path.exists(src))
+        src2 = os.path.join(self.tmp, "in2.jpg")
+        open(src2, "wb").close()
+        rel2 = pb.ai.keep_photo(src2, now=time.time() + 8 * 86400)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, rel)))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, rel2)))
 
 
 if __name__ == "__main__":

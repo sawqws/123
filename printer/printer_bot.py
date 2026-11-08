@@ -11,13 +11,16 @@ PRINTER_WS_PORT (17999), PRINTER_START (moonraker | screen — чем запус
 import base64
 import datetime
 import hashlib
+import html
 import json
 import os
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,6 +29,8 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "studio", "kit"))
+sys.path.insert(0, HERE)
+import ai  # noqa: E402
 import botkit as kit  # noqa: E402
 
 URL = (os.environ.get("PRINTER_URL") or "http://127.0.0.1:17125").rstrip("/")
@@ -40,6 +45,10 @@ HEAL_AFTER = 120   # секунд без связи до сброса завис
 HEAL_EVERY = 300
 PAGE = 6
 TG_FILE_LIMIT = 20 * 1024 * 1024  # больше Telegram не отдаёт ботам
+AI_TTL = 24 * 3600  # разговор с Claude забывается через сутки тишины
+AI_LOCK = threading.Lock()  # вопросы по очереди и в одном разговоре
+ANSWER_SIZE = 3500  # на сообщение: после разметки должно влезть в 4096
+TAG = re.compile(r"\[\[([a-z]+)(?::([^\]\n]+))?\]\]")
 STATES = {"printing": "🟢 Печатает", "paused": "⏸ На паузе", "complete": "✅ Готово", "cancelled": "⛔ Отменена",
           "error": "⚠️ Ошибка", "standby": "⚪️ Свободен"}
 
@@ -103,6 +112,16 @@ class Moon:
 
     def delete(self, name):
         self.request("DELETE", "/server/files/gcodes/" + urllib.parse.quote(name))
+
+    def details(self):
+        query = "gcode_move=speed_factor,extrude_factor&fan=speed&print_stats=filament_used&toolhead=homed_axes"
+        return self.request("GET", "/printer/objects/query?" + query, timeout=6)["status"]
+
+    def history(self, count=5):
+        return (self.request("GET", f"/server/history/list?limit={count}&order=desc") or {}).get("jobs") or []
+
+    def journal(self, count=40):
+        return (self.request("GET", f"/server/gcode_store?count={count}") or {}).get("gcode_store") or []
 
     def upload(self, name, data):
         boundary = uuid.uuid4().hex
@@ -262,21 +281,22 @@ def status_lines(snap):
 class PrinterBot(kit.Bot):
     def _message(self, msg):
         uid = (msg.get("from") or {}).get("id")
-        if msg.get("document") and msg["chat"].get("type") == "private" and self.allowed(uid):
+        is_file = msg.get("document") and kit.media_kind(msg) is None  # фото и видео файлом — как обычные
+        if is_file and msg["chat"].get("type") == "private" and self.allowed(uid):
             c = kit.Ctx(self, msg["chat"]["id"], msg.get("from"), msg=msg)
             return self.later(got_document, c)
         return super()._message(msg)
 
 
 bot = PrinterBot("Принтер", emoji="🖨", about="Твой 3D-принтер в Telegram: сколько осталось, пауза, отмена, запуск файлов, "
-                                         "сообщения о готовности и сбоях.",
+                                         "сообщения о готовности и сбоях. На вопросы отвечает Claude.",
                  short="3D-принтер в Telegram",
-                 commands=[("start", "Статус"), ("files", "Файлы"), ("help", "Что умею")],
+                 commands=[("start", "Статус"), ("files", "Файлы"), ("new", "Новый разговор"), ("help", "Что умею")],
                  token=os.environ.get("PRINTER_TOKEN", ""),
                  support={"name": "Принтер", "folders": ["printer"], "pm2": "printer-bot", "cwd": REPO,
                           "tests": ["python3 printer/test_printer.py"]},
                  kb=[[kit.b("🖨 Статус", "home"), kit.b("📁 Файлы", "files")], [kit.KB_SUPPORT]],
-                 kb_version=1, kb_placeholder="Пришли G-code или ☰ справа")
+                 kb_version=2, kb_placeholder="Спроси что угодно или пришли G-code")
 
 OFFLINE_LINES = ["🔴 Нет связи с принтером", "Он выключен или без интернета. Если включён, туннель поднимется сам за минуту."]
 
@@ -314,8 +334,8 @@ def home(c):
 @bot.command("help")
 def help_(c):
     c.say(kit.card("🖨 <b>Что умею</b>", [
-        "Показываю, сколько печатать осталось и когда конец.",
-        "Пауза, отмена, запуск файлов с принтера, остывание.",
+        "Спроси что угодно текстом, голосом или фото: отвечает Claude, он видит текущую печать. /new — начать заново.",
+        "Показываю, сколько осталось. Пауза, отмена, запуск файлов, остывание.",
         "Пишу сам: старт, первый слой, готово, ошибка, пропала связь.",
         "Пришли .gcode до 20 МБ — положу на принтер.",
         "/gcode G28 — любая команда принтеру."]), [[kit.b("‹ Главное", "home")]])
@@ -516,6 +536,154 @@ def got_document(c):
     c.typing()
     moon.upload(name, tg_download(doc["file_id"]))
     show_file(c, find(fid(name)))
+
+
+# ---------- вопросы к Claude ----------
+
+def plain(line):
+    return html.unescape(re.sub(r"<[^>]+>", "", str(line)))
+
+
+def soft(fn, *a):
+    """Дополнительные сведения для Claude: не получилось — обойдётся без них."""
+    try:
+        return fn(*a)
+    except (Offline, kit.Fail, KeyError, ValueError, TypeError):
+        return None
+
+
+def facts():
+    """Что Claude знает о принтере прямо сейчас. Только чтение."""
+    lines = [f"Сейчас {local_now().strftime('%d.%m.%Y %H:%M')} по времени Глеба."]
+    snap = snapshot()
+    if not snap["online"]:
+        return "\n".join(lines + ["Принтер не на связи: выключен или без интернета."])
+    if snap.get("klippy"):
+        lines.append("Klipper не готов: " + plain(snap["klippy"]))
+    else:
+        lines += [plain(x) for x in status_lines(snap)]
+        meta = snap.get("meta") or {}
+        if meta.get("estimated_time"):
+            lines.append(f"По нарезке файл печатается {hm(meta['estimated_time'])}.")
+        if meta.get("filament_weight_total"):
+            lines.append(f"По нарезке пластика {meta['filament_weight_total']:.0f} г.")
+    more = soft(moon.details) or {}
+    move = more.get("gcode_move") or {}
+    if move.get("speed_factor"):
+        lines.append(f"Скорость {move['speed_factor'] * 100:.0f} %, поток {(move.get('extrude_factor') or 1) * 100:.0f} %.")
+    if "speed" in (more.get("fan") or {}):
+        lines.append(f"Обдув {more['fan']['speed'] * 100:.0f} %.")
+    used = (more.get("print_stats") or {}).get("filament_used")
+    if used:
+        lines.append(f"Пластика уже ушло {used / 1000:.1f} м.")
+    jobs = soft(moon.history) or []
+    if jobs:
+        lines.append("Последние печати:")
+        for j in jobs:
+            when = local_now(j.get("end_time") or j.get("start_time") or 0).strftime("%d.%m %H:%M")
+            lines.append(f"- {j.get('filename')}: {j.get('status')}, {hm(j.get('print_duration'))}, {when}")
+    notes = [m.get("message") or "" for m in soft(moon.journal) or [] if m.get("type") == "response"]
+    notes = [n for n in notes if n.strip() and n.strip() != "ok"][-6:]
+    if notes:
+        lines.append("Последние сообщения Klipper:")
+        lines += [f"- {n.strip()[:160]}" for n in notes]
+    names = soft(moon.files) or []
+    if names:
+        lines.append(f"Файлы на принтере, всего {len(names)}, новые сверху: " + ", ".join(f["path"] for f in names[:10]))
+    return "\n".join(lines)
+
+
+def make_prompt(question, photo=None):
+    parts = ["Свежие данные принтера, собраны только что. На цифры из прошлых сообщений не опирайся.", facts(), "",
+             "Сообщение Глеба:", question or "Посмотри фото и скажи, что видишь и что с этим делать."]
+    if photo:
+        parts.append(f"Глеб прислал фото: {photo}. Открой его инструментом Read.")
+    return "\n".join(parts)
+
+
+def render(text):
+    """Ответ Claude в HTML Telegram: жирный и код, всё остальное экранировано."""
+    out = kit.esc(text)
+    out = re.sub(r"^#{1,6}\s*(.+)$", r"<b>\1</b>", out, flags=re.M)
+    out = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", out)
+    out = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", out)
+    return re.sub(r"^[-*]\s+", "• ", out, flags=re.M)
+
+
+def chunks(text, size=ANSWER_SIZE):
+    out = []
+    while len(text) > size:
+        cut = text.rfind("\n", 0, size)
+        cut = cut if cut >= size // 2 else size
+        out.append(text[:cut])
+        text = text[cut:].lstrip()
+    return out + [text] if text else out
+
+
+def action_buttons(raw):
+    """Метки в ответе Claude → (текст без меток, кнопки). Кнопка появляется, только если действие сейчас возможно."""
+    tags = list(dict.fromkeys(TAG.findall(raw)))
+    text = TAG.sub("", raw).strip()
+    if not tags:
+        return text, []
+    snap, row = snapshot(), []
+    state = snap.get("state") if snap.get("online") and not snap.get("klippy") else None
+    for name, arg in tags:
+        if name == "status":
+            row.append(kit.b("🖨 Статус", "home"))
+        elif name == "files":
+            row.append(kit.b("📁 Файлы", "files"))
+        elif name == "pause" and state == "printing":
+            row.append(kit.b("⏸ Пауза", "pause"))
+        elif name == "resume" and state == "paused":
+            row.append(kit.b("▶️ Продолжить", "resume", "success"))
+        elif name == "cancel" and state in ACTIVE:
+            row.append(kit.b("⛔ Отмена", "cancel"))
+        elif name == "cool" and state and state not in ACTIVE:
+            row.append(kit.b("🧊 Остудить", "cool"))
+        elif name == "file" and arg:
+            for f in soft(moon.files) or []:
+                if f["path"] == arg.strip():
+                    row.append(kit.b("📄 " + f["path"], f"f|{fid(f['path'])}"))
+    return text, [row[i:i + 3] for i in range(0, len(row), 3)]
+
+
+def answer(c, photo=None):
+    mid = c.say("💭 <i>Думаю…</i>")
+    try:
+        with AI_LOCK:
+            c.typing()
+            saved = bot.db.get("ai") or {}
+            sid = saved.get("sid") if time.time() - (saved.get("ts") or 0) < AI_TTL else None
+            name = ai.keep_photo(photo) if photo else None
+            raw, sid = ai.ask(make_prompt(c.text, name), sid)
+            bot.db.set("ai", {"sid": sid, "ts": time.time()})
+        text, buttons = action_buttons(raw)
+        parts = chunks(text) or ["Готово."]
+        bot.edit(c.chat, mid, render(parts[0]), buttons if len(parts) == 1 else None)
+        for i, part in enumerate(parts[1:], 2):
+            c.say(render(part), buttons if i == len(parts) else None)
+    except ai.AIError as e:
+        bot.edit(c.chat, mid, kit.error(kit.esc(e)), [[kit.b("‹ Главное", "home")]])
+    except Exception:
+        traceback.print_exc()
+        bot.edit(c.chat, mid, kit.error("Что-то пошло не так. Спроси ещё раз."), [[kit.b("‹ Главное", "home")]])
+
+
+@bot.text
+def on_text(c):
+    bot.later(answer, c)
+
+
+@bot.photo
+def on_photo(c):
+    answer(c, c.photo)
+
+
+@bot.command("new")
+def new_chat(c):
+    bot.db.delete("ai")
+    c.say(kit.card("🧹 <b>Новый разговор</b>", ["Прошлые вопросы забыл. Спрашивай."]))
 
 
 # ---------- сам пишет ----------
