@@ -131,8 +131,8 @@ class AI(unittest.TestCase):
             self.assertEqual([i["price"] for i in ai.pick_similar("iPhone 13", items)], [35000, 37000])
 
 
-class Flow(unittest.TestCase):
-    """Сценарий целиком: фото → фон → описание → цена текстом → средняя цена → кнопка цены."""
+class FlowBase(unittest.TestCase):
+    """Заглушки Telegram и Claude для сценариев бота."""
 
     def setUp(self):
         avito.st.clear()
@@ -147,7 +147,7 @@ class Flow(unittest.TestCase):
                 return {"ok": True, "result": {"file_path": "photos/x.jpg"}}
             return {"ok": True, "result": {"message_id": len(self.sent)}}
 
-        def remove_bg(pairs):
+        def remove_bg(pairs, mode=()):
             for s, t in pairs:
                 write_file(t, b"jpg")
             return [{"src": s, "dst": t, "ok": True} for s, t in pairs]
@@ -173,7 +173,7 @@ class Flow(unittest.TestCase):
             p.start()
 
     def tearDown(self):
-        for p in self.patches:
+        for p in reversed(self.patches):
             p.stop()
 
     def texts(self):
@@ -181,6 +181,10 @@ class Flow(unittest.TestCase):
 
     def msg(self, **kw):
         return {"chat": {"id": 7, "type": "private"}, "from": {"id": 7, "first_name": "Глеб"}, **kw}
+
+
+class Flow(FlowBase):
+    """Сценарий целиком: фото → фон → описание → цена текстом → средняя цена → кнопка цены."""
 
     def test_flow(self):
         avito.on_message(self.msg(photo=[{"file_id": "a"}], media_group_id="g"))
@@ -1014,7 +1018,298 @@ class InitData(unittest.TestCase):
             self.assertTrue(avito.send(1, "x", [[avito.b("📊 Цена", "mk", "primary")]])["ok"])
         self.assertEqual(bodies[1]["reply_markup"]["inline_keyboard"][0][0], {"text": "📊 Цена", "callback_data": "mk"})
 
+class BatchLogic(unittest.TestCase):
+    def test_under_round(self):
+        for src, want in ((20000, 19900), (19900, 19900), (5240, 5200), (5000, 4900), (835, 830), (1000, 900)):
+            self.assertEqual(market.under_round(src), want)
+
+    def test_clean_groups(self):
+        raw = {"items": [{"name": "Пара 1", "photos": [1, 2, 2, 99, "x"], "closeups": [2, 3], "tags": [2]},
+                         {"name": "Пара 2", "photos": [2, 3], "closeups": [], "tags": []},
+                         {"name": "Пустая", "photos": [99]}, "мусор"], "unsure": [1]}
+        res = ai.clean_groups(raw, 4)
+        self.assertEqual([it["photos"] for it in res["items"]], [[1, 2], [3]])
+        self.assertEqual(res["items"][0]["closeups"], [2])  # кадр 3 — не этой вещи
+        self.assertEqual(res["unsure"], [4])  # кадр, которого Claude не назвал, не теряется
+
+    def test_clean_groups_limit(self):
+        res = ai.clean_groups({"items": [{"name": "x", "photos": list(range(1, 15))}]}, 14, max_photos=10)
+        self.assertEqual(len(res["items"][0]["photos"]), 10)
+        self.assertEqual(res["unsure"], [11, 12, 13, 14])
+
+    def test_write_ad_params(self):
+        answer = json.dumps({"title": "Кеды", "description": "д", "query": "к", "category": "о",
+                             "params": {"brand": "Prada", "size": " ", "color": "белый"}})
+        with mock.patch.object(ai, "claude", lambda *a, **k: answer):
+            self.assertEqual(ai.write_ad("x")["params"], {"brand": "Prada", "color": "белый"})
+
+
+class Batch(FlowBase):
+    """📦 Пачка целиком: фото вперемешку → разбор → таблица → правка цены → набор для подачи."""
+
+    GROUPS = {"items": [{"name": "Кроссовки Burberry", "photos": [1, 3], "closeups": [3], "tags": [3]},
+                        {"name": "Кеды Prada", "photos": [2], "closeups": [], "tags": []}], "unsure": [4]}
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(avito.batch_drop)
+        self.seen = {}
+
+        def sort_batch(sheets, total, info="", max_photos=10):
+            self.seen.update(total=total, info=info)
+            return ai.clean_groups(self.GROUPS, total, max_photos)
+
+        def write_ad(info, imgs=(), prev=None, req=""):
+            self.seen.setdefault("imgs", []).append(list(imgs))
+            return {"title": info.split("\n")[0], "description": "Текст", "query": info.split("\n")[0], "category": "Обувь",
+                    "params": {"brand": "Бренд", "size": "44"}, "questions": ["Какой размер?"]}
+
+        extra = [
+            mock.patch.object(avito, "schedule_batch_note", lambda chat: None),
+            mock.patch.object(avito, "make_sheets", lambda out, paths: ["sheet.jpg"]),
+            mock.patch.object(avito, "ruler_cmd", lambda *a: {}),
+            mock.patch.object(ai, "sort_batch", sort_batch),
+            mock.patch.object(ai, "write_ad", write_ad),
+            mock.patch.object(avito, "market_for", lambda d, q: {"source": "web", "stats": {"median": 20000}}),
+        ]
+        for p in extra:
+            p.start()
+        self.patches += extra
+
+    def callback(self, data):
+        avito.on_callback({"id": "1", "from": {"id": 7}, "data": data, "message": {"chat": {"id": 7}, "message_id": 5}})
+
+    def collect(self, n=4):
+        avito.on_message(self.msg(text="/batch"))
+        for i in range(n):
+            avito.on_message(self.msg(photo=[{"file_id": f"f{i}"}]))
+
+    def test_collect_goes_to_pack_not_draft(self):
+        self.collect()
+        self.assertEqual(len(avito.st["batch"]["photos"]), 4)
+        self.assertFalse((avito.st.get("draft") or {}).get("photos"))
+
+    def test_text_while_collecting_is_a_hint(self):
+        self.collect(1)
+        avito.on_message(self.msg(text="Dior 44"))
+        self.callback("bt|go")
+        self.assertIn("Dior 44", self.seen["info"])
+
+    def test_full_flow(self):
+        self.collect()
+        self.callback("bt|go")
+        self.assertEqual(self.seen["total"], 4)
+        self.assertNotIn("batch", avito.st)  # пачка разобрана и удалена
+        ads = avito.done_ads()
+        self.assertEqual([a["title"] for a in ads], ["Кроссовки Burberry", "Кеды Prada"])
+        first = ads[0]["photos"]
+        self.assertIn("white_", first[0]["clean"])  # общий кадр — белый фон
+        self.assertIn("sq_", first[1]["clean"])  # бирка — только обрезка до такого же квадрата
+        self.assertEqual(ads[0]["price"], 19900)  # медиана 20 000 → под порог фильтра
+        table = self.texts()[-1]
+        self.assertIn("~19", table)  # цена из интернета помечена как примерная
+        self.assertIn("Какой размер?", table)
+        self.assertTrue(any(a for a in self.albums))  # кадр 4 показан как «не понял»
+
+    def test_ai_sees_tag_first(self):
+        self.collect()
+        self.callback("bt|go")
+        first = next(i for i in self.seen["imgs"] if len(i) == 2)
+        self.assertIn(avito.done_ads()[0]["photos"][1]["orig"], first)
+
+    def test_price_edit_by_number(self):
+        self.collect()
+        self.callback("bt|go")
+        avito.on_message(self.msg(text="2 14900"))
+        self.assertEqual(avito.done_ads()[1]["price"], 14900)
+        self.assertIn("14", self.texts()[-1])
+
+    def test_price_edit_wrong_number_is_plain_text(self):
+        self.collect()
+        self.callback("bt|go")
+        self.assertFalse(avito.batch_price(7, "9 14900"))
+        self.assertFalse(avito.batch_price(7, "3 носка"))
+
+    def test_publish_from_table(self):
+        self.collect()
+        self.callback("bt|go")
+        aid = avito.done_ads()[1]["id"]
+        self.sent.clear()
+        self.callback(f"bt|pub|{aid}")
+        self.assertEqual(avito.st["draft"]["id"], aid)
+        joined = "\n".join(self.texts())
+        self.assertIn("Кеды Prada", joined)
+        self.assertIn("размер", joined)  # поля формы в наборе
+        self.assertEqual(len(avito.done_ads()), 2)  # таблица не развалилась от смены текущего объявления
+
+    def test_cancel_removes_photos(self):
+        self.collect(1)
+        folder = avito.st["batch"]["dir"]
+        self.callback("bt|no")
+        self.assertNotIn("batch", avito.st)
+        self.assertFalse(os.path.exists(folder))
+
+    def test_go_without_photos(self):
+        avito.on_message(self.msg(text="/batch"))
+        self.callback("bt|go")
+        self.assertEqual(self.seen, {})
+
+    def test_ai_failure_keeps_pack_for_retry(self):
+        self.collect()
+        with mock.patch.object(ai, "sort_batch", side_effect=ai.AIError("лимит")):
+            self.callback("bt|go")
+        self.assertIn("лимит", self.texts()[-1])
+        self.assertEqual(len(avito.st["batch"]["photos"]), 4)
+        self.assertFalse(avito.st["batch"]["running"])
+
+    def fake_ruler(self, *args):
+        self.seen.setdefault("ruler", []).append(args)
+        if args[0] == "label":
+            return {"found": True}
+        write_file(args[2], b"cm")
+        return {"ok": True}
+
+    def test_ruler_becomes_cm(self):
+        self.collect()
+        with mock.patch.object(avito, "ruler_cmd", self.fake_ruler), mock.patch.object(ai, "read_ruler", lambda p: 11.5):
+            self.callback("bt|go")
+        photo = avito.done_ads()[0]["photos"][1]  # кадр 3 — крупный план с рулеткой
+        self.assertIn("cm_", photo["clean"])
+        self.assertTrue(os.path.exists(photo["clean"]))
+        self.assertEqual(self.seen["ruler"][-1][0], "cm")
+        self.assertEqual(self.seen["ruler"][-1][3], "11.5")
+        self.assertIn(photo["clean"], avito.done_ads()[0]["ai_images"])  # и в описании будут сантиметры
+        self.assertFalse(os.path.exists(photo["orig"] + ".label.jpg"))
+
+    def test_ruler_failure_keeps_photo(self):
+        self.collect()
+        with mock.patch.object(avito, "ruler_cmd", self.fake_ruler), \
+                mock.patch.object(ai, "read_ruler", side_effect=ai.AIError("лимит")):
+            self.callback("bt|go")
+        photo = avito.done_ads()[0]["photos"][1]
+        self.assertIn("sq_", photo["clean"])  # просто крупный план
+        self.assertEqual(len(avito.done_ads()), 2)  # из-за рулетки объявление не теряется
+
+    def test_ruler_in_cm_is_left_alone(self):
+        self.collect()
+        with mock.patch.object(avito, "ruler_cmd", self.fake_ruler), mock.patch.object(ai, "read_ruler", lambda p: None):
+            self.callback("bt|go")
+        self.assertNotIn("cm_", avito.done_ads()[0]["photos"][1]["clean"])
+
+    def test_square_failure_keeps_photo(self):
+        self.collect()
+        def fail_square(pairs, mode=()):
+            if mode:
+                return [{"src": s, "dst": t, "ok": False, "error": "упало"} for s, t in pairs]
+            for s, t in pairs:
+                write_file(t, b"jpg")
+            return [{"src": s, "dst": t, "ok": True} for s, t in pairs]
+        with mock.patch.object(avito, "remove_bg", fail_square):
+            self.callback("bt|go")
+        photo = avito.done_ads()[0]["photos"][1]
+        self.assertEqual(photo["clean"], photo["orig"])
+
+    def test_old_pack_is_forgotten(self):
+        self.collect(1)
+        avito.st["batch"]["ts"] = 0
+        self.assertIsNone(avito.batch())
+
+
+class Ruler(unittest.TestCase):
+    """avito/ruler.py на рисованном кадре: нужны numpy, scipy, Pillow и шрифт (они есть в avito/.venv)."""
+
+    def setUp(self):
+        try:
+            import numpy  # noqa: F401
+            import scipy  # noqa: F401
+            from PIL import Image, ImageDraw
+        except ImportError:
+            self.skipTest("нет numpy, scipy или Pillow")
+        import ruler
+        self.ruler, self.Image = ruler, Image
+        self.tmp = tempfile.mkdtemp()
+        self.src = os.path.join(self.tmp, "src.jpg")
+        img = Image.new("RGB", (600, 1300), (176, 136, 84))
+        pen = ImageDraw.Draw(img)
+        pen.ellipse([170, 150, 430, 1150], fill=(30, 30, 30))  # стелька
+        pen.line([(300, 200), (300, 1100)], fill="white", width=10)
+        for i in range(1, 24):
+            y = 200 + 900 * i / 24
+            pen.line([(300, y), (350 if i == 12 else 325 if i % 2 else 335, y)], fill="white", width=5)
+        for y in (200, 1100):
+            pen.ellipse([278, y - 22, 322, y + 22], fill="white")
+        pen.rounded_rectangle([278, 600, 322, 700], radius=20, fill="white")
+        pen.text((290, 640), "12", fill="black")
+        pen.text((295, 130), "12", fill="white")  # подпись над кружком
+        img.save(self.src, quality=95)
+
+    def test_nice_cm(self):
+        self.assertEqual(self.ruler.nice_cm(12 * 2.54), "30,5")
+        self.assertEqual(self.ruler.nice_cm(11.5 * 2.54), "29")
+
+    def test_found_and_redrawn(self):
+        import numpy as np
+        found = self.ruler.find(np.asarray(self.Image.open(self.src).convert("RGB")))
+        self.assertIsNotNone(found)
+        self.assertLess(abs(found["a"][1] - 200), 12)
+        self.assertLess(abs(found["b"][1] - 1100), 12)
+        self.assertLess(abs(found["mid"] - 0.5), 0.03)
+        dst = os.path.join(self.tmp, "cm.jpg")
+        try:
+            self.assertTrue(self.ruler.to_cm(self.src, dst, 12))
+        except RuntimeError:
+            self.skipTest("нет шрифта DejaVu")
+        out = np.asarray(self.Image.open(dst).convert("L"))
+        self.assertEqual(out.shape, (1200, 1200))  # такой же квадрат, как остальные кадры
+        k = 1200 / (900 / self.ruler.FILL)
+        x, y = 600 + (346 - 300) * k, 600 + (650 - 650) * k
+        self.assertEqual(out[10:40, 10:40].min() > 240, True)  # снимок уже квадрата — по бокам белое поле
+        self.assertLess(out[int(y) - 60:int(y) - 50, int(x)].mean(), 200)  # длинная метка в дюймах стёрта
+        self.assertLess(out[int(600 + (136 - 650) * k), int(600 + (300 - 300) * k)], 180)  # и подпись над кружком тоже
+
+    def test_no_ruler(self):
+        path = os.path.join(self.tmp, "plain.jpg")
+        self.Image.new("RGB", (600, 1300), (176, 136, 84)).save(path)
+        self.assertFalse(self.ruler.to_cm(path, os.path.join(self.tmp, "x.jpg"), 12))
+        self.assertFalse(self.ruler.label(path, os.path.join(self.tmp, "x.jpg")))
+
+
 class Photos(unittest.TestCase):
+    def test_best_square(self):
+        try:
+            import numpy  # noqa: F401
+            from PIL import Image
+        except ImportError:
+            self.skipTest("нет numpy или Pillow")
+        import photos
+        alpha = Image.new("L", (1200, 1600), 0)
+        alpha.paste(255, (200, 1000, 1000, 1600))  # вещь внизу кадра
+        left, top, right, bottom = photos.best_square(alpha)
+        self.assertEqual((left, right, bottom - top), (0, 1200, 1200))
+        self.assertGreaterEqual(top, 380)  # вещь в окне почти вся (допуск 2 %, ближе к центру кадра)
+        self.assertEqual(photos.best_square(Image.new("L", (1200, 1600), 0)), (0, 200, 1200, 1400))  # не нашлась — центр
+        self.assertEqual(photos.best_square(Image.new("L", (900, 900), 0)), (0, 0, 900, 900))
+        wide = Image.new("L", (1600, 1200), 0)
+        wide.paste(255, (0, 0, 500, 1200))
+        left, top, right, bottom = photos.best_square(wide)
+        self.assertEqual((top, bottom, right - left), (0, 1200, 1200))
+        self.assertLessEqual(left, 20)
+
+    def test_sheets(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("нет Pillow")
+        import sheets
+        tmp = tempfile.mkdtemp()
+        paths = []
+        for i in range(12):
+            paths.append(os.path.join(tmp, f"{i}.jpg"))
+            Image.new("RGB", (640, 480), (200, 50, i)).save(paths[-1])
+        res = sheets.build(os.path.join(tmp, "out"), paths)
+        self.assertEqual(len(res), 2)  # 10 + 2 кадра
+        self.assertEqual(Image.open(res[0]).size, (sheets.COLS * sheets.CELL, 2 * sheets.CELL))
+
     def test_place_on_white(self):
         try:
             from PIL import Image

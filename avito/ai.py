@@ -98,9 +98,64 @@ def write_ad(info, images=(), previous=None, request=""):
     title = str(ad.get("title") or "").strip().strip('"«»')
     if len(title) > 50:
         title = title[:50].rsplit(" ", 1)[0].rstrip(",;:- ")
+    params = ad.get("params") if isinstance(ad.get("params"), dict) else {}
     return {"title": title, "description": str(ad.get("description") or "").strip(),
             "query": str(ad.get("query") or title).strip(), "category": str(ad.get("category") or "").strip(),
+            "params": {str(k): str(v).strip() for k, v in params.items() if str(v).strip()},
             "questions": [str(q) for q in (ad.get("questions") or [])][:3]}
+
+
+SORT_BATCH = """Продавец прислал {total} фото вещей вперемешку, одним потоком. На обзорных листах каждый кадр подписан жёлтым номером (1…{total}).
+Что сказал продавец: {info}
+
+Разложи кадры по вещам: одна вещь (или пара обуви) — один пункт. Для каждой вещи:
+- name — что это: тип, бренд, цвет («Кроссовки Burberry, синие в клетку»);
+- photos — её кадры в порядке для объявления: сначала вещь целиком под углом (обложка), потом спереди, сзади, с боков, подошва, крупные планы, бирки. Не больше {max_photos}: повторы лишних кадров не бери;
+- closeups — те кадры из photos, где нельзя убирать фон: бирка, стелька, замер, крупный план части вещи, кадр с рукой;
+- tags — кадры, где можно прочитать бирку: размер, артикул, страна.
+Чего не можешь уверенно отнести к вещи — в unsure. Каждый номер — только в одном месте.
+
+Ответ — только JSON:
+{{"items": [{{"name": "...", "photos": [1, 2], "closeups": [2], "tags": [2]}}], "unsure": [3]}}"""
+
+
+def clean_groups(raw, total, max_photos=10):
+    """Ответ Claude → проверенные группы: только существующие номера, каждый кадр в одной вещи, не больше max_photos.
+    Кадры, которых Claude не назвал, попадают в unsure, а не теряются молча."""
+    used, items = set(), []
+    for it in raw.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        photos = []
+        for n in it.get("photos") or []:
+            if isinstance(n, int) and 1 <= n <= total and n not in used and len(photos) < max_photos:
+                photos.append(n)
+                used.add(n)
+        if photos:
+            keep = set(photos)
+            items.append({"name": str(it.get("name") or "").strip(), "photos": photos,
+                          "closeups": [n for n in it.get("closeups") or [] if n in keep],
+                          "tags": [n for n in it.get("tags") or [] if n in keep]})
+    return {"items": items, "unsure": [n for n in range(1, total + 1) if n not in used]}
+
+
+def sort_batch(sheets, total, info="", max_photos=10):
+    """Обзорные листы → {"items": [{name, photos, closeups, tags}], "unsure": [номера]}. Номера — с 1."""
+    prompt = SORT_BATCH.format(total=total, info=info.strip() or "(ничего)", max_photos=max_photos)
+    return clean_groups(json_from(claude(prompt, sheets, timeout=360)), total, max_photos)
+
+
+def read_ruler(image):
+    """Сколько показывает рулетка iPhone на снимке подписи: дюймы числом; None — там сантиметры или число не читается."""
+    prompt = ("На снимке — подпись с экрана приложения «Рулетка»: длина, текст может быть повёрнут. Прочитай её. "
+              '½ — это .5. Ответ — только JSON: {"value": 11.5, "unit": "in"}; unit "in" — дюймы (значок "), '
+              '"cm" — сантиметры. Подписи нет или не читается — {"value": null, "unit": null}.')
+    res = json_from(claude(prompt, [image], timeout=120))
+    try:
+        value = float(res.get("value"))
+    except (TypeError, ValueError):
+        return None
+    return value if res.get("unit") == "in" and 2 <= value <= 60 else None
 
 
 def pick_similar(item, items):

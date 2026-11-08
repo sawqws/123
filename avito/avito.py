@@ -8,6 +8,8 @@
   3. Число («3500», «3.5к») — цена; любой другой текст — правка описания («короче», «добавь, что есть чек»).
   4. «📊 Средняя цена» — до 100 похожих объявлений на Авито → медиана, «быстро продать», «дороже».
   То же самое — в мини-приложении (/app): загрузка фото, описание, цена с гистограммой, прошлые объявления.
+  📦 Пачка (/batch): все фото разом, вперемешку → бот сам раскладывает их по вещам, пишет описания, ищет цены
+     и присылает одну таблицу; по каждой вещи — готовый набор для подачи.
 
 Переменные окружения (на сервере — /etc/avito-bot.env):
   AVITO_TOKEN    токен от @BotFather
@@ -20,6 +22,7 @@
 
 Сам бот — только стандартная библиотека Python. Фон убирает avito/photos.py в avito/.venv (rembg).
 """
+import concurrent.futures
 import datetime
 import hashlib
 import hmac
@@ -511,12 +514,12 @@ def schedule_photos(chat, delay):
     t.start()
 
 
-def remove_bg(pairs):
-    """[(вход, выход)] → результаты photos.py. Без venv — ошибка у каждого фото."""
+def remove_bg(pairs, mode=()):
+    """[(вход, выход)] → результаты photos.py. Без venv — ошибка у каждого фото. mode — ключ photos.py (--square)."""
     py = VENV_PY if os.path.exists(VENV_PY) else None
     if not py:
         return [{"src": s, "dst": t, "ok": False, "error": "на сервере не установлен rembg"} for s, t in pairs]
-    args = [x for pair in pairs for x in pair]
+    args = [*mode, *(x for pair in pairs for x in pair)]
     try:
         p = subprocess.run([py, os.path.join(HERE, "photos.py"), *args], capture_output=True, text=True,
                            timeout=120 + 60 * len(pairs))
@@ -612,7 +615,7 @@ def write(chat, request="", mid=None):
 
 def compose(d, request=""):
     """Claude пишет (или переписывает) название и описание объявления. Ошибка — ai.AIError."""
-    images = [p.get("orig") for p in d.get("photos") or []][:6]
+    images = d.get("ai_images") or [p.get("orig") for p in d.get("photos") or []][:6]
     prev = {k: d[k] for k in ("title", "description") if d.get(k)} or None
     ad = ai.write_ad(d.get("info", ""), images, prev, request)
     with lock:
@@ -861,11 +864,13 @@ def home(chat, name="", mid=None):
 # разбирает его до ожиданий (ответ покупателю, цена) и до рассказа о вещи. Ставится один раз при запуске
 # (версия — st["kb_ver"]) и на каждый /start.
 
-KB = menukb.MenuKB([["🆕 Новое", "📝 Объявление", "🗂 Все объявления"],
-                    ["💬 Чаты Авито", "💬 Ответ покупателю", "📊 Цена на Авито"],
-                    ["📱 Приложение", "⚙️ Режим", "🛠 Поддержка"]], version=1, placeholder="Фото вещи или ☰ справа")
+KB = menukb.MenuKB([["🆕 Новое", "📦 Пачка", "📝 Объявление"],
+                    ["🗂 Все объявления", "💬 Чаты Авито", "💬 Ответ покупателю"],
+                    ["📊 Цена на Авито", "📱 Приложение", "⚙️ Режим"],
+                    ["🛠 Поддержка"]], version=2, placeholder="Фото вещи или ☰ справа")
 # кнопка → команда (дальше — тот же экран, что у команды)
-KB_CMD = {"🆕 Новое": "/new", "📝 Объявление": "/ad", "🗂 Все объявления": "/ads", "💬 Чаты Авито": "/chats",
+KB_CMD = {"🆕 Новое": "/new", "📦 Пачка": "/batch", "📝 Объявление": "/ad", "🗂 Все объявления": "/ads",
+          "💬 Чаты Авито": "/chats",
           "💬 Ответ покупателю": "/buyer", "📊 Цена на Авито": "/price", "📱 Приложение": "/app",
           "⚙️ Режим": "/mode", "🛠 Поддержка": "kb:support"}
 
@@ -959,6 +964,8 @@ def copy_text(chat):
 
 ADD_URL = "https://www.avito.ru/additem"  # «Разместить объявление» (в приложении Авито — кнопка «+»)
 AVITO_LINK = re.compile(r"https?://(?:www\.|m\.)?avito\.ru/\S+")
+PARAM_NAMES = {"condition": "состояние", "brand": "бренд", "size": "размер", "color": "цвет", "material": "материал",
+               "country": "страна"}
 
 
 def publish(chat):
@@ -979,9 +986,15 @@ def publish(chat):
                else "5. Цена: пришли сюда число, подскажу по рынку — «📊 Цена»."),
               ("6. Описание — следующим сообщением (долгий тап → Копировать)." if d.get("description")
                else "6. Описания пока нет — напиши о вещи пару слов, и я его составлю.")]
+    fields = [f"{name}: <code>{esc(d['params'][key])}</code>" for key, name in PARAM_NAMES.items()
+              if (d.get("params") or {}).get(key)]
+    if fields:
+        steps.append("7. Поля формы — " + ", ".join(fields))
+    rows = [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]]
+    if d.get("batch"):
+        rows.append([b("📦 К таблице", "bt|table")])
     send(chat, fmt("📤 Выложить на Авито — 1 минута", "\n".join(steps),
-                   "Нажми на название или цену — скопируется. Выложил — жми «✅ Выложил»."),
-         [[{"text": "🌐 Подать на Авито", "url": ADD_URL}], [b("✅ Выложил", "live", "success")]])
+                   "Нажми на название или цену — скопируется. Выложил — жми «✅ Выложил»."), rows)
     send_description(chat, d)
 
 
@@ -1053,6 +1066,356 @@ def open_ad(chat, aid, mid=None):
         st["ads"], st["draft"] = rest[:KEEP_ADS - 1], target
         save()
     show_card(chat, mid)
+
+
+# ---------- 📦 пачка: все фото разом → вещи, описания, цены, одна таблица ----------
+
+MAX_BATCH = 100        # фото в одной пачке (10 альбомов)
+BATCH_TTL = 6 * 3600   # недособранная пачка забывается
+BATCH_ITEMS = KEEP_ADS - 1  # вещей за раз: при большем числе удалялись бы папки только что сделанных объявлений
+BATCH_THREADS = 3      # описания и цены — параллельно: цена из интернета идёт до 5 минут на вещь
+DONE_TTL = 3 * 86400   # сколько живёт таблица последней пачки (правка цены «3 14900»)
+BATCH_PRICE = re.compile(r"^\s*(\d{1,2})\s+(\d[\d\s.,]*\s*(?:к|тыс\w*)?)\s*$", re.I)
+
+
+def batch():
+    """Открытая пачка или None; забытая дольше BATCH_TTL удаляется."""
+    with lock:
+        pack = st.get("batch")
+    if pack and time.time() - pack.get("ts", 0) > BATCH_TTL:
+        batch_drop()
+        return None
+    return pack
+
+
+def collecting():
+    """Пачка, которая ещё принимает фото: пока идёт разбор, новые фото — уже обычное объявление, а не потеря."""
+    pack = batch()
+    return pack if pack and not pack.get("running") else None
+
+
+def batch_drop():
+    with lock:
+        pack = st.pop("batch", None)
+        save()
+    if pack:
+        shutil.rmtree(pack.get("dir") or "", ignore_errors=True)
+
+
+def batch_status(n):
+    body = (f"Принял фото: <b>{n}</b>. Ещё фото — просто присылай." if n
+            else "Кидай все фото разом и вперемешку: можно несколькими альбомами, подписи не нужны.")
+    return (fmt("📦 Пачка", body, "Сам разложу по вещам, прочитаю бирки, напишу описания и найду цены."),
+            [[b("✅ Всё, разобрать", "bt|go", "success")], [b("✖️ Отмена", "bt|no")]])
+
+
+def batch_start(chat):
+    batch_drop()
+    os.makedirs(DATA, exist_ok=True)
+    path = tempfile.mkdtemp(prefix="batch-", dir=DATA)
+    mid = send(chat, *batch_status(0))["result"]["message_id"]
+    with lock:
+        st["batch"] = {"dir": path, "photos": [], "info": "", "ts": time.time(), "mid": mid}
+        save()
+
+
+def batch_add(chat, msg):
+    pack = batch()
+    with lock:
+        full = len(pack["photos"]) >= MAX_BATCH
+        warned = pack.get("warned_max")
+        if full:
+            pack["warned_max"] = True
+    if full:
+        if not warned:
+            send(chat, fail(f"В пачке хватит {MAX_BATCH} фото — остальные пропускаю. Разбери эту и пришли ещё."))
+        return
+    fid = msg["photo"][-1]["file_id"] if msg.get("photo") else msg["document"]["file_id"]
+    path = os.path.join(pack["dir"], f"{uuid.uuid4().hex[:12]}.jpg")
+    download(fid, path)
+    with lock:
+        pack["photos"].append(path)
+        caption = (msg.get("caption") or "").strip()
+        if caption:
+            pack["info"] = (pack["info"] + "\n" + caption).strip()[-2000:]
+        save()
+    schedule_batch_note(chat)
+
+
+def schedule_batch_note(chat):
+    """Счётчик фото — один раз на альбом, когда всё пришло, а не на каждое фото."""
+    key = ("batch", chat)
+    t = timers.pop(key, None)
+    if t:
+        t.cancel()
+    t = timers[key] = threading.Timer(ALBUM_WAIT, batch_note, args=(chat,))
+    t.daemon = True
+    t.start()
+
+
+def batch_note(chat):
+    """Новый счётчик внизу чата (старый удаляем), чтобы кнопка «Разобрать» была под рукой."""
+    pack = batch()
+    if not pack:
+        return
+    try:
+        tg("deleteMessage", chat_id=chat, message_id=pack.get("mid"))
+    except Exception:
+        pass
+    mid = send(chat, *batch_status(len(pack["photos"])))["result"]["message_id"]
+    with lock:
+        pack["mid"] = mid
+        save()
+
+
+def make_sheets(out_dir, paths):
+    """Обзорные листы с номерами кадров (avito/sheets.py в venv бота: там Pillow). Ошибка — ai.AIError."""
+    if not os.path.exists(VENV_PY):
+        raise ai.AIError("на сервере не установлен Pillow")
+    try:
+        p = subprocess.run([VENV_PY, os.path.join(HERE, "sheets.py"), out_dir, *paths], capture_output=True, text=True,
+                           timeout=60 + 3 * len(paths))
+        return json.loads(p.stdout.strip().splitlines()[-1])
+    except (subprocess.TimeoutExpired, ValueError, IndexError):
+        raise ai.AIError("обзорные листы не собрались") from None
+
+
+def ruler_cmd(*args):
+    """avito/ruler.py в venv бота → его ответ. Сбой — пустой ответ: кадр просто останется как был."""
+    if not os.path.exists(VENV_PY):
+        return {}
+    try:
+        p = subprocess.run([VENV_PY, os.path.join(HERE, "ruler.py"), *args], capture_output=True, text=True, timeout=120)
+        return json.loads(p.stdout.strip().splitlines()[-1])
+    except (subprocess.TimeoutExpired, ValueError, IndexError) as e:
+        print("ruler:", e)
+        return {}
+
+
+def read_inches(photo):
+    """Дюймы на рулетке iPhone в этом кадре или None (рулетки нет, она в сантиметрах, число не прочитать)."""
+    crop = photo + ".label.jpg"
+    try:
+        return ai.read_ruler(crop) if ruler_cmd("label", photo, crop).get("found") else None
+    except ai.AIError as e:
+        print("ruler:", e)
+        return None
+    finally:
+        if os.path.exists(crop):
+            os.remove(crop)
+
+
+def fix_rulers(d):
+    """Рулетка в дюймах → сантиметры на кадрах без обработки фона (замер стельки всегда среди них)."""
+    for photo in d["photos"]:
+        orig = photo["orig"]
+        inches = read_inches(orig) if photo.get("clean") == orig else None
+        if not inches:
+            continue
+        dst = orig.replace("orig_", "cm_")
+        if ruler_cmd("cm", orig, dst, str(inches)).get("ok"):
+            with lock:
+                photo["clean"] = dst
+                d["ai_images"] = [dst if p == orig else p for p in d.get("ai_images") or []]  # и Claude видит сантиметры
+                save()
+
+
+def square_closeups(d):
+    """Крупные планы и бирки — такой же квадрат, как остальные кадры: фон на месте, только обрезка. Сбой — кадр как был."""
+    todo = [p for p in d["photos"] if p.get("clean") == p["orig"]]
+    if not todo:
+        return
+    done = remove_bg([(p["orig"], p["orig"].replace("orig_", "sq_")) for p in todo], ("--square",))
+    made = {r["src"]: r["dst"] for r in done if r.get("ok")}
+    with lock:
+        for p in todo:
+            p["clean"] = made.get(p["orig"], p["orig"])
+        save()
+
+
+def batch_ad(item, paths, info=""):
+    """Новое объявление из вещи пачки: фото по порядку; у крупных планов и бирок фон не трогаем (там рука и дефекты)."""
+    did = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+    d = {"id": did, "photos": [], "price": None, "batch": True, "info": "\n".join(x for x in (item["name"], info) if x)}
+    by_number = {}
+    for n in item["photos"]:
+        dst = new_orig(d)
+        shutil.copyfile(paths[n - 1], dst)
+        by_number[n] = dst
+        d["photos"].append({"orig": dst, "clean": dst if n in item["closeups"] else None})
+    # Claude смотрит обложку и бирки: на них размер и артикул
+    d["ai_images"] = list(dict.fromkeys([by_number[item["photos"][0]]] + [by_number[n] for n in item["tags"]]
+                                        + [by_number[n] for n in item["photos"]]))[:6]
+    return d
+
+
+def batch_fill(d):
+    """Описание и цена одной вещи. Сбой одной вещи не мешает остальным: она придёт в таблице с пометкой."""
+    try:
+        compose(d)
+    except ai.AIError as e:
+        with lock:
+            d["batch_err"] = str(e)
+            save()
+        return
+    try:
+        m = market_for(d, ad_query(d))
+    except Exception as e:
+        print("batch price:", e)
+        return
+    median = (m.get("stats") or {}).get("median")
+    if median:
+        with lock:
+            d["price"] = market.under_round(median)
+            d["price_source"] = m.get("source") or "avito"
+            save()
+
+
+def batch_run(chat):
+    pack = batch()
+    if not pack or not pack["photos"]:
+        return send(chat, fail("В пачке нет фото — нажми «📦 Пачка» и пришли их."))
+    with lock:
+        pack["running"] = True
+    try:
+        batch_work(chat, pack)
+    finally:
+        with lock:
+            pack["running"] = False  # сбой — можно нажать «Ещё раз»; после успеха пачки уже нет
+
+
+def batch_work(chat, pack):
+    paths = list(pack["photos"])
+    mid = send(chat, fmt(f"🧩 Раскладываю {len(paths)} фото по вещам…", note="Обычно пара минут."))["result"]["message_id"]
+    tg("sendChatAction", chat_id=chat, action="typing")
+    try:
+        groups = ai.sort_batch(make_sheets(os.path.join(pack["dir"], "sheets"), paths), len(paths),
+                               pack.get("info", ""), MAX_PHOTOS)
+    except ai.AIError as e:
+        return edit(chat, mid, fail(f"Не получилось разложить: {esc(e)}"), [[b("🔁 Ещё раз", "bt|go")]])
+    items = groups["items"]
+    if not items:
+        return edit(chat, mid, fail("На фото не нашлось вещей — пришли другие."), [[b("✖️ Отмена", "bt|no")]])
+    archive()
+    ads = [batch_ad(it, paths, pack.get("info", "")) for it in items[:BATCH_ITEMS]]
+    with lock:
+        st["ads"] = (ads + (st.get("ads") or []))[:KEEP_ADS - 1]
+        save()
+    for n, d in enumerate(ads, 1):  # фон по очереди: модель занимает ~300 МБ на процесс
+        edit(chat, mid, fmt(f"🪄 Убираю фон · вещь {n} из {len(ads)}…"))
+        clean_photos(d)
+        fix_rulers(d)
+        square_closeups(d)
+    edit(chat, mid, fmt(f"✍️ Пишу описания и ищу цены · вещей: {len(ads)}…", note="Цены из интернета — до 5 минут на вещь."))
+    with concurrent.futures.ThreadPoolExecutor(BATCH_THREADS) as pool:
+        list(pool.map(batch_fill, ads))
+    skipped = len(items) - len(ads)
+    unsure = [paths[n - 1] for n in groups["unsure"]]
+    with lock:
+        st["batch_done"] = {"ids": [d["id"] for d in ads], "ts": time.time()}
+        save()
+    try:
+        tg("deleteMessage", chat_id=chat, message_id=mid)
+    except Exception:
+        pass
+    if unsure:
+        send_album(chat, unsure[:MAX_PHOTOS], f"🤔 Не понял, к какой вещи эти фото ({len(unsure)}) — в объявления не вошли")
+    send(chat, *batch_table())
+    if skipped:
+        send(chat, fail(f"За раз беру {BATCH_ITEMS} вещей, ещё {skipped} не вошли — пришли их следующей пачкой."))
+    batch_drop()
+
+
+def done_ads():
+    """Объявления последней пачки: в порядке таблицы, без удалённых."""
+    done = st.get("batch_done") or {}
+    if time.time() - done.get("ts", 0) > DONE_TTL:
+        return []
+    by_id = {a.get("id"): a for a in all_ads()}
+    return [by_id[i] for i in done.get("ids") or [] if i in by_id]
+
+
+def batch_table():
+    ads = done_ads()
+    if not ads:
+        return fmt("📦 Таблицы пока нет", note="Нажми «📦 Пачка» и пришли фото."), None
+    lines, row, rows = [], [], []
+    for n, d in enumerate(ads, 1):
+        price = market.fmt_rub(d["price"]) if d.get("price") else "цена?"
+        approx = "~" if d.get("price") and d.get("price_source") != "avito" else ""
+        title = d.get("title") or (d.get("info") or "").split("\n")[0]
+        lines.append(f"<b>{n}.</b> {esc(title)} — {approx}{price}")
+        if d.get("batch_err"):
+            lines.append(f"    ⚠️ описание не получилось: {esc(d['batch_err'])}")
+        lines += [f"    ❓ {esc(q)}" for q in d.get("questions") or []]
+        row.append(b(f"📤 {n}", f"bt|pub|{d['id']}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    note = "Цена с «~» — примерная, по интернету. Поправить: «3 14900». 📤 — набор для подачи; там же можно ответить на ❓ и поправить текст."
+    return fmt(f"📦 Готово · вещей: {len(ads)}", "\n".join(lines), note), rows
+
+
+def batch_price(chat, text):
+    """«3 14900» под таблицей — цена вещи №3. True, если это оно."""
+    m = BATCH_PRICE.match(text)
+    ads = done_ads() if m else []
+    n = int(m.group(1)) if ads else 0
+    if not 1 <= n <= len(ads):
+        return False
+    price = parse_price(m.group(2))
+    if price is None:
+        return False
+    with lock:
+        ads[n - 1]["price"] = price
+        ads[n - 1]["price_source"] = "avito"  # цену назвал сам Глеб: «~» больше не нужна
+        save()
+    send(chat, *batch_table())
+    return True
+
+
+def batch_select(aid):
+    """Сделать вещь пачки текущим объявлением (правка текста и цены дальше идут в неё). False — её уже нет."""
+    with lock:
+        cur = st.get("draft")
+        if cur and cur.get("id") == aid:
+            return True
+        target = next((a for a in st.get("ads") or [] if a.get("id") == aid), None)
+        if not target:
+            return False
+        rest = [a for a in st.get("ads") or [] if a.get("id") != aid]
+        if cur and (cur.get("title") or cur.get("photos")):
+            rest = [cur] + rest
+        st["ads"], st["draft"] = rest[:KEEP_ADS - 1], target
+        save()
+    return True
+
+
+def batch_callback(chat, mid, data):
+    action = data[1]
+    if action == "go":
+        pack = batch()
+        if not pack or not pack["photos"]:
+            return "Сначала пришли фото"
+        if pack.get("running"):
+            return "Уже разбираю"
+        run(chat, batch_run, chat)
+        return "Разбираю"
+    if action == "no":
+        batch_drop()
+        edit(chat, mid, fmt("📦 Пачку отменил", note="Фото удалены."))
+        return ""
+    if action == "pub":
+        if not batch_select(data[2]):
+            return "Этой вещи уже нет"
+        run(chat, publish, chat)
+        return ""
+    if action == "table":
+        send(chat, *batch_table())
+        return ""
+    return STALE
 
 
 # ---------- ответы покупателям ----------
@@ -1198,7 +1561,10 @@ def on_message(msg):
     if not text.startswith("/") and not kb and on_wait(chat, msg, text or (msg.get("caption") or "").strip()):
         return
     if media.kind(msg) == "photo":
-        add_photo(chat, msg)
+        if collecting():
+            batch_add(chat, msg)
+        else:
+            add_photo(chat, msg)
         return
     if media.kind(msg) == "voice":
         run(chat, hear, chat, msg)
@@ -1230,6 +1596,8 @@ def on_message(msg):
             send(chat, fail(f"Приложение ещё настраивается: {esc(https_note)}"))
     elif cmd == "/new":
         new_ad(chat)
+    elif cmd == "/batch":
+        batch_start(chat)
     elif cmd == "/ad":
         show_card(chat)
     elif cmd == "/ads":
@@ -1260,7 +1628,13 @@ def on_message(msg):
         send(chat, fail("Такой команды нет — /help"))
     elif not text:
         send(chat, fmt("📸 Пришли фото вещи", note="Или видео, текст, голосовое."))
-    else:
+    elif collecting():  # пока собирается пачка, текст — подсказка ко всем вещам («Dior 44, Prada с коробкой»)
+        with lock:
+            pack = st["batch"]
+            pack["info"] = (pack["info"] + "\n" + text).strip()[-2000:]
+            save()
+        send(chat, fmt("📝 Учту при разборе"))
+    elif not batch_price(chat, text):
         on_text(chat, text)
 
 
@@ -1387,6 +1761,8 @@ def callback(chat, mid, data):
         new_ad(chat)
     elif data[0] == "pub":
         run(chat, publish, chat)
+    elif data[0] == "bt":
+        note = batch_callback(chat, mid, data)
     elif data[0] == "live":
         if not d:
             return NO_AD
