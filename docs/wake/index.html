@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Будильник">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Умный будильник: будит в лёгком сне по твоим циклам из WHOOP и движению телефона">
+<title>Будильник</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* «Будильник» — ночной сайт: всегда тёмный (светлый экран ночью будит), чистый чёрный фон (OLED гасит пиксели),
+   тёплый белый текст без синевы. Синий WHOOP «сон» — циклы, янтарь — окно пробуждения и рассвет. */
+:root {
+  --black: #000;
+  --ink: #f4eee6;
+  --mute: rgba(244, 238, 230, .58);
+  --faint: rgba(244, 238, 230, .34);
+  --line: rgba(244, 238, 230, .1);
+  --surface: #131418;
+  --surface2: #1d1e24;
+  --sleep: #7ba1bb;
+  --deep: #3f5f7d;
+  --ember: #ffb067;
+  --ember-ink: #1c1206;
+  --rose: #d0606f;
+  --ok: #16ec06;
+  --mid: #ffde00;
+  --bad: #ff0026;
+  --r-lg: 26px;
+  --r-md: 18px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", Roboto, system-ui, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", Inter, "Segoe UI", system-ui, sans-serif;
+  --st: env(safe-area-inset-top, 0px);
+  --sb: env(safe-area-inset-bottom, 0px);
+  --sl: env(safe-area-inset-left, 0px);
+  --sr: env(safe-area-inset-right, 0px);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--black); color: var(--ink); }
+body { font: 400 16px/1.4 var(--font); min-height: 100vh; min-height: 100dvh; -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%; overflow-x: hidden; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; }
+:focus-visible { outline: 2px solid var(--ember); outline-offset: 3px; border-radius: 10px; }
+[hidden] { display: none !important; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ── главный экран ── */
+#app { min-height: 100vh; min-height: 100dvh; padding: calc(var(--st) + 10px) calc(var(--sr) + 16px) calc(var(--sb) + 24px) calc(var(--sl) + 16px);
+  max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; }
+.top { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+.top h1 { font: 600 17px/1 var(--display); margin: 0; flex: 1; letter-spacing: -.01em; }
+.back { display: inline-flex; align-items: center; gap: 2px; color: var(--ember); text-decoration: none; font-size: 17px;
+  min-height: 44px; padding-right: 10px; }
+.back svg { width: 12px; height: 20px; }
+.ibtn { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; color: var(--mute);
+  transition: background .2s, color .2s; }
+.ibtn svg { width: 22px; height: 22px; }
+.ibtn:active { background: var(--surface2); }
+@media (hover: hover) { .ibtn:hover { background: var(--surface); color: var(--ink); } }
+
+.grid { flex: 1; display: grid; gap: 22px; align-content: start; padding-top: 6px; }
+.lead { margin: 6px 0 0; color: var(--mute); font-size: 15px; }
+.hero { container-type: inline-size; min-width: 0; }
+.win { font: 200 min(16.5cqi, 116px)/1 var(--display); letter-spacing: -.035em; margin: 4px 0 0;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.win .dash { color: var(--faint); margin: 0 .04em; font-weight: 200; }
+.win .to { color: var(--ember); }
+.sub { margin: 12px 0 0; color: var(--ink); font-size: 16px; max-width: 34em; }
+.sub b { font-weight: 600; }
+
+.sky { margin: 22px 0 0; position: relative; }
+.sky svg { display: block; width: 100%; height: auto; overflow: hidden; }
+.sky .lbl { position: relative; height: 18px; margin-top: 6px; font-size: 12px; color: var(--faint); }
+.sky .lbl span { position: absolute; top: 0; white-space: nowrap; transform: translateX(-50%); }
+.sky .lbl span:first-child { transform: none; left: 0 !important; }
+.sky .lbl span:last-child { transform: translateX(-100%); left: 100% !important; color: var(--ember); }
+.sky figcaption { margin-top: 8px; font-size: 13px; color: var(--mute); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--mute); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+.beds { margin-top: 18px; display: grid; gap: 2px; }
+.bed { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.bed .t { font: 300 26px/1 var(--display); font-variant-numeric: tabular-nums; min-width: 2.9em; letter-spacing: -.02em; }
+.bed .d { color: var(--mute); font-size: 14px; flex: 1; }
+.bed .tag { font-size: 12px; color: var(--sleep); white-space: nowrap; }
+.bed .tag.low { color: var(--faint); }
+
+.group { background: var(--surface); border-radius: var(--r-lg); padding: 4px 16px; }
+.row { display: flex; align-items: center; gap: 12px; min-height: 56px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row > .k { flex: 1; font-size: 16px; }
+.row > .k small { display: block; color: var(--mute); font-size: 13px; margin-top: 2px; }
+.row .link2 { color: var(--ember); font-size: 13px; padding: 4px 0; min-height: 36px; }
+
+.step { display: flex; align-items: center; gap: 4px; }
+.step button { width: 40px; height: 40px; border-radius: 20px; background: var(--surface2); font-size: 22px; line-height: 1;
+  display: grid; place-items: center; transition: transform .12s, background .2s; }
+.step button:active { transform: scale(.92); }
+@media (hover: hover) { .step button:hover { background: #2a2b33; } }
+.tbox { position: relative; }
+.tbox .tv { font: 300 28px/1 var(--display); font-variant-numeric: tabular-nums; min-width: 3.1em; text-align: center;
+  padding: 6px 4px; border-radius: 12px; letter-spacing: -.02em; display: block; }
+.tbox input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0;
+  font-size: 16px; }
+.tbox:focus-within .tv { outline: 2px solid var(--ember); outline-offset: 2px; }
+
+.seg { display: flex; background: var(--surface2); border-radius: 12px; padding: 2px; gap: 2px; }
+.seg button { min-height: 36px; min-width: 44px; padding: 0 10px; border-radius: 10px; font-size: 14px; color: var(--mute);
+  transition: background .2s, color .2s; }
+.seg button[aria-pressed="true"] { background: #3a3b44; color: var(--ink); font-weight: 500; }
+.play { width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; background: var(--surface2); color: var(--ember); }
+.play svg { width: 16px; height: 16px; }
+
+.sw { position: relative; width: 51px; height: 31px; flex: none; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.sw span { position: absolute; inset: 0; border-radius: 16px; background: #39393d; transition: background .25s; }
+.sw span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .3); transition: transform .25s cubic-bezier(.3, .7, .4, 1.2); }
+.sw input:checked + span { background: var(--ember); }
+.sw input:checked + span::after { transform: translateX(20px); }
+.sw input:focus-visible + span { outline: 2px solid var(--ember); outline-offset: 2px; }
+
+.forma { background: var(--surface); border-radius: var(--r-lg); padding: 14px 16px; display: block; width: 100%; text-align: left; }
+.forma .h { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mute); }
+.forma .h .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--sleep); }
+.forma .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.forma .stats b { display: block; font: 300 24px/1.1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.forma .stats span { font-size: 12px; color: var(--mute); }
+.forma .note { margin-top: 10px; font-size: 13px; color: var(--mute); }
+.forma.pair { display: flex; align-items: center; gap: 12px; min-height: 64px; transition: background .2s; }
+.forma.pair .k { flex: 1; }
+.forma.pair .k small { display: block; color: var(--mute); font-size: 13px; margin-top: 2px; }
+.forma.pair:active { background: var(--surface2); }
+.chev { width: 8px; height: 14px; color: var(--faint); flex: none; }
+
+.go { display: block; width: 100%; min-height: 56px; border-radius: 28px; background: var(--ember); color: var(--ember-ink);
+  font: 600 18px/1 var(--display); letter-spacing: -.01em; transition: transform .15s, filter .2s; }
+.go:active { transform: scale(.97); filter: brightness(.92); }
+@media (hover: hover) { .go:hover { filter: brightness(1.06); } }
+.go[disabled] { opacity: .5; }
+.lnk { display: block; margin: 12px auto 0; color: var(--mute); font-size: 14px; min-height: 40px; padding: 0 12px; }
+@media (hover: hover) { .lnk:hover { color: var(--ink); } }
+.side { display: grid; gap: 14px; align-content: start; }
+.hint { font-size: 13px; color: var(--mute); text-align: center; margin: -2px 8px 0; }
+
+@media (min-width: 720px) {
+  #app { padding-left: calc(var(--sl) + 32px); padding-right: calc(var(--sr) + 32px); }
+  .grid { grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr); gap: 48px; align-content: center; padding-bottom: 24px; }
+  .side { padding-top: 28px; }
+}
+@media (min-width: 720px) and (max-height: 520px) {
+  .win { font-size: min(16.5cqi, 21vh); }
+  .grid { align-content: start; }
+}
+
+/* ── ночь ── */
+.night { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: calc(var(--st) + 20px) 24px calc(var(--sb) + 24px); user-select: none;
+  -webkit-user-select: none; touch-action: manipulation; }
+.night .face { transition: opacity 1.2s ease, transform 2s ease; }
+.night.dim .face { opacity: .16; }
+.night .nclock { font: 200 clamp(64px, 22vw, 132px)/1 var(--display); color: var(--ember); opacity: .62; letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums; }
+.night .nline { margin-top: 14px; color: rgba(255, 176, 103, .55); font-size: 17px; }
+.night .nstat { margin-top: 8px; color: rgba(244, 238, 230, .34); font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
+.night .nstat i { width: 6px; height: 6px; border-radius: 3px; background: rgba(123, 161, 187, .7); transition: transform .3s, background .3s; }
+.night .nstat i.pulse { transform: scale(1.8); background: var(--sleep); }
+.night .nwarn { margin-top: 18px; max-width: 22em; color: rgba(255, 176, 103, .7); font-size: 14px; }
+.night .nact { position: absolute; left: 0; right: 0; bottom: calc(var(--sb) + 22px); display: flex; justify-content: center; gap: 10px;
+  transition: opacity .6s; }
+.night.dim .nact { opacity: 0; pointer-events: none; }
+.night .nact button { min-height: 44px; padding: 0 20px; border-radius: 22px; background: #141416; color: rgba(244, 238, 230, .6); font-size: 15px; }
+.night .resume { margin-top: 26px; }
+
+/* ── рассвет ── */
+.alarm { position: fixed; inset: 0; z-index: 30; overflow: hidden; background: #07060f; display: flex; flex-direction: column;
+  align-items: center; justify-content: space-between; text-align: center;
+  padding: calc(var(--st) + 12vh) 24px calc(var(--sb) + 28px); }
+.alarm .sky2 { position: absolute; inset: 0; background: linear-gradient(180deg, #120d2c 0%, #3b1f4a 34%, #a24a62 64%, #f08a5d 84%, #ffc785 100%);
+  opacity: 0; transition: opacity 70s linear; }
+.alarm .sun { position: absolute; left: 50%; bottom: -46vmax; width: 92vmax; height: 92vmax; margin-left: -46vmax; border-radius: 50%;
+  background: radial-gradient(circle, #fff3d9 0%, #ffd79a 18%, rgba(255, 176, 103, .55) 38%, rgba(255, 140, 90, 0) 66%);
+  transform: translateY(40vmax); opacity: .2; transition: transform 90s cubic-bezier(.25, .1, .25, 1), opacity 30s ease; }
+.alarm.rise .sky2 { opacity: 1; }
+.alarm.rise .sun { transform: translateY(6vmax); opacity: 1; }
+.alarm > div { position: relative; }
+.alarm .aclock { font: 200 clamp(84px, 28vw, 168px)/1 var(--display); letter-spacing: -.045em; font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 30px rgba(0, 0, 0, .25); }
+.alarm .agreet { font: 500 24px/1.2 var(--display); margin-top: 10px; }
+.alarm .awhy { margin: 10px auto 0; max-width: 22em; color: rgba(255, 245, 235, .82); font-size: 16px; }
+.alarm .acts { width: 100%; max-width: 380px; }
+.alarm .go { background: #140d22; color: #fff1dd; }
+.alarm .lnk { color: #2a1430; font-weight: 500; }
+
+/* ── лист ── */
+.sheet { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
+.sheet .bg { position: absolute; inset: 0; background: rgba(0, 0, 0, .6); opacity: 0; transition: opacity .3s; }
+.sheet .pn { position: relative; width: 100%; max-height: 88vh; max-height: 88dvh; overflow: auto; overscroll-behavior: contain;
+  background: #17181d; border-radius: 26px 26px 0 0; padding: 8px 20px calc(var(--sb) + 22px);
+  transform: translateY(102%); transition: transform .38s cubic-bezier(.2, .8, .2, 1); }
+.sheet.on .bg { opacity: 1; }
+.sheet.on .pn { transform: none; }
+.sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: #3a3b42; margin: 0 auto 10px; }
+.sheet h2 { font: 600 22px/1.2 var(--display); margin: 8px 0 12px; letter-spacing: -.01em; }
+.sheet p { color: var(--mute); margin: 0 0 12px; }
+.sheet .x { position: absolute; right: 12px; top: 12px; }
+@media (min-width: 700px) {
+  .sheet { align-items: center; }
+  .sheet .pn { width: 460px; border-radius: 26px; transform: translateY(24px) scale(.97); opacity: 0;
+    transition: transform .3s cubic-bezier(.2, .8, .2, 1), opacity .25s; padding-bottom: 24px; }
+  .sheet.on .pn { transform: none; opacity: 1; }
+  .sheet .grab { display: none; }
+}
+.steps { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 12px; }
+.steps li { display: flex; gap: 12px; align-items: flex-start; }
+.steps li svg { width: 22px; height: 22px; flex: none; color: var(--ember); margin-top: 1px; }
+.steps li span { color: var(--ink); }
+.steps li small { display: block; color: var(--mute); font-size: 14px; margin-top: 2px; }
+.code { width: 100%; min-height: 56px; border-radius: 16px; border: 1px solid #34353c; background: #0e0f12; padding: 0 16px;
+  font: 300 28px/1 var(--display); letter-spacing: .2em; text-align: center; margin: 4px 0 14px; }
+.code:focus { outline: 2px solid var(--ember); outline-offset: 1px; }
+.err { color: #ff8a8a; font-size: 14px; min-height: 20px; margin: -6px 0 10px; }
+.hist { display: grid; }
+.hist button { display: flex; align-items: center; gap: 12px; min-height: 60px; text-align: left; border-top: 1px solid var(--line); }
+.hist button:first-child { border-top: 0; }
+.hist .d { flex: 1; }
+.hist .d small { display: block; color: var(--mute); font-size: 13px; margin-top: 2px; }
+.hist .m { font: 300 22px/1 var(--display); font-variant-numeric: tabular-nums; }
+.ns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 6px; }
+.ns b { display: block; font: 300 26px/1.1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.ns span { color: var(--mute); font-size: 12px; }
+.empty { color: var(--mute); padding: 18px 0; }
+
+.toast { position: fixed; left: 50%; bottom: calc(var(--sb) + 24px); z-index: 60; max-width: min(92vw, 420px);
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none; background: rgba(40, 40, 46, .92); backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px); padding: 12px 18px; border-radius: 18px; font-size: 15px; text-align: center;
+  transition: transform .3s cubic-bezier(.2, .8, .2, 1), opacity .3s; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  .alarm .sky2 { opacity: 1; }
+  .alarm .sun { transform: translateY(6vmax); opacity: 1; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <a class="back" id="back" href="/" hidden><svg viewBox="0 0 12 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2 2 10l8 8"/></svg>Форма</a>
+    <h1>Будильник</h1>
+    <button class="ibtn" id="histBtn" aria-label="Прошлые ночи" title="Прошлые ночи"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg></button>
+  </header>
+  <main class="grid">
+    <section class="hero" aria-live="polite">
+      <p class="lead">Разбужу в лёгком сне</p>
+      <div class="win num" id="win"><span id="wFrom">06:25</span><span class="dash">–</span><span class="to" id="wTo">06:45</span></div>
+      <p class="sub" id="heroSub"></p>
+      <figure class="sky" id="sky"></figure>
+      <div class="beds" id="beds"></div>
+    </section>
+    <section class="side">
+      <div class="group">
+        <div class="row">
+          <div class="k">Подъём<small id="wakeSrc"></small></div>
+          <div class="step">
+            <button id="wMinus" aria-label="На 5 минут раньше">−</button>
+            <label class="tbox"><span class="tv" id="wakeTv">06:45</span><input type="time" id="wakeIn" step="300" aria-label="Время подъёма"></label>
+            <button id="wPlus" aria-label="На 5 минут позже">+</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="k">Окно<small>минут до подъёма</small></div>
+          <div class="seg" id="winSeg" role="group" aria-label="Окно пробуждения">
+            <button data-v="10">10</button><button data-v="20">20</button><button data-v="30">30</button><button data-v="45">45</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="k">Мелодия</div>
+          <div class="seg" id="sndSeg" role="group" aria-label="Мелодия">
+            <button data-v="dawn">Рассвет</button><button data-v="chime">Звон</button>
+          </div>
+          <button class="play" id="preview" aria-label="Послушать мелодию"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11a.6.6 0 0 0 .9.5l9-5.5a.6.6 0 0 0 0-1l-9-5.5a.6.6 0 0 0-.9.5Z"/></svg></button>
+        </div>
+        <div class="row">
+          <label class="k" for="micSw">Слушать звуки<small>Если телефон не на кровати</small></label>
+          <span class="sw"><input type="checkbox" id="micSw" role="switch"><span></span></span>
+        </div>
+      </div>
+      <div id="forma"></div>
+      <button class="go" id="go">Спать</button>
+      <p class="hint" id="goHint"></p>
+      <button class="lnk" id="howBtn">Как положить телефон</button>
+    </section>
+  </main>
+</div>
+
+<div class="night" id="night" hidden>
+  <div class="face" id="face">
+    <div class="nclock" id="nclock">00:00</div>
+    <div class="nline" id="nline"></div>
+    <div class="nstat" id="nstat"><i id="ndot"></i><span id="nstatT"></span></div>
+    <div class="nwarn" id="nwarn" hidden></div>
+    <button class="go resume" id="resume" hidden>Продолжить ночь</button>
+  </div>
+  <div class="nact"><button id="nOff">Выключить</button></div>
+</div>
+
+<div class="alarm" id="alarm" hidden>
+  <div class="sky2"></div><div class="sun"></div>
+  <div>
+    <div class="aclock" id="aclock">06:31</div>
+    <div class="agreet">Доброе утро</div>
+    <div class="awhy" id="awhy"></div>
+  </div>
+  <div class="acts">
+    <button class="go" id="upBtn">Я встал</button>
+    <button class="lnk" id="snoozeBtn">Ещё 5 минут</button>
+  </div>
+</div>
+
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="shT">
+  <div class="bg" id="shBg"></div>
+  <div class="pn" id="shPn"><div class="grab"></div>
+    <button class="ibtn x" id="shX" aria-label="Закрыть"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <div id="shBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+'use strict';
+/* ═════════ Ядро: циклы, окно, решение «будить сейчас» (чистые функции; тест — site/wake_test.js) ═════════ */
+const Core = (() => {
+  const MIN = 60000, EP = 30000;  // эпоха — 30 с, как у актиграфии
+  const pad = n => String(n).padStart(2, '0');
+  const hm = ms => { const d = new Date(ms); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+  const mins = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(s || ''); return m && +m[1] < 24 && +m[2] < 60 ? +m[1] * 60 + +m[2] : null; };
+  const toHM = m => pad(Math.floor(((m % 1440) + 1440) % 1440 / 60)) + ':' + pad(((m % 60) + 60) % 60);
+  const dur = m => { m = Math.max(0, Math.round(m)); return Math.floor(m / 60) + ':' + pad(m % 60); };
+  /** ближайший момент ЧЧ:ММ строго после t (мс) */
+  function nextAt(t, s) {
+    const m = mins(s); const d = new Date(t); d.setHours(Math.floor(m / 60), m % 60, 0, 0);
+    if (d.getTime() <= t) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+  /** концы циклов после засыпания — моменты лёгкого сна */
+  function ends(onset, cycle, until) {
+    const r = []; for (let k = 1; onset + k * cycle * MIN <= until; k++) r.push(onset + k * cycle * MIN); return r;
+  }
+  /** план: уснуть в onset, встать не позже wakeAt, окно win мин → когда вероятнее разбудить */
+  function plan({ onset, wakeAt, win, cycle }) {
+    const from = wakeAt - win * MIN, bs = ends(onset, cycle, wakeAt), i = bs.findIndex(b => b >= from);
+    return { from, wakeAt, onset, ends: bs, onCycle: i >= 0, pred: i >= 0 ? bs[i] : wakeAt, k: i >= 0 ? i + 1 : bs.length };
+  }
+  /** когда лечь: k полных циклов и пробуждение в окне (с запасом от края — больше сна) */
+  function beds({ wakeAt, win, cycle, latency, need }) {
+    const target = wakeAt - Math.round(win * 0.25) * MIN, out = [];
+    for (let k = 3; k <= 7; k++) out.push({ k, sleep: k * cycle, bed: target - (k * cycle + latency) * MIN, enough: k * cycle >= need * 60 - 1 });
+    return out;
+  }
+  /** Ночь: эпохи {t — конец эпохи, m — движение (доля порога, ≥1 — шевелился) | null, s — звук | null} */
+  class Night {
+    constructor(o) {
+      Object.assign(this, { start: o.start, wakeAt: o.wakeAt, win: o.win, cycle: o.cycle || 90, latency: o.latency ?? 15,
+        ep: o.ep || [], onset: o.onset || null, end: o.end || null, snooze: !!o.snooze });
+    }
+    get from() { return this.wakeAt - this.win * MIN; }
+    act(e) { return e && e.m != null ? e.m : e && e.s != null ? e.s * 0.8 : null; }
+    add(e) { this.ep.push(e); if (!this.onset) this.findOnset(); }
+    /** засыпание — начало первых 15 минут без движения (не раньше 5 мин после «Спать») */
+    findOnset() {
+      const need = 30; let run = 0;
+      for (let i = 0; i < this.ep.length; i++) {
+        const a = this.act(this.ep[i]);
+        if (a != null && a < 1) { if (++run >= need) { this.onset = Math.max(this.ep[i - need + 1].t - EP, this.start + 5 * MIN); return; } }
+        else run = 0;
+      }
+    }
+    estOnset() { return this.onset || this.start + this.latency * MIN; }
+    plan() { return plan({ onset: this.estOnset(), wakeAt: this.wakeAt, win: this.win, cycle: this.cycle }); }
+    /** null — спать дальше; иначе причина: move | sound | cycle | deadline */
+    decide(t) {
+      if (t >= this.wakeAt) return 'deadline';
+      if (this.snooze || t < this.from) return null;
+      const last = this.ep.filter(e => e.t > Math.max(t - 2 * EP - 1000, this.from)).slice(-2);
+      const live = last.filter(e => this.act(e) != null);
+      if (live.length) {
+        const a = live.map(e => this.act(e)), cur = a[a.length - 1], sum = a.reduce((x, y) => x + y, 0);
+        if (cur >= 1 || (a.length > 1 && sum >= 1.4)) return live[live.length - 1].m != null ? 'move' : 'sound';
+      }
+      const p = this.plan();  // нет движения: конец цикла (с датчиком — через 3 мин после него, когда лёгкий сон уже точно)
+      if (p.onCycle && t >= p.pred + (live.length ? 3 : 0) * MIN) return 'cycle';
+      return null;
+    }
+    /** по эпохам: w — не спал, l — ворочался (лёгкий), d — спокойно, - — нет данных */
+    stages() {
+      const a = this.ep.map(e => this.act(e)), on = this.estOnset(), big = j => (a[j] ?? 0) >= 1;
+      return this.ep.map((e, i) => {
+        if (a[i] == null) return '-';
+        if (e.t <= on) return 'w';
+        let n = 0; for (let j = i - 2; j <= i + 2; j++) if (big(j)) n++;
+        if (n >= 3) return 'w';
+        for (let j = Math.max(0, i - 6); j <= i + 6 && j < a.length; j++) if ((a[j] ?? 0) >= 0.6) return 'l';
+        return 'd';
+      });
+    }
+    summary(woke, reason) {
+      const c = { w: 0, l: 0, d: 0 }; this.stages().forEach(s => { if (s in c) c[s]++; });
+      const half = x => Math.round(x / 2), on = Math.min(this.estOnset(), woke);
+      return { start: hm(this.start), onset: hm(on), woke: hm(woke), reason, window: this.win,
+        minutes: Math.round((woke - on) / MIN), light: half(c.l), deep: half(c.d), awake: half(c.w),
+        moves: this.ep.filter(e => (this.act(e) ?? 0) >= 1).length };
+    }
+    toJSON() { const { start, wakeAt, win, cycle, latency, ep, onset, end, snooze } = this; return { start, wakeAt, win, cycle, latency, ep, onset, end, snooze }; }
+  }
+  /** порог движения: 2,5 × «тихий» уровень (30-й перцентиль за 20 минут), не меньше 0,03 м/с² */
+  function motionScore(peak, peaks) {
+    const s = peaks.slice(-40).sort((x, y) => x - y), base = s.length ? s[Math.floor(s.length * 0.3)] : peak;
+    return Math.round(peak / Math.max(0.03, base * 2.5) * 100) / 100;
+  }
+  return { MIN, EP, pad, hm, mins, toHM, dur, nextAt, ends, plan, beds, Night, motionScore };
+})();
+
+/* ═════════ Состояние ═════════ */
+const $ = (s, r = document) => r.querySelector(s);
+const { MIN, EP, hm, mins, toHM, dur } = Core;
+const Q = new URLSearchParams(location.search);
+const SPEED = Math.min(3600, Math.max(1, +Q.get('speed') || 1));  // ускорение часов — только для проверки
+const T0 = Date.now(), P0 = performance.now();
+let OFF = 0;
+const now = () => T0 + OFF + (performance.now() - P0) * SPEED;
+const API = location.hostname.endsWith('github.io') ? 'https://coach.2-27-206-165.sslip.io' : location.origin;
+const ls = {
+  get(k, d = null) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} },
+};
+const getTok = () => { try { return localStorage.getItem('kcal.token') || ''; } catch (e) { return ''; } };
+const setTok = t => { try { t ? localStorage.setItem('kcal.token', t) : localStorage.removeItem('kcal.token'); } catch (e) {} };
+const cfg = Object.assign({ wake: '07:00', src: 'own', day: null, win: 20, snd: 'dawn', mic: false, how: false }, ls.get('wake.cfg', {}));
+if (!mins(cfg.wake)) cfg.wake = '07:00';
+if (![10, 20, 30, 45].includes(cfg.win)) cfg.win = 20;
+const saveCfg = () => ls.set('wake.cfg', cfg);
+let F = ls.get('wake.forma');  // {d: ответ /api/wake, at}
+let ferr = '';
+let night = null;  // Core.Night активной ночи
+const fd = () => (F && F.d) || null;
+const fx = () => {
+  const d = fd() || {}, c = +d.cycle;
+  return { cycle: c >= 70 && c <= 120 ? Math.round(c) : 90, latency: d.latency >= 0 && d.latency <= 60 ? d.latency : 15,
+    need: d.need > 4 && d.need < 13 ? d.need : 8.5, nights: d.nights || 0, real: c >= 70 && c <= 120 };
+};
+const wakeAt = () => Core.nextAt(now(), cfg.wake);
+const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ═════════ Сервер Формы ═════════ */
+async function api(path, body) {
+  const tok = getTok();
+  if (!tok) { const e = new Error('Нет связи с Формой'); e.code = 401; throw e; }
+  const o = body ? { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify(body) }
+    : { headers: { Authorization: 'Bearer ' + tok } };
+  const r = await fetch(API + path, o);
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { setTok(''); F = null; ls.del('wake.forma'); }
+  if (!r.ok) { const e = new Error(j.error || 'Сервер Формы не ответил'); e.code = r.status; throw e; }
+  return j;
+}
+function applyPlan() {
+  const p = fd() && fd().plan;
+  if (!p || !mins(p.wake)) return;
+  if (cfg.src !== 'own' || cfg.day !== p.day) { cfg.wake = p.wake; cfg.src = 'forma'; cfg.day = p.day; saveCfg(); }
+}
+async function refresh() {
+  if (!getTok()) { renderMain(); return; }
+  try { const d = await api('/api/wake'); F = { d, at: Date.now() }; ls.set('wake.forma', F); ferr = ''; applyPlan(); }
+  catch (e) { ferr = e.code === 401 ? '' : 'Форма не ответила — беру прошлые данные'; }
+  renderMain();
+}
+/** «ГГГГ-ММ-ДДTЧЧ:ММ» во времени пользователя (tz Формы), иначе — телефона */
+function localISO(ms) {
+  const tz = fd() && Number.isFinite(fd().tz) ? fd().tz : null;
+  if (tz == null) { const d = new Date(ms); return `${d.getFullYear()}-${Core.pad(d.getMonth() + 1)}-${Core.pad(d.getDate())}T${hm(ms)}`; }
+  return new Date(ms + tz * MIN).toISOString().slice(0, 16);
+}
+
+/* ═════════ Главный экран ═════════ */
+const ICON = {
+  chev: '<svg class="chev" viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m1 1 6 6-6 6"/></svg>',
+};
+function skySVG({ onset, wakeAt, from, cycle, pred }) {
+  const W = 600, H = 170, top = 40, low = 150, rem = 26, span = Math.max(wakeAt - onset, MIN);
+  const x = t => Math.max(0, Math.min(W, (t - onset) / span * W));
+  const ss = v => v * v * (3 - 2 * v);
+  const y = px => {  // стилизованная гипнограмма: вниз в глубокий (в начале ночи глубже), вверх в REM, конец цикла — лёгкий сон
+    const c = px / W * span / (cycle * MIN), i = Math.floor(c), f = c - i, yd = top + Math.max(.22, .95 - i * .17) * (low - top);
+    return f < .3 ? top + (yd - top) * ss(f / .3) : f < .52 ? yd : f < .82 ? yd + (rem - yd) * ss((f - .52) / .3) : rem + (top - rem) * ss((f - .82) / .18);
+  };
+  let d = '';
+  for (let px = 0; px <= W; px += 2) d += (px ? ' L' : 'M') + px + ' ' + y(px).toFixed(1);
+  const xf = x(from), xp = Math.max(18, Math.min(W - 18, x(pred)));
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Циклы сна до подъёма">
+  <defs><linearGradient id="gs" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7ba1bb" stop-opacity=".34"/><stop offset="1" stop-color="#7ba1bb" stop-opacity="0"/></linearGradient>
+  <linearGradient id="gw" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb067" stop-opacity=".26"/><stop offset="1" stop-color="#ffb067" stop-opacity="0"/></linearGradient>
+</defs>
+  <rect x="${xf}" y="0" width="${W - xf}" height="${H}" fill="url(#gw)"/>
+  <line x1="${xf}" y1="0" x2="${xf}" y2="${H}" stroke="#ffb067" stroke-opacity=".45" stroke-dasharray="3 5"/>
+  <line x1="0" y1="${top}" x2="${W}" y2="${top}" stroke="#f4eee6" stroke-opacity=".08"/>
+  <path d="${d} L${W} ${H} L0 ${H} Z" fill="url(#gs)"/>
+  <path d="${d}" fill="none" stroke="#7ba1bb" stroke-width="2.2" stroke-linejoin="round"/>
+  <circle cx="${xp}" cy="${top}" r="18" fill="#ffb067" opacity=".18"/>
+  <circle cx="${xp}" cy="${top}" r="7" fill="#ffb067"/>
+</svg>`;
+}
+function renderMain() {
+  const t = now(), w = wakeAt(), c = fx(), from = w - cfg.win * MIN;
+  $('#wFrom').textContent = hm(from); $('#wTo').textContent = hm(w);
+  $('#wakeTv').textContent = cfg.wake; $('#wakeIn').value = cfg.wake;
+  const p0 = fd() && fd().plan;
+  $('#wakeSrc').innerHTML = cfg.src === 'forma' && p0 ? 'не позже · по режиму'
+    : p0 && mins(p0.wake) ? `своё · <button class="link2" id="resetWake">вернуть ${esc(p0.wake)}</button>` : 'не позже';
+  const rb = $('#resetWake'); if (rb) rb.onclick = () => { cfg.src = 'forma'; cfg.day = null; applyPlan(); renderMain(); toast('Подъём — по режиму'); };
+  document.querySelectorAll('#winSeg button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === cfg.win)));
+  document.querySelectorAll('#sndSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === cfg.snd)));
+  $('#micSw').checked = !!cfg.mic;
+
+  const bs = Core.beds({ wakeAt: w, win: cfg.win, cycle: c.cycle, latency: c.latency, need: c.need });
+  const kE = (bs.find(b => b.enough) || bs[bs.length - 1]).k;
+  const main = bs.find(b => b.k === kE);
+  const later = main.bed > t + 5 * MIN;  // «хороший» отбой ещё впереди — показываем план от него
+  const onset = later ? main.bed + c.latency * MIN : t + c.latency * MIN;
+  const p = Core.plan({ onset, wakeAt: w, win: cfg.win, cycle: c.cycle });
+  const left = w - t;
+  let sub;
+  if (left < 50 * MIN) sub = `До подъёма ${Math.max(1, Math.round(left / MIN))} мин — разбужу при первом движении в окне`;
+  else if (later) sub = `Ляг в <b>${hm(main.bed)}</b> — ${kE} ${plural(kE, 'цикл', 'цикла', 'циклов')}, сна ${dur(main.sleep)}. Проснёшься в конце цикла`;
+  else if (p.onCycle) sub = `Уснёшь сейчас — разбужу около <b>${hm(p.pred)}</b>, после ${p.k}-го цикла. Сна ~${dur((p.pred - onset) / MIN)}`;
+  else sub = `Уснёшь сейчас — сна до ${dur((w - onset) / MIN)}. Разбужу, как шевельнёшься в окне, или в ${hm(w)}`;
+  $('#heroSub').innerHTML = sub;
+
+  const lbl = [[onset, (later ? 'уснёшь ' : '') + hm(onset)], [from, hm(from)], [w, hm(w)]]
+    .map(([tt, s]) => `<span style="left:${Math.max(0, Math.min(100, (tt - onset) / Math.max(w - onset, MIN) * 100)).toFixed(1)}%">${s}</span>`);
+  $('#sky').innerHTML = left > 20 * MIN
+    ? skySVG({ onset, wakeAt: w, from, cycle: c.cycle, pred: p.pred }) +
+      `<div class="lbl num">${lbl[0]}${(from - onset) / Math.max(w - onset, MIN) < .84 ? lbl[1] : ''}${lbl[2]}</div>` +
+      `<figcaption>Цикл ${c.cycle} мин — ${c.real ? `по твоему WHOOP за ${c.nights} ${plural(c.nights, 'ночь', 'ночи', 'ночей')}` : 'средний, свяжи с Формой для своего'}</figcaption>`
+    : '';
+  $('#beds').innerHTML = (later ? bs.filter(b => (b.k === kE || b.k === kE - 1) && b.bed > t + 5 * MIN) : []).sort((a, b) => b.k - a.k)
+    .map(b => `<div class="bed"><span class="t num">${hm(b.bed)}</span><span class="d">${b.k} ${plural(b.k, 'цикл', 'цикла', 'циклов')} · сна ${dur(b.sleep)}</span><span class="tag${b.enough ? '' : ' low'}">${b.enough ? 'по норме' : 'меньше нормы'}</span></div>`).join('');
+  renderForma();
+  $('#goHint').textContent = getTok() ? `Не прозвенит сайт — Тренер напишет в Telegram в ${hm(w)}` : `Про запас поставь обычный будильник на ${hm(w)}`;
+}
+function renderForma() {
+  const el = $('#forma'), d = fd();
+  if (!getTok()) {
+    el.innerHTML = `<button class="forma pair" id="pairBtn"><span class="k">Связать с Формой<small>Подъём по режиму и твои циклы из WHOOP</small></span>${ICON.chev}</button>`;
+    $('#pairBtn').onclick = openPair; return;
+  }
+  if (!d) { el.innerHTML = `<div class="forma"><div class="h"><i class="dot"></i>Форма</div><div class="note">${esc(ferr || 'Загружаю твой сон…')}</div></div>`; return; }
+  const L = d.last, r = d.recovery, zc = r && r.score != null ? (r.score >= 67 ? 'var(--ok)' : r.score >= 34 ? 'var(--mid)' : 'var(--bad)') : '';
+  const st = [];
+  if (L && L.hours != null) st.push(`<div><b class="num">${dur(L.hours * 60)}</b><span>сон за ночь</span></div>`);
+  if (L && L.cycles) st.push(`<div><b class="num">${L.cycles}</b><span>${plural(L.cycles, 'цикл', 'цикла', 'циклов')}</span></div>`);
+  if (r && r.score != null) st.push(`<div><b class="num" style="color:${zc}">${Math.round(r.score)}%</b><span>восстановление</span></div>`);
+  else if (L && L.performance != null) st.push(`<div><b class="num">${Math.round(L.performance)}%</b><span>качество сна</span></div>`);
+  const need = d.need ? `Нужно сна: ${dur(d.need * 60)}` : '';
+  el.innerHTML = `<div class="forma"><div class="h"><i class="dot"></i>Из Формы и WHOOP</div>${st.length ? `<div class="stats">${st.join('')}</div>` : ''}
+    <div class="note">${esc([need, ferr].filter(Boolean).join(' · ') || 'Данные WHOOP появятся после первой ночи')}</div></div>`;
+}
+
+/* ═════════ Звук: мелодия с нарастанием, готовится заранее (OfflineAudioContext → WAV) ═════════ */
+const SR = 16000, SND_LEN = 180, RISE = 75;  // 3 мин: 75 с тихо → громко, дальше по кругу с 75-й секунды
+const sounds = {};  // kind → {url, buf}
+let AC = null;  // живой AudioContext — запасной путь, если <audio> не дали
+const AU = new Audio(); AU.preload = 'auto'; AU.setAttribute('playsinline', '');
+function wav(buf) {
+  const d = buf.getChannelData(0), n = d.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+  const s = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVE'); s(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, buf.sampleRate, true); v.setUint32(28, buf.sampleRate * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, d[i])) * 32767, true);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
+const SILENT = wav({ getChannelData: () => new Float32Array(1600), sampleRate: SR });
+async function render(kind, seconds, rise) {
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const ctx = new OAC(1, SR * seconds, SR);
+  const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4; comp.connect(ctx.destination);
+  const master = ctx.createGain(); master.connect(comp);
+  master.gain.setValueAtTime(rise ? 0.006 : 0.55, 0);
+  if (rise) master.gain.exponentialRampToValueAtTime(0.9, rise);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  if (kind === 'dawn') {  // тёплый аккорд ля мажор (add9), медленно «дышит»
+    [110, 164.81, 220, 277.18, 329.63, 493.88].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain(), l = ctx.createOscillator(), lg = ctx.createGain();
+      o.frequency.value = f; o.detune.value = (i % 2 ? 4 : -4); g.gain.value = 0.045;
+      l.frequency.value = 0.05 + i * 0.013; lg.gain.value = 0.03; l.connect(lg); lg.connect(g.gain);
+      o.connect(g); g.connect(master); o.start(0); l.start(0);
+    });
+  }
+  const notes = kind === 'dawn' ? [440, 554.37, 659.25, 739.99, 880, 1108.73] : [659.25, 739.99, 880, 987.77, 1108.73, 1318.51, 1479.98];
+  const bell = (t, f, amp) => {
+    [[1, 1, 2.8], [2.76, .32, 1.3], [5.4, .1, .6]].forEach(([p, a, dec]) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f * p; g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(amp * a, t + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dec); o.connect(g); g.connect(master); o.start(t); o.stop(t + dec + 0.05);
+    });
+  };
+  let t = 0.4, last = -1;
+  while (t < seconds - 0.5) {
+    let i; do { i = Math.floor(rnd() * notes.length); } while (i === last); last = i;
+    bell(t, notes[i], kind === 'dawn' ? 0.16 : 0.13);
+    if (kind === 'chime' && rnd() < 0.3) bell(t + 0.16, notes[(i + 2) % notes.length], 0.08);
+    t += kind === 'dawn' ? 1.3 + rnd() * 1.1 : 0.5 + rnd() * 0.45;
+  }
+  return ctx.startRendering();
+}
+async function wavAsync(buf) {  // то же, что wav(), но кусками по 100 тыс. отсчётов — страница не замирает
+  const d = buf.getChannelData(0), n = d.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), h = wav({ getChannelData: () => new Float32Array(0), sampleRate: buf.sampleRate });
+  const head = new Uint8Array(await (await fetch(h)).arrayBuffer()); URL.revokeObjectURL(h);
+  new Uint8Array(b).set(head.subarray(0, 44)); v.setUint32(4, 36 + n * 2, true); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, d[i])) * 32767, true);
+    if (i % 100000 === 99999) await new Promise(r => setTimeout(r, 0));
+  }
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
+const pending = {};
+function prepare(kind) {
+  if (sounds[kind]) return Promise.resolve(sounds[kind]);
+  return pending[kind] || (pending[kind] = render(kind, SND_LEN, RISE).then(async buf => (sounds[kind] = { buf, url: await wavAsync(buf) })).finally(() => { delete pending[kind]; }));
+}
+/** в нажатии «Спать»: «отпереть» звук (iOS разрешает play() потом только элементу, запущенному пальцем) */
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}  // играть и в беззвучном режиме
+  const s = sounds[cfg.snd];
+  AU.src = s ? s.url : SILENT; AU.loop = false;
+  const p = AU.play(); if (p && p.then) p.then(() => { AU.pause(); AU.currentTime = 0; }).catch(() => {});
+  try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); AC.resume(); } catch (e) { AC = null; }
+}
+let acSrc = null, vibT = 0;
+function playAlarm() {
+  const s = sounds[cfg.snd];
+  const fallback = () => {
+    if (!AC || !s) return;
+    try { acSrc = AC.createBufferSource(); acSrc.buffer = s.buf; acSrc.loop = true; acSrc.loopStart = RISE; acSrc.loopEnd = SND_LEN; acSrc.connect(AC.destination); AC.resume(); acSrc.start(); } catch (e) {}
+  };
+  if (s && AU.src !== s.url) AU.src = s.url;
+  AU.currentTime = 0;
+  AU.onended = () => { AU.currentTime = RISE; AU.play().catch(() => {}); };
+  const p = AU.play(); if (p && p.catch) p.catch(fallback);
+  if (navigator.vibrate) { const v = () => navigator.vibrate([500, 700, 500]); v(); vibT = setInterval(v, 3000); }
+}
+function stopAlarm() {
+  AU.onended = null; AU.pause();
+  if (acSrc) { try { acSrc.stop(); } catch (e) {} acSrc = null; }
+  clearInterval(vibT); if (navigator.vibrate) navigator.vibrate(0);
+}
+let preT = 0;
+async function preview() {
+  const btn = $('#preview');
+  if (preT) { clearTimeout(preT); preT = 0; AU.pause(); btn.setAttribute('aria-label', 'Послушать мелодию'); return; }
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  AU.src = SILENT; AU.play().catch(() => {});  // отпереть в самом нажатии, пока мелодия готовится
+  const key = 'p' + cfg.snd;
+  if (!sounds[key]) { const buf = await render(cfg.snd, 8, 0); sounds[key] = { buf, url: wav(buf) }; }
+  AU.src = sounds[key].url; AU.currentTime = 0; AU.onended = null; AU.play().catch(() => toast('Звук не включился — проверь громкость'));
+  btn.setAttribute('aria-label', 'Остановить');
+  preT = setTimeout(() => { preT = 0; btn.setAttribute('aria-label', 'Послушать мелодию'); }, 8000);
+}
+
+/* ═════════ Датчики: движение телефона и (по желанию) звук ═════════ */
+const S = { on: false, motion: false, mic: false, sm: 0, g: null, buf: { mp: 0, mn: 0, se: 0, sn: 0 }, peaks: [], rms: [], stream: null, an: null, micT: 0 };
+function onMotion(e) {
+  let x, y, z; const a = e.acceleration;
+  if (a && a.x != null) { x = a.x; y = a.y; z = a.z; }
+  else {  // без «чистого» ускорения — убираем гравитацию сами (фильтр высоких частот)
+    const g = e.accelerationIncludingGravity; if (!g || g.x == null) return;
+    if (!S.g) S.g = { x: g.x, y: g.y, z: g.z };
+    S.g.x += (g.x - S.g.x) * .1; S.g.y += (g.y - S.g.y) * .1; S.g.z += (g.z - S.g.z) * .1;
+    x = g.x - S.g.x; y = g.y - S.g.y; z = g.z - S.g.z;
+  }
+  S.sm = S.sm * .6 + Math.hypot(x, y, z) * .4;  // сгладить одиночные всплески датчика
+  if (S.sm > S.buf.mp) S.buf.mp = S.sm;
+  S.buf.mn++; S.motion = true;
+}
+async function startSensors(useMic) {
+  S.on = true; S.buf = { mp: 0, mn: 0, se: 0, sn: 0 };
+  window.addEventListener('devicemotion', onMotion);  // без разрешения iOS просто не шлёт события
+  if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try { await Promise.race([DeviceMotionEvent.requestPermission(), new Promise(r => setTimeout(r, 10000))]); } catch (e) {}
+  }
+  if (useMic && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    try {
+      S.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      AC = AC || new (window.AudioContext || window.webkitAudioContext)(); await AC.resume();
+      const src = AC.createMediaStreamSource(S.stream); S.an = AC.createAnalyser(); S.an.fftSize = 1024; src.connect(S.an);
+      const arr = new Float32Array(S.an.fftSize);
+      S.micT = setInterval(() => {
+        S.an.getFloatTimeDomainData(arr); let q = 0; for (let i = 0; i < arr.length; i++) q += arr[i] * arr[i];
+        const r = Math.sqrt(q / arr.length); S.rms.push(r); if (S.rms.length > 480) S.rms.shift();
+        const fl = S.rms.slice().sort((a, b) => a - b)[Math.floor(S.rms.length * .2)] || r;
+        S.buf.sn++; if (S.rms.length > 20 && r > Math.max(0.003, fl * 3.2)) S.buf.se++;
+        S.mic = true;
+      }, 250);
+    } catch (e) { S.mic = false; }
+  }
+}
+function stopSensors() {
+  S.on = false; window.removeEventListener('devicemotion', onMotion);
+  clearInterval(S.micT); if (S.stream) S.stream.getTracks().forEach(t => t.stop()); S.stream = null; S.an = null;
+}
+function closeEpoch(t) {
+  const b = S.buf; let m = null, s = null;
+  if (b.mn >= 5) { m = Core.motionScore(b.mp, S.peaks); S.peaks.push(b.mp); if (S.peaks.length > 40) S.peaks.shift(); }
+  else S.sm = 0;  // был разрыв (экран гас) — старое сглаживание не тянем
+  if (b.sn >= 20) s = Math.round(b.se / 3 * 100) / 100;
+  S.buf = { mp: 0, mn: 0, se: 0, sn: 0 };
+  night.add({ t, m, s });
+  nightStatus();
+  if ((m ?? 0) >= 1 || (s ?? 0) >= 1) { const d = $('#ndot'); d.classList.add('pulse'); setTimeout(() => d.classList.remove('pulse'), 700); }
+}
+
+/* ═════════ Ночь ═════════ */
+let lock = null, nightT = 0, lastEp = 0, dimT = 0, hiddenAt = 0, awakeOK = true;
+async function keepAwake() {
+  try { if ('wakeLock' in navigator && document.visibilityState === 'visible') { lock = await navigator.wakeLock.request('screen'); return true; } } catch (e) {}
+  return false;
+}
+function saveNight() { if (night) ls.set('wake.night', night.toJSON()); }
+async function goSleep() {
+  const c = fx(), t = now();
+  unlockAudio();  // в самом нажатии — до любого await
+  night = new Core.Night({ start: t, wakeAt: wakeAt(), win: cfg.win, cycle: c.cycle, latency: c.latency });
+  lastEp = t; saveNight();
+  showNight(); arm();  // страховка — сразу, до ответов о разрешениях
+  const [awake] = await Promise.all([keepAwake(), startSensors(cfg.mic)]);
+  awakeOK = awake;
+  if (!sounds[cfg.snd]) prepare(cfg.snd).then(s => { if (!AU.src || AU.src === SILENT) AU.src = s.url; }).catch(() => {});
+  setTimeout(nightStatus, 2500);
+}
+function arm() {
+  if (!getTok() || !night) return;
+  api('/api/wake/arm', { at: localISO(night.wakeAt + MIN), from: hm(night.from) }).catch(() => {});
+}
+function nightStatus() {
+  if (!night || night.snooze || !S.on) return;
+  const st = S.motion ? 'Слежу за движением' : S.mic ? 'Слушаю звуки' : 'Датчиков нет — бужу по циклам';
+  $('#nstatT').textContent = st + (S.motion && S.mic ? ' и звуками' : '');
+  const warn = [];
+  if (!awakeOK) warn.push('Не гаси экран: если телефон уснёт, сайт тоже уснёт.');
+  if (!S.motion && !S.mic) warn.push('Нет доступа к датчику движения — разбужу в конце цикла.');
+  $('#nwarn').hidden = !warn.length; $('#nwarn').textContent = warn.join(' ');
+}
+function showNight() {
+  $('#night').hidden = false; $('#app').setAttribute('aria-hidden', 'true');
+  $('#nline').textContent = night.snooze ? `Разбужу в ${hm(night.wakeAt)}` : `Разбужу ${hm(night.from)}–${hm(night.wakeAt)}`;
+  $('#resume').hidden = true; $('#nwarn').hidden = true;
+  $('#nstatT').textContent = night.snooze ? 'Ещё пять минут' : 'Включаю датчики…';
+  nightTick(); clearInterval(nightT); nightT = setInterval(nightTick, 1000);
+  wakeFace();
+}
+function wakeFace() {
+  const n = $('#night'); n.classList.remove('dim'); clearTimeout(dimT);
+  dimT = setTimeout(() => n.classList.add('dim'), 12000);
+}
+function nightTick() {
+  if (!night) return;
+  const t = now();
+  $('#nclock').textContent = hm(t);
+  const m = Math.floor(t / MIN); $('#face').style.transform = `translate(${(m * 37) % 17 - 8}px, ${(m * 53) % 21 - 10}px)`;  // экран не выгорает
+  if (S.on) {
+    let guard = 0;
+    while (t - lastEp >= EP && guard++ < 3000) { lastEp += EP; closeEpoch(lastEp); }
+    if (guard) saveNight();
+  }
+  const why = night.decide(t);
+  if (why) ring(why);
+}
+function ring(why) {
+  clearInterval(nightT); stopSensors();
+  const t = now(); night.end = { t, reason: why }; saveNight();
+  $('#night').hidden = true;
+  const A = $('#alarm'); A.hidden = false; A.classList.remove('rise');
+  $('#aclock').textContent = hm(t);
+  $('#awhy').textContent = { move: 'Ты шевельнулся — сон лёгкий, самое время', sound: 'Ты ворочался — сон лёгкий, самое время',
+    cycle: 'Цикл сна закончился — сейчас легко встать', deadline: night.snooze ? 'Пять минут прошли' : 'Пора — это крайнее время' }[why];
+  requestAnimationFrame(() => requestAnimationFrame(() => A.classList.add('rise')));
+  playAlarm();
+  if (getTok() && !night.snooze) api('/api/wake/done', night.summary(t, why)).catch(() => {});
+  else if (getTok()) api('/api/wake/done', { cancel: true }).catch(() => {});
+}
+function finishNight() {
+  stopAlarm();
+  if (lock) { lock.release().catch(() => {}); lock = null; }
+  $('#alarm').hidden = true; $('#app').removeAttribute('aria-hidden');
+  if (night && night.end) {
+    const first = ls.get('wake.night0');  // ночь до «Ещё 5 минут»
+    const base = first ? new Core.Night(first) : night;
+    if (first) { base.ep = base.ep.concat(night.ep); base.end = night.end; }
+    const rec = { ...base.summary(base.end.t, (first && first.end ? first.end.reason : base.end.reason)), t0: base.start, t1: base.end.t, wakeAt: base.wakeAt, win: base.win,
+      a: base.ep.map(e => { const a = base.act(e); return a == null ? '-' : String(Math.min(9, Math.round(a * 3))); }).join(''), et: base.ep.length ? base.ep[0].t : base.start };
+    const h = ls.get('wake.nights', []); h.unshift(rec); ls.set('wake.nights', h.slice(0, 30));
+    ls.del('wake.night0'); ls.del('wake.night'); night = null;
+    renderMain(); showNightSheet(rec, true);
+  } else { ls.del('wake.night'); night = null; renderMain(); }
+}
+function snooze() {
+  stopAlarm();
+  ls.set('wake.night0', night.toJSON());
+  const t = now();
+  night = new Core.Night({ start: t, wakeAt: t + 5 * MIN, win: 0, cycle: night.cycle, latency: 0, snooze: true });
+  lastEp = t; saveNight();
+  $('#alarm').hidden = true;
+  showNight();
+  keepAwake();
+}
+function nightOff() {
+  openSheet(`<h2 id="shT">Выключить будильник?</h2><p>Утром он не прозвенит.</p>
+    <button class="go" id="offYes">Выключить</button><button class="lnk" id="offNo">Оставить</button>`);
+  $('#offNo').onclick = closeSheet;
+  $('#offYes').onclick = () => {
+    closeSheet(); clearInterval(nightT); stopSensors(); stopAlarm();
+    if (lock) { lock.release().catch(() => {}); lock = null; }
+    if (getTok()) api('/api/wake/done', { cancel: true }).catch(() => {});
+    ls.del('wake.night'); ls.del('wake.night0'); night = null;
+    $('#night').hidden = true; $('#app').removeAttribute('aria-hidden'); renderMain(); toast('Будильник выключен');
+  };
+}
+/** страница перезапустилась ночью: продолжить (датчики и звук — только по нажатию) или честно сказать, что проспал */
+function resumeNight() {
+  const o = ls.get('wake.night'); if (!o || !o.start) return false;
+  const n = new Core.Night(o), t = now();
+  if (n.end) { night = n; finishNight(); return true; }
+  if (t > n.wakeAt + 3 * 3600 * 1000) { ls.del('wake.night'); return false; }
+  night = n; lastEp = t;
+  if (t >= n.wakeAt) {  // время вышло, пока сайт был закрыт
+    night.end = { t: n.wakeAt, reason: 'deadline' }; saveNight();
+    toast('Сайт был закрыт — будильник не прозвенел'); finishNight(); return true;
+  }
+  showNight();
+  $('#resume').hidden = false; $('#nstatT').textContent = 'Сайт перезапустился — нажми, чтобы слушать дальше';
+  $('#resume').onclick = async () => {
+    unlockAudio(); $('#resume').hidden = true;
+    const [awake] = await Promise.all([keepAwake(), startSensors(cfg.mic)]);
+    awakeOK = awake;
+    if (!sounds[cfg.snd]) prepare(cfg.snd).then(s => { if (!AU.src || AU.src === SILENT) AU.src = s.url; }).catch(() => {});
+    setTimeout(nightStatus, 2500);
+  };
+  return true;
+}
+
+/* ═════════ Листы ═════════ */
+let shOpen = false, shBack = null;
+function openSheet(html, onClose) {
+  const sh = $('#sheet'); $('#shBody').innerHTML = html; sh.hidden = false; shOpen = true; shBack = onClose || null;
+  requestAnimationFrame(() => requestAnimationFrame(() => sh.classList.add('on')));
+  const f = $('#shBody input, #shBody button'); if (f && matchMedia('(pointer: fine)').matches) f.focus();
+}
+function closeSheet() {
+  const sh = $('#sheet'); if (!shOpen) return; shOpen = false; sh.classList.remove('on');
+  setTimeout(() => { if (!shOpen) sh.hidden = true; }, 380);
+  if (shBack) { const f = shBack; shBack = null; f(); }
+}
+function openHow(then) {
+  const tg = getTok();
+  openSheet(`<h2 id="shT">Перед сном</h2>
+  <ul class="steps">
+    <li>${svgI('bolt')}<span>Поставь на зарядку<small>Экран будет гореть всю ночь — тёмный, почти не светит</small></span></li>
+    <li>${svgI('bed')}<span>Положи на матрас у подушки, экраном вниз<small>Так телефон чувствует, как ты ворочаешься</small></span></li>
+    <li>${svgI('vol')}<span>Громкость — повыше<small>Беззвучный режим не мешает</small></span></li>
+    <li>${svgI('lock')}<span>Не закрывай сайт и не блокируй экран<small>${tg ? `Если сайт уснёт — Тренер напишет в Telegram в ${hm(wakeAt())}` : `Про запас — обычный будильник на ${hm(wakeAt())}`}</small></span></li>
+  </ul>
+  <button class="go" id="howGo">${then ? 'Понятно, спать' : 'Понятно'}</button>`);
+  $('#howGo').onclick = () => { cfg.how = true; saveCfg(); shBack = null; closeSheet(); if (then) then(); };
+}
+function svgI(k) {
+  const p = { bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>', bed: '<path d="M3 18v-7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v7M3 14h18M7 9V7a2 2 0 0 1 2-2h2"/>',
+    vol: '<path d="M11 5 6 9H3v6h3l5 4zM16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/>', lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>' }[k];
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+}
+function openPair() {
+  openSheet(`<h2 id="shT">Связать с Формой</h2><p>Код — у Тренера в Telegram: напиши ему /site. Или открой будильник из Формы.</p>
+    <input class="code num" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" aria-label="Код из /site" placeholder="000000">
+    <div class="err" id="perr" role="alert"></div><button class="go" id="pairGo" disabled>Связать</button>`);
+  const inp = $('#code'), b = $('#pairGo');
+  inp.oninput = () => { inp.value = inp.value.replace(/\s+/g, ''); b.disabled = inp.value.length < 4; $('#perr').textContent = ''; };
+  inp.onkeydown = e => { if (e.key === 'Enter' && !b.disabled) b.click(); };
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Связываю…';
+    try {
+      const r = await fetch(API + '/api/kcal/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: inp.value }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.token) throw new Error(j.error || 'Не получилось — попробуй ещё раз');
+      setTok(j.token); closeSheet(); toast('Связано с Формой'); refresh();
+    } catch (e) { $('#perr').textContent = e.message === 'Failed to fetch' ? 'Нет связи с сервером Формы' : e.message; b.disabled = false; b.textContent = 'Связать'; }
+  };
+}
+const MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const nightName = r => { const a = new Date(r.t0), b = new Date(r.t1); return a.getDate() === b.getDate() ? `${b.getDate()} ${MON[b.getMonth()]}` : `${a.getDate()}–${b.getDate()} ${MON[b.getMonth()]}`; };
+const WHY = { move: 'в лёгком сне — по движению', sound: 'в лёгком сне — по звуку', cycle: 'в конце цикла', deadline: 'в крайнее время', manual: 'вручную' };
+function nightSVG(r) {
+  const W = 600, H = 150, t0 = r.et - EP, n = r.a.length, span = Math.max(r.t1 - t0, MIN), x = t => (t - t0) / span * W;
+  const st = new Core.Night({ start: r.t0, wakeAt: r.wakeAt, win: r.win, ep: r.a.split('').map((c, i) => ({ t: r.et + i * EP, m: c === '-' ? null : +c / 3 })) });
+  st.onset = null; st.findOnset();
+  const sg = st.stages(), col = { w: '#e8dccb', l: '#7ba1bb', d: '#3f5f7d', '-': '#26272d' };
+  let bars = '', band = '', i = 0;
+  const bw = Math.max(1, W / Math.max(n, 1));
+  r.a.split('').forEach((c, j) => { if (c !== '-' && +c > 0) { const h = Math.min(1, +c / 6) * 86; bars += `<rect x="${(x(r.et + j * EP) - bw).toFixed(1)}" y="${(100 - h).toFixed(1)}" width="${Math.max(1, bw * .8).toFixed(1)}" height="${h.toFixed(1)}" rx="1" fill="#f4eee6" opacity=".55"/>`; } });
+  while (i < n) { let j = i; while (j < n && sg[j] === sg[i]) j++; const a = x(r.et + (i - 1) * EP), b = x(r.et + (j - 1) * EP); band += `<rect x="${a.toFixed(1)}" y="112" width="${Math.max(1, b - a).toFixed(1)}" height="22" fill="${col[sg[i]]}"/>`; i = j; }
+  const xf = x(r.wakeAt - r.win * MIN), xw = Math.min(W - 6, x(r.t1));
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Ночь по движению"><defs><clipPath id="nb"><rect x="0" y="112" width="${W}" height="22" rx="6"/></clipPath></defs>
+  ${xf < W ? `<rect x="${Math.max(0, xf)}" y="0" width="${W - Math.max(0, xf)}" height="${H}" fill="#ffb067" opacity=".1"/>` : ''}
+  ${bars}<g clip-path="url(#nb)"><rect x="0" y="112" width="${W}" height="22" fill="#26272d"/>${band}</g>
+  <line x1="${xw}" y1="0" x2="${xw}" y2="140" stroke="#ffb067" stroke-width="2"/><circle cx="${xw}" cy="6" r="5" fill="#ffb067"/></svg>`;
+}
+function showNightSheet(r, fresh) {
+  openSheet(`<h2 id="shT">${fresh ? 'Доброе утро' : 'Ночь ' + nightName(r)}</h2>
+    <p>Проснулся в ${esc(r.woke)} ${esc(WHY[r.reason] || '')}</p>
+    <div class="ns"><div><b class="num">${dur(r.minutes)}</b><span>сна (оценка)</span></div><div><b class="num">${esc(r.onset)}</b><span>уснул</span></div><div><b class="num">${r.moves}</b><span>${plural(r.moves, 'движение', 'движения', 'движений')}</span></div></div>
+    <figure class="sky" style="margin-top:14px">${nightSVG(r)}<div class="lbl num"><span style="left:0">${esc(r.start)}</span><span style="left:100%">${esc(r.woke)}</span></div>
+    <div class="legend"><span><i style="background:#3f5f7d"></i>спокойно</span><span><i style="background:#7ba1bb"></i>ворочался</span><span><i style="background:#e8dccb"></i>не спал</span></div>
+    <figcaption>По движению телефона — примерно. Точные фазы — в WHOOP.</figcaption></figure>
+    <button class="go" id="nsOk" style="margin-top:18px">Готово</button>`);
+  $('#nsOk').onclick = closeSheet;
+}
+function openHist() {
+  const h = ls.get('wake.nights', []);
+  openSheet(`<h2 id="shT">Прошлые ночи</h2>${h.length ? `<div class="hist">${h.map((r, i) => `<button data-i="${i}"><span class="d">${nightName(r)}<small>${esc(r.onset)} → ${esc(r.woke)} · ${esc(WHY[r.reason] || '')}</small></span><span class="m">${dur(r.minutes)}</span>${ICON.chev}</button>`).join('')}</div>`
+    : '<p class="empty">Здесь будут ночи с будильником: во сколько уснул, когда разбудил и почему.</p>'}`);
+  document.querySelectorAll('.hist button').forEach(b => b.onclick = () => { const r = h[+b.dataset.i]; shOpen = false; showNightSheet(r, false); });
+}
+let toastT = 0;
+function toast(s) { const t = $('#toast'); t.textContent = s; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2600); }
+
+/* ═════════ События ═════════ */
+function setWake(v, own = true) {
+  if (!mins(v)) return;
+  cfg.wake = v; if (own) { cfg.src = 'own'; cfg.day = (fd() && fd().plan && fd().plan.day) || null; }
+  saveCfg(); renderMain();
+}
+$('#wMinus').onclick = () => setWake(toHM(mins(cfg.wake) - 5));
+$('#wPlus').onclick = () => setWake(toHM(mins(cfg.wake) + 5));
+$('#wakeIn').onchange = e => setWake(e.target.value);
+$('#wakeIn').onkeydown = e => { if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); setWake(toHM(mins(cfg.wake) + (e.key === 'ArrowUp' ? 5 : -5))); } };
+document.querySelectorAll('#winSeg button').forEach(b => b.onclick = () => { cfg.win = +b.dataset.v; saveCfg(); renderMain(); });
+document.querySelectorAll('#sndSeg button').forEach(b => b.onclick = () => { cfg.snd = b.dataset.v; saveCfg(); renderMain(); setTimeout(() => prepare(cfg.snd).catch(() => {}), 50); });
+$('#micSw').onchange = e => { cfg.mic = e.target.checked; saveCfg(); };
+$('#preview').onclick = preview;
+$('#go').onclick = () => { if (!cfg.how) openHow(goSleep); else goSleep(); };
+$('#howBtn').onclick = () => openHow(null);
+$('#histBtn').onclick = openHist;
+$('#shBg').onclick = closeSheet; $('#shX').onclick = closeSheet;
+$('#night').addEventListener('pointerdown', wakeFace);
+$('#nOff').onclick = nightOff;
+$('#upBtn').onclick = finishNight;
+$('#snoozeBtn').onclick = snooze;
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && shOpen) { e.preventDefault(); closeSheet(); }
+  else if (!$('#night').hidden) wakeFace();
+});
+(() => {  // лист тянется вниз пальцем — закрыть
+  const pn = $('#shPn'); let y0 = null, dy = 0;
+  pn.addEventListener('touchstart', e => { y0 = pn.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
+  pn.addEventListener('touchmove', e => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); pn.style.transition = 'none'; pn.style.transform = `translateY(${dy}px)`; }, { passive: true });
+  pn.addEventListener('touchend', () => { if (y0 == null) return; pn.style.transition = ''; pn.style.transform = ''; if (dy > 90) closeSheet(); y0 = null; });
+})();
+document.addEventListener('visibilitychange', () => {
+  if (!night || night.end) return;
+  if (document.visibilityState === 'hidden') { hiddenAt = now(); return; }
+  keepAwake();
+  const gap = hiddenAt ? now() - hiddenAt : 0; hiddenAt = 0;
+  if (gap > 2 * MIN) { lastEp = now(); toast('Экран гас — в это время я не слышал движений'); }
+  nightTick();
+});
+setInterval(() => { if ($('#night').hidden && $('#alarm').hidden) renderMain(); }, 20000);
+window.addEventListener('focus', () => { if (F && Date.now() - F.at > 15 * MIN && !night) refresh(); });
+
+/* ═════════ Старт ═════════ */
+(function takePair() {  // из Формы: …/wake/#pair=<токен>
+  const m = /^#pair=([\w-]{16,128})$/.exec(location.hash);
+  if (m) { setTok(decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname + location.search); }
+})();
+if (!location.hostname.endsWith('github.io') && !/^(localhost|127\.)/.test(location.hostname)) $('#back').hidden = false;  // внутри Формы — назад в Форму
+applyPlan();
+renderMain();
+if (!resumeNight()) refresh(); else if (getTok()) refresh();
+(window.requestIdleCallback || (f => setTimeout(f, 800)))(() => prepare(cfg.snd).catch(() => {}));
+if ('serviceWorker' in navigator && !/^(localhost|127\.)/.test(location.hostname)) navigator.serviceWorker.register('sw.js').catch(() => {});
+window.__wake = { Core, jump: ms => { OFF += ms; }, night: () => night, S, cfg, sounds, AU };  // для проверки
+</script>
+</body>
+</html>
