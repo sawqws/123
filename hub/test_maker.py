@@ -244,6 +244,304 @@ class Update(Base):
         self.assertEqual(kept, "local\n")  # местная правка не потерялась
 
 
+class LostFixes(Base):
+    """08.11: коммит поддержки выпал из кода при rebase, а сообщение об этом не ушло никому."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = tempfile.mkdtemp()
+        p = mock.patch.object(hub, "REPO", self.root)
+        p.start()
+        self.p.append(p)
+        self.pm2["coach-bot"] = "online"
+        self.g("init", "-q", "-b", "main")
+        self.commit({"coach/bot.py": "a\nb\nc\n", "coach/CLAUDE.md": "one\ntwo\n"}, "base")
+
+    def g(self, *a):
+        p = subprocess.run(["git", "-C", self.root, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                           capture_output=True, text=True)
+        return p.returncode, p.stdout + p.stderr
+
+    def commit(self, files, msg):
+        for rel, text in files.items():
+            path = os.path.join(self.root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        self.g("add", "-A")
+        self.g("commit", "-qm", msg)
+        return self.g("rev-parse", "HEAD")[1].strip()
+
+    def diverge(self, upstream, local, msg="Поддержка (Форма): правка"):
+        """В main пришло upstream, на сервере поверх базы — коммит local."""
+        self.commit(upstream, "upstream")
+        self.g("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.g("reset", "-q", "--hard", "HEAD~1")
+        return self.commit(local, msg)
+
+    def read(self, rel):
+        with open(os.path.join(self.root, rel), encoding="utf-8") as f:
+            return f.read()
+
+    def branches(self):
+        return self.g("branch", "--list", "local-*")[1].split()
+
+    def ahead(self):
+        return int(self.g("rev-list", "--count", "origin/main..HEAD")[1])
+
+    def in_progress(self):
+        git_dir = os.path.join(self.root, ".git")
+        return [x for x in ("rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD") if os.path.exists(os.path.join(git_dir, x))]
+
+    def cards(self):
+        return [t for t in self.texts() if "Правка выпала" in t]
+
+    def buttons(self):
+        return json.dumps([kw for m, kw in self.sent if m == "sendMessage"], ensure_ascii=False)
+
+    def dropped(self):
+        """Конфликт в коде: правка ушла в ветку, код — свежий main."""
+        sha = self.diverge({"coach/bot.py": "a\nMAIN\nc\n"}, {"coach/bot.py": "a\nFIX\nc\n"})
+        self.assertEqual(hub.sync_main(hub.repo_git)[0], 0)
+        self.assertEqual(self.read("coach/bot.py"), "a\nMAIN\nc\n")
+        return sha
+
+    def install_line(self):
+        """Настоящая строка из coach/install.sh."""
+        with open(os.path.join(os.path.dirname(HERE), "coach", "install.sh"), encoding="utf-8") as f:
+            return next(x for x in f if 'branch -f "local-' in x)
+
+    def run_install_line(self):
+        subprocess.run(["bash", "-c", self.install_line()], env={**os.environ, "DIR": self.root, "BRANCH": "main"}, check=True)
+
+    def saved_by_install(self, upstream, local):
+        """install.sh: местный коммит в ветку, код — origin/main."""
+        sha = self.diverge(upstream, local)
+        self.run_install_line()
+        self.g("checkout", "-q", "-B", "main", "origin/main")
+        return sha
+
+    # --- sync_main
+
+    def test_doc_conflict_keeps_code(self):
+        """Настоящий случай: соседняя строка в CLAUDE.md не должна уносить правку кода."""
+        self.diverge({"coach/CLAUDE.md": "one\ntwo\nthree\n"}, {"coach/CLAUDE.md": "one\nTWO\n", "coach/bot.py": "a\nFIX\nc\n"})
+        code, _ = hub.sync_main(hub.repo_git)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.read("coach/bot.py"), "a\nFIX\nc\n")
+        self.assertEqual(self.read("coach/CLAUDE.md"), "one\ntwo\nthree\n")
+        self.assertEqual(self.branches(), [])
+        self.assertEqual(self.ahead(), 1)
+        self.assertEqual(self.in_progress(), [])
+
+    def test_doc_only_commit_disappears(self):
+        self.diverge({"coach/CLAUDE.md": "one\ntwo\nthree\n"}, {"coach/CLAUDE.md": "one\nTWO\n"})
+        self.assertEqual(hub.sync_main(hub.repo_git)[0], 0)
+        self.assertEqual(self.ahead(), 0)
+        self.assertEqual(self.branches(), [])
+        self.assertEqual(self.in_progress(), [])
+
+    def test_doc_then_code_conflict_keeps_both_in_branch(self):
+        self.diverge({"coach/CLAUDE.md": "one\ntwo\nthree\n", "coach/bot.py": "a\nMAIN\nc\n"}, {"coach/CLAUDE.md": "one\nTWO\n"}, "справка")
+        self.commit({"coach/bot.py": "a\nFIX\nc\n"}, "код")
+        self.assertEqual(hub.sync_main(hub.repo_git)[0], 0)
+        self.assertEqual(self.in_progress(), [])
+        self.assertEqual(self.read("coach/bot.py"), "a\nMAIN\nc\n")
+        br = self.branches()[0]
+        self.assertEqual(self.g("show", br + ":coach/bot.py")[1], "a\nFIX\nc\n")
+        self.assertEqual(self.g("show", br + ":coach/CLAUDE.md")[1], "one\nTWO\n")
+
+    # --- карточка
+
+    def test_card_once(self):
+        sha = self.dropped()
+        hub.tell_lost(U)
+        self.assertEqual(len(self.cards()), 1)
+        self.assertIn("Поддержка (Форма): правка", self.cards()[0])
+        self.assertIn("Тренер «Форма»", self.cards()[0])
+        self.assertIn(f"lost|fix|{sha}", self.buttons())
+        self.assertIn(f"lost|drop|{sha}", self.buttons())
+        hub.tell_lost(U)
+        self.assertEqual(len(self.cards()), 1)
+
+    def test_undelivered_card_retried(self):
+        self.dropped()
+        with mock.patch.object(hub, "send", side_effect=RuntimeError("сеть")):
+            hub.tell_lost(U)
+        self.assertEqual(self.cards(), [])
+        hub.tell_lost(U)
+        self.assertEqual(len(self.cards()), 1)
+
+    def test_update_all_tells_before_restart(self):
+        """Сообщение sync_main раньше терялось: _update_all его не показывал."""
+        bare = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True)
+        self.g("remote", "add", "origin", bare)
+        self.g("push", "-q", "origin", "main")
+        self.commit({"coach/bot.py": "a\nMAIN\nc\n"}, "upstream")
+        self.g("push", "-q", "origin", "main")
+        self.g("reset", "-q", "--hard", "HEAD~1")
+        self.commit({"coach/bot.py": "a\nFIX\nc\n"}, "Поддержка (Форма): правка")
+        with mock.patch.object(hub.os, "_exit", side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                hub._update_all(U)
+        texts = self.texts()
+        lost = next(i for i, t in enumerate(texts) if "Правка выпала" in t)
+        done = next(i for i, t in enumerate(texts) if "Обновил и перезапустил" in t)
+        self.assertLess(lost, done)
+
+    def test_branch_saved_before_checkout_survives(self):
+        """Между «сохранил в ветку» и checkout -B код ещё тот же: git cherry пуст, но удалять ветку нельзя."""
+        self.diverge({"coach/bot.py": "a\nMAIN\nc\n"}, {"coach/bot.py": "a\nFIX\nc\n"})
+        self.run_install_line()
+        hub.tell_lost(U)
+        self.assertEqual(len(self.branches()), 1)
+        self.assertEqual(self.cards(), [])
+        self.g("checkout", "-q", "-B", "main", "origin/main")
+        hub.tell_lost(U)
+        self.assertEqual(len(self.cards()), 1)
+
+    def test_same_content_in_code_is_no_card(self):
+        self.commit({"coach/bot.py": "a\nb\nc\nd\n"}, "Поддержка: то же")
+        self.g("branch", "local-1108-0000", "HEAD")
+        self.g("reset", "-q", "--hard", "HEAD~1")
+        self.commit({"coach/CLAUDE.md": "one\ntwo\nthree\n"}, "другое")
+        self.commit({"coach/bot.py": "a\nb\nc\nd\n"}, "то же в main")
+        hub.tell_lost(U)
+        self.assertEqual(self.cards(), [])
+        self.assertEqual(self.branches(), [])
+
+    # --- кнопки
+
+    def test_restore_clean(self):
+        sha = self.saved_by_install({"coach/CLAUDE.md": "one\ntwo\nthree\n"}, {"coach/bot.py": "a\nFIX\nc\n"})
+        self.assertEqual(len(self.branches()), 1)
+        self.assertEqual(self.read("coach/bot.py"), "a\nb\nc\n")
+        self.press(f"lost|fix|{sha}")
+        self.assertEqual(self.read("coach/bot.py"), "a\nFIX\nc\n")
+        self.assertEqual(self.ahead(), 1)
+        self.assertIn(("pm2", "restart", "coach-bot"), [r[:3] for r in self.runs])
+        self.assertTrue(any("снова в коде" in t for t in self.texts()))
+        self.assertEqual(hub.lost_commits(), [])
+        hub.tell_lost(U)
+        self.assertEqual(self.branches(), [])
+
+    def test_restore_doc_conflict(self):
+        sha = self.saved_by_install({"coach/CLAUDE.md": "one\ntwo\nthree\n"},
+                                    {"coach/CLAUDE.md": "one\nTWO\n", "coach/bot.py": "a\nFIX\nc\n"})
+        self.press(f"lost|fix|{sha}")
+        self.assertEqual(self.read("coach/bot.py"), "a\nFIX\nc\n")
+        self.assertEqual(self.read("coach/CLAUDE.md"), "one\ntwo\nthree\n")
+        self.assertEqual(self.in_progress(), [])
+        self.assertEqual(hub.lost_commits(), [])
+
+    def test_restore_code_conflict_goes_to_claude(self):
+        sha = self.dropped()
+        seen = {}
+
+        def fix(chat, pm2, tz):
+            seen.update(pm2=pm2, tz=tz, busy=self.in_progress())
+            self.commit({"coach/bot.py": "a\nMAIN FIX\nc\n"}, "Главный: правка")
+        with mock.patch.object(maker, "fix", side_effect=fix):
+            self.press(f"lost|fix|{sha}")
+        self.assertEqual(seen["pm2"], "coach-bot")
+        self.assertEqual(seen["busy"], [])  # неудачный cherry-pick снят до Claude
+        self.assertIn("Поддержка (Форма): правка", seen["tz"])
+        self.assertIn("+FIX", seen["tz"])
+        self.assertEqual(hub.lost_commits(), [])
+        hub.tell_lost(U)
+        self.assertEqual(self.branches(), [])
+
+    def test_restore_failed_stays_open(self):
+        sha = self.dropped()
+        with mock.patch.object(maker, "fix"):
+            self.press(f"lost|fix|{sha}")
+        self.assertEqual([c["sha"] for c in hub.lost_commits()], [sha])
+        self.assertEqual(len(self.branches()), 1)
+
+    def test_restore_busy(self):
+        sha = self.dropped()
+        with maker.job:
+            self.press(f"lost|fix|{sha}")
+        self.assertTrue(any("занят" in t for t in self.texts()))
+        self.assertEqual(self.read("coach/bot.py"), "a\nMAIN\nc\n")
+        self.assertEqual([c["sha"] for c in hub.lost_commits()], [sha])
+
+    def test_restore_common_code_conflict_asks_chat(self):
+        self.commit({"common/x.py": "1\n"}, "общий")
+        self.diverge({"common/x.py": "main\n"}, {"common/x.py": "local\n"})
+        hub.sync_main(hub.repo_git)
+        sha = hub.lost_commits()[0]["sha"]
+        with mock.patch.object(maker, "fix") as fix:
+            self.press(f"lost|fix|{sha}")
+        fix.assert_not_called()
+        self.assertTrue(any("Сам не верну" in t for t in self.texts()))
+
+    def test_drop(self):
+        sha = self.dropped()
+        hub.tell_lost(U)
+        self.press(f"lost|drop|{sha}")
+        self.assertEqual(hub.lost_commits(), [])
+        hub.tell_lost(U)
+        self.assertEqual(self.branches(), [])
+        self.assertEqual(len(self.cards()), 1)
+
+    # --- для чатов
+
+    def test_status_shows_local_and_does_not_touch(self):
+        self.diverge({"coach/CLAUDE.md": "one\ntwo\nthree\n"}, {"coach/bot.py": "a\nFIX\nc\n"}, "только на сервере")
+        self.g("branch", "local-1108-0000", "HEAD")
+        self.g("reset", "-q", "--hard", "HEAD~1")
+        self.commit({"kpp/bot.py": "x\n"}, "ещё на сервере")
+        r = hub.remote_api("status", {})["local"]
+        self.assertEqual(len(r["ahead"]), 1)
+        self.assertIn("ещё на сервере", r["ahead"][0])
+        self.assertEqual(len(r["lost"]), 1)
+        self.assertIn("только на сервере", r["lost"][0])
+        self.assertEqual(self.branches(), ["local-1108-0000"])
+
+    def test_remote_prints_local(self):
+        import contextlib
+        import io
+        import remote
+        answer = {"apps": [], "server": {}, "local": {"ahead": ["abc правка"], "lost": ["def local-1 выпала"]}}
+        out = io.StringIO()
+        with mock.patch.object(remote, "call", return_value=answer), contextlib.redirect_stdout(out):
+            remote.main(["status"])
+        self.assertIn("Только на сервере", out.getvalue())
+        self.assertIn("abc правка", out.getvalue())
+        self.assertIn("Выпали из кода", out.getvalue())
+        answer["local"] = {"ahead": [], "lost": []}
+        out = io.StringIO()
+        with mock.patch.object(remote, "call", return_value=answer), contextlib.redirect_stdout(out):
+            remote.main(["status"])
+        self.assertNotIn("⚠️", out.getvalue())
+
+    # --- установщики
+
+    def test_every_install_script_keeps_local(self):
+        repo = os.path.dirname(HERE)
+        checked = 0
+        for kind in sorted(os.listdir(repo)):
+            path = os.path.join(repo, kind, "install.sh")
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            for i, line in enumerate(lines):
+                if "checkout -B" in line:
+                    checked += 1
+                    around = lines[i - 1] + line  # tgbot при местных коммитах код вообще не трогает
+                    self.assertTrue('branch -f "local-' in around or "rev-list origin/main..HEAD" in around, kind)
+        self.assertGreaterEqual(checked, 11)
+
+    def test_install_line_no_local_no_branch(self):
+        self.commit({"coach/CLAUDE.md": "one\ntwo\nthree\n"}, "upstream")
+        self.g("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.run_install_line()
+        self.assertEqual(self.branches(), [])
+
+
 class StudioBots(Base):
     def test_studio_registry_merged(self):
         os.makedirs(self.bots, exist_ok=True)

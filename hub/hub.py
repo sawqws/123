@@ -969,6 +969,7 @@ def _update_all(chat, reset=False):
         progress("Не скачал код — подробности в чате", done=True, ok=False)
         return send(chat, f"⚠️ <b>Не скачал код</b>\n<pre>{esc(out[-800:])}</pre>",
                     [[b("🧹 Сбросить правки", "upd|reset", "danger")]] if "rebase" in out else None)
+    tell_lost(chat)  # до перезапуска: 08.11 сообщение о выпавшей правке отсюда не уходило никому
     _, new = git("rev-parse", "HEAD")
     if old.strip() == new.strip():
         progress("Уже последняя версия", done=True)
@@ -1000,15 +1001,47 @@ def _update_all(chat, reset=False):
     os._exit(0)  # pm2 поднимет заново
 
 
+GIT_ME = ("-c", "user.name=Главный", "-c", "user.email=hub@localhost")
+
+
+def keep_main_docs(git, op):
+    """Идёт rebase/cherry-pick (op), конфликт только в справке *.md: берём текст main, код правки остаётся.
+    08.11: правка самопроверки Формы выпала из кода из-за соседней строки в coach/CLAUDE.md.
+    Конфликт в коде — False: решать здесь нечего, остановку снимает вызывающий."""
+    def unmerged():
+        return git("diff", "--name-only", "--diff-filter=U")[1].split()
+    for _ in range(50):
+        files = unmerged()
+        if not files:  # остановка без конфликта: от коммита ничего не осталось (правил только справку)
+            code, _out = git(*GIT_ME, op, "--skip")
+            if code == 0:
+                return True
+            if not unmerged():
+                return False
+            continue
+        if not all(f.endswith(".md") for f in files):
+            return False
+        for f in files:
+            if git("checkout", "--ours", "--", f)[0] != 0 or git("add", "--", f)[0] != 0:
+                return False
+        code, _out = git(*GIT_ME, "-c", "core.editor=true", op, "--continue")
+        if code == 0:
+            return True
+    return False
+
+
 def sync_main(git, reset=False):
-    """Код = свежий main. Локальные коммиты «✏️ Доработать» переносятся поверх него (rebase);
-    конфликт — откат rebase и ошибка (reset=True — выбросить локальные правки)."""
+    """Код = свежий main. Локальные коммиты («✏️ Доработать», поддержка, Страж) переносятся поверх него (rebase);
+    конфликт только в справке — текст main, код правки остаётся (keep_main_docs); конфликт в коде — правки в ветку
+    local-*, код — свежий main, Глебу приходит карточка (tell_lost). reset=True — выбросить локальные правки."""
     _, ahead = git("rev-list", "origin/main..HEAD")
     if reset or not ahead.strip():
         return git("checkout", "-B", "main", "origin/main")
     git("add", "-A")
-    git("-c", "user.name=Главный", "-c", "user.email=hub@localhost", "commit", "-q", "-m", "Главный: правки на сервере")
-    code, out = git("-c", "user.name=Главный", "-c", "user.email=hub@localhost", "rebase", "origin/main")
+    git(*GIT_ME, "commit", "-q", "-m", "Главный: правки на сервере")
+    code, out = git(*GIT_ME, "rebase", "origin/main")
+    if code != 0 and keep_main_docs(git, "rebase"):
+        return 0, "Местные правки поверх свежего main, справка *.md — как в main.\n" + out
     if code != 0:
         # 22.10: Страж коммитил починки здесь, те же правки пришли в main — rebase конфликтовал, и обновление не шло
         # вообще. Теперь местные правки — в ветку-копию, код — свежий main (правки не теряются, их можно вернуть)
@@ -1020,6 +1053,124 @@ def sync_main(git, reset=False):
             return code2, out2
         return 0, f"Местные правки конфликтовали с main — сохранил их в ветке {keep}, код — свежий main.\n" + out
     return 0, out
+
+
+# ---------- правки, выпавшие из кода ----------
+# Сервер не может отправлять в GitHub, поэтому поддержка, «Доработать» и Страж коммитят только здесь. При конфликте
+# правка уходит в ветку local-* (sync_main, */install.sh). Судим по ветке, а не по месту, откуда она взялась.
+
+LOST_TZ = """Верни правку, которая выпала из кода при обновлении: {subject}
+main изменился там же, поэтому коммит не ложится сам. Сделай то же поверх текущего кода, ничего лишнего.
+Если эта правка в коде уже есть — ничего не меняй и скажи об этом.
+
+Исходный коммит:
+{show}"""
+
+
+def repo_git(*a):
+    return sh("git", "-C", REPO, *a, timeout=60)
+
+
+def bot_of(files):
+    """Чей код: бот, в чьих папках больше всего файлов коммита (None — общий код, например common/)."""
+    count = {}
+    for f in files:
+        for pm2, v in maker.CATALOG.items():
+            if f.split("/")[0] in v[1]:
+                count[pm2] = count.get(pm2, 0) + 1
+    return max(count, key=count.get) if count else None
+
+
+def lost_branches():
+    code, refs = repo_git("for-each-ref", "--format=%(refname:short)", "refs/heads/local-*")
+    return [x for x in refs.split() if x.startswith("local-")] if code == 0 else []
+
+
+def lost_commits(branches=None):
+    """Только чтение: коммиты веток local-*, которых нет в работающем коде и которые не закрыты кнопкой.
+    [{sha, branch, subject, files, pm2}]. Сравнение — по содержимому (git cherry)."""
+    closed = set(setting("lost_closed") or [])
+    res, seen = [], set()
+    for br in lost_branches() if branches is None else branches:
+        code, ch = repo_git("cherry", "HEAD", br)
+        if code != 0:
+            continue
+        for sha in (x[2:].strip() for x in ch.splitlines() if x.startswith("+ ")):
+            if sha in closed or sha in seen:
+                continue
+            seen.add(sha)
+            subject = repo_git("log", "-1", "--format=%s", sha)[1].strip()
+            files = repo_git("show", "--name-only", "--format=", sha)[1].split()
+            res.append({"sha": sha, "branch": br, "subject": subject, "files": files, "pm2": bot_of(files)})
+    return res
+
+
+def local_state():
+    """Что есть только на сервере — для remote.py status: правки не в main и выпавшие из кода."""
+    code, ahead = repo_git("log", "--format=%h %s", "origin/main..HEAD")
+    return {"ahead": ahead.splitlines()[:20] if code == 0 else [],
+            "lost": [f"{c['sha'][:10]} {c['branch']} {c['subject']}" for c in lost_commits()]}
+
+
+def lost_close(sha):
+    closed = setting("lost_closed") or []
+    if sha not in closed:
+        setting("lost_closed", (closed + [sha])[-200:])
+
+
+def tell_lost(chat):
+    """Карточка на каждую выпавшую правку, один раз и только если дошла: не дошла — повтор в следующую минуту.
+    Ветка, из которой всё вернулось или закрыто кнопкой, больше не нужна."""
+    try:
+        branches = lost_branches()  # снимок до проверки: появившуюся после него ветку не тронем
+        lost = lost_commits(branches)
+        left = {c["branch"] for c in lost}
+        for br in branches:
+            # Ветка — предок HEAD: её только что сохранили, а код ещё не сменился (install.sh, sync_main). Не трогаем.
+            if br not in left and repo_git("merge-base", "--is-ancestor", br, "HEAD")[0] != 0:
+                repo_git("branch", "-D", br)
+        told = setting("lost_told") or []
+        for c in [x for x in lost if x["sha"] not in told][:5]:
+            who = short(maker.label(c["pm2"]) or c["pm2"]) if c["pm2"] else "общий код"
+            send(chat, card("⚠️ <b>Правка выпала из кода</b>", [f"{esc(who)}: {esc(c['subject'][:300])}"],
+                            f"<i>Код обновился там же, где она. Правка цела в ветке {esc(c['branch'])}.</i>"),
+                 [[b("🧩 Вернуть", f"lost|fix|{c['sha']}", "primary"), b("Не нужна", f"lost|drop|{c['sha']}")]])
+            told = (told + [c["sha"]])[-200:]
+            setting("lost_told", told)
+    except Exception as e:
+        print("tell_lost:", e, str(getattr(e, "detail", ""))[:200])
+
+
+def lost_restore(chat, sha):
+    """🧩 Вернуть: ложится сама (или конфликт только в справке) — сразу; конфликт в коде — Claude (maker.fix)."""
+    c = next((x for x in lost_commits() if x["sha"] == sha), None)
+    if not c:
+        return send(chat, "ℹ️ Эта правка уже в коде.")
+    if not maker.job.acquire(blocking=False):
+        return send(chat, "⏳ Claude ещё занят — нажми «Вернуть» чуть позже.")
+    try:
+        ok = repo_git(*GIT_ME, "cherry-pick", sha)[0] == 0 or keep_main_docs(repo_git, "cherry-pick")
+        if not ok:
+            repo_git("cherry-pick", "--abort")
+    finally:
+        maker.job.release()
+    subject = esc(c["subject"][:300])
+    if ok:
+        lost_close(sha)
+        send(chat, card("✅ <b>Правка снова в коде</b>", [subject]))
+        if c["pm2"] == "horo-bot":
+            wait_hdp()
+        if c["pm2"]:
+            maker.restart_after(chat, c["pm2"])
+        return
+    if not c["pm2"]:
+        return send(chat, card("⚠️ <b>Сам не верну</b>", [subject],
+                               f"<i>Это общий код и конфликт с main. Перенеси в чате Claude: {esc(sha[:10])}</i>"))
+    before = repo_git("rev-parse", "HEAD")[1]
+    show = repo_git("show", "--format=%B", sha)[1]
+    maker.fix(chat, c["pm2"], LOST_TZ.format(subject=c["subject"], show=show[:20000]))
+    if repo_git("rev-parse", "HEAD")[1] != before:
+        lost_close(sha)
 
 
 def ask_token(chat, mid, kind):
@@ -1225,6 +1376,7 @@ def watch():
                         send(owner(), text, btns)
                     except Exception as e:
                         print("watch send:", e, str(getattr(e, "detail", ""))[:200])
+                tell_lost(owner())
                 studio_auto()
         except Exception as e:
             print("watch:", e)
@@ -1731,7 +1883,7 @@ def pulse_forward(body):
 
 def remote_api(action, body):
     if action == "status":
-        return {"apps": apps(), "server": server(), "paid": setting("paid")}
+        return {"apps": apps(), "server": server(), "paid": setting("paid"), "local": local_state()}
     if action in ("logs", "restart"):  # имя — не флаг для pm2 (--update-env и т. п.)
         nm = str(body.get("name") or "")
         if not nm or nm.startswith("-") or len(nm) > 80:
@@ -2392,6 +2544,12 @@ def callback(chat, mid, uid, data):
         more(chat, mid)
     elif data[0] == "cl":
         on_claude(chat, mid, arg)
+    elif data[0] == "lost" and arg == "fix" and len(data) > 2:
+        note = "Возвращаю…"
+        bg(chat, lost_restore, data[2])
+    elif data[0] == "lost" and arg == "drop" and len(data) > 2:
+        lost_close(data[2])
+        edit(chat, mid, "🧹 <b>Правка закрыта</b>\n<i>Больше о ней не напомню.</i>", None)
     elif data[0] == "upd":
         if updating():
             note = "Уже обновляю — дождись итога"

@@ -30,6 +30,7 @@ command -v claude >/dev/null || npm install -g @anthropic-ai/claude-code
 echo "== 2/5 Код"
 if [ -d "$DIR/.git" ]; then
   git -C "$DIR" fetch origin "$BRANCH"
+  [ -z "$(git -C "$DIR" rev-list "origin/$BRANCH..HEAD" 2>/dev/null)" ] || git -C "$DIR" branch -f "local-$(date +%m%d-%H%M)" HEAD  # местные правки — в ветку, Главный покажет их Глебу
   git -C "$DIR" checkout -B "$BRANCH" "origin/$BRANCH"
 else
   git clone -b "$BRANCH" https://github.com/sawqws/123.git "$DIR"
