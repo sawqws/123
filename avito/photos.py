@@ -33,6 +33,36 @@ def place_on_white(cut, size=SIZE, fill=FILL):
     return canvas
 
 
+def clean_cut(im, alpha, force=False):
+    """Снимок + маска rembg → RGBA без типичных ошибок: обрывки вне вещи убираем, вырезанное внутри (стелька, подкладка)
+    возвращаем. Дырка цвета пола остаётся дыркой (просвет между кроссовками); force — вернуть все крупные."""
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+    rgb = np.asarray(im.convert("RGB"))
+    a = np.asarray(alpha.convert("L")).copy()
+    solid = a > 24
+    labels, n = ndimage.label(solid)
+    if n > 1:
+        sizes = ndimage.sum(solid, labels, range(1, n + 1))
+        a[np.isin(labels, np.nonzero(sizes < sizes.max() * 0.01)[0] + 1)] = 0
+        solid = a > 24
+    holes, n = ndimage.label(ndimage.binary_fill_holes(solid) & ~solid)
+    outside = ~ndimage.binary_dilation(solid, iterations=8) & ~(holes > 0)
+    floor = np.median(rgb[outside], axis=0) if outside.any() else None
+    least = solid.size * 0.005  # мелкие просветы (шнурки, петли) не трогаем: подкладка внутри обуви намного больше
+    for i in range(1, n + 1):
+        hole = holes == i
+        if hole.sum() < least:
+            continue
+        differs = floor is None or np.linalg.norm(np.median(rgb[hole], axis=0) - floor) > 45
+        if force or differs:
+            a[ndimage.binary_dilation(hole, iterations=3)] = 255
+    res = im.convert("RGBA")
+    res.putalpha(Image.fromarray(a))
+    return res
+
+
 def best_square(alpha):
     """Маска вещи → квадрат (left, top, right, bottom) по короткой стороне там, где вещи больше всего.
     Равноценные места — ближе к центру кадра: так почти пустая маска даёт обычную обрезку по центру."""
@@ -71,8 +101,8 @@ def main(argv):
                 to_square(im, session, remove).save(dst, "JPEG", quality=92, optimize=True)
                 out.append({"src": src, "dst": dst, "ok": True})
                 continue
-            cut = remove(im, session=session, post_process_mask=True)
-            res = place_on_white(cut.convert("RGBA"))
+            mask = remove(im, session=session, post_process_mask=True, only_mask=True)
+            res = place_on_white(clean_cut(im, mask))
             if res is None:
                 out.append({"src": src, "dst": dst, "ok": False, "error": "вещь на фото не нашлась"})
                 continue

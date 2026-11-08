@@ -272,9 +272,9 @@ class Flow(FlowBase):
         kit = [p for m, p in self.sent if m == "sendMessage" and "Подача на Авито" in p.get("text", "")][-1]
         self.assertEqual(kit["reply_markup"]["inline_keyboard"][0][0]["url"], avito.ADD_URL)
         texts = self.texts()
-        i = texts.index("<code>iPhone 13 128 ГБ</code>")  # порядок подачи: название, описание, цена, поля — отдельными сообщениями
-        self.assertTrue(texts[i + 1].startswith("<code>Отличный телефон."))
-        self.assertEqual(texts[i + 2], "<code>35000</code>")
+        i = texts.index("iPhone 13 128 ГБ")  # порядок подачи: название, описание, цена, поля — отдельными сообщениями, обычным шрифтом
+        self.assertTrue(texts[i + 1].startswith("Отличный телефон."))
+        self.assertEqual(texts[i + 2], "35000")
         self.assertIn("Подача на Авито", texts[i + 3])
         self.cb("live")
         self.assertEqual(d["status"], "live")
@@ -1290,9 +1290,29 @@ class Ruler(unittest.TestCase):
         self.assertEqual(out.shape, (1200, 1200))  # такой же квадрат, как остальные кадры
         k = 1200 / (900 / self.ruler.FILL)
         x, y = 600 + (346 - 300) * k, 600 + (650 - 650) * k
-        self.assertEqual(out[10:40, 10:40].min() > 240, True)  # снимок уже квадрата — по бокам белое поле
-        self.assertLess(out[int(y) - 60:int(y) - 50, int(x)].mean(), 200)  # длинная метка в дюймах стёрта
-        self.assertLess(out[int(600 + (136 - 650) * k), int(600 + (300 - 300) * k)], 180)  # и подпись над кружком тоже
+        self.assertLess(out[10:40, 10:40].std(), 3)  # снимок уже квадрата — по бокам ровное поле цвета пола
+        self.assertLess(out[10:40, 10:40].mean(), 240)  # а не белая полоса
+        self.assertGreater(out[int(y) - 60:int(y) - 50, int(x) - 30:int(x)].max(), 240)  # старая рулетка закрыта белой лентой
+        self.assertLess(out[int(600 + (136 - 650) * k), int(600 + (300 - 300) * k)], 180)  # подпись над кружком стёрта
+
+    def test_clean_cut(self):
+        import numpy as np
+        import photos
+        im = self.Image.new("RGB", (400, 400), (176, 136, 84))  # пол
+        px = np.asarray(im).copy()
+        px[100:300, 100:300] = (40, 40, 40)   # кроссовок
+        px[150:250, 150:250] = (120, 150, 170)  # подкладка внутри
+        px[10:14, 10:14] = (40, 40, 40)       # обрывок вне вещи
+        alpha = np.zeros((400, 400), "uint8")
+        alpha[100:300, 100:300] = 255
+        alpha[150:250, 150:250] = 0           # rembg вырезал подкладку
+        alpha[10:14, 10:14] = 255
+        res = np.asarray(photos.clean_cut(self.Image.fromarray(px), self.Image.fromarray(alpha)))
+        self.assertEqual(res[200, 200, 3], 255)  # подкладка вернулась
+        self.assertEqual(res[12, 12, 3], 0)      # обрывок убран
+        px[150:250, 150:250] = (176, 136, 84)    # а просвет цвета пола остаётся просветом
+        res = np.asarray(photos.clean_cut(self.Image.fromarray(px), self.Image.fromarray(alpha)))
+        self.assertEqual(res[200, 200, 3], 0)
 
     def test_no_ruler(self):
         path = os.path.join(self.tmp, "plain.jpg")
