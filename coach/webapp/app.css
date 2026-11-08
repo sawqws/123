@@ -486,6 +486,24 @@ details.about p { margin: 8px 0 0; font-size: 14px; line-height: 1.5; }
 .tonight > div { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: var(--r-md); background: var(--card-2); }
 .tk { font: 800 10px/1.2 var(--head); text-transform: uppercase; letter-spacing: .1em; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tonight b { font: 700 24px/1 var(--num); color: var(--ink); }
+/* «Умный будильник» — строка внизу «Сон сегодня» → сайт /wake/ (своё нажатие: карточка под ней не вдавливается) */
+.wk-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; margin: 8px 0 0; padding: 8px 12px 8px 10px;
+  border: 0; border-radius: var(--r-md); background: var(--card-2); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; transition: transform .5s var(--spring-bounce, ease), opacity .2s, background-color .25s; }
+.wk-row:active { transform: scale(.97); transition-duration: .12s; }
+html .card.tap:has(.wk-row:active) { transform: none !important; }
+.wk-row.busy { opacity: .55; pointer-events: none; }
+.wk-ic { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; color: var(--sleep);
+  background: color-mix(in srgb, var(--sleep) 18%, transparent); }
+.wk-ic .ico { width: 18px; height: 18px; }
+.wk-m { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wk-m b { font-size: 15px; font-weight: 600; line-height: 1.2; }
+.wk-m > span { font-size: 13px; line-height: 1.2; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wk-go { flex: none; display: grid; color: var(--hint); opacity: .7; }
+.wk-go .ico { width: 15px; height: 15px; stroke-width: 2.2; }
+html.mono .wk-ic { color: var(--ink); background: var(--card-3, rgba(255, 255, 255, .12)); }
+html.wh .wk-row { margin-top: 12px; padding: 10px 0 0; border-top: 1px solid var(--sep); border-radius: 0; background: transparent; }
+@media (hover: hover) { .wk-row:hover { background: var(--card-3, rgba(255, 255, 255, .14)); } html.wh .wk-row:hover { background: transparent; } }
 
 /* «Моя панель» */
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

@@ -104,6 +104,7 @@
     cam: svgi('<path d="M4 8h3.5L9 5.5h6L16.5 8H20v11H4z"/><circle cx="12" cy="13" r="3.4"/>'),
     arrow: svgi('<path d="M4 12h15M13 6l6 6-6 6"/>'),
     clock: svgi('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+    alarm: svgi('<circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.6M4.5 4.8L2.6 6.7M19.5 4.8l1.9 1.9M7 19.5l-1.5 2M17 19.5l1.5 2"/>'),
     bed: svgi('<path d="M3 18V7M3 14h18v4M21 14v-2.5A2.5 2.5 0 0 0 18.5 9H11v5"/><circle cx="7" cy="11" r="1.6"/>'),
     sparkle: svgi('<path d="M12 3.5l1.8 5 5 1.8-5 1.8-1.8 5-1.8-5-5-1.8 5-1.8z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/>'),
     hrv: svgi('<path d="M2.5 13h4l2-5 3 10 2.5-7 1.5 2h6"/>'),
@@ -852,7 +853,29 @@
     return `<section class="card rise tap" data-a="${F.screens.plan ? 'plan-open' : 'detail'}" data-v="sleep" role="button">${cap('Сон сегодня', `${mode ? esc(mode) : ''}<span class="chev"></span>`)}
       <div class="tonight"><div><span class="tk">Нужно сна</span><b class="num" style="color:var(--teal)">${hm(need)}</b></div>
         <div><span class="tk">Лечь в</span><b class="num">${esc(bed)}</b></div>
-        <div><span class="tk">Подъём${!pl && b.weekend ? ' · вых.' : ''}</span><b class="num">${esc(wake)}</b></div></div></section>`;
+        <div><span class="tk">Подъём${!pl && b.weekend ? ' · вых.' : ''}</span><b class="num">${esc(wake)}</b></div></div>
+      <button class="wk-row" data-a="wake-open" aria-label="Умный будильник: разбудит в лёгком сне до ${esc(wake)}"><span class="wk-ic">${I.alarm}</span>
+        <span class="wk-m"><b>Умный будильник</b><span>в лёгком сне до <span class="num">${esc(wake)}</span></span></span><span class="wk-go">${I.next}</span></button></section>`;
+  }
+  // «Умный будильник» — сайт /wake/ на этом же домене (coach/SYNC.md п. 9): вход — токен «Калорий» в localStorage['kcal.token']
+  // (общий с «Калориями»); нет его или он устарел — новый по сессии Формы (POST /api/kcal/link), не сохранился — через #pair=
+  async function wakeOpen(el) {
+    if (el.classList.contains('busy')) return;  // двойное нажатие — один переход
+    haptic('tap');
+    el.classList.add('busy');
+    const K = 'kcal.token';
+    let tok = null, saved = false;
+    try { tok = localStorage.getItem(K); } catch (e) { /* хранилище закрыто — возьмём токен у сервера */ }
+    if (tok) {  // старый токен проверяем: сессию могли закрыть
+      try { const r = await fetch('/api/wake', { headers: { Authorization: 'Bearer ' + tok } }); if (r.status === 401 || r.status === 403) tok = null; else saved = true; } catch (e) { saved = true; }
+    }
+    if (!tok) {
+      try { const r = await api('/api/kcal/link', {}); tok = r && r.token; } catch (e) { el.classList.remove('busy'); return fail(e); }
+      if (!tok) { el.classList.remove('busy'); return fail(new Error('Сервер не выдал вход — попробуй ещё раз')); }
+      try { localStorage.setItem(K, tok); saved = localStorage.getItem(K) === tok; } catch (e) { saved = false; }
+    }
+    location.href = '/wake/' + (saved ? '' : '#pair=' + encodeURIComponent(tok));
+    setTimeout(() => el.classList.remove('busy'), 1500);  // вернулись назад (bfcache) — кнопка снова живая
   }
   // «My Day»: сон и тренировки за день по порядку
   function myDay(t) {
@@ -1698,6 +1721,7 @@
     if (a === 'profile') profileSheet();
     else if (a === 'workout') openScreen('strain');
     else if (a === 'plan-open') openScreen('plan');
+    else if (a === 'wake-open') wakeOpen(el);
     else if (a === 'about') aboutSheet(v);
     else if (a === 'streak') streakSheet();
     else if (a === 'ask-go') { go('coach'); ask(v); }  // без модуля activity.js — общий экран нагрузки

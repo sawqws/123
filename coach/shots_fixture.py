@@ -10,6 +10,7 @@ shots.json — список снимков для shots.js ([{"name": ..., "clic
 --serve: http://127.0.0.1:<порт>/ — приложение как сайт (без Telegram), /api/… — эти же примеры, /kcal/ — «Калории»
 из docs/kcal (coach.kcal_static, как на сервере); пока в docs/kcal нет режима embed (или с --kcal-stub) — заглушка
 KCAL_STUB по договору coach/SYNC.md, п. 5 (сегменты сверху, отступ под меню Формы, тема, kcal-changed).
+/wake/ — «Будильник» из docs/wake (coach.wake_static; папки нет — 404).
 Ответы на POST с телом здесь не различаются: shots.js отдаёт один ответ на путь. Свои /api/… разделов (f_*.py)
 добавляются сами: для каждого пути из EXTRA_PATHS вызывается route с пустым телом.
 Пути из LIVE_PATHS (тренды, ряды графиков, «Ещё из WHOOP») в --serve считаются на лету по телу запроса
@@ -527,9 +528,10 @@ def serve(port, stub=False):
                 return self.send(200, {} if hit is None else hit, headers=None if hit is not None else {"X-Fixture": "none"})
             if path in ("/kcal/", "/kcal/index.html") and stub:
                 return self.send(200, KCAL_STUB, "text/html; charset=utf-8")
-            if path == "/kcal" or path.startswith("/kcal/"):
-                code, body, ctype, cache, extra = coach.kcal_static(path, u.query, self.headers)
-                return self.send(code, body, ctype, {**extra, "Cache-Control": cache})
+            for prefix, static in (("/kcal", coach.kcal_static), ("/wake", coach.wake_static)):  # «Калории», «Будильник» (docs/wake)
+                if path == prefix or path.startswith(prefix + "/"):
+                    code, body, ctype, cache, extra = static(path, u.query, self.headers)
+                    return self.send(code, body, ctype, {**extra, "Cache-Control": cache})
             name = "index.html" if path in ("/", "/site/") else os.path.basename(path)
             file = os.path.join(coach.WEB, name)
             if not name or not os.path.isfile(file):
