@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Telegram-бот: решает задания horodigital.ru через Claude Code (`claude -p`)
-и показывает, что осталось сделать.
+"""HDP-бот: решает задания horodigital.ru и показывает, что осталось сделать.
 
 Переменные окружения:
   TELEGRAM_TOKEN  токен от @BotFather
@@ -38,8 +37,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import autotest
 import drafts
 import prep
 import sitecheck
@@ -1304,6 +1305,42 @@ def solve(url, text="", show=False, on_tool=None, retry=None):
     return claude(prompt_for(url, text, show, retry), SOLVE_TOOLS, on_tool=on_tool)
 
 
+def solve_site_test(url, text, task, step, retry=None):
+    """Автотест сайта решает Codex. Для письменного задания возвращаем None."""
+    step("Читаю условие", 0.2)
+    ok, fetched = node("horo/fetch.js", url, "--test-only", timeout=240)
+    if not ok:
+        return False, fetched
+    folder = Path(drafts.task_dir(task))
+    try:
+        data = json.loads((folder / "task.json").read_text(encoding="utf-8"))
+        if data["data"]["type"] != "test":
+            return None
+        meta = {"type": "test", **data["meta"]}
+        blocked = test_lock_of(meta)
+        if blocked:
+            return False, f"Тест {blocked}."
+        step("Codex решает тест", 0.45)
+        answer = autotest.solve(folder, data, fetched, "\n".join(wishes(text)), retry)
+        summary = answer["summary"].strip() or "Codex проверил ответы."
+        if re.search(r"покажи|не отправляй|только ответ", text, re.I):
+            return True, summary
+        left = ((meta.get("progress") or {}).get("grade") or {}).get("remainingAttemptsCount")
+        if answer["uncertain"] and (left is None or left <= 1):
+            return True, f"Нужно проверить ответ: {summary}"
+        response = folder / "answers.json"
+        pending = response.with_suffix(".part")
+        pending.write_text(json.dumps(answer["answers"], ensure_ascii=False), encoding="utf-8")
+        pending.replace(response)
+    except autotest.TestError as e:
+        return False, str(e)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False, "Не получилось прочитать данные теста."
+    step("Вношу ответы на сайт", 0.88)
+    ok, out = node("horo/submit.js", url, str(response), "--defer", timeout=600)
+    return ok, summary if ok else out
+
+
 SCORE = re.compile(r"^[ \t*]*БАЛЛЫ:\s*(\d+(?:[.,]\d+)?)\s*(?:/\s*(\d+(?:[.,]\d+)?)|%)[^\n]*\n?", re.M | re.I)
 
 
@@ -1419,7 +1456,7 @@ def test_lock_of(meta):
     return None
 
 
-def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
+def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False, site=False):
     """Одно задание. Можно присылать несколько ссылок подряд: до MAX_PARALLEL решаются сразу, остальные ждут очереди.
     quiet — без карточки «В очереди» (пачка с сайта: десятки таких карточек — это 429 от Telegram)."""
     task = drafts.task_id(url)
@@ -1460,10 +1497,11 @@ def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
              menu=True, raw_html=True)
         mark_active(task, None)
         return
-    mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry})
+    mark_active(task, {"chat": chat, "url": url, "text": text, "show": bool(show), "retry": retry, "site": site})
     try:
-        for _ in range(3):  # лимит Claude — ждём сброса и решаем снова (не больше 3 раз)
-            wait_limit()
+        for attempt in range(3):  # лимит Claude — ждём сброса и решаем снова (не больше 3 раз)
+            if not site or show or attempt:
+                wait_limit()
             if not lock.acquire(blocking=False):
                 if not quiet:
                     react(chat, mid, "🤔")
@@ -1471,7 +1509,7 @@ def run_task(chat, url, text, show=False, mid=None, retry=None, quiet=False):
                                     icon="⏳"), raw_html=True)
                     quiet = True
                 lock.acquire()
-            if _run_task(chat, url, text, show, mid, task, retry) != LIMIT_MSG:
+            if _run_task(chat, url, text, show, mid, task, retry, site) != LIMIT_MSG:
                 break
     finally:
         with running_lock:
@@ -1512,10 +1550,11 @@ def resume_active():
             s.setdefault("active", {})[task] = {**a, "tries": a.get("tries", 0) + 1}
             save_settings(s)
         threading.Thread(target=run_task, args=(a["chat"], a["url"], a.get("text", ""), a.get("show", False), None,
-                                                a.get("retry")), daemon=True).start()
+                                                a.get("retry")), kwargs={"site": True} if a.get("site") else {},
+                         daemon=True).start()
 
 
-def _run_task(chat, url, text, show, mid, task, retry=None):
+def _run_task(chat, url, text, show, mid, task, retry=None, site=False):
     try:
         t0 = time.time()
         react(chat, mid, "👀")
@@ -1524,10 +1563,15 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
                     esc(task_title(task)),
                     sub_fn=lambda: esc(task_title(task)))
         live.task = task
-        live.step("Запускаю Claude", 0.05)
         try:
-            ok, out = solve(url, text, show, on_tool=live.tool, **({"retry": retry} if retry else {}))
-            if ok and hand_fresh(task, t0):  # решение от руки — перепроверить отдельно, как учитель
+            result = solve_site_test(url, text, task, live.step, retry) if site and not show else None
+            codex = result is not None
+            if codex:
+                ok, out = result
+            else:
+                live.step("Запускаю Claude", 0.05)
+                ok, out = solve(url, text, show, on_tool=live.tool, **({"retry": retry} if retry else {}))
+            if not codex and ok and hand_fresh(task, t0):  # решение от руки — перепроверить отдельно, как учитель
                 live.step("Перепроверяю решение", 0.8)
                 checked = verify(task, on_tool=live.tool)
                 if checked:
@@ -1555,7 +1599,7 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
             send(chat, err(out, esc(title)), menu=True, raw_html=True)
             return
         pend = None if show else defer_of(task, t0)
-        if ok and not show and not pend and not re.search(r"покажи|не отправляй|только ответ", text, re.I):
+        if not codex and ok and not show and not pend and not re.search(r"покажи|не отправляй|только ответ", text, re.I):
             pend = push_answers(task, url, t0)
             if pend:  # Claude ответы не внёс — внёс бот; его «не внёс» Глебу не показываем
                 out = "Ответы внесены на сайт."
@@ -1563,7 +1607,7 @@ def _run_task(chat, url, text, show, mid, task, retry=None):
             unhold_test(task)
             remember(title or "Тест", True, parse_score(out)[1], url=url, secs=time.time() - t0)
             react(chat, mid, "👌")
-            schedule_test(chat, task, pend, title, out, tries=(retry or {}).get("k", 0))
+            schedule_test(chat, task, pend, title, out, tries=(retry or {}).get("k", 0), site=codex)
             return
         result, full = result_card(out, title, time.time() - t0, show)
         if not show and drafts.task_info(task)[0] == "test":  # тест решён, но не внесён — ждёт выбора Глеба
@@ -2128,12 +2172,12 @@ def test_kb(task):
     return kb([("⚡ Сдать сейчас", f"tnow:{task}", "success"), ("✖ Не сдавать", f"tdrop:{task}")])
 
 
-def schedule_test(chat, task, pend, title, out="", tries=0, silent=False):
+def schedule_test(chat, task, pend, title, out="", tries=0, silent=False, site=False):
     """Тест решён, ответы на сайте — сдать через test_delay (переживает перезапуск: settings → tests).
     silent — без своей карточки (пачка автотестов пишет одну общую). -> время сдачи (epoch)."""
     at = time.time() + test_delay(pend.get("N"))
     set_test(task, {"task": task, "chat": chat, "url": pend["url"], "answers": pend["answers"], "title": title,
-                    "N": pend.get("N"), "at": at, "tries": tries})
+                    "N": pend.get("N"), "at": at, "tries": tries, "site": site})
     if at - time.time() < 5:
         threading.Thread(target=finish_test, args=(task,), daemon=True).start()
         return at
@@ -2220,9 +2264,10 @@ def _finish_test(task):
     if t.get("tries", 0) == 0 and left >= 2:
         send(chat, card("Не 100% — делаю вторую попытку", note=f"Перепроверю каждый вопрос и найду ошибку · после неё "
                         f"останется ещё {left - 1}", icon="🔁"), raw_html=True)
-        threading.Thread(target=run_task, args=(chat, t["url"], "", False, None, info), daemon=True).start()
+        threading.Thread(target=run_task, args=(chat, t["url"], "", False, None, info),
+                         kwargs={"site": True} if t.get("site") else {}, daemon=True).start()
     elif left >= 1:
-        set_offer(task, {**info, "url": t["url"], "title": title})
+        set_offer(task, {**info, "url": t["url"], "title": title, "site": bool(t.get("site"))})
         why = "осталась последняя попытка" if left == 1 else "вторую уже делал"
         send(chat, card("Не 100%", note=f"{esc(title)} · {why} — пересдать?", icon="🔁"),
              markup=kb([("🔁 Перепроверить и пересдать", f"tretry:{task}", "primary")]), raw_html=True)
@@ -2248,7 +2293,8 @@ def on_test_button(chat, cq, data):
         if offer:
             set_offer(task, None)
             info = {k: offer[k] for k in ("got", "total", "miss", "k")}
-            threading.Thread(target=run_task, args=(chat, offer["url"], "", False, None, info), daemon=True).start()
+            threading.Thread(target=run_task, args=(chat, offer["url"], "", False, None, info),
+                             kwargs={"site": True} if offer.get("site") else {}, daemon=True).start()
         return
     t = pending_tests().get(task)
     if not t:
@@ -3659,7 +3705,8 @@ def done_tasks():
             if t.get("status") in ("approved", "reviewing") or (t.get("type") == "test" and t.get("left") == 1)}
 
 
-def app_solve(b):
+def app_solve(b, *, site=False):
+    source = {"site": True} if site else {}
     if isinstance(b.get("urls"), list):  # «⚡ Все автотесты» с сайта — пачка одним запросом (22.10: по одному сайт
         # слал 70 запросов подряд, под нагрузкой один не дошёл — и остальные так и не запустились)
         links = list(dict.fromkeys(m.group(0) for m in (LINK.search(str(u)) for u in b["urls"][:200]) if m))
@@ -3670,21 +3717,25 @@ def app_solve(b):
         skipped = [u for u in links if drafts.task_id(u) in done or drafts.task_id(u) in held]
         links = [u for u in links if u not in skipped]
         for url in links:
-            threading.Thread(target=run_task, args=(owner(), url, "", False, None, None, True), daemon=True).start()  # quiet
+            threading.Thread(target=run_task, args=(owner(), url, "", False, None, None, True),
+                             kwargs=source, daemon=True).start()  # quiet
         return {"ok": True, "n": len(links), "skipped": len(skipped)}
     m = LINK.search(str(b.get("url") or ""))
     if not m:
         raise ValueError("Это не ссылка на задание HDP")
     wish = str(b.get("wish") or "").strip()[:500]  # «💬 Пожелания» к заданию на сайте
-    threading.Thread(target=run_task, args=(owner(), m.group(0), wish, bool(b.get("show"))), daemon=True).start()
+    threading.Thread(target=run_task, args=(owner(), m.group(0), wish, bool(b.get("show"))),
+                     kwargs=source, daemon=True).start()
     return {"ok": True}
 
 
-def app_auto(_):
+def app_auto(_, *, site=False):
     busy_check()
     tests = [r for r in (overview() or {}).get("tasks", []) if r.get("auto") and r.get("rawStatus") in AUTO_STATUSES]
     if not tests:
         raise ValueError("Новых автотестов нет")
+    if site:
+        return app_solve({"urls": [test["url"] for test in tests]}, site=True)
     threading.Thread(target=run_all, args=(owner(), tests), daemon=True).start()
     return {"ok": True, "n": len(tests)}
 

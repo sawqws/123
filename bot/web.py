@@ -524,9 +524,11 @@ class Web(BaseHTTPRequestHandler):
 
     def api(self, path, body):
         user = check_init_data(self.headers.get("X-Init-Data") or "", _cfg["token"])
+        site = False
         # сайт: вход по cookie. Свой заголовок X-Site браузер не пошлёт с чужого сайта без разрешения (CORS),
         # поэтому чужая страница не сможет нажать «Сделать» от имени Глеба
         if not user and self.headers.get("X-Site") == "1" and site_check(self.cookie()):
+            site = True
             user = {"id": _cfg["owner"]()}
         if not user:
             return self.reply(401, {"error": "Открой приложение через Telegram" if not self.headers.get("X-Site")
@@ -539,7 +541,8 @@ class Web(BaseHTTPRequestHandler):
         if path in WRITE:
             mirror._swr.clear()  # бот что-то меняет на платформе — зеркало берёт свежее
         try:
-            self.reply(200, fn(body))
+            result = fn(body, site=True) if site and path in ("/api/solve", "/api/auto") else fn(body)
+            self.reply(200, result)
         except ValueError as e:  # понятная ошибка для человека
             self.reply(400, {"error": str(e)})
         except PermissionError as e:
