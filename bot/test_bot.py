@@ -37,11 +37,11 @@ CHAT = 42
 
 class Sync:
     """threading.Thread, который выполняет задачу сразу."""
-    def __init__(self, target, args=(), daemon=None):
-        self.target, self.args = target, args
+    def __init__(self, target, args=(), daemon=None, kwargs=None):
+        self.target, self.args, self.kwargs = target, args, kwargs or {}
 
     def start(self):
-        self.target(*self.args)
+        self.target(*self.args, **self.kwargs)
 
 
 class BotTest(unittest.TestCase):
@@ -1581,6 +1581,15 @@ class SiteTest(BotTest):
                 bot.lock.release()
         self.assertEqual(sent, [])  # ни одной карточки «В очереди»
 
+    def test_browser_solve_routes_to_codex(self):
+        saved = {"token": "test", "owner": lambda: CHAT, "routes": bot.ROUTES}
+        request = mock.Mock(headers={"X-Site": "1"})
+        with mock.patch.object(web, "_cfg", saved), mock.patch.object(web, "site_check", return_value=True), \
+                mock.patch.object(bot.threading, "Thread") as thread:
+            web.Web.api(request, "/api/solve", {"url": URL})
+        request.reply.assert_called_once_with(200, {"ok": True})
+        self.assertEqual(thread.call_args.kwargs["kwargs"], {"site": True})
+
     def test_claude_limit_reset_time(self):
         import datetime as dt
         now = dt.datetime(2026, 10, 22, 13, 16, tzinfo=dt.timezone.utc).timestamp()
@@ -2356,6 +2365,31 @@ class DeferTest(BotTest):
         self.assertNotIn(TASK, bot.pending_tests())
         self.assertIn("17 / 17", self.last()[0])
         self.assertIn("попыток 1 из 3", self.last()[0])
+
+    def test_codex_website_test_uses_existing_deferred_submission(self):
+        folder = pathlib.Path(drafts.task_dir(TASK))
+        folder.joinpath("task.json").write_text(json.dumps(
+            {"data": {"type": "test", "title": "Тест: клетка"},
+             "meta": {"progress": {"grade": {"remainingAttemptsCount": 2}}}}))
+        bot.save_settings({"owner": CHAT})
+
+        def node(*args, **kwargs):
+            if args[0] == "horo/submit.js" and "--defer" in args:
+                self.assertEqual(json.loads(pathlib.Path(args[2]).read_text()), {"1": "митоз"})
+                folder.joinpath("defer.json").write_text(json.dumps(
+                    {"url": URL, "answers": args[2], "N": 1, "at": time.time() * 1000}))
+            return self.fake_node(*args, **kwargs)
+
+        answer = {"answers": {"1": "митоз"}, "uncertain": False, "summary": "Митоз"}
+        with mock.patch.object(bot.autotest, "solve", return_value=answer) as solve, \
+                mock.patch.object(bot, "node", node):
+            bot.app_solve({"url": URL}, site=True)
+            self.assertTrue(bot.pending_tests()[TASK]["site"])
+            solve.assert_called_once()
+            self.assertEqual(self.prompts, [])
+            self.due()
+        self.assertIn("--continue-only", self.nodes[-1])
+        self.assertNotIn(TASK, bot.pending_tests())
 
     def test_held_on_last_attempt_not_in_batches_until_entered(self):
         """23.10: «Phrases» на последней попытке — Claude не внёс ответы и спросил Глеба. Тест висел в

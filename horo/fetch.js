@@ -30,6 +30,7 @@ function fileView(file, ext) {
 
 (async () => {
   const url = process.argv[2];
+  const testOnly = process.argv.includes('--test-only');
   const s = await open();
   try {
     const t = await loadTask(s.page, url);
@@ -37,9 +38,11 @@ function fileView(file, ext) {
     const dir = path.join(TMP, t.task);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'task.json'), JSON.stringify(t, null, 1));
+    if (testOnly && d.type !== 'test') return;
 
     let imgN = 0;
     const seen = {};
+    const media = [];
     const saveImages = async h => {
       const out = [];
       for (const src of images(h)) {
@@ -47,6 +50,7 @@ function fileView(file, ext) {
         if (seen[src]) { out.push('картинка: ' + seen[src]); continue; }
         const f = (seen[src] = path.join(dir, `img${++imgN}.png`));
         await download(s.page, src, f);
+        media.push(f);
         out.push('картинка: ' + f);
       }
       return out;
@@ -70,7 +74,13 @@ function fileView(file, ext) {
       const out = path.join(dir, `file${++fileN}.${ext}`);
       try { await download(s.page, src, out); } catch (e) { console.log(`ФАЙЛ: ${name} — не скачался (${e.message})`); continue; }
       console.log(`ФАЙЛ: ${name} → ${out}`);
-      for (const line of fileView(out, ext)) console.log('  ' + line);
+      for (const line of fileView(out, ext)) {
+        console.log('  ' + line);
+        if (line.startsWith('картинка: ') || line.startsWith('страница: ')) media.push(line.slice(line.indexOf(': ') + 2));
+        if (testOnly && line.startsWith('текст файла: ')) {
+          console.log(fs.readFileSync(out.replace(/\.\w+$/, '.txt'), 'utf8'));
+        }
+      }
     }
 
     (d.questions || []).forEach((q, i) => (q._n = i + 1));
@@ -98,6 +108,7 @@ function fileView(file, ext) {
         if (im && !txt) {
           const f = path.join(dir, `opt${q._n}_${k + 1}.png`);
           await download(s.page, im, f);
+          media.push(f);
           console.log(`  вариант ${k + 1} [${o.uuid}]: картинка ${f}`);
         } else console.log(`  вариант ${k + 1}: ${txt || JSON.stringify(o)}`);
       }
@@ -144,6 +155,7 @@ function fileView(file, ext) {
       }
     }
     console.log(`\nJSON: ${path.join(dir, 'task.json')}`);
+    if (testOnly) console.log('HDP_MEDIA: ' + JSON.stringify(media));
   } finally {
     await close(s);
   }
