@@ -1,7 +1,6 @@
 """Codex решает тест по условию. Доступ к HDP и сдача остаются у бота."""
 import json
 import os
-import pwd
 import re
 import shutil
 import subprocess
@@ -94,6 +93,10 @@ grouping: точные названия групп и массивы элеме�
 
 
 def solve(task_dir, task, fetched, wishes="", retry=None):
+    if os.name != "posix":
+        raise TestError("Автотесты Codex запускаются на сервере HDP.")
+    import pwd
+
     questions = task["data"].get("questions") or []
     if not questions:
         raise TestError("HDP не вернул вопросы теста.")
